@@ -26,6 +26,35 @@ RECEIPT="$TMPROOT/runtime-recovery-receipt.json"
 DOCKER_LOG="$TMPROOT/docker.log"
 mkdir -p "$FAKEBIN" "$RUNTIME_DIR/configs"
 : > "$DOCKER_LOG"
+export FAKE_GUARD_LIB="$TMPROOT/guard/lib"
+mkdir -p "$FAKE_GUARD_LIB"
+cp scripts/ci/lib/{runtime-recovery-receipt,gateway-activation-host,runtime-recovery-host,runtime-guard-install}.py "$FAKE_GUARD_LIB/"
+export FAKE_GUARD_SOURCE="$REPO_ROOT/scripts/ci/lib/runtime-maintenance-guard.py"
+export FAKE_GUARD_ROOT="$TMPROOT/guard"
+cat > "$FAKE_GUARD_LIB/runtime-maintenance-guard.py" <<'PY_GUARD'
+import importlib.util, os, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('guard', os.environ['FAKE_GUARD_SOURCE'])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.ROOT = Path(os.environ['FAKE_GUARD_ROOT'])
+module.OWNER_UID = os.geteuid()
+assert sys.argv[1] == 'exec-installed'
+with module.RuntimeGuard() as guard:
+    module.validate_installation()
+    guard.exec(sys.argv[2:])
+PY_GUARD
+chmod 700 "$FAKE_GUARD_ROOT" "$FAKE_GUARD_LIB"
+chmod 600 "$FAKE_GUARD_LIB/"*.py
+python3 - <<'PY_GUARD_MANIFEST'
+import hashlib,json,os
+from pathlib import Path
+root=Path(os.environ['FAKE_GUARD_ROOT'])
+blobs={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (root/'lib').glob('*.py')}
+path=root/'guard.json'
+path.write_text(json.dumps({'protocolVersion':1,'sourceSha':'a'*40,'blobs':blobs,'qualifiedAt':'2026-11-05T00:00:00Z','recoveryCaller':None}))
+path.chmod(0o600)
+PY_GUARD_MANIFEST
 
 # Exercise the exact classifier embedded in deploy-infra's remote script. GNU
 # timeout may return 124 with empty stderr; that is bounded/transient, while a
@@ -68,6 +97,10 @@ while [[ $# -gt 0 && "$1" == -* ]]; do
   esac
 done
 [[ $# -gt 0 ]] && shift
+if [[ "$*" == 'bash -s' ]]; then
+  sed "s|/var/lib/cogni/runtime-maintenance/lib|$FAKE_GUARD_LIB|g" | bash -s
+  exit $?
+fi
 exec bash -c "$*"
 EOF
 chmod +x "$FAKEBIN/ssh"
@@ -85,9 +118,9 @@ fi
 if [[ "${1:-}" == image && "${2:-}" == inspect ]]; then
   ref="${@: -1}"
   case "$ref" in
-    postgres:17) printf 'sha256:postgres\n' ;;
-    litellm:test) printf 'sha256:litellm\n' ;;
-    autoheal:test) printf 'sha256:autoheal\n' ;;
+    postgres:17) printf 'sha256:0000000000000000000000000000000000000000000000000000000000000001\n' ;;
+    litellm:test) printf 'sha256:0000000000000000000000000000000000000000000000000000000000000002\n' ;;
+    autoheal:test) printf 'sha256:0000000000000000000000000000000000000000000000000000000000000003\n' ;;
     *) exit 1 ;;
   esac
   exit 0
@@ -137,7 +170,7 @@ write_receipt() {
     --arg compose "$compose_sha" \
     --arg config "$config_sha" \
     --arg recoveryServiceConfig "$recovery_service_config_sha" \
-    '{version:2,composeSha256:$compose,litellmConfigSha256:$config,recoveryServiceConfigSha256:$recoveryServiceConfig,images:{postgres:{ref:"postgres:17",id:"sha256:postgres"},litellm:{ref:"litellm:test",id:"sha256:litellm"},autoheal:{ref:"autoheal:test",id:"sha256:autoheal"}},sourceRef:"test",completedAt:"2026-10-14T00:00:00Z"}')"
+    '{version:2,composeSha256:$compose,litellmConfigSha256:$config,recoveryServiceConfigSha256:$recoveryServiceConfig,images:{postgres:{ref:"postgres:17",id:"sha256:0000000000000000000000000000000000000000000000000000000000000001"},litellm:{ref:"litellm:test",id:"sha256:0000000000000000000000000000000000000000000000000000000000000002"},autoheal:{ref:"autoheal:test",id:"sha256:0000000000000000000000000000000000000000000000000000000000000003"}},sourceRef:"test",completedAt:"2026-10-14T00:00:00Z"}')"
   digest="$(printf '%s' "$core" | sha256sum | awk '{print $1}')"
   jq -cS --arg digest "$digest" '. + {declarationDigest:$digest}' <<<"$core" > "$RECEIPT"
 }
@@ -154,6 +187,35 @@ run_recovery() {
     FAKE_OPENBAO_SEALED="${FAKE_OPENBAO_SEALED:-false}" \
     bash scripts/ci/deploy-infra.sh --recover-installed-runtime
 }
+
+# A partial helper installation or unsupported installed protocol must refuse
+# before receipt/config checks or any Docker effect, even on ordinary recovery.
+mv "$FAKE_GUARD_ROOT/guard.json" "$TMPROOT/valid-guard.json"
+if run_recovery > "$TMPROOT/incomplete-guard.log" 2>&1; then
+  echo 'incomplete guard enrollment admitted recovery' >&2; exit 1
+fi
+grep -q 'runtime_guard_installation_incomplete' "$TMPROOT/incomplete-guard.log"
+! grep -Eq '(^| )(up|start|restart|stop|kill|rm|down|pull|build|create)( |$)' "$DOCKER_LOG" \
+  || { echo 'incomplete enrollment mutated Docker' >&2; exit 1; }
+jq '.protocolVersion = 999' "$TMPROOT/valid-guard.json" > "$FAKE_GUARD_ROOT/guard.json"
+chmod 600 "$FAKE_GUARD_ROOT/guard.json"
+if run_recovery > "$TMPROOT/incompatible-guard.log" 2>&1; then
+  echo 'incompatible guard protocol admitted recovery' >&2; exit 1
+fi
+grep -q 'runtime_guard_installation_incomplete' "$TMPROOT/incompatible-guard.log"
+! grep -Eq '(^| )(up|start|restart|stop|kill|rm|down|pull|build|create)( |$)' "$DOCKER_LOG" \
+  || { echo 'incompatible enrollment mutated Docker' >&2; exit 1; }
+mv "$TMPROOT/valid-guard.json" "$FAKE_GUARD_ROOT/guard.json"
+cp "$FAKE_GUARD_LIB/runtime-recovery-host.py" "$TMPROOT/valid-recovery-host.py"
+printf '\n# tampered fixture\n' >> "$FAKE_GUARD_LIB/runtime-recovery-host.py"
+if run_recovery > "$TMPROOT/tampered-guard.log" 2>&1; then
+  echo 'tampered guard helper admitted recovery' >&2; exit 1
+fi
+grep -q 'runtime_guard_installation_incomplete' "$TMPROOT/tampered-guard.log"
+! grep -Eq '(^| )(up|start|restart|stop|kill|rm|down|pull|build|create)( |$)' "$DOCKER_LOG" \
+  || { echo 'tampered enrollment mutated Docker' >&2; exit 1; }
+mv "$TMPROOT/valid-recovery-host.py" "$FAKE_GUARD_LIB/runtime-recovery-host.py"
+: > "$DOCKER_LOG"
 
 # Missing receipt: named fail-closed state, no Docker command at all.
 missing_out="$(run_recovery)"
@@ -198,13 +260,24 @@ FAKE_OPENBAO_SEALED=true
 degraded_out="$(run_recovery)"
 grep -q '^recovery_state=recovered_degraded$' <<<"$degraded_out"
 
-# The normal candidate-a full-reconcile path shares the recovery preflight. It
-# reaches required-secret validation only after attempting installed recovery;
-# use a missing receipt so the preflight itself performs zero Docker mutation.
-rm -f "$RECEIPT"
-: > "$DOCKER_LOG"
-set +e
-candidate_full_out="$({
+# The full-reconcile entrypoint repairs enrollment before installed recovery.
+# This stub isolates the entrypoint wiring; native tests exercise interrupted
+# publication and the real staged installer under the shared guard.
+export FAKE_REPAIR_VALID_MARKER="$TMPROOT/full-valid-guard.json"
+export FAKE_REPAIR_LOG="$TMPROOT/repair.log"
+cp "$FAKE_GUARD_ROOT/guard.json" "$FAKE_REPAIR_VALID_MARKER"
+cat > "$FAKEBIN/node" <<'NODE_REPAIR'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$#" == 3 && "$1" == --experimental-strip-types && "$2" == */scripts/ci/runtime-source-admission.ts && "$3" == repair-installed-guard ]]
+[[ "${FAKE_REPAIR_REFUSE:-false}" != true ]] || exit 93
+! grep -Eq '(^| )(up|start|restart|stop|kill|rm|down|pull|build|create)( |$)' "$FAKE_DOCKER_LOG"
+cp "$FAKE_REPAIR_VALID_MARKER" "$FAKE_GUARD_ROOT/guard.json"
+chmod 600 "$FAKE_GUARD_ROOT/guard.json"
+printf 'admitted_staged_repair\n' >> "$FAKE_REPAIR_LOG"
+NODE_REPAIR
+chmod +x "$FAKEBIN/node"
+run_candidate_full() {
   env -u DOMAIN \
     PATH="$FAKEBIN:$PATH" \
     VM_HOST=fake \
@@ -213,14 +286,40 @@ candidate_full_out="$({
     COGNI_RECOVERY_RECEIPT="$RECEIPT" \
     FAKE_DOCKER_LOG="$DOCKER_LOG" \
     FAKE_RUNTIME_DIR="$RUNTIME_DIR" \
-    bash scripts/ci/deploy-infra.sh
-} 2>&1)"
-candidate_full_rc=$?
-set -e
-[[ "$candidate_full_rc" -ne 0 ]] || { echo "candidate full reconcile unexpectedly passed without required secrets" >&2; exit 1; }
-grep -q '^recovery_state=custody_required$' <<<"$candidate_full_out"
-grep -q 'Candidate full reconcile continuing after installed-runtime recovery preflight' <<<"$candidate_full_out"
-grep -q 'Missing required deploy input: DOMAIN' <<<"$candidate_full_out"
-[[ ! -s "$DOCKER_LOG" ]] || { echo "candidate full preflight mutated Docker without a receipt" >&2; exit 1; }
+    bash scripts/ci/deploy-infra.sh "$@"
+}
+rm -f "$RECEIPT"
+for enrollment in complete missing stale; do
+  cp "$FAKE_REPAIR_VALID_MARKER" "$FAKE_GUARD_ROOT/guard.json"
+  case "$enrollment" in
+    missing) rm "$FAKE_GUARD_ROOT/guard.json" ;;
+    stale) jq '.protocolVersion = 999' "$FAKE_REPAIR_VALID_MARKER" > "$FAKE_GUARD_ROOT/guard.json" ;;
+  esac
+  : > "$DOCKER_LOG"
+  : > "$FAKE_REPAIR_LOG"
+  set +e
+  candidate_full_out="$(run_candidate_full 2>&1)"
+  candidate_full_rc=$?
+  set -e
+  [[ "$candidate_full_rc" -ne 0 ]] || { echo "candidate full reconcile unexpectedly passed without required inputs" >&2; exit 1; }
+  grep -q '^admitted_staged_repair$' "$FAKE_REPAIR_LOG"
+  grep -q '^recovery_state=custody_required$' <<<"$candidate_full_out"
+  grep -q 'Candidate full reconcile continuing after installed-runtime recovery preflight' <<<"$candidate_full_out"
+  grep -q 'Missing required deploy input: DOMAIN' <<<"$candidate_full_out"
+  [[ ! -s "$DOCKER_LOG" ]] || { echo "candidate full preflight mutated Docker without a receipt" >&2; exit 1; }
+done
+: > "$DOCKER_LOG"
+if FAKE_REPAIR_REFUSE=true run_candidate_full > "$TMPROOT/refused-repair.log" 2>&1; then
+  echo 'failed guard repair admitted full reconcile' >&2; exit 1
+fi
+! grep -q '^recovery_state=' "$TMPROOT/refused-repair.log"
+! grep -Eq '(^| )(up|start|restart|stop|kill|rm|down|pull|build|create)( |$)' "$DOCKER_LOG"
+: > "$FAKE_REPAIR_LOG"
+: > "$DOCKER_LOG"
+if run_candidate_full --dry-run > "$TMPROOT/dry-guard-repair.log" 2>&1; then
+  echo 'dry run unexpectedly passed without required inputs' >&2; exit 1
+fi
+grep -q 'Missing required deploy input: DOMAIN' "$TMPROOT/dry-guard-repair.log"
+[[ ! -s "$FAKE_REPAIR_LOG" && ! -s "$DOCKER_LOG" ]]
 
 echo "PASS: recover-installed-runtime.test.sh"

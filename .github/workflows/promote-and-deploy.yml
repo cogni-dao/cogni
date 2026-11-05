@@ -125,6 +125,23 @@ jobs:
             echo "preview_forward=$PREVIEW_FORWARD"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Checkout trusted runtime admission
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          path: runtime-policy
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Admit guarded runtime source
+        working-directory: runtime-policy
+        env:
+          # Runtime writers run from the trusted workflow revision. An older
+          # retained app artifact is not a runtime-tooling selection.
+          SOURCE_SHA: ${{ github.sha }}
+        run: node --experimental-strip-types scripts/ci/runtime-source-admission.ts "$SOURCE_SHA"
+
       - name: Checkout (for image-tags lib)
         uses: actions/checkout@v4
         with:

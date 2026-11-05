@@ -127,6 +127,14 @@ export type SharedLaneInfraEnv = "preview" | "production";
 
 export type ReconcileNodeInfraInput =
   | {
+      readonly env: import("@cogni/operator-gateway-activation").GatewayEnvironment;
+      readonly slug: "operator";
+      readonly parentOwner: string;
+      readonly parentRepo: string;
+      readonly target: "litellm-provider-key";
+      readonly operationId: string;
+    }
+  | {
       readonly env: "production";
       readonly slug: "operator";
       readonly parentOwner: string;
@@ -155,6 +163,7 @@ export type ReconcileNodeInfraInput =
     };
 
 export type NodeInfraReconcileResult =
+  | import("@cogni/operator-gateway-activation").GatewayOperation
   | {
       readonly status: "unchanged" | "git_published";
       readonly version: 1;
@@ -495,6 +504,13 @@ export interface DeployPlanePort {
   reconcileNodeInfra(
     input: ReconcileNodeInfraInput
   ): Promise<NodeInfraReconcileResult>;
+
+  /** Read only. A historical native receipt never certifies current host state. */
+  readGatewayActivation(input: {
+    readonly parentOwner: string;
+    readonly parentRepo: string;
+    readonly operationId: string;
+  }): Promise<import("@cogni/operator-gateway-activation").GatewayOperation>;
 
   /**
    * Promote a node to an environment by dispatching `promote-and-deploy.yml` via the operator App.

@@ -200,6 +200,14 @@ jobs:
           ref: ${{ github.ref }}
           fetch-depth: 0
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Admit guarded provisioning source
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: node --experimental-strip-types scripts/ci/runtime-source-admission.ts "$SOURCE_SHA"
+
       - name: Pre-flight — Grafana Cloud admin token (optional)
         env:
           GRAFANA_CLOUD_ADMIN_TOKEN: ${{ secrets.GH_GRAFANA_CLOUD_ADMIN_TOKEN }}

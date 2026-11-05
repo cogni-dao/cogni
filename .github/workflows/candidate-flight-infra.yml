@@ -1,4 +1,5 @@
 name: Candidate Flight — Infra
+run-name: ${{ inputs.operation == 'gateway-activation' && format('Gateway {0} {1} {2} {3}', inputs.operation_id, inputs.environment, inputs.implementation_sha, inputs.transport_sha) || 'Candidate infrastructure reconcile' }}
 
 # Infra-only reconciliation of the candidate-a VM's Compose stack.
 # This workflow is the INFRA LEVER (task.0314): it rsyncs infra/compose/** from
@@ -24,6 +25,25 @@ name: Candidate Flight — Infra
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: "Fixed infrastructure operation"
+        type: choice
+        options: [infra, gateway-activation]
+        default: infra
+      environment:
+        description: "Gateway target environment (infra remains candidate-only)"
+        type: choice
+        options: [candidate-a, preview, production]
+        default: candidate-a
+      operation_id:
+        description: "Immutable gateway operation UUID"
+        type: string
+      implementation_sha:
+        description: "Implementation selected by the signed intent"
+        type: string
+      transport_sha:
+        description: "Trusted-main workflow transport commit"
+        type: string
       ref:
         description: "Git ref to source infra/compose/** from (blank = use the dispatch ref, typically main)"
         required: false
@@ -32,13 +52,32 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: candidate-flight-infra-candidate-a
+  group: candidate-flight-infra-${{ inputs.environment || 'candidate-a' }}
   cancel-in-progress: false
 
 jobs:
+  source-admission:
+    if: inputs.operation != 'gateway-activation'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Admit guarded infrastructure source
+        env:
+          SOURCE_SHA: ${{ inputs.ref || github.sha }}
+        run: node --experimental-strip-types scripts/ci/runtime-source-admission.ts "$SOURCE_SHA"
+
   flight-infra:
+    needs: source-admission
+    if: inputs.operation != 'gateway-activation'
     runs-on: ubuntu-latest
     environment: candidate-a
     env:
@@ -167,6 +206,10 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
       - name: Setup SSH
         run: |
           if [ -z "$VM_HOST" ]; then
@@ -252,3 +295,59 @@ jobs:
             -H "Authorization: Bearer ${INTERNAL_OPS_TOKEN}" \
             -H "Content-Type: application/json" \
             -d '{"limit":500}' | jq .
+
+  gateway-activation:
+    if: inputs.operation == 'gateway-activation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    env:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      GH_TOKEN: ${{ github.token }}
+      GATEWAY_OPERATION_ID: ${{ inputs.operation_id }}
+      GATEWAY_ENVIRONMENT: ${{ inputs.environment }}
+      GATEWAY_IMPLEMENTATION_SHA: ${{ inputs.implementation_sha }}
+      GATEWAY_TRANSPORT_SHA: ${{ inputs.transport_sha }}
+    steps:
+      - name: Checkout trusted transport
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
+        with:
+          version: 9.12.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Resolve signed immutable intent
+        id: intent
+        run: pnpm exec tsx scripts/ci/gateway-activation.ts prepare
+      - name: Checkout original implementation
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ steps.intent.outputs.implementation_sha }}
+          fetch-depth: 0
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Set up target transport
+        env:
+          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$VM_HOST"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts
+      - name: Activate only the gateway binding
+        run: pnpm exec tsx scripts/ci/gateway-activation.ts run
+      - name: Retain typed transaction observation
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gateway-receipt-${{ inputs.operation_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gateway-receipt.json
+          retention-days: 30
+          if-no-files-found: ignore

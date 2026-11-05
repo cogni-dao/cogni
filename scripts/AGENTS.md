@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-22
+- **Last reviewed:** 2026-11-04
 
 ## Purpose
 
@@ -22,7 +22,7 @@ Build-time scripts for migrations, seeds, type generation, development utilities
 ```json
 {
   "layer": "scripts",
-  "may_import": ["scripts", "ports", "shared", "types"],
+  "may_import": ["scripts", "ports", "shared", "types", "packages"],
   "must_not_import": [
     "app",
     "features",

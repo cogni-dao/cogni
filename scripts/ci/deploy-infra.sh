@@ -264,8 +264,17 @@ esac
 # rsync, image pulls, or the full remote reconciler. It trusts neither file
 # presence nor Docker restart policy: every installed input and local image must
 # byte-match the receipt written LAST by a successful full deploy.
-if [[ "$RECOVER_INSTALLED_RUNTIME" == "true" || "$ENVIRONMENT" == candidate-* ]]; then
+if [[ "$DRY_RUN" != "true" && ( "$RECOVER_INSTALLED_RUNTIME" == "true" || "$ENVIRONMENT" == candidate-* ) ]]; then
   [[ -n "${VM_HOST:-}" ]] || log_fatal "VM_HOST is required for installed-runtime recovery"
+  if [[ "$RECOVER_INSTALLED_RUNTIME" != "true" ]]; then
+    # A full reconcile can repair partial publication from admitted staged
+    # helpers. Explicit custody-free recovery still trusts only complete inputs.
+    (
+      cd "$CALLER_REPO"
+      VM_HOST="$VM_HOST" DEPLOY_ENVIRONMENT="$ENVIRONMENT" SSH_KEY_PATH="${SSH_KEY_PATH:-}" \
+        node --experimental-strip-types "$CALLER_REPO/scripts/ci/runtime-source-admission.ts" repair-installed-guard
+    )
+  fi
   recovery_output="$(ssh $SSH_OPTS root@"$VM_HOST" 'bash -s' <<'RECOVER_REMOTE'
 set -euo pipefail
 
@@ -283,8 +292,26 @@ custody_required() {
 }
 
 command -v jq >/dev/null 2>&1 || custody_required jq_missing
+# Guard admission precedes receipt validation: an interrupted key transaction
+# must be resumed by its owner, never mistaken for ordinary receipt corruption.
+GUARD=/var/lib/cogni/runtime-maintenance/lib/runtime-maintenance-guard.py
+CODEC=/var/lib/cogni/runtime-maintenance/lib/runtime-recovery-receipt.py
+[[ -s "$GUARD" && -s "$CODEC" ]] || custody_required runtime_guard_not_installed
+python3 "$GUARD" exec-installed bash -s <<'GUARDED_RECOVERY'
+set -euo pipefail
+RUNTIME_DIR="${COGNI_RUNTIME_DIR:-/opt/cogni-template-runtime}"
+COMPOSE_FILE="$RUNTIME_DIR/docker-compose.yml"
+ENV_FILE="$RUNTIME_DIR/.env"
+LITELLM_CONFIG="$RUNTIME_DIR/configs/litellm.config.yaml"
+RECEIPT="${COGNI_RECOVERY_RECEIPT:-/var/lib/cogni/runtime-recovery-receipt.json}"
+CODEC=/var/lib/cogni/runtime-maintenance/lib/runtime-recovery-receipt.py
+RUNTIME_COMPOSE=(docker compose --project-name cogni-runtime --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+custody_required() {
+  printf 'recovery_state=custody_required\nrecovery_reason=%s\n' "$1"
+  exit 0
+}
 [[ -s "$RECEIPT" ]] || custody_required receipt_missing
-jq -e '.version == 2 and (.declarationDigest | type == "string")' "$RECEIPT" >/dev/null 2>&1 \
+python3 "$CODEC" validate < "$RECEIPT" >/dev/null 2>&1 \
   || custody_required receipt_invalid
 for file in "$COMPOSE_FILE" "$ENV_FILE" "$LITELLM_CONFIG"; do
   [[ -s "$file" ]] || custody_required installed_file_missing
@@ -295,11 +322,6 @@ litellm_config_sha="$(sha256sum "$LITELLM_CONFIG" | awk '{print $1}')"
 [[ "$compose_sha" == "$(jq -r '.composeSha256' "$RECEIPT")" ]] || custody_required compose_mismatch
 [[ "$litellm_config_sha" == "$(jq -r '.litellmConfigSha256' "$RECEIPT")" ]] || custody_required litellm_config_mismatch
 
-receipt_core="$(jq -cS 'del(.declarationDigest)' "$RECEIPT")"
-receipt_digest="$(printf '%s' "$receipt_core" | sha256sum | awk '{print $1}')"
-[[ "$receipt_digest" == "$(jq -r '.declarationDigest' "$RECEIPT")" ]] \
-  || custody_required receipt_digest_mismatch
-
 resolved_config="$("${RUNTIME_COMPOSE[@]}" config --format json 2>/dev/null)" \
   || custody_required compose_config_invalid
 recovery_service_config="$(jq -cS \
@@ -307,7 +329,7 @@ recovery_service_config="$(jq -cS \
   <<<"$resolved_config")" || custody_required compose_config_invalid
 jq -e '.services | [.postgres, .litellm, .autoheal] | all(. != null)' \
   <<<"$recovery_service_config" >/dev/null 2>&1 || custody_required recovery_service_missing
-recovery_service_config_sha="$(printf '%s' "$recovery_service_config" | sha256sum | awk '{print $1}')"
+recovery_service_config_sha="$(python3 "$CODEC" config-hash <<<"$resolved_config")"
 [[ "$recovery_service_config_sha" == "$(jq -r '.recoveryServiceConfigSha256' "$RECEIPT")" ]] \
   || custody_required recovery_service_config_mismatch
 for service in postgres litellm autoheal; do
@@ -352,6 +374,7 @@ if ! timeout 20 kubectl exec -n openbao openbao-0 -- \
 fi
 printf 'recovery_state=%s\n' "$state"
 printf 'recovery_receipt=%s\n' "$(jq -r '.declarationDigest' "$RECEIPT")"
+GUARDED_RECOVERY
 RECOVER_REMOTE
 )"
   printf '%s\n' "$recovery_output"
@@ -2713,7 +2736,6 @@ $RUNTIME_COMPOSE ps
 # any Compose mutation can occur.
 write_runtime_recovery_receipt() {
   local receipt=/var/lib/cogni/runtime-recovery-receipt.json
-  local receipt_tmp="${receipt}.tmp.$$"
   local compose_sha litellm_config_sha recovery_service_config recovery_service_config_sha
   local service ref image_id core digest
   local images='{}'
@@ -2746,7 +2768,7 @@ write_runtime_recovery_receipt() {
   jq -e '.services | [.postgres, .litellm, .autoheal] | all(. != null)' \
     <<<"$recovery_service_config" >/dev/null \
     || log_fatal "recovery receipt: recovery service declaration is incomplete"
-  recovery_service_config_sha="$(printf '%s' "$recovery_service_config" | sha256sum | awk '{print $1}')"
+  recovery_service_config_sha="$(python3 /var/lib/cogni/runtime-maintenance/lib/runtime-recovery-receipt.py config-hash <<<"$resolved_config")"
   for service in postgres litellm autoheal; do
     ref="$(jq -r --arg service "$service" '.services[$service].image // empty' <<<"$resolved_config")"
     [[ -n "$ref" ]] || log_fatal "recovery receipt: ${service} image is unresolved"
@@ -2763,11 +2785,10 @@ write_runtime_recovery_receipt() {
     --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --argjson images "$images" \
     '{version: 2, composeSha256: $compose, litellmConfigSha256: $config, recoveryServiceConfigSha256: $recoveryServiceConfig, images: $images, sourceRef: $sourceRef, completedAt: $completedAt}')"
-  digest="$(printf '%s' "$core" | sha256sum | awk '{print $1}')"
+  core="$(python3 /var/lib/cogni/runtime-maintenance/lib/runtime-recovery-receipt.py seal <<<"$core")"
+  digest="$(jq -r .declarationDigest <<<"$core")"
   mkdir -p /var/lib/cogni
-  jq -cS --arg digest "$digest" '. + {declarationDigest: $digest}' <<<"$core" > "$receipt_tmp"
-  chmod 600 "$receipt_tmp"
-  mv -f "$receipt_tmp" "$receipt"
+  python3 /var/lib/cogni/runtime-maintenance/lib/runtime-recovery-receipt.py commit "$RUNTIME_RECEIPT_EXPECTED" <<<"$core" >/dev/null
   log_info "Runtime recovery receipt installed: ${digest}"
 }
 
@@ -2817,62 +2838,62 @@ fi
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Deploy bundles to VM via rsync
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-log_info "Deploying edge and runtime bundles to VM..."
-ssh $SSH_OPTS root@"$VM_HOST" "mkdir -p /opt/cogni-template-edge /opt/cogni-template-runtime /opt/cogni-template-argocd-updater"
-
-# Upload edge bundle (rarely changes - Caddy config only)
-rsync -av -e "ssh $SSH_OPTS" \
-  "$REPO_ROOT/infra/compose/edge/" \
-  root@"$VM_HOST":/opt/cogni-template-edge/
-
-# Upload runtime bundle (infra stack config)
-rsync -av -e "ssh $SSH_OPTS" \
-  "$REPO_ROOT/infra/compose/runtime/" \
-  root@"$VM_HOST":/opt/cogni-template-runtime/
-
-# Upload Argo CD Image Updater kustomize tree (bug.0344 — consumed by Step 7b
-# in the remote script). Scoped to the image-updater subtree only; the rest
-# of infra/k8s/argocd/ (ApplicationSets) is reconciled by promote-and-deploy.yml /
-# candidate-flight.yml's own kubectl-apply step.
+log_info "Staging edge and runtime bundles privately..."
+REMOTE_STAGE="$(ssh $SSH_OPTS root@"$VM_HOST" 'umask 077; mkdir -p /var/lib/cogni/runtime-maintenance/staging; mktemp -d /var/lib/cogni/runtime-maintenance/staging/infra.XXXXXXXX')"
+[[ "$REMOTE_STAGE" =~ ^/var/lib/cogni/runtime-maintenance/staging/infra\.[A-Za-z0-9]+$ ]] || log_fatal "invalid private runtime staging path"
+ssh $SSH_OPTS root@"$VM_HOST" "mkdir -p '$REMOTE_STAGE/edge' '$REMOTE_STAGE/runtime' '$REMOTE_STAGE/updater' '$REMOTE_STAGE/lib'"
+rsync -av -e "ssh $SSH_OPTS" "$REPO_ROOT/infra/compose/edge/" "root@$VM_HOST:$REMOTE_STAGE/edge/"
+rsync -av -e "ssh $SSH_OPTS" "$REPO_ROOT/infra/compose/runtime/" "root@$VM_HOST:$REMOTE_STAGE/runtime/"
 if [[ -d "$REPO_ROOT/infra/k8s/argocd/image-updater" ]]; then
-  rsync -av --delete -e "ssh $SSH_OPTS" \
-    "$REPO_ROOT/infra/k8s/argocd/image-updater/" \
-    root@"$VM_HOST":/opt/cogni-template-argocd-updater/
+  rsync -av --delete -e "ssh $SSH_OPTS" "$REPO_ROOT/infra/k8s/argocd/image-updater/" "root@$VM_HOST:$REMOTE_STAGE/updater/"
 fi
-
-# Upload deployment script
-scp $SSH_OPTS "$ARTIFACT_DIR/deploy-infra-remote.sh" root@"$VM_HOST":/tmp/deploy-infra-remote.sh
-
-# Upload healthcheck and bootstrap scripts (called from deploy-infra-remote.sh)
+scp $SSH_OPTS "$ARTIFACT_DIR/deploy-infra-remote.sh" "root@$VM_HOST:$REMOTE_STAGE/deploy-infra-remote.sh"
 scp $SSH_OPTS \
   "$REPO_ROOT/scripts/ci/ensure-temporal-namespace.sh" \
   "$REPO_ROOT/scripts/ci/bootstrap-openfga.sh" \
   "$REPO_ROOT/scripts/ci/reconcile-edge-caddy.remote.sh" \
   "$REPO_ROOT/scripts/secrets/sync-app-webhook-secret.sh" \
-  root@"$VM_HOST":/tmp/
-
+  "$REPO_ROOT/infra/openfga/rbac-model.json" "root@$VM_HOST:$REMOTE_STAGE/"
+scp $SSH_OPTS "$REPO_ROOT/infra/provision/cherry/harden-docker-public-ports.sh" "root@$VM_HOST:$REMOTE_STAGE/hardener.sh"
+scp $SSH_OPTS "$ARTIFACT_DIR/compute-egress-allowlist" "root@$VM_HOST:$REMOTE_STAGE/compute-egress-allowlist"
 scp $SSH_OPTS \
-  "$REPO_ROOT/infra/provision/cherry/harden-docker-public-ports.sh" \
-  "root@${VM_HOST}:${REMOTE_HARDEN_SCRIPT}"
-scp $SSH_OPTS \
-  "$ARTIFACT_DIR/compute-egress-allowlist" \
-  "root@${VM_HOST}:${REMOTE_COMPUTE_EGRESS_ALLOWLIST}"
+  "$REPO_ROOT/scripts/ci/lib/runtime-maintenance-guard.py" \
+  "$REPO_ROOT/scripts/ci/lib/runtime-recovery-receipt.py" \
+  "$REPO_ROOT/scripts/ci/lib/runtime-recovery-host.py" \
+  "$REPO_ROOT/scripts/ci/lib/runtime-guard-install.py" \
+  "$REPO_ROOT/scripts/ci/lib/gateway-activation-host.py" "root@$VM_HOST:$REMOTE_STAGE/lib/"
+REMOTE_SHA="$(ssh $SSH_OPTS root@"$VM_HOST" "sha256sum '$REMOTE_STAGE/deploy-infra-remote.sh'" | awk '{print $1}')"
+[[ "$LOCAL_SHA" == "$REMOTE_SHA" ]] || log_fatal "staged deploy-infra-remote.sh digest mismatch"
 
-scp $SSH_OPTS "$REPO_ROOT/infra/openfga/rbac-model.json" root@"$VM_HOST":/tmp/rbac-model.json
-
-# Verify SCP landed correctly
-REMOTE_CHECK=$(ssh $SSH_OPTS root@"$VM_HOST" "echo host=\$(hostname) date=\$(date -u +%Y-%m-%dT%H:%M:%SZ) && sha256sum /tmp/deploy-infra-remote.sh | awk '{print \$1}'" 2>&1) || {
-  log_fatal "SSH to VM failed during SCP verify: $REMOTE_CHECK"
-}
-log_info "VM: ${REMOTE_CHECK%%$'\n'*}"
-REMOTE_SHA=$(echo "$REMOTE_CHECK" | tail -1)
-if [ -z "$REMOTE_SHA" ] || [ ${#REMOTE_SHA} -ne 64 ]; then
-  log_fatal "/tmp/deploy-infra-remote.sh missing or unreadable on VM. SSH output: $REMOTE_CHECK"
+# Publication and execution share ONE remote lock lifetime. No rsync destination
+# above is an installed path. Only this guarded process can publish the bundle.
+cat > "$ARTIFACT_DIR/publish-runtime.sh" <<'PUBLISH_RUNTIME'
+#!/bin/bash
+set -euo pipefail
+stage="$1"
+source_sha="$2"
+python3 "$stage/lib/runtime-guard-install.py" install "$source_sha" >/dev/null
+mkdir -p /opt/cogni-template-edge /opt/cogni-template-runtime /opt/cogni-template-argocd-updater /var/lib/cogni/runtime-maintenance/lib
+RUNTIME_RECEIPT_EXPECTED=absent
+if [[ -e /var/lib/cogni/runtime-recovery-receipt.json ]]; then
+  RUNTIME_RECEIPT_EXPECTED="$(sha256sum /var/lib/cogni/runtime-recovery-receipt.json | awk '{print $1}')"
 fi
-if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]; then
-  log_fatal "deploy-infra-remote.sh sha256 mismatch: local=${LOCAL_SHA} remote=${REMOTE_SHA}"
-fi
-log_info "deploy-infra-remote.sh verified on VM (sha256 match)"
+export RUNTIME_RECEIPT_EXPECTED
+cp -a "$stage/edge/." /opt/cogni-template-edge/
+cp -a "$stage/runtime/." /opt/cogni-template-runtime/
+rsync -a --delete "$stage/updater/" /opt/cogni-template-argocd-updater/
+for helper in ensure-temporal-namespace.sh bootstrap-openfga.sh reconcile-edge-caddy.remote.sh sync-app-webhook-secret.sh rbac-model.json; do
+  install -m 600 "$stage/$helper" "/tmp/$helper"
+done
+set -a
+. "$stage/env.sh"
+set +a
+rm -f "$stage/env.sh"
+install -m 600 "$stage/hardener.sh" "$REMOTE_HARDEN_SCRIPT"
+install -m 600 "$stage/compute-egress-allowlist" "$REMOTE_COMPUTE_EGRESS_ALLOWLIST"
+exec bash "$stage/deploy-infra-remote.sh"
+PUBLISH_RUNTIME
+scp $SSH_OPTS "$ARTIFACT_DIR/publish-runtime.sh" "root@$VM_HOST:$REMOTE_STAGE/publish-runtime.sh"
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Execute remote script with env vars
@@ -2932,9 +2953,11 @@ for _rv in "${REMOTE_ENV_VARS[@]}"; do
   printf '%s=%q\n' "$_rv" "${!_rv-}" >> "$REMOTE_ENV_FILE"
 done
 unset _rv
-scp $SSH_OPTS "$REMOTE_ENV_FILE" root@"$VM_HOST":/tmp/deploy-infra-env.sh
+chmod 600 "$REMOTE_ENV_FILE"
+scp $SSH_OPTS "$REMOTE_ENV_FILE" "root@$VM_HOST:$REMOTE_STAGE/env.sh"
 ssh $SSH_OPTS root@"$VM_HOST" \
-    "set -a; . /tmp/deploy-infra-env.sh; set +a; rm -f /tmp/deploy-infra-env.sh; bash /tmp/deploy-infra-remote.sh"
+    "python3 '$REMOTE_STAGE/lib/runtime-maintenance-guard.py' exec bash '$REMOTE_STAGE/publish-runtime.sh' '$REMOTE_STAGE' '$REF_SHA'"
+ssh $SSH_OPTS root@"$VM_HOST" "rm -rf -- '$REMOTE_STAGE'"
 rm -f "$REMOTE_ENV_FILE"
 
 emit_deployment_event "infra_deployment.complete" "success" "Infrastructure deployment completed"

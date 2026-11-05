@@ -6,6 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
+- **Last reviewed:** 2026-11-04
 
 ## Purpose
 
@@ -84,3 +85,4 @@ pnpm setup dao       # DAO contract deployment
 ## Notes
 
 - `bootstrap.sh` is the human/runner entry point; `provision-env-vm.sh` owns VM, DNS, OpenBao/ESO, Argo, and readyz proof.
+- Provisioning stages edge/bootstrap and local image-build inputs privately, then publishes them under the shared runtime guard. Phase 5f is the sole runtime definition and environment publisher; provisioning does not write an intermediate runtime render.

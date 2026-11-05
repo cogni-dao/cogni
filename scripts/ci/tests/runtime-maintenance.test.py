@@ -1,0 +1,694 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+"""Bounded native lock, crash-journal, receipt-CAS and gateway-resume contracts."""
+import copy
+import contextlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+LIB = Path(__file__).resolve().parents[1] / 'lib'
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(name.replace('-', '_'), LIB / (name + '.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+guard = load('runtime-maintenance-guard')
+receipt = load('runtime-recovery-receipt')
+gateway = load('gateway-activation-host')
+installer = load('runtime-guard-install')
+recovery = load('runtime-recovery-host')
+gateway_install = load('gateway-install-host')
+ID = 'b9d19a15-95f9-41b4-bcf5-cd56142c0eb2'
+OTHER_ID = '36d7c53d-3a41-4e5d-b44d-cf5fbedbfb24'
+
+class NativeContracts(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        for module in (guard, gateway.guard, receipt, gateway.receipt, installer, installer.guard, installer.receipt,
+                       recovery.guard, recovery.receipt, gateway_install.guard, gateway_install.receipt):
+            self.enterContext(patch.object(module, 'OWNER_UID', os.geteuid()))
+        self.enterContext(patch.object(guard, 'ROOT', self.root / 'guard'))
+        self.enterContext(patch.object(receipt, 'RECEIPT', self.root / 'receipt.json'))
+        self.enterContext(patch.object(installer.guard, 'ROOT', guard.ROOT))
+        self.enterContext(patch.object(recovery.guard, 'ROOT', guard.ROOT))
+        self.enterContext(patch.object(gateway_install.guard, 'ROOT', guard.ROOT))
+
+    def enrollment(self, qualification='merged', source='a', floor='a', revision='1'):
+        stage = self.root / 'staged-library'
+        stage.mkdir(exist_ok=True)
+        for name in gateway_install.FILES:
+            (stage / name).write_text(name + revision)
+        (stage / 'gateway-install-host.py').write_text('enrollment-adapter' + revision)
+        return {'protocolVersion': 1, 'maintenanceEnabled': True, 'sourceQualification': qualification,
+                'env': 'candidate-a', 'custodian': {'owner': 'cogni-dao', 'repo': 'cogni', 'controlEnv': 'production'},
+                'implementationSha': source * 40, 'minimumSourceSha': floor * 40,
+                'coreSha256': receipt.digest(('core' + revision).encode()),
+                'runnerSha256': receipt.digest(('runner' + revision).encode()),
+                'admissionSha256': {name: receipt.digest((name + revision).encode())
+                                   for name in gateway_install.ADMISSION_INPUTS} |
+                                  {'enrollmentAdapter': receipt.digest((stage / 'gateway-install-host.py').read_bytes())},
+                'blobs': {name: receipt.digest((stage / name).read_bytes()) for name in gateway_install.FILES},
+                'inventorySha256': 'e' * 64, 'operationId': ID}
+
+    def enroll(self, manifest):
+        env, machine = self.root / 'runtime.env', self.root / 'machine-id'
+        env.write_text('DEPLOY_ENVIRONMENT=candidate-a\n')
+        machine.write_text('fixture-machine')
+        stage = self.root / 'staged-library'
+        def installed(source, operation):
+            target = guard.ROOT / 'lib'
+            guard.private_directory(target)
+            for name in gateway_install.FILES:
+                receipt.atomic(target / name, (stage / name).read_bytes())
+            return {'blobs': manifest['blobs']}
+        with patch.object(gateway_install, 'LIB', stage), \
+             patch.object(gateway_install, 'Path', side_effect=lambda path: {
+                 '/opt/cogni-template-runtime/.env': env, '/etc/machine-id': machine}[path]), \
+             patch.object(sys, 'argv', ['gateway-install-host.py', 'install']), \
+             patch.object(sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(json.dumps(manifest).encode()))), \
+             patch.object(gateway_install.subprocess, 'check_output', return_value=b'{"metadata":{"uid":"fixture-cluster"}}'), \
+             patch.object(gateway_install.installer, 'install', side_effect=installed) as effect, \
+             patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()) as output:
+            os.environ.pop('COGNI_RUNTIME_GUARD_FD', None)
+            gateway_install.main()
+            return json.loads(output.getvalue()), effect.call_count
+
+    def test_premerge_enrollment_transfers_identical_inputs_once_to_merged(self):
+        self.enroll(self.enrollment('premerge'))
+        self.journal('activated')
+        observed, effects = self.enroll(self.enrollment('merged', source='b', floor='b'))
+        self.assertEqual(observed['state'], 'guard_enrolled')
+        self.assertEqual(effects, 1)
+        source = json.loads((guard.ROOT / 'source.json').read_text())
+        self.assertEqual(source['sourceQualification'], 'merged')
+        with self.assertRaisesRegex(RuntimeError, 'gateway_guard_enrollment_refused'):
+            self.enroll(self.enrollment('premerge', source='b', floor='b'))
+
+    def test_premerge_transfer_refuses_changed_implementation_inputs(self):
+        self.enroll(self.enrollment('premerge'))
+        self.journal('activated')
+        previous = (guard.ROOT / 'source.json').read_bytes()
+        for field in ('coreSha256', 'runnerSha256', 'blobs'):
+            with self.subTest(field=field):
+                manifest = self.enrollment('merged', source='b', floor='b')
+                if field == 'blobs':
+                    name = gateway_install.FILES[0]
+                    (self.root / 'staged-library' / name).write_text('changed helper')
+                    manifest['blobs'][name] = receipt.digest(b'changed helper')
+                else:
+                    manifest[field] = 'f' * 64
+                with self.assertRaisesRegex(RuntimeError, 'gateway_guard_enrollment_refused'):
+                    self.enroll(manifest)
+                self.assertEqual((guard.ROOT / 'source.json').read_bytes(), previous)
+
+    def test_completed_merged_floor_accepts_a_new_qualified_implementation(self):
+        self.enroll(self.enrollment('merged'))
+        self.journal('activated')
+        manifest = self.enrollment('merged', source='b', revision='2')
+        manifest['operationId'] = OTHER_ID
+        observed, effects = self.enroll(manifest)
+        self.assertEqual(observed['implementationSha'], 'b' * 40)
+        self.assertEqual(effects, 1)
+        source = json.loads((guard.ROOT / 'source.json').read_text())
+        self.assertEqual(source['minimumSourceSha'], 'a' * 40)
+        self.assertEqual(source['coreSha256'], receipt.digest(b'core2'))
+
+    def test_qualification_transfer_refuses_each_changed_admission_input(self):
+        self.enroll(self.enrollment('premerge'))
+        self.journal('activated')
+        previous = (guard.ROOT / 'source.json').read_bytes()
+        for field in gateway_install.ADMISSION_INPUTS:
+            with self.subTest(field=field):
+                manifest = self.enrollment('merged', source='b', floor='b')
+                if field == 'enrollmentAdapter':
+                    (self.root / 'staged-library' / 'gateway-install-host.py').write_text('new installer')
+                    manifest['admissionSha256'][field] = receipt.digest(b'new installer')
+                else:
+                    manifest['admissionSha256'][field] = 'f' * 64
+                with self.assertRaisesRegex(RuntimeError, 'gateway_guard_enrollment_refused'):
+                    self.enroll(manifest)
+                self.assertEqual((guard.ROOT / 'source.json').read_bytes(), previous)
+
+    def test_pending_enrollment_preserves_inputs_and_allows_only_original_resume(self):
+        original = self.enrollment('merged')
+        self.enroll(original)
+        self.journal('prepared')
+        previous = (guard.ROOT / 'source.json').read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'gateway_guard_enrollment_refused'):
+            self.enroll(self.enrollment('merged', source='b', revision='2'))
+        self.assertEqual((guard.ROOT / 'source.json').read_bytes(), previous)
+        self.enrollment('merged')  # Restore the staged original helper inputs.
+        observed, effects = self.enroll(original)
+        self.assertEqual(observed['state'], 'guard_retained_for_resume')
+        self.assertEqual(effects, 0)
+
+    def journal(self, state):
+        directory = guard.ROOT / 'operations' / ID
+        guard.private_directory(directory)
+        receipt.atomic(directory / 'operation.json', json.dumps({'version': 1, 'operationId': ID, 'state': state}).encode())
+
+    def test_exclusive_lock_and_durable_refusal_after_process_loss(self):
+        script = '''import importlib.util,os,sys
+from pathlib import Path
+s=importlib.util.spec_from_file_location('guard',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+m.ROOT=Path(sys.argv[2]);m.OWNER_UID=os.geteuid()
+with m.RuntimeGuard():
+ print('held',flush=True)
+ sys.stdin.readline()
+'''
+        child = subprocess.Popen(['python3', '-c', script, str(LIB / 'runtime-maintenance-guard.py'), str(guard.ROOT)],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), 'held')
+            with self.assertRaisesRegex(guard.GuardError, 'runtime_guard_busy'):
+                with guard.RuntimeGuard(wait_seconds=0):
+                    self.fail('second writer entered')
+            self.journal('recreate_started')
+            child.kill()
+            child.wait(timeout=5)
+            with self.assertRaisesRegex(guard.GuardError, 'reconcile_required'):
+                with guard.RuntimeGuard():
+                    self.fail('ordinary writer entered unfinished operation')
+            with guard.RuntimeGuard(ID):
+                pass
+            with self.assertRaisesRegex(guard.GuardError, 'reconcile_required'):
+                with guard.RuntimeGuard(OTHER_ID):
+                    self.fail('foreign activation entered')
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=5)
+
+    def test_partial_prepare_blocks_other_writers(self):
+        with guard.RuntimeGuard():
+            guard.private_directory(guard.ROOT / 'operations' / ID)
+        with self.assertRaisesRegex(guard.GuardError, 'reconcile_required'):
+            with guard.RuntimeGuard():
+                pass
+        with guard.RuntimeGuard(ID):
+            pass
+
+    def test_two_ordinary_writers_wait_and_finish_serially(self):
+        script = '''import importlib.util,os,sys
+from pathlib import Path
+s=importlib.util.spec_from_file_location('guard',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+m.ROOT=Path(sys.argv[2]);m.OWNER_UID=os.geteuid()
+with m.RuntimeGuard(wait_seconds=2):
+ print('entered',flush=True)
+ sys.stdin.readline()
+'''
+        args = ['python3', '-c', script, str(LIB / 'runtime-maintenance-guard.py'), str(guard.ROOT)]
+        first = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        second = None
+        try:
+            self.assertEqual(first.stdout.readline().strip(), 'entered')
+            second = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertIsNone(second.poll())
+            first.communicate('\n', timeout=2)
+            self.assertEqual(first.returncode, 0)
+            output, error = second.communicate('\n', timeout=2)
+            self.assertEqual((second.returncode, output.strip(), error), (0, 'entered', ''))
+        finally:
+            for child in (first, second):
+                if child and child.poll() is None:
+                    child.kill(); child.communicate(timeout=2)
+
+    def test_exec_preserves_lock_and_nested_installer_can_reenter(self):
+        child = '''import importlib.util,os,sys
+from pathlib import Path
+s=importlib.util.spec_from_file_location('guard',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+m.ROOT=Path(sys.argv[2]);m.OWNER_UID=os.geteuid()
+with m.RuntimeGuard(wait_seconds=0):
+ print('inherited',flush=True)
+ sys.stdin.readline()
+'''
+        parent = '''import importlib.util,os,sys
+from pathlib import Path
+s=importlib.util.spec_from_file_location('guard',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+m.ROOT=Path(sys.argv[2]);m.OWNER_UID=os.geteuid()
+with m.RuntimeGuard() as guard:
+ guard.exec([sys.executable,'-c',sys.argv[3],sys.argv[1],sys.argv[2]])
+'''
+        process = subprocess.Popen(['python3', '-c', parent, str(LIB / 'runtime-maintenance-guard.py'), str(guard.ROOT), child],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(process.stdout.readline().strip(), 'inherited')
+            with self.assertRaisesRegex(guard.GuardError, 'busy'):
+                with guard.RuntimeGuard(wait_seconds=0):
+                    self.fail('exec released the host lock')
+            output, error = process.communicate('\n', timeout=2)
+            self.assertEqual((process.returncode, output, error), (0, '', ''))
+        finally:
+            if process.poll() is None:
+                process.kill(); process.communicate(timeout=2)
+
+    def test_native_mutation_child_keeps_exclusion_after_parent_only_death(self):
+        ready, release = self.root / 'native-ready', self.root / 'native-release'
+        child = '''import sys,time
+from pathlib import Path
+Path(sys.argv[1]).touch()
+deadline=time.monotonic()+8
+while not Path(sys.argv[2]).exists() and time.monotonic()<deadline: time.sleep(.01)
+'''
+        parent = '''import importlib.util,os,sys
+from pathlib import Path
+s=importlib.util.spec_from_file_location('host',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+m.guard.ROOT=Path(sys.argv[2]);m.guard.OWNER_UID=os.geteuid();m.RUNTIME=Path(sys.argv[3])
+with m.guard.RuntimeGuard(sys.argv[4]) as guard:
+ m.ACTIVE_GUARD_FD=guard.stream.fileno()
+ print('parent-held',flush=True)
+ m.run([sys.executable,'-c',sys.argv[5],sys.argv[6],sys.argv[7]],timeout=10)
+'''
+        process = subprocess.Popen([sys.executable, '-c', parent, str(LIB / 'gateway-activation-host.py'),
+                                    str(guard.ROOT), str(self.root), ID, child, str(ready), str(release)],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(process.stdout.readline().strip(), 'parent-held')
+            deadline = time.monotonic() + 3
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertTrue(ready.exists(), 'native mutation child did not start')
+            process.kill(); process.wait(timeout=2)
+            with self.assertRaisesRegex(guard.GuardError, 'runtime_guard_busy'):
+                with guard.RuntimeGuard(ID, wait_seconds=0):
+                    self.fail('same-UUID resume overlapped a surviving native child')
+            release.touch()
+            with guard.RuntimeGuard(ID, wait_seconds=2):
+                pass
+        finally:
+            release.touch()
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=2)
+
+    def test_first_guard_install_has_no_gateway_enablement_or_runtime_effect(self):
+        target = guard.ROOT / 'lib'
+        self.assertFalse(target.exists())
+        self.enterContext(patch.object(installer, 'recover_caller', return_value=None))
+        result = installer.install('a' * 40)
+        self.assertIsNone(result['recoveryCaller'])
+        for name, fingerprint in result['blobs'].items():
+            self.assertEqual(receipt.digest((target / name).read_bytes()), fingerprint)
+        self.assertTrue((guard.ROOT / 'guard.json').is_file())
+        self.assertFalse((guard.ROOT / 'source.json').exists())
+
+    def test_admitted_staged_installer_repairs_interrupted_first_or_upgrade_publication(self):
+        self.enterContext(patch.object(installer, 'recover_caller', return_value=None))
+        effects = self.enterContext(patch.object(recovery, 'run'))
+        for previous in (False, True):
+            with self.subTest(previous_enrollment=previous):
+                root = self.root / ('upgrade' if previous else 'first-install')
+                stage = self.root / ('upgrade-stage' if previous else 'first-stage')
+                stage.mkdir()
+                for name in installer.FILES:
+                    (stage / name).write_bytes((LIB / name).read_bytes())
+                with patch.object(installer, 'LIB', stage), \
+                     patch.object(installer.guard, 'ROOT', root), patch.object(recovery.guard, 'ROOT', root):
+                    if previous:
+                        installer.install('a' * 40)
+                        with (stage / installer.FILES[0]).open('ab') as changed:
+                            changed.write(b'\n# qualified upgrade\n')
+                    original = installer.receipt.atomic
+                    published = []
+                    def interrupted(path, data):
+                        original(path, data)
+                        if path.parent == root / 'lib':
+                            published.append(path)
+                            if len(published) == 2:
+                                raise ConnectionError('installer lost before enrollment commit')
+                    with patch.object(installer.receipt, 'atomic', side_effect=interrupted):
+                        with self.assertRaises(ConnectionError):
+                            installer.install('b' * 40)
+                    effects.reset_mock()
+                    self.assertEqual(recovery.recover()['state'], 'custody_required')
+                    effects.assert_not_called()
+                    installer.install('b' * 40)
+                    with installer.guard.RuntimeGuard():
+                        self.assertEqual(installer.guard.validate_installation()['sourceSha'], 'b' * 40)
+                    effects.assert_not_called()
+
+    def test_native_timeout_does_not_release_a_surviving_childs_lock(self):
+        release = self.root / 'release-timeout-child'
+        command = [sys.executable, '-c', 'import sys,time;from pathlib import Path;'
+                   'p=Path(sys.argv[1]);deadline=time.monotonic()+5;'
+                   '\nwhile not p.exists() and time.monotonic()<deadline: time.sleep(.01)', str(release)]
+        try:
+            with guard.RuntimeGuard(ID) as active:
+                with self.assertRaisesRegex(guard.GuardError, 'runtime_native_outcome_pending'):
+                    guard.run_native(active.stream.fileno(), command, env=os.environ.copy(), cwd=self.root, timeout=.02)
+            with self.assertRaisesRegex(guard.GuardError, 'runtime_guard_busy'):
+                with guard.RuntimeGuard(ID, wait_seconds=0):
+                    self.fail('timeout released a running mutation child')
+        finally:
+            release.touch()
+        with guard.RuntimeGuard(ID, wait_seconds=2):
+            pass
+
+    def test_guard_install_refuses_pending_activation_before_installing_files(self):
+        with guard.RuntimeGuard():
+            self.journal('render_installed')
+        caller = self.enterContext(patch.object(installer, 'recover_caller'))
+        with self.assertRaisesRegex(installer.guard.GuardError, 'reconcile_required'):
+            installer.install('a' * 40)
+        caller.assert_not_called()
+        self.assertFalse((guard.ROOT / 'lib').exists())
+
+    def test_recovery_refuses_incomplete_incompatible_or_tampered_guard_enrollment(self):
+        effects = self.enterContext(patch.object(recovery, 'run'))
+        self.assertEqual(recovery.recover()['state'], 'custody_required')
+        effects.assert_not_called()
+        self.enterContext(patch.object(installer, 'recover_caller', return_value=None))
+        installed = installer.install('a' * 40)
+        with guard.RuntimeGuard():
+            self.assertEqual(guard.validate_installation()['blobs'], installed['blobs'])
+        marker = guard.ROOT / 'guard.json'
+        valid = marker.read_bytes()
+        changed = json.loads(valid); changed['protocolVersion'] = 999
+        receipt.atomic(marker, receipt.canonical(changed))
+        self.assertEqual(recovery.recover()['state'], 'custody_required')
+        effects.assert_not_called()
+        receipt.atomic(marker, valid)
+        receipt.atomic(guard.ROOT / 'lib' / 'runtime-recovery-host.py', b'# incomplete replacement\n')
+        self.assertEqual(recovery.recover()['state'], 'custody_required')
+        effects.assert_not_called()
+
+    def test_terminal_journal_allows_normal_reconcile(self):
+        with guard.RuntimeGuard():
+            self.journal('activated')
+        with guard.RuntimeGuard():
+            pass
+
+    def test_symlinked_journal_is_never_read(self):
+        with guard.RuntimeGuard():
+            directory = guard.ROOT / 'operations' / ID
+            guard.private_directory(directory)
+            (directory / 'operation.json').symlink_to('/etc/passwd')
+        with self.assertRaisesRegex(guard.GuardError, 'journal_invalid'):
+            with guard.RuntimeGuard(ID):
+                pass
+
+    def test_unknown_journal_version_refuses_even_owner(self):
+        with guard.RuntimeGuard():
+            self.journal('activated')
+        path = guard.ROOT / 'operations' / ID / 'operation.json'
+        receipt.atomic(path, json.dumps({'version': 2, 'operationId': ID, 'state': 'activated'}).encode())
+        with self.assertRaisesRegex(guard.GuardError, 'journal_invalid'):
+            with guard.RuntimeGuard(ID):
+                pass
+
+    def core(self):
+        return {'version': 2, 'composeSha256': 'a' * 64, 'litellmConfigSha256': 'b' * 64,
+                'recoveryServiceConfigSha256': 'c' * 64, 'sourceRef': 'a' * 40,
+                'completedAt': '2026-11-04T00:00:00Z',
+                'images': {s: {'ref': s + ':pinned', 'id': 'sha256:' + 'd' * 64}
+                           for s in ('postgres', 'litellm', 'autoheal')}}
+
+    def test_receipt_codec_matches_existing_jq_wire_and_rejects_tampering(self):
+        value = receipt.seal(self.core())
+        raw = subprocess.check_output(['jq', '-cS', '.'], input=json.dumps(self.core()).encode()).rstrip(b'\n')
+        self.assertEqual(value['declarationDigest'], receipt.digest(raw))
+        value['recoveryServiceConfigSha256'] = 'e' * 64
+        with self.assertRaisesRegex(receipt.ReceiptError, 'digest_invalid'):
+            receipt.validate(value)
+
+    def test_receipt_create_and_compare_swap_preserve_winner(self):
+        before = receipt.seal(self.core())
+        old_hash = receipt.commit(before, None)
+        changed = self.core()
+        changed['recoveryServiceConfigSha256'] = 'e' * 64
+        after = receipt.seal(changed)
+        new_hash = receipt.commit(after, old_hash)
+        self.assertNotEqual(new_hash, old_hash)
+        with self.assertRaisesRegex(receipt.ReceiptError, 'changed'):
+            receipt.commit(before, old_hash)
+        self.assertEqual(receipt.read(), after)
+        with self.assertRaisesRegex(receipt.ReceiptError, 'already_exists'):
+            receipt.commit(before, None)
+
+    def host(self, phase):
+        host = object.__new__(gateway.Host)
+        host.intent = {'operationId': ID}
+        host.directory = self.root
+        host.path = self.root / 'operation.json'
+        host.journal = {'state': phase, 'beforeContainerId': 'old-container', 'beforeProviderKeySha256': 'a' * 64,
+                        'projection': {'keySha256': 'b' * 64}, 'beforeReceiptSha256': 'c' * 64}
+        self.enterContext(patch.object(host, 'preserved'))
+        self.enterContext(patch.object(host, 'selected'))
+        self.enterContext(patch.object(host, 'render_matches'))
+        return host
+
+    def test_adopted_container_after_lost_response_is_not_recreated(self):
+        host = self.host('recreate_started')
+        self.enterContext(patch.object(host, 'gateway_matches', return_value=True))
+        self.enterContext(patch.object(gateway, 'wait_gateway'))
+        effect = self.enterContext(patch.object(gateway, 'run'))
+        host.activate()
+        effect.assert_not_called()
+        self.assertEqual(json.loads(host.path.read_text())['state'], 'gateway_verified')
+
+    def test_unknown_container_is_not_recreated_or_compensated(self):
+        host = self.host('recreate_started')
+        self.enterContext(patch.object(host, 'gateway_matches', return_value=False))
+        self.enterContext(patch.object(gateway, 'container', return_value={'Id': 'foreign-container'}))
+        effect = self.enterContext(patch.object(gateway, 'run'))
+        with self.assertRaisesRegex(gateway.GatewayConflict, 'unknown_container'):
+            host.activate()
+        effect.assert_not_called()
+
+    def test_superseded_projection_refuses_before_any_effect(self):
+        host = self.host('render_installed')
+        self.enterContext(patch.object(host, 'selected', side_effect=gateway.GatewayConflict('gateway_binding_superseded')))
+        effect = self.enterContext(patch.object(gateway, 'run'))
+        with self.assertRaisesRegex(gateway.GatewayConflict, 'binding_superseded'):
+            host.activate()
+        effect.assert_not_called()
+
+    def test_completed_operation_reports_fresh_binding_supersession_without_effects(self):
+        host = self.host('activated')
+        host.journal.update({'appSha': 'a' * 40, 'imageId': 'sha256:' + 'e' * 64, 'untouchedRuntime': {},
+                             'projection': {'keySha256': 'b' * 64, 'uid': 'projection', 'resourceVersion': '1'},
+                             'desiredReceiptSha256': receipt.digest(b'committed')})
+        self.enterContext(patch.object(host, 'selected', side_effect=gateway.GatewayConflict('gateway_binding_superseded')))
+        self.enterContext(patch.object(host, 'gateway_matches', return_value=True))
+        self.enterContext(patch.object(gateway.receipt, 'read_bytes', return_value=b'committed'))
+        effect = self.enterContext(patch.object(gateway, 'run'))
+        observed = host.step('observe')
+        self.assertEqual(observed['phase'], 'activated')
+        self.assertTrue(observed['noChanges'])
+        self.assertFalse(observed['currentQualified'])
+        self.assertEqual(observed['failure'], 'gateway_binding_superseded')
+        effect.assert_not_called()
+
+    def test_backup_completion_does_not_change_stable_runtime_preservation(self):
+        def instance(service):
+            return {'Id': service + '-id', 'Name': service, 'Image': service + '-image',
+                    'State': {'StartedAt': 'same-start'},
+                    'Config': {'Labels': {'com.docker.compose.service': service}}}
+        stable, backup = instance('postgres'), instance('db-backup')
+        self.enterContext(patch.object(gateway, 'run', side_effect=[b'postgres-id backup-id',
+                          json.dumps([stable, backup]).encode(), b'postgres-id', json.dumps([stable]).encode()]))
+        before = gateway.untouched_runtime()
+        after = gateway.untouched_runtime()
+        self.assertEqual(before, after)
+        self.assertEqual(set(before), {'postgres'})
+        self.assertEqual(before['postgres']['id'], 'postgres-id')
+
+    def test_render_rename_lost_response_resumes_without_replacing_installed_bytes(self):
+        host = self.host('prepared')
+        desired = b'OPENROUTER_API_KEY=sk-new-fixture\n'
+        env = self.root / 'runtime.env'
+        receipt.atomic(env, desired)
+        receipt.atomic(host.directory / 'desired.env', desired)
+        host.journal.update({'beforeEnvSha256': 'd' * 64, 'desiredEnvSha256': receipt.digest(desired)})
+        self.enterContext(patch.object(gateway, 'ENV_FILE', env))
+        self.enterContext(patch.object(gateway.receipt, 'read_bytes', return_value=b'prior'))
+        host.journal['beforeReceiptSha256'] = receipt.digest(b'prior')
+        self.enterContext(patch.object(gateway, 'container', return_value={'Id': 'old-container'}))
+        self.enterContext(patch.object(host, 'gateway_matches', return_value=True))
+        original_atomic = gateway.atomic
+        writes = self.enterContext(patch.object(gateway, 'atomic', wraps=original_atomic))
+        host.install_render()
+        self.assertEqual(host.journal['state'], 'render_installed')
+        self.assertEqual(env.read_bytes(), desired)
+        self.assertFalse(any(call.args[0] == env for call in writes.call_args_list))
+
+    def test_receipt_commit_resumes_before_and_after_atomic_publication(self):
+        for phase, published in [('gateway_verified', False), ('receipt_commit_started', False), ('receipt_commit_started', True)]:
+            with self.subTest(phase=phase, published=published):
+                host = self.host(phase)
+                prior = receipt.canonical(receipt.seal(self.core())) + b'\n'
+                desired_value = self.core()
+                desired_value['recoveryServiceConfigSha256'] = receipt.digest(receipt.canonical({'services': {s: {} for s in ('postgres', 'litellm', 'autoheal')}}))
+                desired_value['completedAt'] = '2026-11-05T00:00:00Z'
+                desired = receipt.canonical(receipt.seal(desired_value)) + b'\n'
+                live = self.root / 'live-receipt.json'
+                self.enterContext(patch.object(gateway.receipt, 'RECEIPT', live))
+                for path, data in [(host.directory / 'before-receipt.json', prior),
+                                   (host.directory / 'desired-receipt.json', desired), (live, desired if published else prior)]:
+                    receipt.atomic(path, data)
+                host.journal.update({'beforeReceiptSha256': receipt.digest(prior), 'desiredReceiptSha256': receipt.digest(desired)})
+                self.enterContext(patch.object(host, 'gateway_matches', return_value=True))
+                self.enterContext(patch.object(gateway, 'wait_gateway'))
+                self.enterContext(patch.object(gateway, 'config', return_value={'services': {s: {} for s in ('postgres', 'litellm', 'autoheal')}}))
+                self.enterContext(patch.object(gateway, 'now', return_value='2026-11-05T00:00:00Z'))
+                original_commit = gateway.receipt.commit
+                commits = self.enterContext(patch.object(gateway.receipt, 'commit', wraps=original_commit))
+                host.commit_receipt()
+                self.assertEqual(host.journal['state'], 'activated')
+                self.assertEqual(live.read_bytes(), desired)
+                self.assertEqual(commits.call_count, 0 if published else 1)
+
+    def test_superseded_render_or_app_recovers_then_admits_a_new_operation(self):
+        for reason in ('gateway_binding_superseded', 'gateway_app_changed'):
+            with self.subTest(reason=reason):
+                host = self.host('render_installed')
+                host.directory = guard.ROOT / 'operations' / ID
+                guard.private_directory(host.directory)
+                host.path = host.directory / 'operation.json'
+                env = self.root / 'runtime.env'
+                old = b'OPENROUTER_API_KEY=sk-old-fixture\nOTHER=unchanged\n'
+                desired = b'OPENROUTER_API_KEY=sk-new-fixture\nOTHER=unchanged\n'
+                prior = receipt.canonical(receipt.seal(self.core())) + b'\n'
+                self.enterContext(patch.object(gateway, 'ENV_FILE', env))
+                self.enterContext(patch.object(gateway.receipt, 'RECEIPT', self.root / 'before-receipt.json'))
+                for path, data in [(env, desired), (host.directory / 'before.env', old),
+                                   (host.directory / 'before-receipt.json', prior), (gateway.receipt.RECEIPT, prior)]:
+                    receipt.atomic(path, data)
+                host.journal.update({'version': 1, 'operationId': ID, 'appSha': 'a' * 40, 'appImages': ['prior-app'],
+                                     'imageId': 'sha256:' + 'e' * 64, 'untouchedRuntime': {},
+                                     'beforeEnvSha256': receipt.digest(old), 'desiredEnvSha256': receipt.digest(desired),
+                                     'beforeReceiptSha256': receipt.digest(prior),
+                                     'projection': {'keySha256': 'b' * 64, 'uid': 'projection', 'resourceVersion': '2'}})
+                self.enterContext(patch.object(host, 'selected', side_effect=gateway.GatewayConflict(reason)))
+                self.enterContext(patch.object(host, 'gateway_matches', return_value=True))
+                self.enterContext(patch.object(gateway, 'wait_gateway'))
+                self.enterContext(patch.object(gateway, 'app_images', return_value=['new-app']))
+                self.enterContext(patch.object(gateway, 'app_sha', return_value='b' * 40))
+                effect = self.enterContext(patch.object(gateway, 'run'))
+                with guard.RuntimeGuard(ID):
+                    host.save('render_installed')
+                with self.assertRaisesRegex(guard.GuardError, 'reconcile_required'):
+                    with guard.RuntimeGuard(wait_seconds=0):
+                        pass
+                with guard.RuntimeGuard(ID):
+                    observed = host.reconcile_conflict(reason)
+                self.assertEqual(env.read_bytes(), old)
+                self.assertEqual(gateway.receipt.RECEIPT.read_bytes(), prior)
+                self.assertEqual(observed['phase'], 'rolled_back')
+                self.assertFalse(observed['evidence']['appPreserved'])
+                effect.assert_not_called()
+                with guard.RuntimeGuard(OTHER_ID):
+                    pass
+
+    def test_conflict_compensation_resumes_after_decision_render_or_native_loss(self):
+        for reason in ('gateway_binding_superseded', 'gateway_app_changed'):
+            for boundary in ('after_decision', 'after_render', 'after_native'):
+                with self.subTest(reason=reason, boundary=boundary):
+                    host = self.host('receipt_commit_started')
+                    host.directory = guard.ROOT / 'operations' / ID
+                    guard.private_directory(host.directory)
+                    host.path = host.directory / 'operation.json'
+                    env = self.root / 'compensation.env'
+                    live = self.root / 'compensation-receipt.json'
+                    old, desired = b'OPENROUTER_API_KEY=sk-old-fixture\n', b'OPENROUTER_API_KEY=sk-new-fixture\n'
+                    prior = receipt.canonical(receipt.seal(self.core())) + b'\n'
+                    changed = self.core()
+                    changed['completedAt'] = '2026-11-05T00:00:00Z'
+                    current = receipt.canonical(receipt.seal(changed)) + b'\n'
+                    self.enterContext(patch.object(gateway, 'ENV_FILE', env))
+                    self.enterContext(patch.object(gateway.receipt, 'RECEIPT', live))
+                    for path, data in [(env, desired), (live, current), (host.directory / 'before.env', old),
+                                       (host.directory / 'before-receipt.json', prior)]:
+                        receipt.atomic(path, data)
+                    host.journal.update({'version': 1, 'operationId': ID, 'appSha': 'a' * 40,
+                                         'appImages': ['prior-app'], 'imageId': 'sha256:' + 'e' * 64,
+                                         'untouchedRuntime': {}, 'beforeEnvSha256': receipt.digest(old),
+                                         'desiredEnvSha256': receipt.digest(desired),
+                                         'beforeReceiptSha256': receipt.digest(prior),
+                                         'desiredReceiptSha256': receipt.digest(current),
+                                         'projection': {'keySha256': 'b' * 64, 'uid': 'projection', 'resourceVersion': '2'}})
+                    state = {'key': 'b' * 64, 'cut': False}
+                    def interrupt(at):
+                        if boundary == at and not state['cut']:
+                            state['cut'] = True
+                            raise ConnectionError('lost caller')
+                    original_save, original_atomic = host.save, gateway.atomic
+                    def save(phase):
+                        original_save(phase)
+                        interrupt('after_decision')
+                    def atomic(path, data):
+                        original_atomic(path, data)
+                        if path == env and data == old:
+                            interrupt('after_render')
+                    def recreate(*args, **kwargs):
+                        state['key'] = 'a' * 64
+                        interrupt('after_native')
+                    app_changed = reason == 'gateway_app_changed'
+                    def preserved(check_app=True):
+                        if check_app and app_changed:
+                            raise gateway.GatewayConflict('gateway_app_changed')
+                    self.enterContext(patch.object(host, 'preserved', side_effect=preserved))
+                    self.enterContext(patch.object(host, 'gateway_matches', side_effect=lambda key: key == state['key']))
+                    self.enterContext(patch.object(gateway, 'wait_gateway'))
+                    self.enterContext(patch.object(gateway, 'app_images', return_value=['new-app'] if app_changed else ['prior-app']))
+                    self.enterContext(patch.object(gateway, 'app_sha', return_value=('b' if app_changed else 'a') * 40))
+                    effect = self.enterContext(patch.object(gateway, 'run', side_effect=recreate))
+                    host.save('receipt_commit_started')
+                    with patch.object(host, 'save', side_effect=save), patch.object(gateway, 'atomic', side_effect=atomic):
+                        with guard.RuntimeGuard(ID), self.assertRaises(ConnectionError):
+                            host.reconcile_conflict(reason)
+                    host.journal = json.loads(host.path.read_text())
+                    self.assertEqual(host.journal['state'], 'rollback_started')
+                    self.assertEqual(host.step('observe')['failure'], reason)
+                    with self.assertRaisesRegex(guard.GuardError, 'reconcile_required'):
+                        with guard.RuntimeGuard(wait_seconds=0):
+                            pass
+                    with guard.RuntimeGuard(ID):
+                        observed = host.step('rollback')
+                    self.assertEqual(observed['phase'], 'rolled_back')
+                    self.assertEqual(observed['failure'], reason)
+                    self.assertEqual(observed['evidence']['appPreserved'], not app_changed)
+                    self.assertEqual(env.read_bytes(), old)
+                    self.assertEqual(live.read_bytes(), prior)
+                    self.assertEqual(effect.call_count, 1)
+                    self.assertEqual(effect.call_args.args[0][-1], 'litellm')
+                    self.assertIn('--no-deps', effect.call_args.args[0])
+                    with guard.RuntimeGuard(ID):
+                        self.assertTrue(host.step('observe')['noChanges'])
+                    self.assertEqual(effect.call_count, 1)
+                    with guard.RuntimeGuard(OTHER_ID):
+                        pass
+
+    def test_provider_render_replaces_one_line_and_preserves_unrelated_bytes(self):
+        raw = b'# comment\nOTHER=untouched\nOPENROUTER_API_KEY=sk-old-fixture\nTRAILING=kept\n'
+        self.assertEqual(gateway.replace_provider(raw, 'sk-new-fixture'), raw.replace(b'sk-old-fixture', b'sk-new-fixture'))
+        with self.assertRaises(RuntimeError):
+            gateway.replace_provider(raw + b'OPENROUTER_API_KEY=sk-duplicate\n', 'sk-new-fixture')
+
+    def test_same_contract_refuses_foreign_binding_and_raw_values(self):
+        intent = {'version': 1, 'operationId': ID, 'target': 'litellm-provider-key', 'env': 'preview',
+                  'custodian': {'owner': 'cogni-dao', 'repo': 'cogni', 'controlEnv': 'production'},
+                  'implementationSha': 'a' * 40, 'protocolVersion': 1,
+                  'bindingRef': 'cogni/preview/operator/OPENROUTER_API_KEY'}
+        self.assertEqual(gateway.validate_intent(intent), intent)
+        for change in ({'value': 'sk-fictional'}, {'env': 'production'}):
+            with self.assertRaises(gateway.GatewayConflict):
+                gateway.validate_intent({**copy.deepcopy(intent), **change})
+
+if __name__ == '__main__':
+    unittest.main()
