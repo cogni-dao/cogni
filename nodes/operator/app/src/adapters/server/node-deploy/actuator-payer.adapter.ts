@@ -154,7 +154,7 @@ export class ActuatorPayer implements PayerPort {
       mapped,
       `actuator ${path} -> HTTP ${res.status} ${mapped}: ${message}`.slice(
         0,
-        400
+        2000
       ),
       mutating && AMBIGUOUS.has(mapped),
       // Positive proof only, never inferred from the code or the message text (bug.5569).
