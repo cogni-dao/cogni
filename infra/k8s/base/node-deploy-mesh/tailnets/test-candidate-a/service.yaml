@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Cogni-DAO
 #
 # task.5428 — the `test-candidate-a` Headscale CLIENT port, for the coordinator env VM's edge Caddy only (NodePort,
-# host.docker.internal). The edge serves `mesh-test-candidate-a.cognidao.org` with a public ACME certificate and
+# host.docker.internal). The edge serves `mesh-test-candidate-a.cogni-testing.org` with a public ACME certificate and
 # forwards ONLY the Tailscale client paths + /verify (scripts/ci/render-caddyfile.sh); the hardener
 # drops the NodePort from the public NIC before NAT (hard requirements 12, 22). NodePort from the
 # tailnet table. publishNotReadyAddresses: a NotReady sequencer pod never withdraws the coordinator.

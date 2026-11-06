@@ -710,18 +710,23 @@ if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] && [[ -n "${CLOUDFLARE_ZONE_ID:-}" ]]; t
     is_primary_host "$node" && continue  # apex already in DNS_RECORDS
     DNS_RECORDS+=("$(host_for_node "$node" "$DOMAIN")")
   done
-  # task.5428 — the mesh hosts this env's VM serves (control hosts of the tailnets its edge fronts, relay
-  # hosts of the tailnets whose relay runs here), from the tailnet table in scripts/ci/lib/mesh-plane.sh;
-  # scripts/ci/reconcile-node-dns.sh writes the same records on every flight/promote. Always DNS-only:
-  # Headscale and DERP do not work behind the Cloudflare proxy.
+  # task.5428 — the mesh hosts this env's VM serves, from the tailnet table in scripts/ci/lib/mesh-plane.sh,
+  # limited to this run's zone ($FORK_ROOT): the control hosts of the tailnets whose coordinator this env
+  # runs and the relay hosts of the tailnets whose relay runs on this VM. scripts/ci/reconcile-node-dns.sh
+  # owns them on every flight/promote (including a relay that lives on another env's VM). Always
+  # DNS-only: Headscale and DERP do not work behind the Cloudflare proxy.
   MESH_DNS_RECORDS=()
   # shellcheck source=../ci/lib/mesh-plane.sh
   . "$REPO_ROOT/scripts/ci/lib/mesh-plane.sh"
   while read -r tailnet; do
-    [ -n "$tailnet" ] && MESH_DNS_RECORDS+=("$(mesh_host "$tailnet" control "$FORK_ROOT")")
+    [ -n "$tailnet" ] || continue
+    [ "$(mesh_tailnet_field "$tailnet" zone)" = "$FORK_ROOT" ] || continue
+    MESH_DNS_RECORDS+=("$(mesh_host "$tailnet" control)")
   done < <(mesh_coordinator_tailnets "$DEPLOY_ENV")
   while read -r tailnet; do
-    [ -n "$tailnet" ] && MESH_DNS_RECORDS+=("$(mesh_host "$tailnet" relay "$FORK_ROOT")")
+    [ -n "$tailnet" ] || continue
+    [ "$(mesh_tailnet_field "$tailnet" zone)" = "$FORK_ROOT" ] || continue
+    MESH_DNS_RECORDS+=("$(mesh_host "$tailnet" relay)")
   done < <(mesh_vm_tailnets "$DEPLOY_ENV")
   DNS_RECORDS+=("${MESH_DNS_RECORDS[@]}")
 

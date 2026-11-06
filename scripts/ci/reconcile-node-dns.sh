@@ -245,39 +245,61 @@ for node in "${NODE_TARGETS[@]}"; do
   fi
 done
 
-# task.5428 — the mesh hosts this env's VM serves, from the ONE tailnet table (scripts/ci/lib/mesh-plane.sh):
-# the control host `mesh-<tailnet>.<zone>` of every tailnet whose coordinator this env's edge fronts, and
-# the relay host `derp-<tailnet>.<zone>` of every tailnet whose relay runs on this env's VM. Headscale and
-# DERP do not work behind a Cloudflare proxy, so these records are ALWAYS proxied=false (DNS-only),
-# whatever the apex does; the edge Caddy serves them with public ACME certificates.
+# task.5428 — the mesh hosts of every tailnet whose coordinator this env runs, from the ONE tailnet table
+# (scripts/ci/lib/mesh-plane.sh): its control host `mesh-<tailnet>.<zone>` -> this env's VM (whose edge
+# fronts the coordinator) and its relay host `derp-<tailnet>.<zone>` -> the VM that runs its relay (this
+# VM, or another env's VM read from that VM's own alias record, written by provision). One writer per
+# tailnet: the run of its coordinator env. A run writes only hosts in ITS zone (FORK_DOMAIN_ROOT, the
+# zone its Cloudflare token is scoped to): canonical tailnets live in the production zone; the test
+# operator's tailnet lives in the isolated test-fleet zone and is written only by a run holding that
+# zone's token (hub test-fleet-parity-boundary). Headscale and DERP do not work behind a Cloudflare
+# proxy, so these records are ALWAYS proxied=false (DNS-only), whatever the apex does.
 # shellcheck source=scripts/ci/lib/mesh-plane.sh
 source "${SCRIPT_DIR}/lib/mesh-plane.sh"
 mesh_dns_hosts=()
+mesh_dns_ips=()
+mesh_slug="$(fork_identity_slug "${SCRIPT_DIR}/../..")"
 while read -r tailnet; do
-  [ -n "$tailnet" ] && mesh_dns_hosts+=("$(mesh_host "$tailnet" control "$FORK_ROOT")")
+  [ -n "$tailnet" ] || continue
+  zone="$(mesh_tailnet_field "$tailnet" zone)"
+  if [ "$zone" != "$FORK_ROOT" ]; then
+    echo "  skip     ${tailnet} mesh hosts (zone ${zone}; written by the ${DEPLOY_ENV} run holding that zone's token)"
+    continue
+  fi
+  mesh_dns_hosts+=("$(mesh_host "$tailnet" control)")
+  mesh_dns_ips+=("$VM_IP")
+  relay_env="$(mesh_tailnet_field "$tailnet" vm_env)"
+  [ -n "$relay_env" ] || continue
+  if [ "$relay_env" = "$DEPLOY_ENV" ]; then
+    relay_ip="$VM_IP"
+  else
+    relay_ip="$(cf_a_record_content "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" \
+      "$(vm_host_for_env "$relay_env" "$FORK_ROOT" "$mesh_slug")")"
+    [ -n "$relay_ip" ] || { echo "[ERROR] no VM alias record for ${relay_env}; cannot place $(mesh_host "$tailnet" relay)" >&2; write_dns_summary "failure"; exit 1; }
+  fi
+  mesh_dns_hosts+=("$(mesh_host "$tailnet" relay)")
+  mesh_dns_ips+=("$relay_ip")
 done < <(mesh_coordinator_tailnets "$DEPLOY_ENV")
-while read -r tailnet; do
-  [ -n "$tailnet" ] && mesh_dns_hosts+=("$(mesh_host "$tailnet" relay "$FORK_ROOT")")
-done < <(mesh_vm_tailnets "$DEPLOY_ENV")
 node="mesh-plane"
-for host in "${mesh_dns_hosts[@]}"; do
-  expected="$VM_IP"
+for i in "${!mesh_dns_hosts[@]}"; do
+  host="${mesh_dns_hosts[$i]}"
+  expected="${mesh_dns_ips[$i]}"
   if $CHECK; then
     content=$(cf_a_record_content "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host")
     proxied_now=$(cf_a_record_proxied "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host")
-    if [ "$content" = "$VM_IP" ] && [ "$proxied_now" = "false" ]; then
-      echo "  ok       ${host} → ${VM_IP} (DNS-only)"
+    if [ "$content" = "$expected" ] && [ "$proxied_now" = "false" ]; then
+      echo "  ok       ${host} → ${expected} (DNS-only)"
       state="ok"
     else
-      echo "  MISSING  ${host} (resolves to '${content:-none}', proxied=${proxied_now:-n/a}; want ${VM_IP}, proxied=false)"
+      echo "  MISSING  ${host} (resolves to '${content:-none}', proxied=${proxied_now:-n/a}; want ${expected}, proxied=false)"
       state="missing"
       missing+=("$host")
     fi
   else
-    state=$(cf_upsert_a_record "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host" "$VM_IP" false) \
+    state=$(cf_upsert_a_record "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host" "$expected" false) \
       || { echo "[ERROR] upsert failed for ${host}" >&2; write_dns_summary "failure"; exit 1; }
-    echo "  ${host} → ${VM_IP} (proxied=false, mesh plane): ${state}"
-    content="$VM_IP"
+    echo "  ${host} → ${expected} (proxied=false, mesh plane): ${state}"
+    content="$expected"
   fi
   append_dns_record
 done

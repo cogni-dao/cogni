@@ -30,7 +30,6 @@ const read = (relative: string): string =>
   readFileSync(path.join(root, relative), "utf8");
 const parse = <T>(relative: string): T => yaml.parse(read(relative)) as T;
 
-const ZONE = "cognidao.org";
 const BASE = "infra/k8s/base/node-deploy-mesh/tailnets";
 const HEADSCALE_IMAGE =
   "ghcr.io/juanfont/headscale:v0.29.7@sha256:11f81665e842809db9fe3006a38c56a66e968baa5abd4bac498e86445572b970";
@@ -44,6 +43,7 @@ interface Tailnet {
   coordinator_np: string;
   stun_port: string;
   derp_region: string;
+  zone: string;
 }
 const FIELDS = [
   "tailnet",
@@ -57,6 +57,7 @@ const FIELDS = [
   "stun_port",
   "wireguard_port",
   "derp_region",
+  "zone",
 ] as const;
 const TABLE: Tailnet[] = (
   read("scripts/ci/lib/mesh-plane.sh").match(
@@ -176,12 +177,12 @@ function expectSocketIsolation(spec: PodSpec, tailnets: string[]) {
 }
 
 describe("mesh coordinators: one Component per tailnet, pinned to the tailnet table (task.5428 P3)", () => {
-  it("the table names the canonical tailnets and the test operator's own", () => {
-    expect(TABLE.map((t) => t.tailnet)).toEqual([
-      "candidate-a",
-      "preview",
-      "production",
-      "test-candidate-a",
+  it("the table names the canonical tailnets (production zone) and the test operator's own (test-fleet zone)", () => {
+    expect(TABLE.map((t) => [t.tailnet, t.zone])).toEqual([
+      ["candidate-a", "cognidao.org"],
+      ["preview", "cognidao.org"],
+      ["production", "cognidao.org"],
+      ["test-candidate-a", "cogni-testing.org"],
     ]);
   });
 
@@ -215,7 +216,7 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
     ]);
 
     const c = cfg(name);
-    expect(c.server_url).toBe(`https://${t.control_label}.${ZONE}`);
+    expect(c.server_url).toBe(`https://${t.control_label}.${t.zone}`);
     expect(c.grpc_listen_addr).toMatch(/^127\.0\.0\.1:\d+$/);
     expect(c.metrics_listen_addr).toMatch(/^127\.0\.0\.1:\d+$/);
     expect(c.grpc_allow_insecure).toBe(false);
@@ -244,7 +245,7 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
     expect(Object.keys(derp.regions)).toEqual([t.derp_region]);
     expect(derp.regions[t.derp_region]?.nodes).toEqual([
       expect.objectContaining({
-        hostname: `${t.relay_label}.${ZONE}`,
+        hostname: `${t.relay_label}.${t.zone}`,
         derpport: 443,
         stunport: Number(t.stun_port || 3478),
         stunonly: false,
@@ -324,6 +325,7 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
           .map((d) => d.toJS())
       )
         .replaceAll(t, "<t>")
+        .replaceAll(row.zone, "<zone>")
         .replace(/\b(81|91)8\d\b/g, "<port>")
         .replace(/\b5048\d\b/g, "<port>")
         .replace(new RegExp(`\\b${row.coordinator_np}\\b`, "g"), "<np>")

@@ -354,24 +354,29 @@ import json, os
 json.dump({"records": [
     {"id": "apex", "name": "test.cognidao.org", "content": "84.32.9.111",
      "proxied": False, "type": "A"},
+    {"id": "vmca", "name": "cogni-candidate-a.vm.cognidao.org", "content": "5.6.7.8",
+     "proxied": False, "type": "A"},
 ], "next_id": 9}, open(os.environ["CF_STORE"], "w"))'
-COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org \
+COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
   bash scripts/ci/reconcile-node-dns.sh production >/dev/null 2>&1
 assert_eq "$(cf_a_record_content test-token zone123 akashnode-test.cognidao.org)" "84.32.9.111" \
   "an env with NO placement override still reconciles (K3S_IS_DEFAULT)"
 
-# task.5428 — mesh hosts from the tailnet table (scripts/ci/lib/mesh-plane.sh), ALWAYS DNS-only, and
-# --check gates content + proxy state. Production's edge fronts the canonical coordinators; the
-# candidate-a VM fronts the test operator's coordinator and runs both tailnets' relays.
+# task.5428 — mesh hosts from the tailnet table (scripts/ci/lib/mesh-plane.sh), ALWAYS DNS-only, written
+# only by the coordinator env's run, only in that run's zone; --check gates content + proxy state.
 for host in mesh-candidate-a mesh-preview mesh-production; do
   assert_eq "$(cf_a_record_content test-token zone123 "${host}.cognidao.org")" "84.32.9.111" \
     "production writes ${host} to its edge VM"
   assert_eq "$(cf_a_record_proxied test-token zone123 "${host}.cognidao.org")" "false" \
     "${host} is DNS-only"
 done
-assert_eq "$(grep -c 'derp-\|mesh-test' "$CF_STORE" || true)" "0" \
-  "production writes no candidate-a relay or test-operator coordinator host"
-if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org \
+assert_eq "$(cf_a_record_content test-token zone123 derp-candidate-a.cognidao.org)" "5.6.7.8" \
+  "production places the canonical candidate-a relay host on the candidate-a VM (its alias record)"
+assert_eq "$(cf_a_record_proxied test-token zone123 derp-candidate-a.cognidao.org)" "false" \
+  "derp-candidate-a is DNS-only"
+assert_eq "$(grep -c 'cogni-testing.org' "$CF_STORE" || true)" "0" \
+  "the production run writes nothing in the test-fleet zone"
+if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
   bash scripts/ci/reconcile-node-dns.sh production --check >/dev/null 2>&1; then
   printf 'OK   --check is green with DNS-only mesh hosts\n'; pass=$((pass + 1))
 else
@@ -384,27 +389,33 @@ for r in s["records"]:
     if r["name"] == "mesh-preview.cognidao.org":
         r["proxied"] = True
 json.dump(s, open(os.environ["CF_STORE"], "w"))'
-if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org \
+if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
   bash scripts/ci/reconcile-node-dns.sh production --check >/dev/null 2>&1; then
   printf 'FAIL --check must fail when a mesh host is proxied\n'; fail=$((fail + 1))
 else
   printf 'OK   --check fails a proxied mesh host\n'; pass=$((pass + 1))
 fi
+# candidate-a holding the production-zone token writes no test-fleet host and no canonical host.
 CF_STORE="$CF_STORE" python3 -c '
 import json, os
 json.dump({"records": [
     {"id": "apex", "name": "test.cognidao.org", "content": "84.32.9.111", "proxied": False, "type": "A"},
 ], "next_id": 9}, open(os.environ["CF_STORE"], "w"))'
-COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org \
+COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
   bash scripts/ci/reconcile-node-dns.sh candidate-a >/dev/null 2>&1
-for host in mesh-test-candidate-a derp-candidate-a derp-test-candidate-a; do
-  assert_eq "$(cf_a_record_content test-token zone123 "${host}.cognidao.org")" "84.32.9.111" \
-    "candidate-a writes ${host} to its VM"
-  assert_eq "$(cf_a_record_proxied test-token zone123 "${host}.cognidao.org")" "false" \
-    "${host} is DNS-only"
+assert_eq "$(grep -c 'mesh-\|derp-' "$CF_STORE" || true)" "0" \
+  "candidate-a with the production-zone token writes no mesh host (canonical: production's; test: test zone's)"
+# candidate-a holding the test-fleet-zone token writes the test operator's tailnet hosts in that zone.
+COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni FORK_DOMAIN_ROOT=cogni-testing.org \
+  bash scripts/ci/reconcile-node-dns.sh candidate-a >/dev/null 2>&1
+for host in mesh-test-candidate-a derp-test-candidate-a; do
+  assert_eq "$(cf_a_record_content test-token zone123 "${host}.cogni-testing.org")" "84.32.9.111" \
+    "the test-zone candidate-a run writes ${host}.cogni-testing.org to the candidate-a VM"
+  assert_eq "$(cf_a_record_proxied test-token zone123 "${host}.cogni-testing.org")" "false" \
+    "${host}.cogni-testing.org is DNS-only"
 done
-assert_eq "$(cf_a_record_content test-token zone123 mesh-candidate-a.cognidao.org)" "" \
-  "candidate-a never writes the canonical candidate-a coordinator host (production's edge owns it)"
+assert_eq "$(grep -c 'mesh-candidate-a.cognidao.org\|derp-candidate-a.cognidao.org' "$CF_STORE" || true)" "0" \
+  "the candidate-a run never writes the canonical candidate-a tailnet hosts"
 
 # ── Lib: the existence probe is type-aware, so a CNAME is never "absent" ──────
 # Pre-fix the probe pinned ?type=A, read a live CNAME as absent, and POSTed an A

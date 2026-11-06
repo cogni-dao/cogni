@@ -9,7 +9,7 @@
 # Control over TLS on 443 only (hard requirement 22): clients reach this server ONLY at server_url.
 # TLS ends at the edge Caddy of the coordinator's env VM (public ACME certificate on a DNS-only host);
 # the listener below is plain HTTP inside the pod, and its NodePort is dropped from the public NIC.
-server_url: https://mesh-test-candidate-a.cognidao.org
+server_url: https://mesh-test-candidate-a.cogni-testing.org
 # Pod-local ports: Headscale containers share the sequencer pod's network namespace, so each tailnet
 # owns its own triple. 8080 is the sequencer's health port.
 listen_addr: 0.0.0.0:8184

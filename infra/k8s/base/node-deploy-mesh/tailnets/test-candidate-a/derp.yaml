@@ -12,7 +12,7 @@ regions:
     nodes:
       - name: 904a
         regionid: 904
-        hostname: derp-test-candidate-a.cognidao.org
+        hostname: derp-test-candidate-a.cogni-testing.org
         stunport: 3479
         stunonly: false
         derpport: 443
