@@ -19,7 +19,7 @@
 #
 # task.5428 — `--domain` also renders the env VM's mesh-plane sites from the one tailnet table
 # (scripts/ci/lib/mesh-plane.sh), for every tailnet whose relay + substrate-gw run on this VM: one relay
-# site per tailnet (`derp-<tailnet>.<zone>` -> that tailnet's derper NodePort) and one enrollment
+# site per tailnet (`derp-<tailnet>.<zone>`, in that tailnet's own DNS zone -> its derper NodePort) and one enrollment
 # publish path per tailnet on the VM's DNS-only alias (`/.well-known/cogni-mesh/<tailnet>/...`). These
 # hosts are DNS-only, so each site overrides the global `local_certs` with a publicly trusted ACME
 # issuer; every proxied host keeps `local_certs`. This script is the VM's ONE Caddyfile writer, and it
@@ -164,7 +164,7 @@ emit_mesh_vm_sites() {
     [ -n "$tailnet" ] || continue
     echo
     echo "# ── mesh relay ${tailnet} (DNS-only, public ACME) → k3s NodePort $(mesh_tailnet_field "$tailnet" relay_np) ──"
-    emit_mesh_relay_site "$(mesh_host "$tailnet" relay "$root")" \
+    emit_mesh_relay_site "$(mesh_host "$tailnet" relay)" \
       "host.docker.internal:$(mesh_tailnet_field "$tailnet" relay_np)"
     pairs+=("${tailnet}=$(mesh_tailnet_field "$tailnet" publish_np)")
   done < <(mesh_vm_tailnets "$env")
@@ -176,11 +176,10 @@ emit_mesh_vm_sites() {
 
 # Fail when any tailnet of ENV's VM lacks its relay site or its publish path (one writer, all routes).
 assert_mesh_vm_sites() {
-  local env="$1" rendered="$2" root tailnet
-  root="${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}"
+  local env="$1" rendered="$2" tailnet
   while read -r tailnet; do
     [ -n "$tailnet" ] || continue
-    grep -Fqx "$(mesh_host "$tailnet" relay "$root") {" <<<"$rendered" \
+    grep -Fqx "$(mesh_host "$tailnet" relay) {" <<<"$rendered" \
       || { echo "[ERROR] render-caddyfile: relay site for tailnet '$tailnet' missing" >&2; return 1; }
     grep -Fq "handle /.well-known/cogni-mesh/${tailnet}/substrate-gw.json {" <<<"$rendered" \
       || { echo "[ERROR] render-caddyfile: publish path for tailnet '$tailnet' missing" >&2; return 1; }

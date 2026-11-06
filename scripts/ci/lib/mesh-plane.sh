@@ -22,18 +22,22 @@
 #   stun_port         UDP hostPort of this tailnet's STUN (named only in its relay map)
 #   wireguard_port    UDP hostPort of this tailnet's substrate-gw direct path
 #   derp_region       this tailnet's relay region id (its relay map has only this region)
+#   zone              the DNS zone of this tailnet's control and relay hosts. Canonical tailnets live in
+#                     the production zone; the test operator's tailnet lives in the isolated test-fleet
+#                     zone (its NODE_DEPLOY_WORKLOAD_ZONE, hub test-fleet-parity-boundary), whose
+#                     Cloudflare token is scoped to that zone only.
 # NodePorts sit off the catalog node_port 100-stride (scripts/ci/next-free-node-port.sh).
 #
 # Intentionally no `set -euo pipefail` — meant to be sourced; callers own shell options.
 
 MESH_TAILNETS_TABLE='
-candidate-a|candidate-a|production|mesh-candidate-a|derp-candidate-a|32441|32340|32341|3478|41641|901
-preview||production|mesh-preview|derp-preview|32442|||||902
-production||production|mesh-production|derp-production|32443|||||903
-test-candidate-a|candidate-a|candidate-a|mesh-test-candidate-a|derp-test-candidate-a|32444|32342|32343|3479|41642|904
+candidate-a|candidate-a|production|mesh-candidate-a|derp-candidate-a|32441|32340|32341|3478|41641|901|cognidao.org
+preview||production|mesh-preview|derp-preview|32442|||||902|cognidao.org
+production||production|mesh-production|derp-production|32443|||||903|cognidao.org
+test-candidate-a|candidate-a|candidate-a|mesh-test-candidate-a|derp-test-candidate-a|32444|32342|32343|3479|41642|904|cogni-testing.org
 '
 
-_mesh_plane_fields=(tailnet vm_env coordinator_env control_label relay_label coordinator_np relay_np publish_np stun_port wireguard_port derp_region)
+_mesh_plane_fields=(tailnet vm_env coordinator_env control_label relay_label coordinator_np relay_np publish_np stun_port wireguard_port derp_region zone)
 
 # Every tailnet name, in table order.
 mesh_tailnets() {
@@ -61,11 +65,12 @@ mesh_coordinator_tailnets() {
   printf '%s\n' "$MESH_TAILNETS_TABLE" | awk -F'|' -v e="$1" 'NF > 1 && $3 == e { print $1 }'
 }
 
-# <label>.<root> for a tailnet's control or relay host:  mesh_host <tailnet> control|relay <root>
+# <label>.<zone> for a tailnet's control or relay host:  mesh_host <tailnet> control|relay
 mesh_host() {
-  local label
+  local label zone
   label="$(mesh_tailnet_field "$1" "${2}_label")" || return 1
-  printf '%s.%s' "$label" "$3"
+  zone="$(mesh_tailnet_field "$1" zone)" || return 1
+  printf '%s.%s' "$label" "$zone"
 }
 
 # Every plain-HTTP edge-only NodePort (coordinator, relay, publisher), sorted, comma-separated. The

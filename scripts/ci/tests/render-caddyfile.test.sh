@@ -184,7 +184,7 @@ vm_tailnets="$(mesh_vm_tailnets candidate-a | paste -sd' ' -)"
   || fail "candidate-a VM must serve the canonical and the test-operator tailnets (got: $vm_tailnets)"
 block_of() { awk -v h="$1 {" '$0 == h {p=1} p {print} p && /^}$/ {exit}' <<<"$2"; }
 for tailnet in $vm_tailnets; do
-  relay="$(mesh_host "$tailnet" relay cognidao.org)"
+  relay="$(mesh_host "$tailnet" relay)"
   rb="$(block_of "$relay" "$CAND")"
   [ -n "$rb" ] || fail "relay site $relay missing"
   grep -Fq 'issuer acme' <<<"$rb" || fail "$relay must use a public ACME issuer (DNS-only)"
@@ -205,7 +205,7 @@ for tailnet in $vm_tailnets; do
 done
 [ "$(grep -c 'handle /.well-known/cogni-mesh/' <<<"$pb")" = "2" ] || fail "VM alias must carry exactly the two publish paths"
 # The one-writer check really fails when a tailnet's route is missing.
-if assert_mesh_vm_sites candidate-a "$(grep -v '^derp-test-candidate-a.cognidao.org {$' <<<"$CAND")" 2>/dev/null; then
+if assert_mesh_vm_sites candidate-a "$(grep -v '^derp-test-candidate-a.cogni-testing.org {$' <<<"$CAND")" 2>/dev/null; then
   fail "a missing relay site must fail the render"
 fi
 if assert_mesh_vm_sites candidate-a "$(grep -v 'cogni-mesh/candidate-a/' <<<"$CAND")" 2>/dev/null; then
@@ -237,6 +237,12 @@ drop_line="$(grep -n -- '--comment "$TAG:drop-public" -j DROP' "$HARDEN" | cut -
 [ "$raw_line" -gt "$drop_line" ] || fail "raw-table block must run after DOCKER-USER's public DROP (fail closed)"
 grep -Fq 'MESH_UDP' "$HARDEN" && fail "no-op UDP ACCEPT rules must not return"
 # Table invariants: unique ports and regions; NodePorts off the catalog 100-stride.
+# Canonical tailnets in the production zone; the test operator's in the isolated test-fleet zone.
+[ "$(mesh_host candidate-a relay)" = "derp-candidate-a.cognidao.org" ] || fail "canonical relay host must be in cognidao.org"
+[ "$(mesh_host test-candidate-a relay)" = "derp-test-candidate-a.cogni-testing.org" ] \
+  || fail "test-operator relay host must be in the test-fleet zone cogni-testing.org"
+[ "$(mesh_host test-candidate-a control)" = "mesh-test-candidate-a.cogni-testing.org" ] \
+  || fail "test-operator control host must be in the test-fleet zone cogni-testing.org"
 for col in coordinator_np relay_np publish_np stun_port wireguard_port derp_region; do
   vals="$(for t in $(mesh_tailnets); do mesh_tailnet_field "$t" "$col"; done | grep -v '^$')"
   [ "$(sort <<<"$vals" | uniq -d)" = "" ] || fail "duplicate $col in the mesh tailnet table"
