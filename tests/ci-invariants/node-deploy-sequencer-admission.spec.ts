@@ -5,7 +5,7 @@
  * Module: `@tests/ci-invariants/node-deploy-sequencer-admission`
  * Purpose: Keep the node-deploy sequencer from reading any OpenBao bucket that is not a node's own, because only a cluster-side admission policy stops it.
  * Scope: Reads the base policy and both overlay kustomizations as YAML (no kubectl needed, so CI always asserts it); does not evaluate CEL or contact a cluster.
- * Invariants: Policy ships fail-closed in base and overlays • Each binding selects exactly the env namespaces its sequencer serves • Extra env namespaces carry the base Role rules • The sequencer may delete only mesh attempt-key Secrets (task.5430)
+ * Invariants: Policies ship fail-closed in base and overlays, and the sequencer may delete only mesh attempt-key Secrets (task.5430) • Each binding selects exactly the env namespaces its sequencer serves • Extra env namespaces carry the base Role rules
  * Side-effects: IO (reads reviewed manifests)
  * Links: task.5405, story.5137, task.5430, infra/k8s/base/node-deploy-sequencer/admission-policy.yaml, infra/k8s/base/node-deploy-sequencer/attempt-secret-delete-policy.yaml
  * @internal
