@@ -426,6 +426,11 @@ export interface ProbePort {
    * nameservers (no local resolver, no public resolver's negative cache), real Host + SNI.
    */
   publicRead(host: string, path: string): Promise<HttpResult>;
+  /**
+   * The A records of `host` through the probe's recursive resolver (task.5431: the lane VM host, read once
+   * per mesh pass). Absent on probes that cannot resolve; a failure throws.
+   */
+  resolveAddresses?(host: string): Promise<readonly string[]>;
   /** Postgres SSLRequest handshake against a forwarded tcp port. */
   tcpTls(host: string, port: number): Promise<boolean>;
 }

@@ -53,7 +53,6 @@ import {
   MESH_COMPANION_IMAGES,
   MESH_DEVICE_ABSENT,
   meshCompanionServices,
-  substratePortsOf,
 } from "./mesh-attempt";
 import { MESH_SECRET_NAME_PATTERN, MeshPlane } from "./mesh-plane";
 import { DEFAULT_SEQUENCER_CONFIG, NodeDeploySequencer } from "./sequencer";
@@ -327,13 +326,30 @@ class FakeCatalog implements NodeCatalogPort {
 // Harness
 // ---------------------------------------------------------------------------------------------
 
-function harness() {
+/** The probe's DNS path for the lane VM host (task.5432 SHARED_POSTGRES_ONLY). */
+class ResolvingProbe extends FakeProbe {
+  addresses: readonly string[] | "fail" = [];
+  async resolveAddresses(_host: string): Promise<readonly string[]> {
+    if (this.addresses === "fail") throw new Error("SERVFAIL");
+    return this.addresses;
+  }
+}
+
+function harness(
+  opts: {
+    readonly bucket?: Record<string, string>;
+    readonly addresses?: readonly string[] | "fail";
+  } = {}
+) {
   const events: string[] = [];
   const clock = new FakeClock();
   const store = new MemoryStore(clock);
   const payer = new FakePayer(events);
   const dns = new FakeDns(events);
-  const probe = new FakeProbe(payer, dns, events);
+  const probe = new ResolvingProbe(payer, dns, events);
+  probe.addresses = opts.addresses ?? [];
+  const runtimeSecrets = new FakeRuntimeSecrets();
+  Object.assign(runtimeSecrets.bucket, opts.bucket ?? {});
   const hs = new FakeHeadscale(clock);
   const keys = new MemoryMeshKeys(events);
   const log = new MemoryLog();
@@ -354,7 +370,7 @@ function harness() {
       probe,
       secrets: new MemorySecrets(),
       runtime: {
-        secrets: new FakeRuntimeSecrets(),
+        secrets: runtimeSecrets,
         catalog: new FakeCatalog(),
         substrateHost: SUBSTRATE,
         operatorDomain: "operator.example",
@@ -453,7 +469,10 @@ async function deployed(h: H, slug: Slug, sha = SHA_1): Promise<AttemptRow> {
   await h.release(slug, sha);
   expect(await h.seq.step(h.key(slug))).toBe("driven");
   const active = (await h.attempts(slug)).find((a) => a.phase === "active");
-  if (!active) throw new Error(`no active attempt: ${h.log.steps().join(" ")}`);
+  if (!active)
+    throw new Error(
+      `no active attempt: ${h.log.steps().join(" ")} ${(await h.attempts(slug)).map((a) => a.error).join(";")}`
+    );
   return active;
 }
 
@@ -578,6 +597,32 @@ describe("HR 18: a lane switch never leaves a node without a serving path", () =
 // ---------------------------------------------------------------------------------------------
 
 describe("HR 3, 16, 21: the companions carry exactly the derived ports", () => {
+  const SHARED_PG = "postgresql://poly@203.0.113.7:5432/poly";
+
+  it("a bucket Postgres DSN on the VM's resolved address is rebound and granted 5432; a failed lookup rebinds nothing", async () => {
+    const shared = harness({
+      bucket: { DATABASE_URL: SHARED_PG },
+      addresses: ["203.0.113.7"],
+    });
+    const a = await deployed(shared, "poly");
+    expect(a.mesh?.ports).toEqual([4000, 5432, 5435, 6379, 7233]);
+    const app = appCreates(shared)[0]?.spec.services[0];
+    expect(app?.env?.DATABASE_URL).toContain("@cogni-substrate:5432/");
+    expect(
+      substrateOf(appCreates(shared)[0])?.expose?.map((e) => e.port)
+    ).toEqual(a.mesh?.ports);
+
+    const unresolved = harness({
+      bucket: { DATABASE_URL: SHARED_PG },
+      addresses: "fail",
+    });
+    const b = await deployed(unresolved, "poly");
+    expect(b.mesh?.ports).toEqual([4000, 5435, 6379, 7233]);
+    expect(appCreates(unresolved)[0]?.spec.services[0]?.env?.DATABASE_URL).toBe(
+      SHARED_PG
+    );
+  });
+
   it("listeners = attempt ports = policy grant; the app's substrate host is cogni-substrate", async () => {
     const h = harness();
     const a = await deployed(h, "poly");
@@ -600,26 +645,11 @@ describe("HR 3, 16, 21: the companions carry exactly the derived ports", () => {
         dst: ["tag:substrate:4000,5435,6379,7233"],
       },
     ]);
-    // The non-registry worker health port is never a listener or a grant (REGISTRY_ONLY).
-    expect(meshLogs(h, "node_mesh_port_not_granted")[0]?.fields.keys).toEqual([
-      "SCHEDULER_WORKER_HEALTH_URL",
-    ]);
-  });
-
-  it("substratePortsOf reads host:port and URLs on substrate hosts only", () => {
-    expect(
-      substratePortsOf(
-        {
-          A: "cogni-substrate:7233",
-          B: "redis://cogni-substrate:6379/0",
-          C: `postgresql://u:p@${SUBSTRATE}:5435/db?sslmode=disable`,
-          D: "postgresql://u:p@elsewhere:5432/db",
-          E: "http://cogni-substrate:30900",
-          F: "not a url",
-        },
-        ["cogni-substrate", SUBSTRATE]
-      )
-    ).toEqual({ ports: [5435, 6379, 7233], refused: ["E"] });
+    // The non-registry worker health port is not injected on a mesh attempt, so it is never a listener.
+    expect(app?.env?.SCHEDULER_WORKER_HEALTH_URL).toBeUndefined();
+    // Doltgres moves to the companion; Poly's own Postgres cell keeps its endpoint.
+    expect(app?.env?.DOLTGRES_URL).toContain("@cogni-substrate:5435/");
+    expect(app?.env?.DATABASE_URL).toContain("@poly-db.cell.example:5432/");
   });
 
   it("companions: uid 10001, no capability, no --advertise-tags, no Tailscale logs, our control URL, pinned digests, lease-internal only", async () => {

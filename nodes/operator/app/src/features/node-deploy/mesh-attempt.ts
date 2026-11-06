@@ -15,9 +15,9 @@
  *     transport is egress whenever it never served on the mesh, so a lane switch never leaves a node
  *     without a serving path. A stop-then-start or a lost-lease redeploy of a never-meshed node stays
  *     egress.
- *   - LISTENERS_ARE_THE_GRANT (HR 3): the companion listeners and the policy grant are the SAME port set:
- *     the registry ports (`substrate-ports.ts`) that the attempt's resolved env names on a substrate host.
- *     A port outside the registry is never a listener and never granted.
+ *   - LISTENERS_ARE_THE_GRANT (HR 3): the companion listeners and the policy grant are the SAME port set,
+ *     the attempt's substrate binding ports (`nodeAppSubstrateBinding`, the input `nodeAppEnv` derives the
+ *     env from). A port outside the registry (`substrate-ports.ts`) is never a listener.
  *   - OPERATOR_OWNED_COMPANIONS (CD1): `cogni-mesh` (Tailscale userspace) and `cogni-substrate` (socat)
  *     are added by the sequencer, never declared by a node; a node service with either name is refused.
  *   - PINNED_ONCE_PER_RELEASE (CD3): the companion digests come from the release's first mesh attempt, so
@@ -136,32 +136,6 @@ export function attemptTransport(input: {
   );
   // The node never served on the mesh, so its last served transport is egress.
   return !serving && !redeploy ? "mesh" : "egress";
-}
-
-const HOST_PORT =
-  /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]*@)?([A-Za-z0-9.-]+):(\d{1,5})(?:[/?#].*)?$/u;
-
-/**
- * HR 3: the registry ports the resolved env names on one of `hosts` (`host:port` or a URL with that
- * host and port). Sorted, deduplicated. A non-registry port on a substrate host is returned in `refused`.
- */
-export function substratePortsOf(
-  env: Readonly<Record<string, string>>,
-  hosts: readonly (string | undefined)[]
-): { readonly ports: number[]; readonly refused: string[] } {
-  const wanted = new Set(
-    hosts.filter((h): h is string => !!h).map((h) => h.toLowerCase())
-  );
-  const ports = new Set<number>();
-  const refused: string[] = [];
-  for (const [name, value] of Object.entries(env)) {
-    const m = HOST_PORT.exec(value.trim());
-    if (!m?.[1] || !m[2] || !wanted.has(m[1].toLowerCase())) continue;
-    const port = Number(m[2]);
-    if (SUBSTRATE_PORT_SET.has(port)) ports.add(port);
-    else refused.push(name);
-  }
-  return { ports: [...ports].sort((a, b) => a - b), refused };
 }
 
 /** `<slug>-<workload>-<release id prefix>-a<attempt>`, a DNS label (Tailscale hostname). */

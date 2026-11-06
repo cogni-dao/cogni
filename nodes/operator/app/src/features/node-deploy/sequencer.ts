@@ -119,20 +119,19 @@ import {
   MESH_COMPANION_IMAGES,
   MESH_DEVICE_ABSENT,
   MESH_LIVE_PHASES,
-  MESH_SUBSTRATE_HOST,
   MESH_TERMINAL_PHASES,
   type MeshCompanionService,
   meshCompanionServices,
   meshDeviceName,
   readAttemptDevices,
   substrateGateway,
-  substratePortsOf,
 } from "./mesh-attempt";
 import { type MeshPlane, meshSecretName } from "./mesh-plane";
 import type { NodeSubstrateGrant } from "./mesh-policy";
 import {
   nodeAppEnv,
   nodeAppSecretKeys,
+  nodeAppSubstrateBinding,
   releaseIdentityEnv,
   workerEnv,
 } from "./node-app-env";
@@ -341,6 +340,8 @@ interface ResolvedRuntime {
   readonly requiredCountryCodes: readonly string[];
   /** True when the env is a non-operator node app's full runtime env (`nodeAppEnv`). */
   readonly nodeApp: boolean;
+  /** A node app's substrate binding ports (`nodeAppSubstrateBinding`): its mesh grant and listeners. */
+  readonly substratePorts?: readonly number[];
 }
 
 export class NodeDeploySequencer {
@@ -351,6 +352,8 @@ export class NodeDeploySequencer {
   private readonly lastStep = new Map<string, string>();
   /** HR 8 device window per live mesh attempt id: in memory, so a restart rolls nothing. */
   private readonly deviceWatch = new Map<string, DeviceWatchEntry>();
+  /** The lane VM host's resolved addresses, read once per mesh pass (task.5432 SHARED_POSTGRES_ONLY). */
+  private vmAddresses: readonly string[] | undefined;
 
   constructor(private readonly d: SequencerDeps) {}
 
@@ -1078,6 +1081,7 @@ export class NodeDeploySequencer {
     let requiredCountryCodes: readonly string[] = [];
     let nodeApp = false;
     let companionEnvs: Record<string, Record<string, string>> = {};
+    let substratePorts: readonly number[] = [];
     if (w.kind === "app") {
       const node = await this.nodeAppRuntime(key, release, transport);
       if (node) {
@@ -1085,6 +1089,7 @@ export class NodeDeploySequencer {
         requiredCountryCodes = node.requiredCountryCodes;
         nodeApp = node.nodeApp;
         companionEnvs = node.companionEnvs ?? {};
+        substratePorts = node.substratePorts ?? [];
       }
       Object.assign(env, releaseIdentityEnv(release.sourceSha));
     }
@@ -1116,7 +1121,13 @@ export class NodeDeploySequencer {
       }))
         env[b.env] = b.value;
     }
-    return { env, requiredCountryCodes, nodeApp, companionEnvs };
+    return {
+      env,
+      requiredCountryCodes,
+      nodeApp,
+      companionEnvs,
+      substratePorts,
+    };
   }
 
   private async nodeAppRuntime(
@@ -1129,6 +1140,7 @@ export class NodeDeploySequencer {
         requiredCountryCodes: string[];
         nodeApp: boolean;
         companionEnvs?: Record<string, Record<string, string>>;
+        substratePorts?: readonly number[];
       }
     | undefined
   > {
@@ -1206,6 +1218,17 @@ export class NodeDeploySequencer {
         );
       throw error;
     }
+    // ONE derivation (CD2, task.5432): the SAME input gives the env and the substrate binding, so the mesh
+    // grant and the `cogni-substrate` listeners are exactly the ports the env reaches (HR 3).
+    const substrate = {
+      transport,
+      substrateHost: rt.substrateHost,
+      substrateAddresses:
+        transport === "mesh" ? await this.substrateAddresses() : [],
+      secretKeys: w.secretKeys,
+      secrets: bucket,
+      boundEnvNames,
+    };
     try {
       return {
         env: nodeAppEnv({
@@ -1216,14 +1239,10 @@ export class NodeDeploySequencer {
           publicHost,
           operatorDomain: rt.operatorDomain,
           port: w.port,
-          // A mesh attempt's app reaches its substrate through the `cogni-substrate` companion (HR 1).
-          substrateHost:
-            transport === "mesh" ? MESH_SUBSTRATE_HOST : rt.substrateHost,
           databasePoolLimits: policy.databasePoolLimits,
-          secretKeys: w.secretKeys,
-          secrets: bucket,
-          boundEnvNames,
+          ...substrate,
         }),
+        substratePorts: nodeAppSubstrateBinding(substrate)?.ports ?? [],
         requiredCountryCodes: [...policy.requiredCountryCodes],
         nodeApp: true,
         companionEnvs: Object.fromEntries(
@@ -2501,6 +2520,27 @@ export class NodeDeploySequencer {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
+  /**
+   * The lane VM host's addresses through the probe's DNS path, read once per mesh pass and on first use.
+   * A failed or absent lookup is `[]`: only the host NAME then matches, so no DSN is rebound (fail safe).
+   */
+  private async substrateAddresses(
+    refresh = false
+  ): Promise<readonly string[]> {
+    if (this.vmAddresses && !refresh) return this.vmAddresses;
+    const host = this.d.runtime?.substrateHost;
+    const resolve = this.d.probe.resolveAddresses?.bind(this.d.probe);
+    let addresses: readonly string[] = [];
+    if (host && resolve)
+      try {
+        addresses = await resolve(host);
+      } catch {
+        addresses = [];
+      }
+    this.vmAddresses = addresses;
+    return addresses;
+  }
+
   /** Every desired workload of the env with all its attempts (newest first). */
   private async meshRows(): Promise<MeshRow[]> {
     const desired = await this.d.store.listDesired(this.d.config.environment);
@@ -2574,20 +2614,8 @@ export class NodeDeploySequencer {
         attempt,
         reason: "mesh_lane_unavailable: this lane no longer runs the mesh",
       };
-    // ONE derivation (CD2): the grant and the listeners are the ports the attempt's resolved env names.
-    // When T5 (task.5432, #3046) lands, this reads `nodeAppSubstrateBinding(...).ports`, the same
-    // binding `nodeAppEnv` derives the env from.
-    const { ports, refused } = substratePortsOf(runtime.env, [
-      MESH_SUBSTRATE_HOST,
-      this.d.runtime?.substrateHost,
-    ]);
-    if (refused.length > 0)
-      // The mesh grants registry ports only (REGISTRY_ONLY); such an env value cannot reach its target.
-      await this.meshEvent("warn", "node_mesh_port_not_granted", attempt, key, {
-        outcome: "refused",
-        keys: refused,
-        reason: refused.join(","),
-      });
+    // HR 3: the binding's ports (`nodeAppSubstrateBinding`) are the grant AND the listeners.
+    const ports = [...(runtime.substratePorts ?? [])];
     if (ports.length === 0)
       return {
         kind: "failed",
@@ -2750,6 +2778,7 @@ export class NodeDeploySequencer {
     const mesh = this.d.mesh;
     if (!mesh) return;
     const startedAt = this.d.clock.now();
+    await this.substrateAddresses(true);
     const rows = await this.meshRows();
     const meshAttempts = rows.flatMap(({ key, attempts }) =>
       attempts
