@@ -75,8 +75,20 @@ function sequencerEnvEntry(kustomization: Kustomization, name: string) {
   return doc.spec.template.spec.containers[0]?.env.find((e) => e.name === name);
 }
 
+/** The effective value: a literal, or the overlay's ConfigMap data its `configMapKeyRef` names. */
 function sequencerEnv(kustomization: Kustomization, name: string) {
-  return sequencerEnvEntry(kustomization, name)?.value;
+  const entry = sequencerEnvEntry(kustomization, name);
+  if (entry?.value !== undefined) return entry.value;
+  const ref = entry?.valueFrom?.configMapKeyRef;
+  if (!ref) return undefined;
+  const configPatch = kustomization.patches?.find(
+    (p) => p.target?.kind === "ConfigMap" && p.target.name === ref.name
+  );
+  const operations = yaml.parse(configPatch?.patch ?? "[]") as {
+    path: string;
+    value?: string;
+  }[];
+  return operations.find((op) => op.path === `/data/${ref.key}`)?.value;
 }
 
 function expectFleetOwner(kustomization: Kustomization, owner: string) {
@@ -103,6 +115,18 @@ function expectFleetOwner(kustomization: Kustomization, owner: string) {
   ).toEqual([
     { op: "add", path: "/data/NODE_SUBMODULE_PARENT_OWNER", value: owner },
   ]);
+}
+
+function expectWorkloadZone(kustomization: Kustomization, zone: string) {
+  expect(sequencerEnv(kustomization, "NODE_DEPLOY_WORKLOAD_ZONE")).toBe(zone);
+  const patch = kustomization.patches?.find(
+    (p) => p.target?.kind === "ConfigMap" && p.target.name === "node-app-config"
+  );
+  const operations = yaml.parse(patch?.patch ?? "[]") as { path: string }[];
+  // Exactly one writer of the zone value: a duplicate add would hide a conflicting second value.
+  expect(
+    operations.filter((op) => op.path === "/data/NODE_DEPLOY_WORKLOAD_ZONE")
+  ).toHaveLength(1);
 }
 
 const base = yaml
@@ -395,8 +419,33 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       expect(kust.namePrefix).toBeUndefined();
     });
 
+    it.each([
+      "candidate-a",
+      "production",
+    ])("missing new plain config cannot stop %s paid recovery before process startup", (env) => {
+      const overlay = yaml.parse(
+        read(`infra/k8s/overlays/${env}/operator/kustomization.yaml`)
+      ) as Kustomization;
+      const patch = overlay.patches?.find(
+        (p) =>
+          p.target?.kind === "Deployment" &&
+          p.target.name === "node-deploy-sequencer"
+      );
+      const deployment = yaml.parse(patch?.patch ?? "") as DeploymentPatch;
+      const entries = deployment.spec.template.spec.containers[0]?.env ?? [];
+      for (const name of [
+        "NODE_DEPLOY_FLEET_OWNER",
+        "NODE_DEPLOY_WORKLOAD_ZONE",
+      ]) {
+        const entry = entries.find((e) => e.name === name);
+        expect(entry?.valueFrom?.configMapKeyRef.optional).toBe(true);
+        expect(entry?.valueFrom?.configMapKeyRef.name).toBe("node-app-config");
+      }
+    });
+
     it("the sequencer is told its fleet org, so it never claims another fleet's nodes", () => {
       expectFleetOwner(production, "cogni-dao");
+      expectWorkloadZone(production, "cognidao.org");
     });
 
     it("the candidate-a overlay serves only itself, and its fleet is cogni-test-org (the test operator claims no canonical node)", () => {
@@ -406,6 +455,7 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       expect(sequencerEnv(candidate, "NODE_DEPLOY_ENVS")).toBeUndefined();
       // story.5137 test lane: the test sequencer's edge guard admits only test-org nodes, never cogni-dao.
       expectFleetOwner(candidate, "cogni-test-org");
+      expectWorkloadZone(candidate, "cogni-testing.org");
     });
   });
 });

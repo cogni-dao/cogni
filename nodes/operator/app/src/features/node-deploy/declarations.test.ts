@@ -13,7 +13,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import {
   COGNI_NODE_APP_V1_DEPLOYMENT,
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
@@ -23,12 +22,12 @@ import {
   renderNodeDeploymentYaml,
 } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
-
 import {
   DeclarationError,
   hostForEnv,
   resolveWorkloadDeclaration,
 } from "./declarations";
+import { WORKLOAD_ZONE } from "./testing";
 
 const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -46,6 +45,8 @@ const resolve = (
   over: Partial<Parameters<typeof resolveWorkloadDeclaration>[0]> = {}
 ) =>
   resolveWorkloadDeclaration({
+    workloadZone: WORKLOAD_ZONE,
+    nodeSlug: "operator",
     repoSpecText: ROOT_SPEC,
     manifests: [CANARY],
     nodeId: NODE_ID,

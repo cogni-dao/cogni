@@ -267,9 +267,8 @@ describe("fleet configuration", () => {
     expect(local.zoneName).toBe("cogni-testing.org");
     expect(bindings).toContainEqual(local);
     expect(
-      edgeHostRegexFor(["toks4"], local.zoneName).test(
-        "toks4-test.cogni-testing.org"
-      )
+      // One zone authority: the deploy edge and the broker consume the same normalized binding.
+      edgeHostRegexFor(["toks4"], local).test("toks4-test.cogni-testing.org")
     ).toBe(true);
   });
 

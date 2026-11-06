@@ -41,12 +41,12 @@
  *     unset owner admits no remote-source node, so the test operator never deploys canonical nodes.
  *   - IMAGE_PINNED_BEFORE_PAY (story.5137): every lane resolves a pending release image through the anonymous
  *     ghcr resolver and pins the digest write-once before any paid create.
- *   - ONE_EDGE_ZONE (story.5137): `NODE_DEPLOY_WORKLOAD_ZONE` names the DNS zone node hosts live in. Unset = the
- *     previous edge behavior remains for recovery, while fresh node app creates are refused. Set (the isolated test
- *     operator: `cogni-testing.org`) = the edge guard and ownership check use that zone, and the zone id is
- *     looked up BY NAME with the scoped token, so the id can never name a zone the token cannot write. A failed
- *     lookup leaves the edge unconfigured (http apps refused before paying). Operator and substrate hosts are
- *     not node hosts and stay where they are.
+ *   - ONE_EDGE_ZONE (story.5137): `NODE_DEPLOY_FLEET_OWNER` + `NODE_DEPLOY_WORKLOAD_ZONE` resolve ONE fleet binding
+ *     (`resolveWorkloadZoneBinding`) in `composeNodeDeployLanes`, the one lane composition. The zone id is looked up
+ *     BY NAME with the zone-scoped token (`resolveCloudflareZoneId`), so it can never name a zone the token cannot
+ *     read, and the DNS adapter re-verifies that native id/name before every use. An invalid binding or a failed
+ *     lookup leaves the edge unconfigured: recovery continues, fresh http apps wait before paying. Operator and
+ *     substrate hosts are not node hosts and stay where they are.
  *   - INTERIM_APP_PROVIDERS (task.5405): `NODE_DEPLOY_APP_PROVIDERS` (comma-separated akash accounts, max 16)
  *     is sent as `allowProviders` on every APP create; unset sends none.
  * Side-effects: IO (Postgres, actuator HTTP, Cloudflare, Kubernetes API, provider ingress; health listener)
@@ -74,20 +74,13 @@ import {
   resolveCloudflareZoneId,
 } from "@/adapters/server";
 import {
-  DEFAULT_EDGE_ZONE,
-  EdgeRouter,
-  edgeHostRegexFor,
-} from "@/features/node-deploy/edge";
-import {
   EnvLaneConfigError,
   EnvLaneSequencers,
   resolveEnvLanes,
 } from "@/features/node-deploy/env-lanes";
-import {
-  DEFAULT_SEQUENCER_CONFIG,
-  NodeDeploySequencer,
-} from "@/features/node-deploy/sequencer";
-import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
+import { DEFAULT_SEQUENCER_CONFIG } from "@/features/node-deploy/sequencer";
+import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
+import { composeNodeDeployLanes } from "./node-deploy-lanes";
 
 const LISTEN_PORT = 8080;
 const CREDENTIAL_DIR = "/var/run/secrets/node-deploy-sequencer";
@@ -194,130 +187,108 @@ const probe = new HttpProbe();
 const chain = runtimeEnv.AKASH_CHAIN_OWNER
   ? new AkashChainTruth({ owner: runtimeEnv.AKASH_CHAIN_OWNER })
   : undefined;
-// Preserve existing edge recovery; fresh node apps require a valid explicit fleet zone.
+// The org that owns this fleet's nodes' source repos (the canonical fleet is `cogni-dao`). The SAME filter the
+// route applies (`isFleetOwnedRow`): unset admits no remote-source node, so a sequencer that was never told its
+// fleet (the test operator) can never claim a host for a canonical node. story.5137 CD4.
 const fleetOwner = runtimeEnv.NODE_DEPLOY_FLEET_OWNER?.trim() || undefined;
-let edgeZoneSetting: string | undefined;
-let validFleetZone = false;
-try {
-  edgeZoneSetting = resolveWorkloadZoneBinding({
-    fleetOwner,
-    zoneName: runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE,
-  }).zoneName;
-  validFleetZone = true;
-} catch {
-  log.warn(
-    "node_deploy_sequencer_fleet_zone_invalid: fresh node app creates refused"
-  );
-}
-const edgeZone = edgeZoneSetting ?? DEFAULT_EDGE_ZONE;
-let edgeZoneId: string | undefined = cfZone || undefined;
-if (edgeZoneSetting && cfToken) {
-  edgeZoneId = await resolveCloudflareZoneId({
-    apiToken: cfToken,
-    zoneName: edgeZoneSetting,
-  }).catch((error: unknown) => {
+const images = new GhcrBuiltImageResolver();
+
+/**
+ * ONE_EDGE_ZONE: the zone id comes from the bound zone's NAME and the zone-scoped token's own view
+ * (`GET /zones?name=`), never from a stored id that may name another zone (the test operator's stored
+ * CLOUDFLARE_ZONE_ID need not be cogni-testing.org). The adapter still re-verifies that id/name before use.
+ */
+async function edgeDnsFor(binding: WorkloadZoneBinding) {
+  if (!cfToken) return undefined;
+  let zoneId: string;
+  try {
+    zoneId = await resolveCloudflareZoneId({
+      apiToken: cfToken,
+      zoneName: binding.zoneName,
+    });
+  } catch (error) {
     log.error(
       {
         environment,
-        edgeZone,
+        edgeZone: binding.zoneName,
         causeMessage:
           error instanceof Error ? error.message.slice(0, 300) : "unknown",
       },
       "node_deploy_sequencer_edge_zone_unresolved"
     );
     return undefined;
-  });
-  if (edgeZoneId && cfZone && cfZone !== edgeZoneId)
+  }
+  if (cfZone && cfZone !== zoneId)
     log.warn(
-      { environment, edgeZone, storedZoneId: cfZone, edgeZoneId },
+      { environment, edgeZone: binding.zoneName, storedZoneId: cfZone, zoneId },
       "node_deploy_sequencer_edge_zone_id_differs: using the id the token resolves for the edge zone"
     );
+  return new CloudflareDnsRecords({
+    binding,
+    apiToken: cfToken,
+    zoneId,
+    // Re-read the projected token so rotation re-verifies identity; the zone id stays the resolved one.
+    readCredentials: async () => ({
+      apiToken: await readCredential("CLOUDFLARE_API_TOKEN"),
+      zoneId,
+    }),
+  });
 }
-const dnsRecords =
-  cfToken && edgeZoneId
-    ? new CloudflareDnsRecords({ apiToken: cfToken, zoneId: edgeZoneId })
-    : undefined;
-if (!dnsRecords) {
+
+// Resolve new-effect authority without disabling the existing paid-effect recovery owner.
+const composed = await composeNodeDeployLanes({
+  fleetOwner,
+  zoneName: runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE,
+  lanes,
+  dnsRecordsFor: edgeDnsFor,
+  nodeDeploySlugs: (env, owner) => catalog.nodeDeploySlugs(env, owner),
+  depsForLane: (lane) => ({
+    store,
+    payer,
+    probe,
+    images,
+    secrets: new KubernetesStatePasswords(
+      lane.secretsNamespace,
+      lane.environment
+    ),
+    runtime: {
+      secrets: new EsoNodeRuntimeSecrets({ namespace: lane.secretsNamespace }),
+      catalog,
+      substrateHost: lane.substrateHost,
+      operatorDomain: lane.operatorDomain,
+    },
+    ...(chain ? { chain } : {}),
+    clock: {
+      now: () => Date.now(),
+      sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    },
+    log,
+    config: {
+      ...DEFAULT_SEQUENCER_CONFIG,
+      namespace,
+      environment: lane.environment,
+      ...(appProviders.length > 0 ? { appProviders } : {}),
+      retainMs: num(
+        runtimeEnv.NODE_DEPLOY_RETAIN_MS,
+        DEFAULT_SEQUENCER_CONFIG.retainMs,
+        0
+      ),
+    },
+  }),
+});
+if (!composed.edgeConfigured) {
   log.warn(
-    { environment, namespace },
-    "node_deploy_sequencer_edge_unconfigured: http apps will be refused before paying"
+    {
+      environment,
+      namespace,
+      reason: composed.authority.ok
+        ? "edge_not_configured"
+        : composed.authority.reason,
+    },
+    "node_deploy_sequencer_edge_unconfigured: recovery continues; fresh http apps refused before paying"
   );
 }
-
-// The org that owns this fleet's nodes' source repos (the canonical fleet is `cogni-dao`). The SAME filter the
-// route applies (`isFleetOwnedRow`): unset admits no remote-source node, so a sequencer that was never told its
-// fleet (the test operator) can never claim a host for a canonical node. story.5137 CD4.
-const images = new GhcrBuiltImageResolver();
-
-const laneSequencers = await Promise.all(
-  lanes.map(async (lane) => {
-    const edgeHostRegex = edgeHostRegexFor(
-      await catalog.nodeDeploySlugs(lane.environment, fleetOwner),
-      edgeZone
-    );
-    log.info(
-      {
-        environment: lane.environment,
-        secretsNamespace: lane.secretsNamespace,
-        substrateHost: lane.substrateHost,
-        fleetOwner,
-        edgeZone,
-        edgeHostRegex: String(edgeHostRegex),
-      },
-      "node_deploy_sequencer_edge_hosts"
-    );
-    return {
-      environment: lane.environment,
-      sequencer: new NodeDeploySequencer({
-        store,
-        payer,
-        edge: dnsRecords
-          ? new EdgeRouter(dnsRecords, edgeHostRegex)
-          : undefined,
-        probe,
-        images,
-        secrets: new KubernetesStatePasswords(
-          lane.secretsNamespace,
-          lane.environment
-        ),
-        runtime: {
-          secrets: new EsoNodeRuntimeSecrets({
-            namespace: lane.secretsNamespace,
-          }),
-          catalog,
-          substrateHost: lane.substrateHost,
-          operatorDomain: lane.operatorDomain,
-          fleetBinding: validFleetZone
-            ? { valid: true }
-            : {
-                valid: false,
-                reason:
-                  "NODE_DEPLOY_FLEET_OWNER or NODE_DEPLOY_WORKLOAD_ZONE is missing or invalid",
-              },
-          edgeZone,
-        },
-        ...(chain ? { chain } : {}),
-        clock: {
-          now: () => Date.now(),
-          sleep: (ms) =>
-            new Promise<void>((resolve) => setTimeout(resolve, ms)),
-        },
-        log,
-        config: {
-          ...DEFAULT_SEQUENCER_CONFIG,
-          namespace,
-          environment: lane.environment,
-          ...(appProviders.length > 0 ? { appProviders } : {}),
-          retainMs: num(
-            runtimeEnv.NODE_DEPLOY_RETAIN_MS,
-            DEFAULT_SEQUENCER_CONFIG.retainMs,
-            0
-          ),
-        },
-      }),
-    };
-  })
-);
+const laneSequencers = composed.lanes;
 
 /** A failure that repeats every pass is logged once per 10 minutes per (loop, env, message). */
 const loopErrorAt = new Map<string, number>();

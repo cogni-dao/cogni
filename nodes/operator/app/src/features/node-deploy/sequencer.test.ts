@@ -35,6 +35,7 @@ import {
   SHA_1,
   SHA_2,
   SHA_3,
+  WORKLOAD_ZONE,
 } from "./testing";
 
 const DB = { nodeId: NODE_ID, env: ENV, workload: "canary-db" };
@@ -63,7 +64,8 @@ function harness(
   const seq = new NodeDeploySequencer({
     store,
     payer,
-    edge: opts.withEdge === false ? undefined : new EdgeRouter(dns),
+    edge:
+      opts.withEdge === false ? undefined : new EdgeRouter(dns, WORKLOAD_ZONE),
     probe,
     secrets,
     chain,
@@ -222,9 +224,11 @@ describe("app deploy", () => {
 
     expect(await deployApp(h, SHA_2)).toBe("driven");
     const idxCreate = h.events.indexOf("payer.create:1003");
-    const idxMove = h.events.findIndex((e) => e.startsWith("dns."));
+    const idxIdentity = h.events.indexOf("dns.zone_identity");
+    const idxMove = h.events.indexOf("dns.update");
     const idxFirstPublic = h.events.indexOf("public.read");
-    expect(idxCreate).toBeGreaterThanOrEqual(0);
+    expect(idxIdentity).toBeGreaterThanOrEqual(0);
+    expect(idxCreate).toBeGreaterThan(idxIdentity);
     expect(idxMove).toBeGreaterThan(idxCreate);
     expect(idxFirstPublic).toBeGreaterThan(idxMove);
     // blue (1002) is still alive: retention window has not elapsed
@@ -1173,17 +1177,22 @@ describe("crash safety", () => {
     const h = harness();
     await stateUp(h);
     let rowsAtCreate = -1;
+    let dispatchAtCreate: string | undefined;
     h.payer.createFault = (_n, req) => {
       if (req.spec.name === "canary") {
         rowsAtCreate = h.store.attempts.filter(
           (a) => a.releaseId && a.cogniKey === req.cogniKey
         ).length;
+        dispatchAtCreate = h.store.attempts.find(
+          (a) => a.cogniKey === req.cogniKey
+        )?.error;
         return new PayerError("provider_rejected", "boom", false);
       }
       return undefined;
     };
     await deployApp(h, SHA_1);
     expect(rowsAtCreate).toBe(1);
+    expect(dispatchAtCreate).toBe(`ambiguous: network@${h.clock.now()}`);
   });
 
   it("a lost create response is resolved through observe(cogniKey), not re-created", async () => {
@@ -1724,6 +1733,38 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
     expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("closed");
   });
 
+  it("parks capability releases at the limit while retaining blue", async () => {
+    const h = harness({ maxFailedAttempts: 1 });
+    singleProvider(h);
+    const blue = await blueUp(h);
+    const app = noState();
+    const { release } = await h.release(
+      {
+        ...app,
+        health: {
+          ready: "/readyz",
+          version: "/version",
+          qualification: {
+            path: "/api/v1/deploy/qualification",
+            timeoutMs: 20000,
+          },
+        },
+      },
+      SHA_2
+    );
+    const attempt = await h.store.insertAttempt(
+      release.id,
+      () => "capability-refused"
+    );
+    await h.store.updateAttempt(attempt.id, {
+      phase: "failed",
+      error: `create refused: ${refusal("already_tried=1", `${ONLY} US 1.00 already_tried`)}`,
+    });
+    expect(await h.seq.step(APP)).toBe("parked");
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("active");
+    expect(h.log.steps()).not.toContain("stop_then_start:closing_blue");
+  });
+
   it("story.5137 LAST_RESORT_STOP still fires when the refused create also excluded lane-memory providers", async () => {
     const h = harness({ maxFailedAttempts: 2 });
     const blue = await failedTryOnP(h, "provider-1"); // attempt 1 failed proof on P
@@ -1796,6 +1837,47 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
       h.log.steps().some((st) => st.startsWith("stop_then_start:closing"))
     ).toBe(false);
     expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe("active");
+  });
+
+  it.each([
+    "blue",
+    "absent",
+    "empty",
+    "overflow",
+    "malformed",
+  ])("native summary %s grants only positive complete provider evidence", async (evidence) => {
+    const h = harness();
+    const blueProvider = `akash1${"b".repeat(38)}`;
+    const other = `akash1${"c".repeat(38)}`;
+    h.payer.providerFor = () => blueProvider;
+    const blue = await blueUp(h);
+    const encoded =
+      evidence === "blue"
+        ? JSON.stringify([blueProvider])
+        : evidence === "absent"
+          ? JSON.stringify([other])
+          : evidence === "empty"
+            ? "[]"
+            : evidence === "overflow"
+              ? "overflow"
+              : '["broken"';
+    h.payer.createFault = (_n, req) =>
+      req.excludeProviders?.includes(blueProvider)
+        ? new PayerError(
+            "provider_rejected",
+            `none passed provider screening [excluded-bidders-v1:${encoded}] [refused: already_tried=1]`,
+            false
+          )
+        : undefined;
+    await h.release(noState(), SHA_2);
+    await h.seq.step(APP);
+    await h.seq.step(APP);
+    expect(h.log.steps().includes("stop_then_start:blue_closed")).toBe(
+      evidence === "blue"
+    );
+    expect(h.payer.byDseq(blue?.externalName ?? "").state).toBe(
+      evidence === "blue" ? "closed" : "active"
+    );
   });
 
   it("second release on a single-provider lane: blue closed (confirmed), then green on the same provider, active", async () => {
@@ -1943,7 +2025,7 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
     ]);
   });
 
-  it("a roster cut off by a truncation (e.g. the old 400-char payer cap) still names blue", async () => {
+  it("a clipped legacy roster cannot authorize stopping blue with other exclusions", async () => {
     const h = harness();
     await stateUp(h); // provider-1
     await deployApp(h, SHA_1); // blue on provider-2
@@ -1965,7 +2047,7 @@ describe("stop-then-start when blue's provider is the only one (task.5409)", () 
         : undefined;
     await deployApp(h, SHA_2); // refused
     expect(await h.seq.step(APP)).toBe("driven");
-    expect(h.log.steps()).toContain("stop_then_start:blue_closed");
+    expect(h.log.steps()).not.toContain("stop_then_start:blue_closed");
     const active = (await h.store.attemptsFor(APP)).find(
       (a) => a.phase === "active"
     );

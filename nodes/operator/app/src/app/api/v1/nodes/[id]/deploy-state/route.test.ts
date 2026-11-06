@@ -118,6 +118,20 @@ describe("GET /api/v1/nodes/[id]/deploy-state — lease read (story.5039 PR-B)",
     readNativeStates.mockResolvedValue({});
   });
 
+  it("returns developer health without protected workload release timelines", async () => {
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect(authorize).toHaveBeenCalledWith({
+      id: NODE.nodeId,
+      userId: "user-1",
+      action: "node.flight",
+    });
+    const body = await res.json();
+    expect(body.envs).toEqual([DEPLOY_CELL]);
+    expect(body.liveEnvs).toEqual(["candidate-a"]);
+    expect(body).not.toHaveProperty("workloadReleases");
+  });
+
   it("returns leases with closure 'unknown' (no app-side Console read-back) AND the orphan diff", async () => {
     // One declared lease (candidate-a) still billing, one lease on an env the catalog no
     // longer declares (preview) — the undetectable orphan the unfiltered enumeration exists for.

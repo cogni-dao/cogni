@@ -37,6 +37,7 @@ const envState = vi.hoisted(() => ({
   NODE_SUBMODULE_PARENT_OWNER: "test-owner" as string | undefined,
   NODE_SUBMODULE_PARENT_REPO: "test-repo" as string | undefined,
   DEPLOY_ENVIRONMENT: "production" as string | undefined,
+  NODE_DEPLOY_WORKLOAD_ZONE: "cognidao.org",
 }));
 const mockGetSessionUser = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({

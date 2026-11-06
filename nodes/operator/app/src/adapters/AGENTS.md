@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** stable
-- **Last reviewed:** 2026-10-31
+- **Last reviewed:** 2026-11-04
 
 ## Purpose
 
@@ -43,6 +43,8 @@ Infrastructure implementations of ports including server/, worker/, cli/, and te
 - **Uses ports:** none
 - **Implements ports:** All ports defined in ports/
 - **Contracts (required if implementing):** tests/contract/ must pass for all implementations
+
+- Node-deploy Cloudflare DNS reads bound native zone identity through the existing adapter. Parsed mismatch/unavailable results refuse use; rotation revalidates through the same projected files. Identity reads prove no edit permission.
 
 ## Responsibilities
 

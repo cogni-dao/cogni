@@ -29,6 +29,8 @@
  *     controller begins any later allocation only from a new durable recovery receipt.
  *   - OUTCOME_STORE_IS_ADVISORY: outcome persistence is best-effort — a store failure never
  *     fails a live provision and never blocks screening (empty history).
+ *   - REFUSAL_EVIDENCE_IS_BOUNDED: screening refusal names at most 16 full excluded bidder identities
+ *     before clipped diagnostics. Overflow or invalid identities authorize no fallback decision.
  * Side-effects: IO (HTTPS requests to the Akash Console API + workload ingress; provision()
  *   spends real escrow; boot outcomes append to Postgres)
  * Links: ComputeResourcePort (@cogni/ai-tools/capabilities/compute), ./akash-sdl,
@@ -1382,14 +1384,30 @@ export class AkashComputeAdapter
           if (id) return id;
         }
         if (sawAnyBid) {
+          // Decision evidence precedes the diagnostic roster. Caller exclusions are bounded
+          // by the paid wire (16); overflow or malformed native identities carry no authority.
+          // Full addresses avoid the diagnostic roster's lossy address elision.
+          const excludedBidders = [
+            ...new Set(
+              lastRoster
+                .filter((r) => r.rejection === "already_tried")
+                .map((r) => r.provider)
+            ),
+          ];
+          const excludedEvidence =
+            excludedBidders.length <= 16 &&
+            excludedBidders.every((p) => /^akash1[0-9a-z]{38}$/u.test(p))
+              ? JSON.stringify(excludedBidders)
+              : "overflow";
           throw new AkashComputeError(
             "NO_ELIGIBLE_BIDS",
-            `bids arrived for dseq ${dseq} but none passed provider screening ` +
+            `none passed provider screening [excluded-bidders-v1:${excludedEvidence}] ` +
+              `bids arrived for dseq ${dseq.slice(0, 80)} ` +
               `[refused: ${formatBidRejections(lastRejections)}]` +
               // The roster names the ADDRESSES so a dry auction is actionable without
               // re-running it: counts alone cannot tell "nobody eligible bid" from
               // "we refused the provider we were waiting for" (story.5050).
-              ` [bids: ${formatBidRoster(lastRoster)}]` +
+              ` [bids: ${formatBidRoster(lastRoster).slice(0, 600)}]` +
               (screening.requiredCountryCodes.length > 0
                 ? ` (required placement countries: ${screening.requiredCountryCodes.join(", ")})`
                 : "")

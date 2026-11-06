@@ -12,9 +12,7 @@
 
 import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
-
 import type { NodeCatalogPort, NodeRuntimeSecretsPort } from "@/ports";
-
 import { EdgeRouter, edgeHostRegexFor } from "./edge";
 import {
   EnvLaneConfigError,
@@ -39,6 +37,7 @@ import {
   MemorySecrets,
   MemoryStore,
   SHA_1,
+  WORKLOAD_ZONE,
 } from "./testing";
 
 const TOKS5_ID = "4b06359a-0000-4000-8000-0000000000bb";
@@ -178,7 +177,11 @@ function lane(
   const sequencer = new NodeDeploySequencer({
     store: shared.store,
     payer: shared.payer,
-    edge: new EdgeRouter(dns, edgeHostRegexFor(edgeSlugs)),
+    edge: new EdgeRouter(
+      dns,
+      WORKLOAD_ZONE,
+      edgeHostRegexFor(edgeSlugs, WORKLOAD_ZONE)
+    ),
     probe: new FakeProbe(shared.payer, dns, shared.events),
     secrets: new MemorySecrets(),
     runtime: {
