@@ -135,6 +135,42 @@ export interface AttemptRow {
   readonly updatedAt: Date;
   /** Oldest first, at most `MAX_ATTEMPT_STEPS`. Empty for attempts that predate the timeline. */
   readonly steps: readonly AttemptStep[];
+  /**
+   * HR 18 (task.5431): how this attempt reaches the env's shared substrate. Written once at insert,
+   * never changed. Undefined = an attempt that predates the field (egress).
+   */
+  readonly transport?: SubstrateTransport | undefined;
+  /** Mesh lifecycle of a `mesh` attempt. Never holds a key value. */
+  readonly mesh?: AttemptMesh | undefined;
+}
+
+/** `egress` = source-IP admission (catalog `compute_egress_cidrs`); `mesh` = the env tailnet. */
+export type SubstrateTransport = "egress" | "mesh";
+
+/**
+ * The durable mesh record of one `mesh` attempt (task.5431, hub node-service-delivery section 3). The key
+ * VALUE is never here: it lives only in the attempt's create-once Secret. `headscaleKeyId` is a provider
+ * id (PROVIDER_IDS_ARE_NAMESPACED), written BEFORE that Secret so the sweep never expires a stored key.
+ */
+export interface AttemptMesh {
+  /** The substrate ports the attempt's env points at: its companion listeners and its policy grant. */
+  readonly ports: readonly number[];
+  /** `<slug>-<workload>-<release id prefix>-a<attempt>`. */
+  readonly deviceName: string;
+  /** Companion digests, pinned once per release (CD3): every attempt of a release uses the same two. */
+  readonly images: { readonly mesh: string; readonly substrate: string };
+  readonly headscaleKeyId?: string | undefined;
+  /**
+   * HR 23: the coordinator epoch the key was minted in (the creation time of the tailnet's owner object)
+   * and the key's own creation time. An id from another epoch, or whose listed key has another creation
+   * time, names nothing of ours: it never revokes, protects or counts anything.
+   */
+  readonly headscaleEpoch?: string | undefined;
+  readonly headscaleKeyCreatedAt?: string | undefined;
+  /** ISO instant the revoke was read back (key expired, devices gone). */
+  readonly revokedAt?: string | undefined;
+  /** ISO instant the attempt's Secret was deleted (one pass after the revoke readback). */
+  readonly secretDeletedAt?: string | undefined;
 }
 
 export interface AttemptPatch {
@@ -145,6 +181,8 @@ export interface AttemptPatch {
   error?: string | null;
   unhealthySince?: Date | null;
   leasedAt?: Date;
+  /** Replaces the whole mesh record. */
+  mesh?: AttemptMesh;
 }
 
 /**
@@ -395,6 +433,11 @@ export interface ProbePort {
    * nameservers (no local resolver, no public resolver's negative cache), real Host + SNI.
    */
   publicRead(host: string, path: string): Promise<HttpResult>;
+  /**
+   * The A records of `host` through the probe's recursive resolver (task.5431: the lane VM host, read once
+   * per mesh pass). Absent on probes that cannot resolve; a failure throws.
+   */
+  resolveAddresses?(host: string): Promise<readonly string[]>;
   /** Postgres SSLRequest handshake against a forwarded tcp port. */
   tcpTls(host: string, port: number): Promise<boolean>;
 }
@@ -450,7 +493,9 @@ export interface StorePort {
    */
   insertAttempt(
     releaseId: string,
-    makeKey: (attempt: number) => string
+    makeKey: (attempt: number) => string,
+    /** Written in the same insert: the attempt's transport (HR 18) is never a second write. */
+    init?: { readonly transport?: SubstrateTransport }
   ): Promise<AttemptRow>;
   updateAttempt(id: string, patch: AttemptPatch): Promise<AttemptRow>;
   /**

@@ -414,6 +414,13 @@
       "when": 1793734127987,
       "tag": "0058_node_workload_resolved_image",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1793935228898,
+      "tag": "0059_node_workload_attempt_mesh",
+      "breakpoints": true
     }
   ]
 }

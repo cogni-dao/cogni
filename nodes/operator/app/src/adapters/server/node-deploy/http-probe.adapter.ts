@@ -157,6 +157,11 @@ export class HttpProbe implements ProbePort {
       ((options, onResponse) => httpsRequest(options, onResponse));
   }
 
+  /** The lane VM host's A records (task.5431 mesh pass). */
+  async resolveAddresses(host: string): Promise<readonly string[]> {
+    return this.dns.a(host);
+  }
+
   hostRouted(
     ingressHost: string,
     hostHeader: string,

@@ -313,6 +313,7 @@ export type { ModelProviderResolverPort } from "./model-provider-resolver.port";
 export type { NodeAddressPort } from "./node-address.port";
 export { NodeAddressError } from "./node-address.port";
 export type {
+  AttemptMesh,
   AttemptPatch,
   AttemptPhase,
   AttemptRow,
@@ -337,6 +338,7 @@ export type {
   SequencerClock,
   SequencerLog,
   StorePort,
+  SubstrateTransport,
   WorkloadKey,
 } from "./node-deploy.port";
 export {
@@ -373,6 +375,7 @@ export type {
   HeadscaleUser,
   MeshApiKey,
   MeshDevice,
+  MeshKeyStorePort,
   MeshPolicy,
   MeshPreAuthKey,
   MeshUser,
@@ -380,12 +383,16 @@ export type {
   NodeMeshErrorCode,
   NodeMeshErrorReason,
   NodeMeshPort,
+  PublishedSubstrateRequest,
+  StoredMeshKey,
+  SubstrateRequestSourcePort,
 } from "./node-mesh.port";
 export {
   headscaleDeviceId,
   headscaleKeyId,
   headscaleUser,
   isNodeMeshError,
+  MESH_ATTEMPT_SECRET_NAME_RE,
   NodeMeshError,
 } from "./node-mesh.port";
 export type {

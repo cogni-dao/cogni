@@ -33,6 +33,7 @@ import type {
   RecordReleaseInput,
   ReleaseRow,
   StorePort,
+  SubstrateTransport,
   WorkloadKey,
 } from "@/ports";
 import { MAX_ATTEMPT_STEPS, withResolvedImage } from "@/ports";
@@ -62,6 +63,10 @@ function toAttempt(r: AttemptDb): AttemptRow {
     leasedAt: r.leasedAt ?? undefined,
     updatedAt: r.updatedAt,
     steps: r.steps ?? [],
+    ...(r.transport === "mesh" || r.transport === "egress"
+      ? { transport: r.transport }
+      : {}),
+    ...(r.mesh ? { mesh: r.mesh } : {}),
   };
 }
 
@@ -374,7 +379,8 @@ export class PostgresNodeDeployStore implements StorePort {
 
   async insertAttempt(
     releaseId: string,
-    makeKey: (attempt: number) => string
+    makeKey: (attempt: number) => string,
+    init: { readonly transport?: SubstrateTransport } = {}
   ): Promise<AttemptRow> {
     for (let tries = 0; tries < 5; tries++) {
       try {
@@ -403,6 +409,7 @@ export class PostgresNodeDeployStore implements StorePort {
               cogniKey: makeKey(attempt),
               endpoints: [],
               phase: "planned",
+              ...(init.transport ? { transport: init.transport } : {}),
             })
             .returning();
           if (!row) throw new Error("attempt insert returned no row");
@@ -428,6 +435,8 @@ export class PostgresNodeDeployStore implements StorePort {
     if (patch.unhealthySince !== undefined)
       set.unhealthySince = patch.unhealthySince;
     if (patch.leasedAt !== undefined) set.leasedAt = patch.leasedAt;
+    if (patch.mesh !== undefined)
+      set.mesh = { ...patch.mesh, ports: [...patch.mesh.ports] };
     const [row] = await this.db
       .update(nodeWorkloadAttempts)
       .set(set)

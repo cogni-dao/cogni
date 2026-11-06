@@ -175,12 +175,14 @@ export {
 export { HttpProbe } from "./node-deploy/http-probe.adapter";
 export { ImageCatalogNodes } from "./node-deploy/image-catalog.adapter";
 export { ImageCatalogNodeSource } from "./node-deploy/image-catalog-source.adapter";
+export { KubernetesMeshKeys } from "./node-deploy/mesh-keys.adapter";
 export { EsoNodeRuntimeSecrets } from "./node-deploy/node-runtime-secrets.adapter";
 export { PostgresNodeDeployStore } from "./node-deploy/postgres-store.adapter";
 // DEV-ONLY adapters (ConsolePayer pays straight from a Console key; FileStatePasswords writes secrets
 // to disk) are deliberately NOT exported here: the production sequencer bootstrap imports this barrel,
 // and a dev payer must be unreachable from it. Only `scripts/node-deploy-local.ts` imports them, by path.
 export { KubernetesStatePasswords } from "./node-deploy/state-secrets.adapter";
+export { HttpsSubstrateRequestSource } from "./node-deploy/substrate-request.adapter";
 export {
   GitHubNodeDeploymentTopologyAdapter,
   type NodeDeploymentFileReader,

@@ -18,6 +18,7 @@ import {
   EnvLaneConfigError,
   EnvLaneSequencers,
   parseSubstrateHosts,
+  parseSubstrateTransports,
   resolveEnvLanes,
   secretsNamespaceFor,
 } from "./env-lanes";
@@ -71,6 +72,8 @@ describe("resolveEnvLanes", () => {
         secretsNamespace: "cogni-node-deploy-production",
         substrateHost: HOSTS.production,
         operatorDomain: "cognidao.org",
+        substrateTransport: "egress",
+        meshTailnet: "production",
       },
     ]);
   });
@@ -85,8 +88,63 @@ describe("resolveEnvLanes", () => {
           env === "production"
             ? "cognidao.org"
             : `${env === "candidate-a" ? "test" : "preview"}.cognidao.org`,
+        substrateTransport: "egress",
+        meshTailnet: env,
       }))
     );
+  });
+
+  it("sets the substrate transport per lane, never per node; unlisted envs stay egress (task.5431)", () => {
+    const lanes = resolveEnvLanes({
+      ...MULTI,
+      substrateTransports: " candidate-a=mesh , production=egress ",
+    });
+    expect(
+      lanes.map((l) => [l.environment, l.substrateTransport, l.meshControlUrl])
+    ).toEqual([
+      ["candidate-a", "mesh", "https://mesh-candidate-a.cognidao.org"],
+      ["preview", "egress", undefined],
+      ["production", "egress", undefined],
+    ]);
+    expect([...parseSubstrateTransports("preview=mesh")]).toEqual([
+      ["preview", { transport: "mesh", tailnet: "preview" }],
+    ]);
+    // An isolated fleet names its own tailnet: socket, control URL and VM publish path follow it.
+    expect(
+      resolveEnvLanes({
+        ...MULTI,
+        substrateTransports: "candidate-a=mesh:test-candidate-a",
+      })[0]
+    ).toMatchObject({
+      substrateTransport: "mesh",
+      meshTailnet: "test-candidate-a",
+      meshControlUrl: "https://mesh-test-candidate-a.cognidao.org",
+    });
+    for (const bad of [
+      "candidate-a=wireguard",
+      "staging=mesh",
+      "preview",
+      "preview=egress:other",
+      "preview=mesh:Bad_Name",
+      "preview=mesh:a:b",
+    ])
+      expect(() =>
+        resolveEnvLanes({ ...MULTI, substrateTransports: bad })
+      ).toThrow(EnvLaneConfigError);
+    expect(() =>
+      resolveEnvLanes({
+        ...MULTI,
+        substrateTransports: "preview=mesh,preview=egress",
+      })
+    ).toThrow(/once each/);
+    // A mesh lane needs the domain root its control URL is derived from.
+    expect(() =>
+      resolveEnvLanes({
+        ...MULTI,
+        operatorDomainRoot: undefined,
+        substrateTransports: "preview=mesh",
+      })
+    ).toThrow(/NODE_DEPLOY_OPERATOR_DOMAIN_ROOT/);
   });
 
   it("refuses to boot on every config that would cross envs or run a node app with a half env", () => {

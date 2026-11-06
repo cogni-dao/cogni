@@ -15,12 +15,20 @@
  *   - INJECTED_ENV_WINS: platform-injected env overrides a same-named declared `env` key.
  *   - DB_CA_TRUST_FOR_NODE_APPS: a node app that receives a database DSN starts through the database CA
  *     trust wrapper (`databaseConsumerCommand`), exactly as the Crossplane lane started it.
+ *   - MESH_COMPANIONS_ARE_OPERATOR_OWNED (task.5431, CD1): a mesh attempt's `cogni-mesh` and
+ *     `cogni-substrate` services are appended by the sequencer; with them, a declared service with either
+ *     name is refused, so a node can never stand in for, or shadow, the operator's companions.
  * Side-effects: none
  * @internal
  */
 
 import type { NodeWorkloadSpec, PayerSpec } from "@/ports";
 import { databaseConsumerCommand } from "@/shared/secrets/database-ca-command";
+
+import {
+  MESH_COMPANION_NAMES,
+  type MeshCompanionService,
+} from "./mesh-attempt";
 
 export function publicHostOf(w: NodeWorkloadSpec): string | undefined {
   return "http" in w.expose ? w.expose.http.host : undefined;
@@ -34,6 +42,8 @@ export interface ToPayerSpecOptions {
   readonly companionEnvs?:
     | Readonly<Record<string, Readonly<Record<string, string>>>>
     | undefined;
+  /** A mesh attempt's two operator-owned companions (`meshCompanionServices`); absent = egress. */
+  readonly meshCompanions?: readonly MeshCompanionService[] | undefined;
 }
 
 export function toPayerSpec(
@@ -51,6 +61,17 @@ export function toPayerSpec(
       })
     : { ...(w.command ? { command: w.command } : {}) };
   const countries = options.requiredCountryCodes ?? [];
+  const declared = [
+    w.serviceName ?? w.name,
+    ...(w.companions ?? []).map((c) => c.name),
+  ];
+  const shadow = options.meshCompanions?.length
+    ? declared.find((n) => MESH_COMPANION_NAMES.has(n))
+    : undefined;
+  if (shadow)
+    throw new Error(
+      `service name ${shadow} is reserved for the operator mesh companions`
+    );
   return {
     name: w.name,
     ...(countries.length > 0
@@ -94,6 +115,7 @@ export function toPayerSpec(
         storageMi: c.storageMi,
         expose: [{ port: c.port, as: c.port, global: false }],
       })),
+      ...(options.meshCompanions ?? []),
     ],
   };
 }

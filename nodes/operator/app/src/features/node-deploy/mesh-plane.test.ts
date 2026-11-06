@@ -43,6 +43,7 @@ import {
   MeshPlane,
   meshSecretName,
   SUBSTRATE_MISMATCH_ALERT,
+  SUBSTRATE_NODE_KEY_ALERT_MS,
   SUBSTRATE_REQUEST_MAX_AGE_MS,
 } from "./mesh-plane";
 import { denyAllPolicy, serializeMeshPolicy } from "./mesh-policy";
@@ -77,6 +78,8 @@ class FakeHeadscale implements NodeMeshPort {
   now = T0;
   policy: string | null = null;
   readonly users: string[] = [];
+  /** Owner creation instants: the coordinator epoch (HR 23). */
+  readonly userCreatedAt = new Map<string, string>();
   readonly keys = new Map<string, FakeKey>();
   readonly devices = new Map<string, MeshDevice>();
   readonly pending = new Map<
@@ -135,13 +138,15 @@ class FakeHeadscale implements NodeMeshPort {
   async createUser(name: HeadscaleUser): Promise<MeshUser> {
     this.enter("CreateUser");
     this.users.push(name);
-    return { headscaleUser: name, createdAt: null };
+    const createdAt = new Date(this.now).toISOString();
+    this.userCreatedAt.set(name, createdAt);
+    return { headscaleUser: name, createdAt };
   }
   async listUsers(): Promise<readonly MeshUser[]> {
     this.enter("ListUsers");
     return this.users.map((u) => ({
       headscaleUser: u as HeadscaleUser,
-      createdAt: null,
+      createdAt: this.userCreatedAt.get(u) ?? null,
     }));
   }
   async createPreAuthKey(
@@ -841,21 +846,205 @@ describe("HR 11 — substrate-gw approval over the verified channel", () => {
     expect(fake.devices.size).toBe(0);
   });
 
-  it("an auth id with no pending request approves nothing", async () => {
+  it("an auth id with no pending request approves nothing (a forged id, with or without a node key)", async () => {
+    // A failed AuthRegister closes approval until the next reconcile, so each case gets a ready plane.
+    for (const nodeKey of ["n", ""]) {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      expect(
+        await plane.approveSubstrateGateway(
+          { authId: "nope", machineKey: "m", nodeKey, publishedAt: fake.now },
+          fake.now
+        )
+      ).toEqual({ outcome: "refused", reason: "registration_not_found" });
+      expect(fake.devices.size).toBe(0);
+    }
+  });
+
+  it("refuses a request with no auth id or no machine key without calling AuthRegister", async () => {
     const fake = new FakeHeadscale();
     const plane = await readyPlane(fake);
-    expect(
-      await plane.approveSubstrateGateway(
-        {
-          authId: "nope",
-          machineKey: "m",
-          nodeKey: "n",
-          publishedAt: fake.now,
-        },
+    const req = publish(fake);
+    for (const bad of [
+      { ...req, authId: "" },
+      { ...req, machineKey: "" },
+    ])
+      expect(await plane.approveSubstrateGateway(bad, fake.now)).toEqual({
+        outcome: "refused",
+        reason: "malformed",
+      });
+    expect(fake.calls).not.toContain("AuthRegister");
+  });
+
+  describe("two stages: the node key is published only after approval (task.5428 substrate-gw.sh)", () => {
+    /** The VM's publish before approval: auth id + machine key, no node key yet. */
+    const beforeApproval = (fake: FakeHeadscale) => ({
+      ...publish(fake),
+      nodeKey: "",
+    });
+    /** The VM's publish after approval: no auth id, the node key the device now knows. */
+    const afterApproval = (fake: FakeHeadscale, nodeKey = "nodekey:gw") => ({
+      authId: "",
+      machineKey: "mkey:gw",
+      nodeKey,
+      publishedAt: fake.now,
+    });
+    const listed = async (fake: FakeHeadscale) => fake.listNodes();
+
+    it("approves on tags + machine key, then verifies the node key on the next re-read", async () => {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      const approved = await plane.approveSubstrateGateway(
+        beforeApproval(fake),
         fake.now
-      )
-    ).toEqual({ outcome: "refused", reason: "registration_not_found" });
-    expect(fake.devices.size).toBe(0);
+      );
+      expect(approved).toMatchObject({
+        outcome: "approved",
+        nodeKeyVerified: false,
+      });
+      // Before the VM republishes, the node key is UNKNOWN: no action.
+      expect(
+        await plane.verifySubstrateNodeKey(
+          beforeApproval(fake),
+          await listed(fake),
+          fake.now + 15_000
+        )
+      ).toMatchObject({ outcome: "unknown", sinceMs: 15_000 });
+      fake.now += 30_000;
+      expect(
+        await plane.verifySubstrateNodeKey(
+          afterApproval(fake),
+          await listed(fake),
+          fake.now
+        )
+      ).toMatchObject({ outcome: "verified" });
+      expect(fake.devices.size).toBe(1);
+      // Stage 2 ended on the first fresh match (B19): later publishes change nothing.
+      for (const nodeKey of ["nodekey:gw", "nodekey:other"])
+        expect(
+          await plane.verifySubstrateNodeKey(
+            afterApproval(fake, nodeKey),
+            await listed(fake),
+            fake.now
+          )
+        ).toEqual({ outcome: "none" });
+      expect(fake.devices.size).toBe(1);
+    });
+
+    it("a mismatched machine key at approval deletes the device and alerts", async () => {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      const result = await plane.approveSubstrateGateway(
+        { ...beforeApproval(fake), machineKey: "mkey:attacker" },
+        fake.now
+      );
+      expect(result).toMatchObject({
+        outcome: "mismatch",
+        alert: SUBSTRATE_MISMATCH_ALERT,
+        tagsExact: true,
+        machineKeyMatches: false,
+        deleted: true,
+      });
+      expect(fake.devices.size).toBe(0);
+    });
+
+    it("a late node key that differs from the device's deletes it and alerts", async () => {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      await plane.approveSubstrateGateway(beforeApproval(fake), fake.now);
+      fake.now += 30_000;
+      expect(
+        await plane.verifySubstrateNodeKey(
+          afterApproval(fake, "nodekey:attacker"),
+          await listed(fake),
+          fake.now
+        )
+      ).toMatchObject({
+        outcome: "mismatch",
+        alert: SUBSTRATE_MISMATCH_ALERT,
+        reason: "node_key_mismatch",
+        deleted: true,
+      });
+      expect(fake.devices.size).toBe(0);
+    });
+
+    it("a stopped or stale publisher is UNKNOWN: the gateway stays enrolled and the age grows (B19)", async () => {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      const approvedAt = fake.now;
+      await plane.approveSubstrateGateway(beforeApproval(fake), approvedAt);
+      const stale = {
+        ...afterApproval(fake, "nodekey:attacker"),
+        publishedAt: approvedAt - SUBSTRATE_REQUEST_MAX_AGE_MS,
+      };
+      for (const request of [null, stale])
+        expect(
+          await plane.verifySubstrateNodeKey(
+            request,
+            await listed(fake),
+            approvedAt + SUBSTRATE_NODE_KEY_ALERT_MS + 1
+          )
+        ).toMatchObject({
+          outcome: "unknown",
+          sinceMs: SUBSTRATE_NODE_KEY_ALERT_MS + 1,
+        });
+      expect(fake.devices.size).toBe(1);
+    });
+
+    it("a gateway first seen after a restart enters stage 2: a fresh different node key deletes it", async () => {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      fake.addDevice({
+        tags: ["tag:substrate"],
+        machineKey: "mkey:gw",
+        nodeKey: "nodekey:gw",
+        keyId: null,
+      });
+      expect(
+        await plane.verifySubstrateNodeKey(
+          afterApproval(fake, "nodekey:other"),
+          await listed(fake),
+          fake.now
+        )
+      ).toMatchObject({ outcome: "mismatch", reason: "node_key_mismatch" });
+      expect(fake.devices.size).toBe(0);
+    });
+  });
+
+  describe("HR 23: a stored key id is void outside its coordinator epoch", () => {
+    it("revoke by an id from an older epoch, or with another key creation time, makes no Headscale call", async () => {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      const epoch = plane.epoch ?? "";
+      expect(epoch).not.toBe("");
+      const key = await fake.createPreAuthKey({
+        tags: [`tag:node-${NODE_A}`],
+        reusable: true,
+        ephemeral: true,
+        expiration: ATTEMPT_KEY_EXPIRATION,
+      });
+      fake.calls.length = 0;
+      expect(
+        await plane.revokeAttempt(key.headscaleKeyId, fake.now, {
+          epoch: "1999-01-01T00:00:00.000Z",
+          keyCreatedAt: key.createdAt,
+        })
+      ).toEqual({ outcome: "void" });
+      expect(fake.calls).toEqual([]);
+      expect(
+        await plane.revokeAttempt(key.headscaleKeyId, fake.now, {
+          epoch,
+          keyCreatedAt: "1999-01-01T00:00:00.000Z",
+        })
+      ).toEqual({ outcome: "void" });
+      expect(fake.mutations()).toEqual([]);
+      expect(
+        await plane.revokeAttempt(key.headscaleKeyId, fake.now, {
+          epoch,
+          keyCreatedAt: key.createdAt,
+        })
+      ).toMatchObject({ outcome: "revoked" });
+    });
   });
 });
 

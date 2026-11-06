@@ -169,6 +169,14 @@ export interface ScoreWorkload {
 // ---------------------------------------------------------------------------
 
 const NAME_RE = /^[a-z][a-z0-9-]{0,62}$/;
+/**
+ * A WORKLOAD name (and a data dependency id, which names a state workload): a DNS label that never
+ * contains `-mesh-` (task.5431). The operator's attempt-key Secrets are `nd-<id8>-<workload>-mesh-<release>-a<n>`
+ * and the sequencer may DELETE only names of that shape; a state password is `nd-<id8>-<workload>`, so a
+ * workload named `x-mesh-y` could otherwise collide with that delete allow-list. The operator's deploy
+ * contract (`deploy.workloads.v1.contract.ts`) refuses the same names; a test keeps the two in step.
+ */
+export const WORKLOAD_NAME_RE = /^(?!.*-mesh-)[a-z][a-z0-9-]{0,62}$/;
 const ENV_KEY_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const DIGEST_IMAGE_RE =
   /^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$/;
@@ -414,11 +422,12 @@ function checkPolicy(m: ScoreWorkload): WorkloadManifestIssue[] {
   const resources = m.resources ?? {};
 
   // -- metadata --------------------------------------------------------------
-  if (!NAME_RE.test(m.metadata.name))
+  if (!WORKLOAD_NAME_RE.test(m.metadata.name))
     add({
       code: "invalid_name",
       path: "metadata.name",
-      message: "metadata.name must match ^[a-z][a-z0-9-]{0,62}$",
+      message:
+        "metadata.name must match ^[a-z][a-z0-9-]{0,62}$ and must not contain -mesh-",
     });
   for (const key of Object.keys(m.metadata))
     if (key !== "name" && key !== "annotations")
@@ -499,11 +508,12 @@ function checkPolicy(m: ScoreWorkload): WorkloadManifestIssue[] {
           path: `${path}.class`,
           message: `postgres class must be one of: ${classes?.join(", ")} (shared ships later)`,
         });
-      if (r.id !== undefined && !NAME_RE.test(r.id))
+      if (r.id !== undefined && !WORKLOAD_NAME_RE.test(r.id))
         add({
           code: "invalid_name",
           path: `${path}.id`,
-          message: "a dependency id must match ^[a-z][a-z0-9-]{0,62}$",
+          message:
+            "a dependency id must match ^[a-z][a-z0-9-]{0,62}$ and must not contain -mesh-",
         });
       if (r.id !== undefined && r.id === m.metadata.name)
         add({
