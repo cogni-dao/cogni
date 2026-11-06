@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the `candidate-a` relay map: ONLY this tailnet's own relay (hard requirements 9 and 21). The
+# relay is this tailnet's derper on its env VM, behind that VM's edge Caddy on 443 at its own DNS-only
+# host (public ACME certificate). STUN is its own UDP port. No ipv4 pin: clients resolve the host.
+regions:
+  901:
+    regionid: 901
+    regioncode: cogni-candidate-a
+    regionname: Cogni candidate-a relay
+    nodes:
+      - name: 901a
+        regionid: 901
+        hostname: derp-candidate-a.cognidao.org
+        stunport: 3478
+        stunonly: false
+        derpport: 443
