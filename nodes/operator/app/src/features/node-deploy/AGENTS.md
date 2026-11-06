@@ -31,7 +31,7 @@ The node-deploy blue/green sequencer (task.5400, story.5127) and its read model.
 
 ## Public Surface
 
-- **Exports:** `NodeDeploySequencer`, `DEFAULT_SEQUENCER_CONFIG`, `buildWorkloadView`, `buildReleaseDetail`, `deriveReleaseTimeline`, `readWorkloadDeclarations` (reads repo-spec + `.cogni/workloads/*.yaml` at one sha from the repo it is handed; story.5137), `resolveWorkloadDeclaration` (declaration check and lowering; an image of `.` takes a `builtImage` digest or, deferred, the `pendingImage` tag), `resolveEnvLanes` + `EnvLaneSequencers` (`env-lanes.ts`: the per-env lanes of ONE sequencer process), declaration/edge helpers
+- **Exports:** `NodeDeploySequencer`, `DEFAULT_SEQUENCER_CONFIG`, `buildWorkloadView`, `buildReleaseDetail`, `deriveReleaseTimeline`, `readWorkloadDeclarations` (reads repo-spec + `.cogni/workloads/*.yaml` at one sha from the repo it is handed; story.5137), `resolveWorkloadDeclaration` (declaration check and lowering; an image of `.` takes a `builtImage` digest or, deferred, the `pendingImage` tag), `resolveEnvLanes` + `EnvLaneSequencers` (`env-lanes.ts`: the per-env lanes of ONE sequencer process), declaration/edge helpers, `mesh-policy.ts` (pure derivation of one env's Headscale policy from node id -> substrate ports; explicit `acls` deny base) and `mesh-plane.ts` (`MeshPlane`: reconcile policy, verified `substrate-gw` approval, attempt key mint, expire-then-delete revoke, node-scoped sweep; task.5429, not wired yet)
 - **Routes (via app/):** `GET|POST /api/v1/deploy/workloads`, `GET /api/v1/deploy/workloads/releases/{releaseId}?nodeId=&env=`
 - **Files considered API:** `sequencer.ts`, `release-view.ts`, `declarations.ts`, `read-declarations.ts`, `env-lanes.ts`
 
