@@ -31,6 +31,15 @@
  *     and is NOT also passed under its own name (byte-identical to the composition). The fleet master
  *     key is on the denylist and can never arrive through the bucket.
  *   - NO_NODE_NAMES: nothing here names a node.
+ *   - ONE_SUBSTRATE_BINDING (task.5432, CD2): the substrate block and the Doltgres endpoint come from
+ *     `nodeAppSubstrateBinding`, the same output the sequencer gives the mesh grant and the companion
+ *     listeners. Ports come only from `substrate-ports.ts`; this file spells no port.
+ *   - MESH_ENV (task.5432): on a `mesh` attempt the substrate host is `cogni-substrate`, `DOLTGRES_URL`
+ *     keeps the bucket credential and database with the binding's host and port, and no port without a
+ *     mesh grant is injected (the egress-only scheduler-worker health URL is omitted). The key set
+ *     otherwise equals the egress key set: no mesh identifier or credential reaches the app. Postgres DSNs
+ *     keep their bucket endpoint: their host is placement-owned (shared VM or dedicated cell).
+ *   - EGRESS_UNCHANGED: an absent transport is `egress`, byte for byte the composition env above.
  * Side-effects: none
  * Links: infra/crossplane/xcomputeworkload/composition.yaml, packages/repo-spec/src/node-app-deployment.ts,
  *   shared/secrets/node-secrets-reserved.data.ts, task.5405
@@ -40,6 +49,18 @@
 import { resolveRuntimeProfileSecretRefs } from "@cogni/repo-spec";
 
 import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
+
+import {
+  rebindDsnEndpoint,
+  resolveSubstrateBinding,
+  type SubstrateBinding,
+  type SubstrateTransport,
+} from "./bindings";
+import {
+  EGRESS_ONLY_PORTS,
+  SUBSTRATE_PORTS,
+  type SubstrateType,
+} from "./substrate-ports";
 
 /** Database pool maxes from the node's catalog `database.<env>.runtimePoolLimits` (public policy). */
 export interface NodeAppPoolLimits {
@@ -75,6 +96,12 @@ export interface NodeAppEnvInput {
    * omits the whole substrate block, exactly like the composition's absent `runtime.substrateHost`.
    */
   readonly substrateHost?: string | undefined;
+  /**
+   * How THIS attempt reaches the shared services (the sequencer decides per attempt, hard requirement 18).
+   * Absent = `egress` (today's env, byte for byte). `mesh` binds them through the `cogni-substrate`
+   * companion and needs no `substrateHost`.
+   */
+  readonly transport?: SubstrateTransport | undefined;
   readonly databasePoolLimits?: NodeAppPoolLimits | undefined;
   readonly lokiPush?: NodeAppLokiPush | undefined;
   /**
@@ -149,16 +176,23 @@ const APP_BASE_FIELDS = {
   HOSTNAME: () => BIND_HOST,
   APP_ENV: () => "production",
 };
+type SubstrateFieldInput = { host: string; env: string };
 const SUBSTRATE_FIELDS = {
-  TEMPORAL_ADDRESS: (i: { host: string; env: string }) => `${i.host}:7233`,
-  TEMPORAL_NAMESPACE: (i: { host: string; env: string }) => `cogni-${i.env}`,
+  TEMPORAL_ADDRESS: (i: SubstrateFieldInput) =>
+    `${i.host}:${SUBSTRATE_PORTS.temporal}`,
+  TEMPORAL_NAMESPACE: (i: SubstrateFieldInput) => `cogni-${i.env}`,
   TEMPORAL_TASK_QUEUE: () => "scheduler-tasks",
-  REDIS_URL: (i: { host: string; env: string }) => `redis://${i.host}:6379`,
-  LITELLM_BASE_URL: (i: { host: string; env: string }) =>
-    `http://${i.host}:4000`,
-  SCHEDULER_WORKER_HEALTH_URL: (i: { host: string; env: string }) =>
-    `http://${i.host}:30900`,
+  REDIS_URL: (i: SubstrateFieldInput) =>
+    `redis://${i.host}:${SUBSTRATE_PORTS.redis}`,
+  LITELLM_BASE_URL: (i: SubstrateFieldInput) =>
+    `http://${i.host}:${SUBSTRATE_PORTS["ai-gateway"]}`,
 };
+/** Egress only: not a registry row, so a mesh attempt never receives it (hard requirement 3). */
+const EGRESS_ONLY_SUBSTRATE_FIELDS = {
+  SCHEDULER_WORKER_HEALTH_URL: (i: SubstrateFieldInput) =>
+    `http://${i.host}:${EGRESS_ONLY_PORTS["scheduler-worker-health"]}`,
+};
+const DOLTGRES_URL = "DOLTGRES_URL";
 const POOL_FIELDS = {
   DB_POOL_MAX: (i: NodeAppPoolLimits) => String(i.app),
   DB_SERVICE_POOL_MAX: (i: NodeAppPoolLimits) => String(i.service),
@@ -209,6 +243,7 @@ export function runtimeOwnedEnvKeys(
           COMMON_FIELDS,
           APP_BASE_FIELDS,
           SUBSTRATE_FIELDS,
+          EGRESS_ONLY_SUBSTRATE_FIELDS,
           POOL_FIELDS,
           LOKI_FIELDS,
           APP_IDENTITY_FIELDS,
@@ -221,6 +256,42 @@ export function runtimeOwnedEnvKeys(
       ? nodeAppSecretKeys(secretKeys).map(appSecretDestination)
       : secretKeys),
   ]);
+}
+
+/** The shared services the node app's substrate block names (Temporal, Redis, the AI gateway). */
+const NODE_APP_SUBSTRATE_TYPES: readonly SubstrateType[] = [
+  "temporal",
+  "redis",
+  "ai-gateway",
+];
+
+export interface NodeAppSubstrateBindingInput {
+  readonly transport?: SubstrateTransport | undefined;
+  /** The env VM alias (`NODE_DEPLOY_SUBSTRATE_HOST[S]`). Used by `egress` only. */
+  readonly substrateHost?: string | undefined;
+  readonly secretKeys?: readonly string[] | undefined;
+  readonly boundEnvNames?: readonly string[] | undefined;
+}
+
+/**
+ * THE substrate binding of one node app attempt (task.5432, CD2). The sequencer passes the SAME input it
+ * gives `nodeAppEnv`; `ports` is the attempt's mesh grant (`NodeSubstrateGrant.ports`) and the
+ * `cogni-substrate` listener set, and `nodeAppEnv` derives its substrate env from this same output.
+ * Doltgres is included when `DOLTGRES_URL` comes from the bucket (not from a state binding). Postgres is
+ * not included: its endpoint is placement-owned.
+ */
+export function nodeAppSubstrateBinding(
+  input: NodeAppSubstrateBindingInput
+): SubstrateBinding | undefined {
+  const keys = nodeAppSecretKeys(input.secretKeys, input.boundEnvNames);
+  return resolveSubstrateBinding({
+    transport: input.transport ?? "egress",
+    vmHost: input.substrateHost,
+    types: [
+      ...NODE_APP_SUBSTRATE_TYPES,
+      ...(keys.includes(DOLTGRES_URL) ? (["doltgres"] as const) : []),
+    ],
+  });
 }
 
 export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
@@ -243,16 +314,26 @@ export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
     ...fieldValues(COMMON_FIELDS, input),
     ...fieldValues(APP_BASE_FIELDS, input),
   };
-  if (input.substrateHost)
-    Object.assign(
-      e,
-      fieldValues(SUBSTRATE_FIELDS, {
-        host: input.substrateHost,
-        env: input.env,
-      })
-    );
+  const binding = nodeAppSubstrateBinding(input);
+  if (binding) {
+    const at = { host: binding.host, env: input.env };
+    Object.assign(e, fieldValues(SUBSTRATE_FIELDS, at));
+    if (binding.transport === "egress")
+      Object.assign(e, fieldValues(EGRESS_ONLY_SUBSTRATE_FIELDS, at));
+  }
   for (const [key, value] of Object.entries(injectable))
     e[appSecretDestination(key)] = value;
+  // MESH_ENV: the bucket keeps the Doltgres credential; the binding owns its endpoint.
+  const doltgres = injectable[DOLTGRES_URL];
+  if (binding?.transport === "mesh" && doltgres !== undefined) {
+    if (!binding.types.includes("doltgres"))
+      throw new Error("node app env refused: Doltgres has no mesh binding");
+    e[DOLTGRES_URL] = rebindDsnEndpoint(
+      doltgres,
+      binding.host,
+      SUBSTRATE_PORTS.doltgres
+    );
+  }
   // Platform identity and optional catalog/push outputs retain precedence over secrets.
   if (input.databasePoolLimits)
     Object.assign(e, fieldValues(POOL_FIELDS, input.databasePoolLimits));
