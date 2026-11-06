@@ -12,8 +12,11 @@
 #                     services and scheduler-worker health, a reviewed mesh-grantable port (T5),
 #                     reached exactly like the env overlays' ExternalName substrate Services)
 #
-# Fixed ClusterIPs (10.43.250.41/.42, inside the k3s service CIDR the hardener already names) are the
-# targets of substrate-gw's hostAliases; nothing else uses them.
+# Fixed ClusterIPs in the k3s STATIC band (10.43.0.16-10.43.0.254 of the /16 service CIDR; k8s >= 1.26
+# allocates dynamic IPs above it, and .1 = apiserver, .10 = kube-dns), so no dynamic Service can hold
+# them. They are the ONE source of substrate-gw's hostAliases (kustomize replacements in each
+# instance overlay); tests/ci-invariants/node-deploy-mesh-plane.spec.ts checks no other manifest uses
+# them. A second per-tailnet instance patches both Services to its own static pair.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -70,7 +73,7 @@ metadata:
     app.kubernetes.io/part-of: cogni-mesh
 spec:
   type: ClusterIP
-  clusterIP: 10.43.250.41
+  clusterIP: 10.43.0.41
   selector:
     app.kubernetes.io/name: mesh-control-fwd
   ports:
@@ -143,7 +146,7 @@ metadata:
     app.kubernetes.io/part-of: cogni-mesh
 spec:
   type: ClusterIP
-  clusterIP: 10.43.250.42
+  clusterIP: 10.43.0.42
   selector:
     app.kubernetes.io/name: substrate-fwd
   ports:

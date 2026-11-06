@@ -8,12 +8,14 @@
 # a coordinator wipe. Forwards exactly the declared registry ports (serve.json: 5432, 5435, 6379, 4000, 7233 and
 # scheduler-worker health 30900) through substrate-fwd.
 #
-# Names, not addresses: hostAliases pin the control host and the relay host to the two forwarder
-# Services (fixed ClusterIPs in this namespace), so substrate-gw never resolves a public name and,
-# under the NetworkPolicy, has no other egress at all (HR21).
+# Names, not addresses: hostAliases pin the control host, the relay host AND `substrate-fwd` to the two
+# forwarder Services' fixed ClusterIPs (set by kustomize replacements from the Services themselves), so
+# substrate-gw never asks a resolver anything: under the NetworkPolicy it has no DNS and no other egress
+# at all (HR21, zero contact).
 #
-# Exposure (hostPort): UDP 41641 = WireGuard direct path; TCP 3341 = the publisher, reached ONLY by
-# this VM's edge Caddy (host.docker.internal:3341) and dropped from the public NIC by the hardener.
+# Exposure: UDP 41641 = WireGuard direct path (hostPort: needs a fixed public port). The publisher is
+# reached ONLY by this VM's edge Caddy through the `substrate-gw-publisher` NodePort Service (the
+# proven edge pattern), which the hardener drops from the public NIC.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -43,12 +45,13 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         seccompProfile: { type: RuntimeDefault }
-      # Replaced by the overlay from its mesh-env ConfigMap (one source per env value).
+      # ips: from the forwarder Services' spec.clusterIP (each instance overlay's replacements).
+      # hostnames: from the overlay's mesh-env ConfigMap (one source per env value).
       hostAliases:
-        - ip: 10.43.250.41
+        - ip: 192.0.2.1
           hostnames: [replace-mesh-control-host]
-        - ip: 10.43.250.42
-          hostnames: [replace-mesh-vm-host]
+        - ip: 192.0.2.1
+          hostnames: [replace-mesh-vm-host, substrate-fwd]
       containers:
         - name: substrate-gw
           image: tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c
@@ -110,12 +113,7 @@ spec:
             - { name: XDG_DATA_HOME, value: /tmp/data }
             - { name: XDG_CONFIG_HOME, value: /tmp/config }
           ports:
-            - {
-                name: publish,
-                containerPort: 8080,
-                hostPort: 3341,
-                protocol: TCP,
-              }
+            - { name: publish, containerPort: 8080, protocol: TCP }
           resources:
             requests: { cpu: 20m, memory: 32Mi }
             limits: { cpu: 20m, memory: 32Mi }
@@ -139,3 +137,24 @@ spec:
           emptyDir: { medium: Memory, sizeLimit: 8Mi }
         - name: publisher-tmp
           emptyDir: { medium: Memory, sizeLimit: 8Mi }
+---
+# The enrollment publisher, for this VM's edge Caddy only (host.docker.internal:<nodePort>). The
+# hardener drops the NodePort from the public NIC before NAT. Off the catalog node_port 100-stride.
+apiVersion: v1
+kind: Service
+metadata:
+  name: substrate-gw-publisher
+  labels:
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: substrate-gw
+  ports:
+    - {
+        name: publish,
+        port: 8080,
+        targetPort: publish,
+        protocol: TCP,
+        nodePort: 32341,
+      }

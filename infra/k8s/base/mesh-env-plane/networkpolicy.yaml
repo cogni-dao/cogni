@@ -7,9 +7,9 @@
 #   - substrate-fwd    :8443  -> our relay (MESH_VM_HOST:443, the VM's edge Caddy -> derper)
 #   - substrate-fwd    :5432/5435/6379/4000/7233 -> the env VM's shared services
 #   - substrate-fwd    :30900 -> scheduler-worker health (reviewed mesh-grantable port, T5)
-#   - cluster DNS      :53    (to resolve `substrate-fwd` for serve.json)
-# Everything else — every Tailscale-operated host, log upload, bootstrap DNS — has no path.
-# Ingress: UDP 41641 (WireGuard, hostPort) and TCP 8080 (publisher, hostPort 3341 for the edge Caddy).
+# No DNS: every name substrate-gw dials (control host, relay host, `substrate-fwd`) is a hostAlias.
+# Everything else — every Tailscale-operated host, log upload, bootstrap DNS, any resolver — has no path.
+# Ingress: UDP 41641 (WireGuard, hostPort) and TCP 8080 (publisher, behind its NodePort for the edge).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -42,16 +42,6 @@ spec:
         - { protocol: TCP, port: 4000 }
         - { protocol: TCP, port: 7233 }
         - { protocol: TCP, port: 30900 }
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - { protocol: UDP, port: 53 }
-        - { protocol: TCP, port: 53 }
 ---
 # mesh-control-fwd accepts only substrate-gw and may send only TCP 443 (its control host on the
 # production edge, a public address) and DNS to resolve that name.

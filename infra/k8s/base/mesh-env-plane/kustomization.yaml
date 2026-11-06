@@ -13,12 +13,20 @@
 # MESH_VM_HOST (= vm_host_for_env, the env VM's DNS-only alias) and the watchdog bound.
 #
 # HR21 egress rule = NetworkPolicy `substrate-gw` (networkpolicy.yaml): substrate-gw may reach ONLY
-# its two forwarders and cluster DNS. The forwarders hold the named destinations (control host :443,
+# its two forwarders, with no DNS (every name it dials is a hostAlias). The forwarders hold the named destinations (control host :443,
 # relay + substrate ports on the VM alias); a NetworkPolicy cannot name a host, so the address is
 # resolved from the very DNS record the B6 writer owns — one source, nothing typed.
 #
 # Eviction (B17): every container is Guaranteed (requests == limits) and every pod runs at the
 # `cogni-mesh-critical` PriorityClass, so kubelet memory-pressure eviction reaches them last.
+#
+# Per-tailnet instances (one env VM may serve more than one tailnet, each with its own control URL):
+# every instance is its own overlay with its own `namespace`, `nameSuffix` (renames the cluster-scoped
+# PriorityClass and its priorityClassName references), `mesh-env` literals, and patches for the
+# instance-unique host-level values: the two forwarder ClusterIPs, the derper/publisher NodePorts and
+# the STUN/WireGuard hostPorts. Each instance overlay ALSO declares the two replacements that copy the
+# forwarder Services' spec.clusterIP into substrate-gw's hostAliases: overlay replacements run after the
+# overlay's own patches (a Component's would not), so a patched Service IP moves its alias with it.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:

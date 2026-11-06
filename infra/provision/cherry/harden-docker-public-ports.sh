@@ -36,11 +36,11 @@ INTERNAL_PORTS="5432,5435,6379,4000,7233,8080"
 # task.5428 — mesh plane plain-HTTP ports that only this VM's edge Caddy may reach (it dials them on
 # host.docker.internal over the Docker bridge, never the public NIC): the per-env Headscale client
 # NodePorts (infra/k8s/base/node-deploy-mesh/service.yaml) and the env relay / enrollment publisher
-# hostPorts (infra/k8s/base/mesh-env-plane). Dropped from the public NIC, so no plain-HTTP control
+# NodePorts (infra/k8s/base/mesh-env-plane). Dropped from the public NIC, so no plain-HTTP control
 # port, no /api surface and no plain DERP is public (hard requirements 12 and 22). Pinned equal to the
 # manifests by scripts/ci/tests/render-caddyfile.test.sh. The public UDP ports (3478 STUN, 41641
 # WireGuard) need no rule: nothing here drops UDP. IPv4 only: k3s is single-stack IPv4 here.
-MESH_EDGE_ONLY_PORTS="3340,3341,32441:32443"
+MESH_EDGE_ONLY_PORTS="32340,32341,32441:32443"
 POD_CIDR="10.42.0.0/16"
 SVC_CIDR="10.43.0.0/16"
 TAG="cogni-harden-internal-ports"
@@ -127,7 +127,7 @@ fi
 
 iptables -A DOCKER-USER -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$INTERNAL_PORTS" -m comment --comment "$TAG:drop-public" -j DROP
 
-# task.5428 — the mesh edge-only ports are k3s (kube-proxy NodePort, CNI hostPort) DNAT targets, not
+# task.5428 — the mesh edge-only ports are k3s (kube-proxy NodePort) DNAT targets, not
 # Docker-published ports, and the FORWARD order between k3s and Docker chains is not ours to rely on.
 # Drop them in raw PREROUTING, which runs before any NAT. This block runs only AFTER DOCKER-USER is
 # complete (its public DROP included), so a raw-table failure can never leave the substrate ports

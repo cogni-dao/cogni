@@ -19,9 +19,10 @@
  *   - OUR_RELAY_ONLY / TLS_443_ONLY (HR9/21/22): no embedded DERP, no derp.urls, https server_url.
  *   - ENV_PLANE_ON_ENV_K3S (B5): relay + gateway are an Argo-delivered Component on the env cluster;
  *     no Compose service, no deploy-infra.sh logic.
- *   - SUBSTRATE_GW_EGRESS_IS_POLICY (HR21): NetworkPolicy lets substrate-gw reach only its forwarders
- *     and cluster DNS; its two names pin to the forwarder ClusterIPs; the control name is the SAME
- *     Headscale server_url host the DNS writer publishes.
+ *   - SUBSTRATE_GW_EGRESS_IS_POLICY (HR21): NetworkPolicy lets substrate-gw reach only its forwarders,
+ *     no DNS; its names pin to the forwarders' static-band ClusterIPs (unique in the repo); the control
+ *     name is the SAME Headscale server_url host the DNS writer publishes; forwarder egress allows the
+ *     post-DNAT destinations.
  *   - EVICTED_LAST (B17): every env-plane container is Guaranteed and runs at cogni-mesh-critical.
  * Side-effects: IO (reads committed files; optional local kubectl kustomize)
  * Links: task.5428, task.5384, task.5435, hub node-service-delivery, infra/k8s/base/node-deploy-mesh/,
@@ -489,7 +490,7 @@ describe("env VM mesh plane on the env's own k3s (task.5428, B5)", () => {
     );
   });
 
-  it("substrate-gw egress is policy: only its forwarders and cluster DNS (HR21)", () => {
+  it("substrate-gw egress is policy: only its two forwarders, no DNS at all (HR21, zero contact)", () => {
     const np = docs("networkpolicy.yaml").find(
       (d) => d.metadata.name === "substrate-gw"
     ) as unknown as {
@@ -505,33 +506,107 @@ describe("env VM mesh plane on the env's own k3s (task.5428, B5)", () => {
     expect(np.spec.podSelector).toEqual({
       matchLabels: { "app.kubernetes.io/name": "substrate-gw" },
     });
-    const targets = np.spec.egress.map(
-      (e) => e.to[0]?.podSelector?.matchLabels ?? {}
-    );
-    expect(targets).toEqual([
+    expect(
+      np.spec.egress.map((e) => e.to[0]?.podSelector?.matchLabels ?? {})
+    ).toEqual([
       { "app.kubernetes.io/name": "mesh-control-fwd" },
       { "app.kubernetes.io/name": "substrate-fwd" },
-      { "k8s-app": "kube-dns" },
     ]);
-    // Its two names pin to the forwarder Services' fixed ClusterIPs.
-    const ipOf = (name: string) =>
-      fwd.find((d) => d.kind === "Service" && d.metadata.name === name)?.spec
-        .clusterIP;
+    // Every name substrate-gw dials is a hostAlias, so it needs no resolver: serve.json's target
+    // host is one of them.
+    const aliases = (gw.spec.template.spec.hostAliases ?? []).flatMap(
+      (h) => h.hostnames
+    );
+    expect(aliases).toContain("substrate-fwd");
+  });
+
+  it("forwarder ClusterIPs are in the static band, unique in the repo, and the ONE source of the aliases", () => {
+    const ips = ["mesh-control-fwd", "substrate-fwd"].map(
+      (name) =>
+        fwd.find((d) => d.kind === "Service" && d.metadata.name === name)?.spec
+          .clusterIP ?? ""
+    );
+    for (const ip of ips) {
+      const m = ip.match(/^10\.43\.0\.(\d+)$/);
+      expect(m, ip).not.toBeNull();
+      const last = Number(m?.[1]);
+      // k8s >= 1.26 reserves only 10.43.0.0-255 of a /16 for static IPs; .1 apiserver, .10 kube-dns.
+      expect(last).toBeGreaterThanOrEqual(16);
+      expect(last).toBeLessThanOrEqual(254);
+    }
+    expect(new Set(ips).size).toBe(2);
+    // No other committed manifest uses either address.
+    const hits = execFileSync(
+      "git",
+      [
+        "grep",
+        "-l",
+        "-F",
+        "-e",
+        ips[0] ?? "",
+        "-e",
+        ips[1] ?? "",
+        "--",
+        "infra",
+      ],
+      { cwd: root, encoding: "utf8" }
+    )
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    expect(hits).toEqual([`${ENV_PLANE}/forwarders.yaml`]);
+    // The base carries a TEST-NET placeholder; the overlay copies each Service's IP (after patches).
     expect(gw.spec.template.spec.hostAliases?.map((h) => h.ip)).toEqual([
-      ipOf("mesh-control-fwd"),
-      ipOf("substrate-fwd"),
+      "192.0.2.1",
+      "192.0.2.1",
+    ]);
+    const overlayRepl = (
+      parse<{
+        replacements: {
+          source: { kind: string; name: string; fieldPath: string };
+          targets: { fieldPaths: string[] }[];
+        }[];
+      }>(`${CAND_OVERLAY}/kustomization.yaml`).replacements ?? []
+    ).filter((r) => r.source.kind === "Service");
+    expect(
+      overlayRepl.map((r) => [
+        r.source.name,
+        r.source.fieldPath,
+        r.targets[0]?.fieldPaths[0],
+      ])
+    ).toEqual([
+      [
+        "mesh-control-fwd",
+        "spec.clusterIP",
+        "spec.template.spec.hostAliases.0.ip",
+      ],
+      [
+        "substrate-fwd",
+        "spec.clusterIP",
+        "spec.template.spec.hostAliases.1.ip",
+      ],
     ]);
   });
 
   it.skipIf(!kubectlAvailable)(
-    "the rendered overlay pins substrate-gw's control and relay names to the forwarders",
+    "the rendered overlay pins substrate-gw's names to the forwarder Services' ClusterIPs",
     () => {
-      const dep = render(CAND_OVERLAY).find(
+      const docsOut = render(CAND_OVERLAY);
+      const ipOf = (name: string) =>
+        docsOut.find((d) => d?.kind === "Service" && d.metadata.name === name)
+          ?.spec.clusterIP;
+      const dep = docsOut.find(
         (d) => d?.kind === "Deployment" && d.metadata.name === "substrate-gw"
       );
       expect(dep?.spec.template.spec.hostAliases).toEqual([
-        { ip: "10.43.250.41", hostnames: [meshEnv.MESH_CONTROL_HOST] },
-        { ip: "10.43.250.42", hostnames: [meshEnv.MESH_VM_HOST] },
+        {
+          ip: ipOf("mesh-control-fwd"),
+          hostnames: [meshEnv.MESH_CONTROL_HOST],
+        },
+        {
+          ip: ipOf("substrate-fwd"),
+          hostnames: [meshEnv.MESH_VM_HOST, "substrate-fwd"],
+        },
       ]);
     }
   );
@@ -541,7 +616,9 @@ describe("env VM mesh plane on the env's own k3s (task.5428, B5)", () => {
       `${ENV_PLANE}/priorityclass.yaml`
     );
     expect(pc.metadata.name).toBe("cogni-mesh-critical");
-    expect(pc.value).toBeGreaterThanOrEqual(1_000_000_000);
+    // Outranks every app pod (no app PriorityClass exists: apps run at 0), far below system classes.
+    expect(pc.value).toBeGreaterThan(0);
+    expect(pc.value).toBeLessThan(1_000_000_000);
     const workloads = [
       derper,
       gw,
@@ -564,18 +641,30 @@ describe("env VM mesh plane on the env's own k3s (task.5428, B5)", () => {
     }
   });
 
-  it("exposure is the declared hostPorts only; the edge-only ones are hardened off the public NIC", () => {
+  it("exposure: hostPort only for public UDP; the TCP edge-only ports are NodePorts hardened off the public NIC", () => {
     const hostPorts = [derper, gw]
       .flatMap((w) => w.spec.template.spec.containers)
       .flatMap((c) => c.ports ?? [])
       .filter((p) => p.hostPort)
       .map((p) => `${p.protocol}/${p.hostPort}`)
       .sort();
-    expect(hostPorts).toEqual(
-      ["TCP/3340", "TCP/3341", "UDP/3478", "UDP/41641"].sort()
-    );
+    expect(hostPorts).toEqual(["UDP/3478", "UDP/41641"]);
+    const nodePortOf = (file: string, name: string) =>
+      docs(file).find((d) => d.kind === "Service" && d.metadata.name === name)
+        ?.spec.ports?.[0]?.nodePort;
+    const relay = nodePortOf("derper.yaml", "derper");
+    const publish = nodePortOf("substrate-gw.yaml", "substrate-gw-publisher");
+    expect(relay).toBeDefined();
+    expect(publish).toBeDefined();
+    expect((relay ?? 0) % 100).not.toBe(0);
+    expect((publish ?? 0) % 100).not.toBe(0);
     const harden = read("infra/provision/cherry/harden-docker-public-ports.sh");
-    expect(harden).toMatch(/^MESH_EDGE_ONLY_PORTS="3340,3341,32441:32443"$/m);
+    expect(harden).toMatch(
+      new RegExp(
+        `^MESH_EDGE_ONLY_PORTS="${relay},${publish},32441:32443"$`,
+        "m"
+      )
+    );
   });
 
   it("substrate-gw: stock pinned tailscale, non-root, no key, fail-closed by default, re-enrolls by itself", () => {

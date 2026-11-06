@@ -6,9 +6,10 @@
 # reproducibility exit is task.5435). Holds no secret. It checks clients against its env's
 # Headscale /verify and FAILS OPEN, so the relay keeps working while the coordinator is down (HR9).
 #
-# Exposure (hostPort, on the env VM): UDP 3478 = STUN, public. TCP 3340 = plain-HTTP DERP, reached
-# ONLY by this VM's edge Caddy (host.docker.internal:3340), which serves the DNS-only VM alias on 443
-# with a public ACME certificate; the hardener drops 3340 from the public NIC before NAT.
+# Exposure: UDP 3478 = STUN, public (hostPort: needs the fixed port the DERP map names). TCP 3340 =
+# plain-HTTP DERP behind the `derper` NodePort Service, reached ONLY by this VM's edge Caddy
+# (host.docker.internal:<nodePort>, the proven edge pattern), which serves the DNS-only VM alias on 443
+# with a public ACME certificate; the hardener drops the NodePort from the public NIC before NAT.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -60,12 +61,7 @@ spec:
             - -verify-client-url=https://$(MESH_CONTROL_HOST)/verify
             - -verify-client-url-fail-open=true
           ports:
-            - {
-                name: derp-http,
-                containerPort: 3340,
-                hostPort: 3340,
-                protocol: TCP,
-              }
+            - { name: derp-http, containerPort: 3340, protocol: TCP }
             - { name: stun, containerPort: 3478, hostPort: 3478, protocol: UDP }
           # Guaranteed QoS (B17).
           resources:
@@ -84,3 +80,22 @@ spec:
       volumes:
         - name: tmp
           emptyDir: { medium: Memory, sizeLimit: 1Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: derper
+  labels:
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: derper
+  ports:
+    - {
+        name: derp-http,
+        port: 3340,
+        targetPort: derp-http,
+        protocol: TCP,
+        nodePort: 32340,
+      }

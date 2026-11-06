@@ -101,12 +101,12 @@ ${host} {
     reverse_proxy ${upstream}
   }
 BLOCK
-  if [[ "$upstream" == *":${MESH_RELAY_HOSTPORT}" ]]; then
+  if [[ "$upstream" == *":${MESH_RELAY_NODEPORT}" ]]; then
     cat <<BLOCK
 
   handle /.well-known/cogni-mesh/substrate-gw.json {
     rewrite * /substrate-gw.json
-    reverse_proxy host.docker.internal:${MESH_PUBLISH_HOSTPORT}
+    reverse_proxy host.docker.internal:${MESH_PUBLISH_NODEPORT}
   }
 BLOCK
   fi
@@ -124,10 +124,10 @@ BLOCK
 BLOCK
 }
 
-# hostPorts of base/mesh-env-plane (derper.yaml derp-http, substrate-gw.yaml publisher); pinned equal
-# to the manifests by scripts/ci/tests/render-caddyfile.test.sh.
-MESH_RELAY_HOSTPORT=3340
-MESH_PUBLISH_HOSTPORT=3341
+# NodePorts of base/mesh-env-plane (Services `derper` and `substrate-gw-publisher`); pinned equal to
+# the manifests by scripts/ci/tests/render-caddyfile.test.sh.
+MESH_RELAY_NODEPORT=32340
+MESH_PUBLISH_NODEPORT=32341
 
 # The env whose operator domain is DOMAIN under the deployment root, or empty (a fork/local domain).
 env_for_domain() {
@@ -149,9 +149,9 @@ emit_mesh_sites() {
   if mesh_vm_plane_in_env "$env"; then
     echo
     echo "# ── mesh relay + enrollment publish (DNS-only VM alias, public ACME) ──────"
-    # Relay (derper behind TLS on 443) + the substrate-gw enrollment request, both k3s hostPorts on
+    # Relay (derper behind TLS on 443) + the substrate-gw enrollment request, both k3s NodePorts on
     # this VM (infra/k8s/base/mesh-env-plane). Nothing else.
-    emit_mesh_site "$(cogni_vm_host_for_env "$env" "$root" "$slug")" "host.docker.internal:${MESH_RELAY_HOSTPORT}" \
+    emit_mesh_site "$(cogni_vm_host_for_env "$env" "$root" "$slug")" "host.docker.internal:${MESH_RELAY_NODEPORT}" \
       '/derp' '/derp/*' '/generate_204'
   fi
   if mesh_control_edge_in_env "$env"; then

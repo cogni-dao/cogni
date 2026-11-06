@@ -182,8 +182,8 @@ PREV="$(bash scripts/ci/render-caddyfile.sh --domain preview.cognidao.org)"
   || fail "domain-derived env differs from explicit --env candidate-a"
 [ "$(grep -c '^  local_certs$' <<<"$PROD")" = "1" ] || fail "global local_certs must stay for every proxied host"
 MESH_BASE="infra/k8s/base/mesh-env-plane"
-relay_port="$(yq -N '.spec.template.spec.containers[0].ports[] | select(.name == "derp-http") | .hostPort' "$MESH_BASE/derper.yaml")"
-publish_port="$(yq -N '.spec.template.spec.containers[] | select(.name == "publisher") | .ports[0].hostPort' "$MESH_BASE/substrate-gw.yaml")"
+relay_port="$(yq -N 'select(.kind == "Service" and .metadata.name == "derper") | .spec.ports[0].nodePort' "$MESH_BASE/derper.yaml")"
+publish_port="$(yq -N 'select(.kind == "Service" and .metadata.name == "substrate-gw-publisher") | .spec.ports[0].nodePort' "$MESH_BASE/substrate-gw.yaml")"
 # candidate-a VM: relay + enrollment publish on its DNS-only alias (from its overlay), nothing else.
 vm_host="$(mesh_vm_plane_value candidate-a MESH_VM_HOST)"
 [ "$vm_host" = "$(cogni_vm_host_for_env candidate-a cognidao.org cogni)" ] || fail "overlay MESH_VM_HOST ($vm_host) != vm_host_for_env"
@@ -191,8 +191,8 @@ vm_block="$(awk -v h="$vm_host {" '$0 == h {p=1} p {print} p && /^}$/ {exit}' <<
 [ -n "$vm_block" ] || fail "candidate-a VM relay/publish site missing"
 grep -Fq 'issuer acme' <<<"$vm_block" || fail "VM site must use a public ACME issuer (DNS-only alias)"
 grep -Fq '@mesh path /derp /derp/* /generate_204' <<<"$vm_block" || fail "relay site must route only DERP paths"
-grep -Fq "reverse_proxy host.docker.internal:${relay_port}" <<<"$vm_block" || fail "relay upstream is not derper hostPort $relay_port"
-grep -Fq "reverse_proxy host.docker.internal:${publish_port}" <<<"$vm_block" || fail "publish upstream is not publisher hostPort $publish_port"
+grep -Fq "reverse_proxy host.docker.internal:${relay_port}" <<<"$vm_block" || fail "relay upstream is not the derper NodePort $relay_port"
+grep -Fq "reverse_proxy host.docker.internal:${publish_port}" <<<"$vm_block" || fail "publish upstream is not the publisher NodePort $publish_port"
 grep -Fq 'mesh-candidate-a.cognidao.org {' <<<"$CAND" && fail "candidate-a edge must not front the coordinators"
 # production edge: one coordinator site per declared Headscale, client paths only, its NodePort.
 lanes=0
@@ -227,7 +227,7 @@ for part in "${parts[@]}"; do
   fi
 done
 [ "$expanded" = "${relay_port},${publish_port},$(mesh_control_nodeports_csv)" ] \
-  || fail "$HARDEN MESH_EDGE_ONLY_PORTS ($edge_only) != relay/publisher hostPorts + coordinator NodePorts"
+  || fail "$HARDEN MESH_EDGE_ONLY_PORTS ($edge_only) != relay/publisher NodePorts + coordinator NodePorts"
 raw_line="$(grep -n -- '-t raw -A PREROUTING -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$MESH_EDGE_ONLY_PORTS"' "$HARDEN" | cut -d: -f1)"
 drop_line="$(grep -n -- '--comment "$TAG:drop-public" -j DROP' "$HARDEN" | cut -d: -f1)"
 [ -n "$raw_line" ] || fail "edge-only ports are not dropped before NAT"

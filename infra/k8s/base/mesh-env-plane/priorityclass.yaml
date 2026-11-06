@@ -3,13 +3,14 @@
 #
 # task.5428 (B17) — the mesh plane is every node lease's path to its shared services on this env.
 # Under memory pressure kubelet evicts by QoS then priority; the mesh pods are Guaranteed and sit
-# above every workload class, below the system classes (2e9). preemptionPolicy Never: they wait for
+# above every workload pod (no app PriorityClass exists, so apps run at 0), far below the system
+# classes (2e9). The smallest round value that outranks them; per-tailnet instances add a nameSuffix. preemptionPolicy Never: they wait for
 # room, they never evict a running workload to get it.
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
   name: cogni-mesh-critical
-value: 1000000000
+value: 1000000
 preemptionPolicy: Never
 globalDefault: false
 description: "task.5428 mesh plane (relay, substrate-gw, forwarders): evicted last, never preempts."

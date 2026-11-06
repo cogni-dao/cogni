@@ -210,6 +210,8 @@ groups:
       # FailedScheduling, ProgressDeadlineExceeded) that keep arriving for 10 minutes mean the new pod
       # has not come up within the bound. The leader heartbeat is NOT a rollout signal: it keeps
       # flowing while a headscale container is down, and node-deploy.alerts.yaml already owns it.
+      # Source health is its own rule (mesh-k8s-events-source-silent, bug.5579): this one stays
+      # noData=OK so a quiet healthy cluster is green, and the liveness rule pages when the source dies.
       - uid: mesh-sequencer-rollout-slow
         title: Node deploy sequencer rollout stuck for more than 10 minutes
         condition: THRESHOLD
@@ -235,6 +237,36 @@ groups:
           summary: "operator-node-deploy-sequencer has emitted Warning events (BackOff / Unhealthy / FailedMount / FailedScheduling / ProgressDeadlineExceeded) for 10 minutes: its rollout, and with it every env's Headscale coordinator, has not completed within the bound. Read the pod's events and its headscale-<env> container logs."
         labels: { severity: critical, plane: mesh }
         noDataState: OK
+        execErrState: Alerting
+
+      # The rollout rule above is only as good as its source. Production Kubernetes events stopped
+      # reaching Loki on 2026-10-21 (bug.5579), which leaves every event-based rule silently green.
+      # Missing evidence must page: no production k8s-events line for 30 minutes is an alert.
+      - uid: mesh-k8s-events-source-silent
+        title: Production Kubernetes events absent from Loki for 30 minutes
+        condition: THRESHOLD
+        for: 0s
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 1800, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'sum(count_over_time({source="k8s-events",env="production"} [30m]))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: THRESHOLD
+        annotations:
+          summary: "No production Kubernetes event reached Loki in 30 minutes (bug.5579). Every event-based rule, including the sequencer rollout alert, is blind until alloy-k8s-events ships again on the production VM."
+        labels: { severity: critical, plane: mesh }
+        noDataState: Alerting
         execErrState: Alerting
 
       # A coordinator container is crash-looping (each start logs {"message":"starting headscale"},

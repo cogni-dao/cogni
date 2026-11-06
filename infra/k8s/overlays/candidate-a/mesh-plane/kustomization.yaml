@@ -32,6 +32,15 @@ patches:
         path: /spec/egress/1/to/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name
         value: cogni-candidate-a
 replacements:
+  # hostAliases ips = the forwarder Services' static-band ClusterIPs (one source; after any patch).
+  - source: { kind: Service, name: mesh-control-fwd, fieldPath: spec.clusterIP }
+    targets:
+      - select: { kind: Deployment, name: substrate-gw }
+        fieldPaths: [spec.template.spec.hostAliases.0.ip]
+  - source: { kind: Service, name: substrate-fwd, fieldPath: spec.clusterIP }
+    targets:
+      - select: { kind: Deployment, name: substrate-gw }
+        fieldPaths: [spec.template.spec.hostAliases.1.ip]
   - source:
       kind: ConfigMap
       name: mesh-env
