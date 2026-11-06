@@ -12,6 +12,7 @@ data:
   APP_ENV: "production"
   AUTH_TRUST_HOST: "true"
   NODE_NAME: "node-app"
+  NODE_REGISTRY_WORKLOAD_ZONE: "cognidao.org"
   # Internal service URLs (same for all nodes on same VM)
   LITELLM_BASE_URL: "http://litellm-external:4000"
   TEMPORAL_ADDRESS: "temporal-external:7233"
