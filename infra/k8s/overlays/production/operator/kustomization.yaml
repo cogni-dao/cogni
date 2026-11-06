@@ -81,7 +81,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:f0bbd462dc122b2cc86d52240e02a82aa651c924f8cca1bb1ae23e433fbfeb38"
+    digest: "sha256:8a8c281316d2c75a7ebff70b07cda2bbc2e6ee6ad3225c622f2e65633cd9b4d4"
 patches:
   - target:
       kind: ExternalSecret
@@ -348,7 +348,10 @@ patches:
                   # node MAY use is now the node's own catalog cell
                   # (`required_placement_countries.<env>`), which FILTERS bids fail-closed.
                   - name: AKASH_ALLOWED_PROVIDERS
-                    value: akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm,akash1hgulk6aekakqzc0v6wukrd3dy9n90f5gkl4ezk,akash1aaul837r7en7hpk9wv2svg8u78fdq0t2j2e82z,akash19tp6w64zvdvdh26pv5lyf4f40llnqthgfy0t48,akash1z9nr23cgweu45g2jktfx95v7g2xp8qlsa3ys2x,akash1svfr9xarfkcxwdnx32nvl8cs9rfruu4nd56c4f,akash1s3hq36mpas4nmkqasn7fgwhs9968cgl3u5esnw,akash1cvcfyadrm6gcghzspyhacw924c90lwnjkhcglm,akash1rja3y2ctj3tzmesvh0zfhzzx95rfjw405hwt8d,akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h,akash127x6cuk44ul3azferg8wy9fju686kcf6x2dhz7,akash15pkdkewzarpsx42t98vzf45h42hlq6ra8w96hr
+                    value: ""
+                    # bug.5582: no provider pin. 10 of the 12 pinned providers run Akash < v0.16.7
+                    # and stopped bidding on ACT-priced orders, so the pin refused every live bidder
+                    # fleet-wide. Placement is screened on policy alone (countries, quality, strikes).
                   - name: AKASH_ACTUATOR_ACCOUNT_ID
                     # PUBLIC, non-secret Akash account address of the operator sponsor wallet.
                     # Asserted at boot by assertActuatorWalletAccount() against Console
