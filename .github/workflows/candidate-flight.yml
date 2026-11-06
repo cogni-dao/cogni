@@ -60,8 +60,10 @@ jobs:
       digests_json: ${{ steps.images.outputs.digests_json }}
       targets_json: ${{ steps.detect.outputs.targets_json }}
       has_targets: ${{ steps.detect.outputs.has_targets }}
-      flight_targets_json: ${{ steps.flight-targets.outputs.flight_targets_json }}
-      has_flight_targets: ${{ steps.flight-targets.outputs.has_flight_targets }}
+      # The planner's output (request minus compute_api=node-deploy cells, story.5137), not the
+      # raw combined request: a verb-owned node must never enter a per-node job matrix.
+      flight_targets_json: ${{ steps.substrate-targets.outputs.flight_targets_json }}
+      has_flight_targets: ${{ steps.substrate-targets.outputs.has_flight_targets }}
       has_image_inputs: ${{ steps.flight-targets.outputs.has_image_inputs }}
       substrate_node_targets_json: ${{ steps.substrate-targets.outputs.k3s_node_targets_json }}
       has_substrate_node_targets: ${{ steps.substrate-targets.outputs.has_k3s_node_targets }}
@@ -69,8 +71,6 @@ jobs:
       has_preflight_node_targets: ${{ steps.substrate-targets.outputs.has_substrate_node_targets }}
       deployment_node_targets_json: ${{ steps.substrate-targets.outputs.deployment_node_targets_json }}
       has_deployment_node_targets: ${{ steps.substrate-targets.outputs.has_deployment_node_targets }}
-      external_compute_node_targets_json: ${{ steps.substrate-targets.outputs.external_compute_node_targets_json }}
-      has_external_compute_node_targets: ${{ steps.substrate-targets.outputs.has_external_compute_node_targets }}
       deployment_provider_by_target_json: ${{ steps.substrate-targets.outputs.deployment_provider_by_target_json }}
       source_repository_by_target_json: ${{ steps.substrate-targets.outputs.source_repository_by_target_json }}
       source_sha_by_target_json: ${{ steps.substrate-targets.outputs.source_sha_by_target_json }}
@@ -413,7 +413,7 @@ jobs:
 
   # Shared firewall policy is applied only by the explicit infrastructure lane.
   prepare-substrate-deploy-branch:
-    needs: [decide, external-node-preflight]
+    needs: [decide]
     if: |
       always() &&
       needs.decide.result == 'success' &&
@@ -487,63 +487,6 @@ jobs:
             echo "::error::Refusing deploy-repository write: expected App '$EXPECTED_APP_SLUG', minted '$ACTUAL_APP_SLUG'"
             exit 1
           }
-
-      # External compute must materialize its secrets and prove Akash prerequisites
-      # before this job writes a ComputeWorkload to its watched branch. k3s targets
-      # are absent from EXPECTED_JSON and retain their established post-prepare flow.
-      - name: Download this node's external preflight marker
-        continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
-        with:
-          name: external-preflight-ok-${{ matrix.node }}
-          path: ${{ runner.temp }}/external-preflight-marker
-      - name: Gate external compute before deploy-branch mutation
-        env:
-          NODE: ${{ matrix.node }}
-          KIND: external-preflight-ok
-          EXPECTED_JSON: ${{ needs.decide.outputs.external_compute_node_targets_json }}
-          MARKER_DIR: ${{ runner.temp }}/external-preflight-marker
-        run: bash app-src/scripts/ci/resolve-substrate-gate.sh
-
-      - name: Materialize node source at its catalog pin
-        env:
-          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
-          NODE: ${{ matrix.node }}
-          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
-        run: |
-          set -euo pipefail
-          # Remote-source node: fetch its tree at the catalog source_sha pin into
-          # nodes/<NODE> — no submodule, no gitlink, private-safe (GIT_READ_TOKEN).
-          # In-repo nodes carry no source_repo and are already in app-src.
-          # spec.node-submodule-retirement.
-          catalog="app-src/infra/catalog/${NODE}.yaml"
-          [ -f "$catalog" ] || exit 0
-          src_repo="$(yq -N '.source_repo // ""' "$catalog")"
-          [ -n "$src_repo" ] || exit 0
-          src_sha="${NODE_SOURCE_SHA:-$(yq -N '.source_sha // ""' "$catalog")}"
-          [ -n "$src_sha" ] || { echo "::error::no source_sha for remote-source node ${NODE}"; exit 1; }
-          repo_path="${src_repo#https://github.com/}"; repo_path="${repo_path%.git}"
-          rm -rf "app-src/nodes/${NODE}"
-          git init -q "app-src/nodes/${NODE}"
-          git -C "app-src/nodes/${NODE}" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${repo_path}.git"
-          git -C "app-src/nodes/${NODE}" fetch -q --depth 1 origin "$src_sha"
-          git -C "app-src/nodes/${NODE}" checkout -q --detach FETCH_HEAD
-
-      - name: Materialize provider-neutral external workload
-        if: env.DEPLOYMENT_PROVIDER == 'akash'
-        uses: ./app-src/.github/actions/materialize-compute-workload
-        with:
-          app_source_root: ${{ github.workspace }}/app-src
-          node: ${{ matrix.node }}
-          environment: candidate-a
-          source_sha: ${{ needs.decide.outputs.node_source_sha || fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
-          source_repository: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
-          git_read_token: ${{ secrets.GIT_READ_TOKEN || github.token }}
-          domain: ${{ vars.DOMAIN }}
-          ghcr_username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}
-          ghcr_token: ${{ secrets.GHCR_DEPLOY_TOKEN || github.token }}
-          dns_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          domain_root: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
 
       - name: Prepare deploy branch shape
         env:
@@ -694,22 +637,6 @@ jobs:
           echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-      - name: Reconcile fleet-control migration access
-        if: steps.ssh-setup.outputs.has_vm == 'true' && fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') == 'candidate-a'
-        env:
-          FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
-          VM_HOST: ${{ secrets.VM_HOST }}
-          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
-        run: |
-          set -euo pipefail
-          # shellcheck source=ci-src/scripts/ci/lib/ssh-retry.sh
-          . ci-src/scripts/ci/lib/ssh-retry.sh
-          access_file="$RUNNER_TEMP/akash-tx-actuator-lane-access.yaml"
-          bash app-src/scripts/ci/render-akash-tx-actuator-lane-access.sh "$FLEET_CONTROL_ENV" >"$access_file"
-          read -r -a ssh_opts <<< "$SSH_OPTS"
-          ci_ssh_retry scp "${ssh_opts[@]}" "$access_file" "root@${VM_HOST}:/tmp/akash-tx-actuator-lane-access.yaml"
-          ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" "kubectl apply -f /tmp/akash-tx-actuator-lane-access.yaml && rm -f /tmp/akash-tx-actuator-lane-access.yaml"
 
       - name: Apply candidate-a-${{ matrix.node }}-applicationset.yaml
         if: steps.ssh-setup.outputs.has_vm == 'true'
@@ -920,134 +847,6 @@ jobs:
           path: marker-out/assert-ok-${{ matrix.node }}.txt
           retention-days: 1
 
-  external-node-preflight:
-    needs: decide
-    if: |
-      always() &&
-      needs.decide.result == 'success' &&
-      needs.decide.outputs.has_external_compute_node_targets == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ${{ fromJson(needs.decide.outputs.external_compute_node_targets_json) }}
-    concurrency:
-      group: external-node-preflight-candidate-a-${{ matrix.node }}
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    environment: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
-    env:
-      DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
-    steps:
-      - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          path: ci-src
-
-      - name: Checkout app source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          ref: ${{ needs.decide.outputs.head_sha }}
-          fetch-depth: 0
-          path: app-src
-
-      - uses: pnpm/action-setup@c5ba7f7862a0f64c1b1a05fbac13e0b8e86ba08c # v4
-        with: { version: 9.12.2 }
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22"
-          cache: pnpm
-          cache-dependency-path: |
-            ci-src/pnpm-lock.yaml
-            app-src/pnpm-lock.yaml
-
-      - name: Install typed substrate dependencies
-        run: |
-          pnpm --dir ci-src install --frozen-lockfile
-          pnpm --dir app-src install --frozen-lockfile
-
-      - name: Materialize node source at its catalog pin
-        env:
-          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
-          NODE: ${{ matrix.node }}
-          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
-        run: |
-          set -euo pipefail
-          # Remote-source node: fetch its tree at the catalog source_sha pin into
-          # nodes/<NODE> — no submodule, no gitlink, private-safe (GIT_READ_TOKEN).
-          # In-repo nodes carry no source_repo and are already in app-src.
-          # spec.node-submodule-retirement.
-          catalog="app-src/infra/catalog/${NODE}.yaml"
-          [ -f "$catalog" ] || exit 0
-          src_repo="$(yq -N '.source_repo // ""' "$catalog")"
-          [ -n "$src_repo" ] || exit 0
-          src_sha="${NODE_SOURCE_SHA:-$(yq -N '.source_sha // ""' "$catalog")}"
-          [ -n "$src_sha" ] || { echo "::error::no source_sha for remote-source node ${NODE}"; exit 1; }
-          repo_path="${src_repo#https://github.com/}"; repo_path="${repo_path%.git}"
-          rm -rf "app-src/nodes/${NODE}"
-          git init -q "app-src/nodes/${NODE}"
-          git -C "app-src/nodes/${NODE}" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${repo_path}.git"
-          git -C "app-src/nodes/${NODE}" fetch -q --depth 1 origin "$src_sha"
-          git -C "app-src/nodes/${NODE}" checkout -q --detach FETCH_HEAD
-
-      - name: Setup SSH to candidate-a VM
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
-          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
-          DEPLOY_ENVIRONMENT: candidate-a
-        run: |
-          set -euo pipefail
-          bash ci-src/scripts/ci/require-node-ref-vm.sh
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          echo "$SSH_DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-      - name: Provision node state and assert Akash prerequisites
-        env:
-          VM_HOST: ${{ secrets.VM_HOST }}
-          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
-          DEPLOY_ENVIRONMENT: candidate-a
-          DOMAIN: ${{ vars.DOMAIN }}
-          APP_SOURCE_DIR: app-src
-          COGNI_CATALOG_ROOT: infra/catalog
-          HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
-          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
-          STATUS_URL: ${{ needs.decide.outputs.status_url }}
-        run: bash ci-src/scripts/ci/run-node-substrate.sh candidate-a "${{ matrix.node }}"
-
-      # The deploy-branch preparation cell gates on this marker before mutating
-      # the watched branch, independently of sibling matrix results.
-      - name: Emit per-node external preflight marker
-        env:
-          NODE: ${{ matrix.node }}
-        run: |
-          set -euo pipefail
-          mkdir -p marker-out
-          printf 'ok' > "marker-out/external-preflight-ok-${NODE}.txt"
-      - name: Upload per-node external preflight marker
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: external-preflight-ok-${{ matrix.node }}
-          path: marker-out/external-preflight-ok-${{ matrix.node }}.txt
-          retention-days: 1
-
-      # The Akash assert already ran inside run-node-substrate. Publish the common
-      # assert marker consumed by flight and verify-candidate.
-      - name: Emit external-compute assert marker
-        env:
-          NODE: ${{ matrix.node }}
-        run: |
-          mkdir -p assert-marker-out
-          printf 'ok' > "assert-marker-out/assert-ok-${NODE}.txt"
-      - name: Upload external-compute assert marker
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: assert-ok-${{ matrix.node }}
-          path: assert-marker-out/assert-ok-${{ matrix.node }}.txt
-          retention-days: 1
-
   node-substrate:
     needs:
       [decide, reconcile-appset, reconcile-dns, prepare-substrate-deploy-branch]
@@ -1094,30 +893,6 @@ jobs:
         run: |
           pnpm --dir ci-src install --frozen-lockfile
           pnpm --dir app-src install --frozen-lockfile
-
-      - name: Materialize node source at its catalog pin
-        env:
-          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN }}
-          NODE: ${{ matrix.node }}
-          NODE_SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha }}
-        run: |
-          set -euo pipefail
-          # Remote-source node: fetch its tree at the catalog source_sha pin into
-          # nodes/<NODE> — no submodule, no gitlink, private-safe (GIT_READ_TOKEN).
-          # In-repo nodes carry no source_repo and are already in app-src.
-          # spec.node-submodule-retirement.
-          catalog="app-src/infra/catalog/${NODE}.yaml"
-          [ -f "$catalog" ] || exit 0
-          src_repo="$(yq -N '.source_repo // ""' "$catalog")"
-          [ -n "$src_repo" ] || exit 0
-          src_sha="${NODE_SOURCE_SHA:-$(yq -N '.source_sha // ""' "$catalog")}"
-          [ -n "$src_sha" ] || { echo "::error::no source_sha for remote-source node ${NODE}"; exit 1; }
-          repo_path="${src_repo#https://github.com/}"; repo_path="${repo_path%.git}"
-          rm -rf "app-src/nodes/${NODE}"
-          git init -q "app-src/nodes/${NODE}"
-          git -C "app-src/nodes/${NODE}" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${repo_path}.git"
-          git -C "app-src/nodes/${NODE}" fetch -q --depth 1 origin "$src_sha"
-          git -C "app-src/nodes/${NODE}" checkout -q --detach FETCH_HEAD
 
       - name: Setup SSH to candidate-a VM
         env:
@@ -1352,8 +1127,6 @@ jobs:
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: |
           set -euo pipefail
-          # Node source already materialized at app-src/nodes/${NODE} by the
-          # "Materialize node source at its catalog pin" step (same job).
           rsync -a --delete app-src/infra/k8s/base/ deploy-branch/infra/k8s/base/
           if [ "$DEPLOYMENT_PROVIDER" = "k3s" ]; then
             mkdir -p "deploy-branch/infra/k8s/overlays/candidate-a/${NODE}"
@@ -1362,18 +1135,6 @@ jobs:
               "deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/"
             . ci-src/scripts/ci/lib/shared-platform-manifests.sh
             reconcile_shared_platform_manifests "$GITHUB_WORKSPACE/ci-src" "$GITHUB_WORKSPACE/deploy-branch" candidate-a "$NODE"
-          else
-            # bug.5148 — WHICH file the materializer rendered is a catalog fact, not a
-            # constant: ONE_AUTHORITY_PER_WORKLOAD means a crossplane cell emits
-            # xcomputeworkload.yaml and deliberately does NOT emit compute-workload.yaml.
-            # shellcheck source=scripts/ci/lib/image-tags.sh
-            . ci-src/scripts/ci/lib/image-tags.sh
-            COMPUTE_API="$(compute_api_for_target "$NODE" candidate-a)"
-            WORKLOAD_FILE="$(compute_workload_manifest_file_for_api "$COMPUTE_API")"
-            if [ ! -f "deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/${WORKLOAD_FILE}" ]; then
-              echo "::error::${NODE} resolves to compute_api=${COMPUTE_API} for candidate-a, which renders ${WORKLOAD_FILE}, but deploy/candidate-a-${NODE} carries no infra/k8s/overlays/candidate-a/${NODE}/${WORKLOAD_FILE}"
-              exit 1
-            fi
           fi
           mkdir -p deploy-branch/infra/catalog
           cp "app-src/infra/catalog/${NODE}.yaml" "deploy-branch/infra/catalog/${NODE}.yaml"
@@ -1395,14 +1156,6 @@ jobs:
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           COGNI_CATALOG_ROOT: ../app-src/infra/catalog
         run: NODES="$NODE" bash ../ci-src/scripts/ci/promote-build-payload.sh
-
-      - name: Record external workload source identity
-        if: env.DEPLOYMENT_PROVIDER == 'akash' && matrix.node != 'scheduler-worker'
-        working-directory: deploy-branch
-        env:
-          APP: ${{ matrix.node }}
-          SOURCE_SHA: ${{ needs.decide.outputs.node_source_sha || fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
-        run: bash ../ci-src/scripts/ci/update-source-sha-map.sh
 
       - name: Commit and push to per-node deploy branch
         if: matrix.node != 'scheduler-worker'
@@ -1590,14 +1343,10 @@ jobs:
   # base/scheduler-worker onto that branch; Argo + the Reloader annotation (#1609) roll
   # the worker. Env-singleton, mirrors reconcile-dns: single per-env job, not per-node.
   reconcile-scheduler-worker-routing:
-    needs: [decide, external-node-preflight]
-    # Shared routing is a watched-ref mutation too: selected external nodes must
-    # prove their native inventory before this job can publish any worker change.
+    needs: [decide]
     if: |
       always() && !cancelled() &&
-      needs.decide.result == 'success' &&
-      ((needs.decide.outputs.has_external_compute_node_targets == 'true' && needs.external-node-preflight.result == 'success') ||
-       (needs.decide.outputs.has_external_compute_node_targets == 'false' && needs.external-node-preflight.result == 'skipped'))
+      needs.decide.result == 'success'
     # This is the ONLY writer of deploy/candidate-a-scheduler-worker. Routing and
     # an optional scheduler image promotion are committed locally and pushed
     # together, so concurrent flights cannot interleave two clone→push writers.
@@ -1917,8 +1666,6 @@ jobs:
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Wait for ArgoCD sync (per-node)
-        # This verifier requires a Kubernetes Deployment. External workloads are
-        # gated by the current-generation ComputeWorkload check below.
         if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s'
         env:
           VM_HOST: ${{ secrets.VM_HOST }}
@@ -1930,49 +1677,6 @@ jobs:
           GH_REPO: ${{ steps.deploy-repo.outputs.repository }}
           COGNI_CATALOG_ROOT: app-src/infra/catalog
         run: bash ci-src/scripts/ci/wait-for-argocd.sh
-
-      # bug.5148 — resolve the rendered manifest's filename from the catalog authority in a
-      # prior step, because a composite-action input cannot call a primitive. No decision here:
-      # the lib is the single shell reader of `compute_api`.
-      - name: Resolve rendered ComputeWorkload manifest
-        id: workload-manifest
-        if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
-        env:
-          NODE: ${{ matrix.node }}
-          COGNI_CATALOG_ROOT: app-src/infra/catalog
-        run: |
-          set -euo pipefail
-          # shellcheck source=scripts/ci/lib/image-tags.sh
-          . ci-src/scripts/ci/lib/image-tags.sh
-          WORKLOAD_FILE="$(compute_workload_manifest_file "$NODE" candidate-a)"
-          echo "path=${GITHUB_WORKSPACE}/deploy-branch/infra/k8s/overlays/candidate-a/${NODE}/${WORKLOAD_FILE}" >> "$GITHUB_OUTPUT"
-
-      # A foreign-custodied lane's XCW lives on the CONTROL cluster, not this VM.
-      # Keep candidate credentials lane-bound and use the manifest's public SHA
-      # for the same convergence phase; never poll the wrong cluster or skip it.
-      - name: Resolve lane custody
-        id: custody
-        if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
-        env:
-          NODE: ${{ matrix.node }}
-        run: |
-          set -euo pipefail
-          CATALOG_DIR="app-src/infra/catalog" . ci-src/scripts/ci/lib/appset-paths.sh
-          CONTROL_ENV="$(CATALOG_DIR=app-src/infra/catalog control_env_for candidate-a "$NODE")"
-          echo "control_env=$CONTROL_ENV" >> "$GITHUB_OUTPUT"
-          if [ "$CONTROL_ENV" != "candidate-a" ]; then
-            echo "::notice::$NODE's candidate-a lane is custodied by '$CONTROL_ENV'; waiting for its exact public revision without control-plane access."
-          fi
-
-      - name: Wait for external ComputeWorkload readiness
-        if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
-        uses: ./ci-src/.github/actions/wait-for-compute-workload
-        with:
-          app_source_root: ${{ github.workspace }}/app-src
-          manifest: ${{ steps.workload-manifest.outputs.path }}
-          public_only: ${{ steps.custody.outputs.control_env != 'candidate-a' }}
-          vm_host: ${{ secrets.VM_HOST }}
-          ssh_identity: /home/runner/.ssh/deploy_key
 
       - name: Wait for candidate readiness
         if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s'
@@ -2066,7 +1770,6 @@ jobs:
           HAS_TARGETS: ${{ needs.decide.outputs.has_targets }}
           HAS_FLIGHT_TARGETS: ${{ needs.decide.outputs.has_flight_targets }}
           HAS_DEPLOYMENT_NODE_TARGETS: ${{ needs.decide.outputs.has_deployment_node_targets }}
-          HAS_EXTERNAL_COMPUTE_NODE_TARGETS: ${{ needs.decide.outputs.has_external_compute_node_targets }}
           HAS_SUBSTRATE_NODE_TARGETS: ${{ needs.decide.outputs.has_substrate_node_targets }}
           PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT: ${{ needs.prepare-substrate-deploy-branch.result }}
           NODE_SUBSTRATE_RESULT: ${{ needs.node-substrate.result }}
@@ -2076,7 +1779,7 @@ jobs:
           TARGETS_JSON: ${{ needs.decide.outputs.flight_targets_json }}
         run: |
           set -euo pipefail
-          echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} external_compute=${HAS_EXTERNAL_COMPUTE_NODE_TARGETS} substrate=${HAS_SUBSTRATE_NODE_TARGETS} prepare_substrate_deploy_branch=${PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT} node_substrate=${NODE_SUBSTRATE_RESULT} assert_substrate=${ASSERT_SUBSTRATE_RESULT} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
+          echo "has_targets=${HAS_TARGETS} has_flight_targets=${HAS_FLIGHT_TARGETS} substrate=${HAS_SUBSTRATE_NODE_TARGETS} prepare_substrate_deploy_branch=${PREPARE_SUBSTRATE_DEPLOY_BRANCH_RESULT} node_substrate=${NODE_SUBSTRATE_RESULT} assert_substrate=${ASSERT_SUBSTRATE_RESULT} flight=${FLIGHT_RESULT} verify=${VERIFY_RESULT} flight_targets=${TARGETS_JSON}"
           if [ "$HAS_FLIGHT_TARGETS" != "true" ]; then
             # No k8s app-lever targets. Either nothing affected, or the affected
             # set is type:infra only (e.g. litellm) — which deploys via the

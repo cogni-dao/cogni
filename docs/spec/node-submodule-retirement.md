@@ -5,7 +5,7 @@ title: Retire the Node Submodule Gitlink
 status: draft
 trust: draft
 summary: Operator never checks out node source; node files reach the operator only by authenticated API fetch at an exact sourceSha. Removes .gitmodules, every nodes/<slug> gitlink, pin PRs, and all classifier special-casing.
-read_when: Touching node formation, candidate-flight/promote deploy plane, single-node-scope, or any operator code that reads nodes/<slug>/ source
+read_when: Touching node formation, operator candidate flight/promote deploy plane, single-node-scope, or any operator code that reads nodes/<slug>/ source
 implements: []
 supersedes_sections:
   - node-ci-cd-contract.md "Operator-hosted artifacts" (submodule paragraphs)
@@ -32,7 +32,7 @@ is exactly what breaks for private nodes and what the sovereignty model already 
 
 Every private-node failure observed is an operator-side submodule clone:
 
-- **Deploy (bug.5014):** `candidate-flight.yml` (×3) + `promote-and-deploy.yml` (×1) run
+- **Deploy (bug.5014):** `candidate-flight.yml` (operator only) (×3) + `promote-and-deploy.yml` (×1) run
   `git submodule update --init` against the node repo.
 - **Unit gate (main-red 2026-06-12):** `render-scheduler-worker-endpoints.sh` runs an
   _anonymous_ `git submodule update --init` to read the node repo-spec. It silently
@@ -82,7 +82,7 @@ the secret-free unit gate never touches node source at all.
 
    The pin this names is the **birth/flight** pin — it replaced the _gitlink_, not the deploy
    state. Once an env has deployed, what that env is running is stated ONLY by `<slug>` in
-   `.promote-state/source-sha-by-app.json` on `deploy/<env>-<slug>`, written by every promote and
+   `.promote-state/source-sha-by-app.json` on the operator deploy branch (operator only), written by every promote and
    flight (`scripts/ci/update-source-sha-map.sh`); promotion writes zero commits to `main`, so
    `main` cannot carry it (task.5022). **Re-rendering a live env from the catalog row reverts it to
    its birth sha** — bug.5043, re-observed as bug.5237 when a candidate-a lane add silently
@@ -96,7 +96,7 @@ the secret-free unit gate never touches node source at all.
 CD jobs that need the node's `k8s/base/**` + `k8s/external-secrets/<env>/**` use **`actions/checkout`**
 (`repository: <source_repo>`, `ref: <source_sha>`, `token: <app-token | GIT_READ_TOKEN>`, `path: node-src`),
 then copy the needed paths into the deploy branch. This replaces the `submodule update --init` +
-`rsync app-src/nodes/<node>/k8s/**` pair in **candidate-flight.yml** (×3) and **promote-and-deploy.yml**.
+`rsync app-src/nodes/<node>/k8s/**` pair in **candidate-flight.yml** (operator only) (×3) and **promote-and-deploy.yml**.
 No bespoke fetch script; identical for public/private.
 
 ### 2. Secret-free CI: metadata-only, no drift check
@@ -142,7 +142,7 @@ barrel export), `GitHubRepoWriter.ensureNodeSubmodulePin` + `treePinsNodeSubmodu
   all `git submodule update --init` steps, the `.gitmodules` blob writes, every `nodes/<slug>` gitlink
 - the `.gitmodules` file.
 
-**Rewrite to metadata/API:** `candidate-flight.yml`, `promote-and-deploy.yml`,
+**Rewrite to metadata/API:** `candidate-flight.yml` (operator only), `promote-and-deploy.yml`,
 `render-scheduler-worker-endpoints.sh`, `detect-remote-source-artifact-targets.sh`,
 `catalog-identity-ssot.spec.ts`, `single-node-scope-meta.spec.ts`, `render-scope-filters.sh`,
 `classify.ts` comments, `openNodeSubmodulePr`, `buildFootprintEntries`, publish route + tests,
@@ -167,4 +167,4 @@ the [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate
 ## Related
 
 - [node-ci-cd-contract.md](./node-ci-cd-contract.md) — artifact contract (unchanged) + sections this supersedes
-- bug.5014 — candidate-flight private submodule clone (subsumed by this)
+- bug.5014 — operator candidate flight private submodule clone (subsumed by this)

@@ -43,7 +43,7 @@ const authzState = vi.hoisted(() => ({
 // The route reads `nodes` then `billingAccounts` — distinguish by call order.
 // Inline the id literal: vi.hoisted runs before module-scope consts initialize.
 const dbState = vi.hoisted(() => ({
-  node: { id: "22222222-2222-4222-8222-222222222222", slug: "sigh" } as {
+  node: { id: "22222222-2222-4222-8222-222222222222", slug: "operator" } as {
     id: string;
     slug: string;
   } | null,
@@ -149,7 +149,7 @@ async function post(body: unknown): Promise<Response> {
 describe("POST /api/v1/deploy/promote", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    dbState.node = { id: NODE_ID, slug: "sigh" };
+    dbState.node = { id: NODE_ID, slug: "operator" };
     dbState.billing = { id: "billing-1" };
     dbState.call = 0;
     dbState.nodeQuery = undefined;
@@ -183,6 +183,19 @@ describe("POST /api/v1/deploy/promote", () => {
       workflowUrl: "https://github.com/test-owner/test-repo/actions",
       message: "Promote dispatched: sigh → production.",
     });
+  });
+
+  it("refuses a non-operator node with 409 node_on_deploy_verb before authz or dispatch (task.5411)", async () => {
+    dbState.node = { id: NODE_ID, slug: "poly" };
+    const res = await post({ nodeId: NODE_ID, env: "production" });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      error: "node_on_deploy_verb",
+      deployVerb: "POST /api/v1/deploy/workloads",
+    });
+    expect(authzState.check).not.toHaveBeenCalled();
+    expect(mockDeployPlane.promoteNode).not.toHaveBeenCalled();
+    expect(mockDeployPlane.promoteNodeFromPreview).not.toHaveBeenCalled();
   });
 
   it("records one bounded terminal failure when authorization throws", async () => {
@@ -278,7 +291,7 @@ describe("POST /api/v1/deploy/promote", () => {
       expect.objectContaining({
         parentOwner: "test-owner",
         parentRepo: "test-repo",
-        slug: "sigh",
+        slug: "operator",
         allowRollback: false,
       })
     );
@@ -295,7 +308,7 @@ describe("POST /api/v1/deploy/promote", () => {
         env: "production",
         parentOwner: "test-owner",
         parentRepo: "test-repo",
-        slug: "sigh",
+        slug: "operator",
         sourceSha,
         allowRollback: false,
       })
@@ -323,7 +336,7 @@ describe("POST /api/v1/deploy/promote", () => {
         env: "preview",
         parentOwner: "test-owner",
         parentRepo: "test-repo",
-        slug: "sigh",
+        slug: "operator",
         sourceSha,
         allowRollback: false,
       })
@@ -338,7 +351,7 @@ describe("POST /api/v1/deploy/promote", () => {
       owner: "test-owner",
       repo: "test-repo",
       env: "preview",
-      slug: "sigh",
+      slug: "operator",
     });
     expect(mockDeployPlane.promoteNodeFromPreview).not.toHaveBeenCalled();
   });

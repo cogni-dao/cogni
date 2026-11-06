@@ -423,6 +423,270 @@ export const nodeServiceSpecSchema = z
 
 export type NodeServiceSpec = z.infer<typeof nodeServiceSpecSchema>;
 
+// ---------------------------------------------------------------------------
+// Blue/green workloads (task.5400, story.5127): the deploy spec a release stores. A node declares
+// it through a workload manifest (`.cogni/workloads/<name>.yaml`, see workload-manifest.ts), which
+// the operator lowers to this shape. Repo-spec no longer carries workloads (story.5137).
+// ---------------------------------------------------------------------------
+
+/** `repo[:tag]@sha256:<64 hex>` — a workload image is ALWAYS pinned by digest (immutable deploys). */
+const workloadImageSchema = z
+  .string()
+  .max(512)
+  .regex(
+    /^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$/,
+    "workload image must be pinned by digest: repo[:tag]@sha256:<64 hex>"
+  );
+
+/**
+ * The ONE tag-only image a release may carry: `<repo>:sha-<40 hex>`, the image node CI builds at a source
+ * sha, valid ONLY with `imagePending: true` (story.5137). The operator's sequencer resolves it to a digest
+ * once the registry has it and pins that digest write-once on the release, so a mutable tag never reaches a
+ * paid create.
+ */
+const pendingWorkloadImageSchema = z
+  .string()
+  .max(512)
+  .regex(
+    /^[a-z0-9][a-z0-9._/-]*:sha-[0-9a-f]{40}$/,
+    "a pending workload image must be <repo>:sha-<40 hex>"
+  );
+
+const workloadHostSchema = z
+  .string()
+  .max(253)
+  .regex(
+    /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/,
+    "workload host must be a lowercase DNS name"
+  );
+
+/**
+ * How a workload is reached. `http` is a public hostname the edge routes to the active lease
+ * (a proxied CNAME); `tcp` is a provider-forwarded global TCP port (state services).
+ */
+export const nodeWorkloadExposeSchema = z.union([
+  z.object({ http: z.object({ host: workloadHostSchema }).strict() }).strict(),
+  z.object({ tcp: z.object({ global: z.literal(true) }).strict() }).strict(),
+]);
+
+const workloadHealthPathSchema = z.string().regex(/^\/[A-Za-z0-9._~/-]*$/);
+
+/**
+ * One blue/green workload (task.5400). An `app` is replaced by immutable blue/green; a `state`
+ * workload is created once and NEVER auto-replaced.
+ */
+/** A stateless private member of one authorized release; Score owns runtime shape. */
+const workloadCompanionSchema = z
+  .object({
+    name: serviceNameSchema,
+    image: z.string().max(512),
+    imagePending: z.literal(true).optional(),
+    command: z.array(z.string().max(8192)).min(1).max(32).optional(),
+    port: z.number().int().min(1).max(65535),
+    cpu: z.number().min(0.1).max(64),
+    memoryMi: z.number().int().min(128).max(262144),
+    storageMi: z.number().int().min(128).max(1048576),
+    env: z.record(serviceEnvKeySchema, z.string().max(4096)),
+    // The same path must fit the qualification observation before a release can be recorded.
+    ready: workloadHealthPathSchema.max(512),
+    secretKeys: z.array(serviceEnvKeySchema).max(32).optional(),
+  })
+  .strict();
+
+export const nodeWorkloadSpecSchema = z
+  .object({
+    /** Present only for the explicit Score/repo-spec companion bridge. */
+    serviceName: serviceNameSchema.optional(),
+    companions: z.array(workloadCompanionSchema).min(1).max(7).optional(),
+    artifactPlan: z
+      .object({
+        repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+        imageRepository: z
+          .string()
+          .regex(/^ghcr\.io\/[a-z0-9._-]+\/[a-z0-9._-]+$/),
+        /** Frozen same-SHA build declarations, including services pruned in this environment. */
+        services: z.array(nodeServiceSpecSchema).min(1).max(8),
+        bundleDigest: workloadImageSchema.optional(),
+        selectedImages: z
+          .record(serviceNameSchema, workloadImageSchema)
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    name: serviceNameSchema,
+    kind: z.enum(["app", "state"]),
+    /** Digest-pinned, or `<repo>:sha-<40 hex>` when `imagePending` is true (resolved before any create). */
+    image: z.string().max(512),
+    /**
+     * True when `image` is the tag the node's CI publishes at `source_sha` and NOT yet a digest. App only.
+     * Set by the operator at lowering (a manifest image of `.`), never by a manifest. The release store
+     * replaces `image` with the digest and drops this flag once the sequencer pins it (write-once).
+     */
+    imagePending: z.literal(true).optional(),
+    command: z.array(z.string().max(8192)).min(1).max(32).optional(),
+    /** Container port. An http app is exposed on 80; a tcp state service on the same number. */
+    port: z.number().int().min(1).max(65535),
+    expose: nodeWorkloadExposeSchema,
+    cpu: z.number().min(0.1).max(64),
+    memoryMi: z.number().int().min(128).max(262144),
+    /** Ephemeral storage. */
+    storageMi: z.number().int().min(128).max(1048576),
+    persistent: z
+      .object({
+        sizeMi: z.number().int().min(128).max(1048576),
+        mountPath: z.string().regex(/^\/(?!$)(?!.*(?:\/\.\.?)(?:\/|$))[^\0]+$/),
+      })
+      .strict()
+      .optional(),
+    /** NON-secret environment only; credentials arrive through `bindings`. */
+    env: z.record(serviceEnvKeySchema, z.string().max(4096)).default({}),
+    /** Env var -> state workload whose connection URL the operator derives (resolveBinding). */
+    bindings: z
+      .array(
+        z
+          .object({ env: serviceEnvKeySchema, workload: serviceNameSchema })
+          .strict()
+      )
+      .max(16)
+      .default([]),
+    /**
+     * Secret KEY NAMES (value-free) the operator delivers to an `app` from the node's own OpenBao
+     * bucket: the `cogni-node-app-v1` profile keys plus the node's declared `secret_refs`
+     * (task.5405). Set by the operator when it lowers a declaration at a source sha, NEVER by a
+     * manifest. Absent = the profile keys only. Operator/fleet credentials are refused at lowering.
+     */
+    secretKeys: z.array(serviceEnvKeySchema).max(64).optional(),
+    /**
+     * `worker`: a sibling service of the node (for example a code-execution sandbox) that is NOT the node
+     * app. It gets ONLY its own declared secrets (never the `cogni-node-app-v1` profile: no database, auth
+     * or LLM credentials) and starts without the node-app database trust wrapper. Set by the operator when
+     * it lowers a declaration (the repo-spec names the workload's service with no runtime profile, beside a
+     * distinct node-app service), NEVER by a manifest. Absent = the node app.
+     */
+    runtimeProfile: z.literal("worker").optional(),
+    /** REQUIRED, no default (CD6): does this workload do work only one live instance may do? */
+    exclusive: z.boolean(),
+    health: z
+      .object({
+        version: workloadHealthPathSchema,
+        ready: workloadHealthPathSchema,
+        qualification: z
+          .object({
+            path: workloadHealthPathSchema,
+            timeoutMs: z.number().int().min(1).max(20000),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .superRefine((w, ctx) => {
+    const http = "http" in w.expose;
+    const companions = w.companions ?? [];
+    const plan = w.artifactPlan;
+    if (plan && !!plan.bundleDigest !== !!plan.selectedImages)
+      ctx.addIssue({
+        code: "custom",
+        path: ["artifactPlan"],
+        message: "bundle identity and digest set must be sealed together",
+      });
+    if (plan?.bundleDigest && plan.selectedImages) {
+      const actual = Object.fromEntries([
+        [w.serviceName ?? w.name, w.image],
+        ...companions.map((c) => [c.name, c.image]),
+      ]);
+      if (
+        w.imagePending ||
+        companions.some((c) => c.imagePending) ||
+        JSON.stringify(Object.entries(actual).sort()) !==
+          JSON.stringify(Object.entries(plan.selectedImages).sort())
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: ["artifactPlan"],
+          message: "accepted digest set must match every selected service",
+        });
+    }
+    if (companions.length && (!w.health?.qualification || w.kind !== "app"))
+      ctx.addIssue({
+        code: "custom",
+        path: ["companions"],
+        message: "private companions require app qualification",
+      });
+    if (
+      new Set(companions.map((c) => c.name)).size !== companions.length ||
+      companions.some((c) => c.name === (w.serviceName ?? w.name))
+    )
+      ctx.addIssue({
+        code: "custom",
+        path: ["companions"],
+        message: "service names must be unique",
+      });
+    for (const c of companions) {
+      if (
+        !(
+          c.imagePending ? pendingWorkloadImageSchema : workloadImageSchema
+        ).safeParse(c.image).success
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: ["companions", c.name, "image"],
+          message: "invalid companion image",
+        });
+    }
+    const imageSchema = w.imagePending
+      ? pendingWorkloadImageSchema
+      : workloadImageSchema;
+    const imageCheck = imageSchema.safeParse(w.image);
+    if (!imageCheck.success)
+      ctx.addIssue({
+        code: "custom",
+        path: ["image"],
+        message:
+          imageCheck.error.issues[0]?.message ?? "invalid workload image",
+      });
+    if (w.imagePending && w.kind !== "app")
+      ctx.addIssue({
+        code: "custom",
+        path: ["imagePending"],
+        message: "only an app workload can carry a pending image",
+      });
+    if (w.kind === "app" && !http)
+      ctx.addIssue({
+        code: "custom",
+        path: ["expose"],
+        message: "an app workload must expose an http host",
+      });
+    if (w.kind === "state" && http)
+      ctx.addIssue({
+        code: "custom",
+        path: ["expose"],
+        message: "a state workload must expose a global tcp port",
+      });
+    if (w.kind === "app" && !w.health)
+      ctx.addIssue({
+        code: "custom",
+        path: ["health"],
+        message: "an app workload must declare health {version, ready}",
+      });
+    if (w.kind === "state" && w.bindings.length > 0)
+      ctx.addIssue({
+        code: "custom",
+        path: ["bindings"],
+        message: "a state workload cannot consume bindings",
+      });
+    if (w.kind === "state" && !w.persistent)
+      ctx.addIssue({
+        code: "custom",
+        path: ["persistent"],
+        message: "a state workload must declare persistent storage",
+      });
+  });
+
+export type NodeWorkloadSpec = z.infer<typeof nodeWorkloadSpecSchema>;
+
 /**
  * App-tier workload declaration. Exactly one service owns public ingress; all
  * other services share the workload network privately by service-name DNS.
@@ -1053,6 +1317,22 @@ export const repoSpecSchema = z
      * author migration.
      */
     deployment: nodeDeploymentSchema.optional(),
+
+    /**
+     * story.5137 / task.5411 — secret KEY names the node's `app` workload needs BEYOND the
+     * `cogni-node-app-v1` profile keys. The node-deploy verb reads this; the legacy
+     * `deployment.services[].secret_refs` is still read as a fallback for nodes not yet migrated.
+     * Values live only in OpenBao; this lists names, never values.
+     */
+    secret_refs: z
+      .array(nodeServiceSecretRefSchema)
+      .optional()
+      .refine(
+        (refs) =>
+          refs === undefined ||
+          new Set(refs.map((r) => r.key)).size === refs.length,
+        "secret_refs keys must be unique"
+      ),
 
     /** Provider-neutral state substrate requested by this sovereign node. */
     state: nodeStateSpecSchema.optional(),

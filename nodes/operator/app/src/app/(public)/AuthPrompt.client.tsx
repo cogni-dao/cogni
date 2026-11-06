@@ -19,7 +19,9 @@ import { useSession } from "next-auth/react";
 import { type ReactElement, useEffect, useMemo, useState } from "react";
 import { useAccount } from "wagmi";
 
+import { BrainLoading } from "@/components";
 import { SignInDialog } from "@/components/kit/auth/SignInDialog";
+import { AppShell } from "@/features/layout";
 
 const DEFAULT_CALLBACK_URL = "/chat";
 const SIGN_IN_PARAM = "signIn";
@@ -73,7 +75,6 @@ export function AuthPrompt(): ReactElement | null {
     [searchParams]
   );
   const [dialogOpen, setDialogOpen] = useState(shouldPrompt);
-  const [redirecting, setRedirecting] = useState(false);
 
   useEffect(() => {
     if (shouldPrompt && status === "unauthenticated") {
@@ -84,7 +85,6 @@ export function AuthPrompt(): ReactElement | null {
   useEffect(() => {
     if (status !== "authenticated") return;
 
-    setRedirecting(true);
     window.location.replace(shouldPrompt ? callbackUrl : DEFAULT_CALLBACK_URL);
   }, [callbackUrl, shouldPrompt, status]);
 
@@ -99,13 +99,17 @@ export function AuthPrompt(): ReactElement | null {
 
   return (
     <>
-      {redirecting ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">
-          <p className="text-muted-foreground text-sm">Redirecting...</p>
+      {status === "authenticated" ? (
+        <div className="fixed inset-0 z-50 overflow-hidden bg-background">
+          <AppShell>
+            <div className="chat-viewport flex overflow-hidden">
+              <BrainLoading />
+            </div>
+          </AppShell>
         </div>
       ) : null}
       <SignInDialog
-        open={dialogOpen}
+        open={status !== "authenticated" && dialogOpen}
         onOpenChange={setDialogOpen}
         onWalletConnect={handleWalletConnect}
         callbackUrl={callbackUrl}

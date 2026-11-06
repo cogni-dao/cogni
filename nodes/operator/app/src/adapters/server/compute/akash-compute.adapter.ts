@@ -29,6 +29,8 @@
  *     controller begins any later allocation only from a new durable recovery receipt.
  *   - OUTCOME_STORE_IS_ADVISORY: outcome persistence is best-effort — a store failure never
  *     fails a live provision and never blocks screening (empty history).
+ *   - REFUSAL_EVIDENCE_IS_BOUNDED: screening refusal names at most 16 full excluded bidder identities
+ *     before clipped diagnostics. Overflow or invalid identities authorize no fallback decision.
  * Side-effects: IO (HTTPS requests to the Akash Console API + workload ingress; provision()
  *   spends real escrow; boot outcomes append to Postgres)
  * Links: ComputeResourcePort (@cogni/ai-tools/capabilities/compute), ./akash-sdl,
@@ -60,6 +62,7 @@ import {
   type AkashProviderInfo,
   countrySourcesDisagree,
   effectiveCountryCode,
+  effectiveProviderPin,
   formatBidRejections,
   formatBidRoster,
   type ProviderOutcomeStats,
@@ -873,7 +876,9 @@ export class AkashComputeAdapter
       `/v1/deployments/${encodeURIComponent(p.leaseId)}`
     );
     const leases = detail?.leases ?? [];
-    const lease = leases.find((l) => l.state === "active") ?? leases[0];
+    // ACTIVE_LEASE_ONLY (task.5420): no `?? leases[0]` fallback. A closed lease's coordinates
+    // are a dead log source; `state` below says why there is none, and the actuator skips it.
+    const lease = leases.find((l) => l.state === "active");
     const owner =
       typeof lease?.id?.provider === "string" ? lease.id.provider : undefined;
     const descriptor: AkashLeaseLogDescriptor = {
@@ -888,10 +893,14 @@ export class AkashComputeAdapter
       services: Object.keys(lease?.status?.services ?? {}),
       state: mapState(detail?.deployment?.state, leases),
     };
-    this.descriptorCache.set(p.leaseId, {
-      value: descriptor,
-      expiresAtMs: this.now().getTime() + DESCRIPTOR_CACHE_TTL_MS,
-    });
+    // Cache only a settled answer: an active lease, or a closed one (terminal). A pending lease
+    // is booting; caching it would hide its boot logs for the whole TTL.
+    if (descriptor.state === "active" || descriptor.state === "closed") {
+      this.descriptorCache.set(p.leaseId, {
+        value: descriptor,
+        expiresAtMs: this.now().getTime() + DESCRIPTOR_CACHE_TTL_MS,
+      });
+    }
     return descriptor;
   }
 
@@ -1084,6 +1093,10 @@ export class AkashComputeAdapter
      * bounded-recovery attempt. The caller derives this from allocation receipts.
      */
     excludedProviders?: ReadonlySet<string>;
+    /**
+     * Caller allowlist (task.5405), INTERSECTED with the configured allowlist. Only ever narrows.
+     */
+    allowedProviders?: ReadonlySet<string>;
   }): Promise<{ leaseId: string; providerAccount: string }> {
     const sdl = buildAkashSdl(
       p.spec,
@@ -1099,9 +1112,20 @@ export class AkashComputeAdapter
           }
         : undefined,
       retainsStorage(p.spec),
-      p.allocationPolicy
+      p.allocationPolicy,
+      p.allowedProviders
     );
     return { leaseId: String(dseq), providerAccount: provider };
+  }
+
+  /**
+   * Pre-spend check (task.5405): why a caller `allowProviders` can NEVER be satisfied against this
+   * client's configured allowlist, or undefined when it can. Lets the actuator refuse BEFORE it claims
+   * the wallet slot or opens an escrow.
+   */
+  providerPinRefusal(allow: ReadonlySet<string>): string | undefined {
+    const effective = effectiveProviderPin(this.config.allowedProviders, allow);
+    return "refusal" in effective ? effective.refusal : undefined;
   }
 
   /**
@@ -1115,7 +1139,8 @@ export class AkashComputeAdapter
     tried: Set<string>,
     onAllocated?: (resource: ProvisionOutput) => Promise<void>,
     retainStorage = false,
-    allocationPolicy?: AkashTxAllocationPolicy
+    allocationPolicy?: AkashTxAllocationPolicy,
+    callerAllowed?: ReadonlySet<string>
   ): Promise<{ dseq: string; provider: string }> {
     const created = await this.request<{ dseq?: string; manifest?: unknown }>(
       "POST",
@@ -1176,7 +1201,8 @@ export class AkashComputeAdapter
         dseq,
         screening,
         tried,
-        allocationPolicy
+        allocationPolicy,
+        callerAllowed
       );
       provider = String(bid.provider);
       leaseAttempted = true;
@@ -1267,17 +1293,24 @@ export class AkashComputeAdapter
     dseq: string,
     screening: ScreeningContext,
     tried: ReadonlySet<string>,
-    allocationPolicy?: AkashTxAllocationPolicy
+    allocationPolicy?: AkashTxAllocationPolicy,
+    callerAllowed?: ReadonlySet<string>
   ): Promise<ConsoleBidId> {
     const deadline = Date.now() + this.bidTimeoutMs;
     const preferred = this.config.preferredProviders ?? [];
     // An EMPTY configured list collapses to `undefined` == no pin. Spelled out because `[]`
     // is TRUTHY: the old `config.allowedProviders ? new Set(...)` turned an empty list into
     // an empty Set, i.e. "no provider is permitted", which refused every bid in silence.
-    const allowed =
-      this.config.allowedProviders && this.config.allowedProviders.length > 0
-        ? new Set(this.config.allowedProviders)
-        : undefined;
+    // task.5405: the caller's `allowProviders` can only NARROW the configured pin (never widen it).
+    // An empty intersection was already refused by `providerPinRefusal` before anything was paid; if
+    // it reaches here anyway, fail loudly instead of screening against the wider set.
+    const effective = effectiveProviderPin(
+      this.config.allowedProviders,
+      callerAllowed
+    );
+    if ("refusal" in effective)
+      throw new AkashComputeError("NO_ELIGIBLE_BIDS", effective.refusal);
+    const allowed = effective.pin;
     let sawAnyBid = false;
     // Carried out of the loop so NO_ELIGIBLE_BIDS can name WHICH filter refused everything.
     // Three independent filters can each empty the set; a static reason list sent operators
@@ -1351,14 +1384,30 @@ export class AkashComputeAdapter
           if (id) return id;
         }
         if (sawAnyBid) {
+          // Decision evidence precedes the diagnostic roster. Caller exclusions are bounded
+          // by the paid wire (16); overflow or malformed native identities carry no authority.
+          // Full addresses avoid the diagnostic roster's lossy address elision.
+          const excludedBidders = [
+            ...new Set(
+              lastRoster
+                .filter((r) => r.rejection === "already_tried")
+                .map((r) => r.provider)
+            ),
+          ];
+          const excludedEvidence =
+            excludedBidders.length <= 16 &&
+            excludedBidders.every((p) => /^akash1[0-9a-z]{38}$/u.test(p))
+              ? JSON.stringify(excludedBidders)
+              : "overflow";
           throw new AkashComputeError(
             "NO_ELIGIBLE_BIDS",
-            `bids arrived for dseq ${dseq} but none passed provider screening ` +
+            `none passed provider screening [excluded-bidders-v1:${excludedEvidence}] ` +
+              `bids arrived for dseq ${dseq.slice(0, 80)} ` +
               `[refused: ${formatBidRejections(lastRejections)}]` +
               // The roster names the ADDRESSES so a dry auction is actionable without
               // re-running it: counts alone cannot tell "nobody eligible bid" from
               // "we refused the provider we were waiting for" (story.5050).
-              ` [bids: ${formatBidRoster(lastRoster)}]` +
+              ` [bids: ${formatBidRoster(lastRoster).slice(0, 600)}]` +
               (screening.requiredCountryCodes.length > 0
                 ? ` (required placement countries: ${screening.requiredCountryCodes.join(", ")})`
                 : "")

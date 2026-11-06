@@ -33,6 +33,15 @@ exec 9>"$HARDEN_LOCK_FILE"
 flock -x 9
 
 INTERNAL_PORTS="5432,5435,6379,4000,7233,8080"
+# task.5428 — mesh plane plain-HTTP ports that only this VM's edge Caddy may reach (it dials them on
+# host.docker.internal over the Docker bridge, never the public NIC): every tailnet's Headscale client
+# NodePort and its relay / enrollment-publisher NodePorts, from the one tailnet table in
+# scripts/ci/lib/mesh-plane.sh (pinned equal by scripts/ci/tests/render-caddyfile.test.sh; the same
+# list on every VM, so a VM that serves no such port loses nothing). Dropped from the public NIC, so no
+# plain-HTTP control port, no /api surface and no plain DERP is public (hard requirements 12 and 22).
+# The public UDP ports (STUN, WireGuard) need no rule: nothing here drops UDP. IPv4 only: k3s is
+# single-stack IPv4 here.
+MESH_EDGE_ONLY_PORTS="32340:32343,32441:32444"
 POD_CIDR="10.42.0.0/16"
 SVC_CIDR="10.43.0.0/16"
 TAG="cogni-harden-internal-ports"
@@ -118,6 +127,20 @@ if [ -f "$ALLOWLIST_FILE" ]; then
 fi
 
 iptables -A DOCKER-USER -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$INTERNAL_PORTS" -m comment --comment "$TAG:drop-public" -j DROP
+
+# task.5428 — the mesh edge-only ports are k3s (kube-proxy NodePort) DNAT targets, not
+# Docker-published ports, and the FORWARD order between k3s and Docker chains is not ours to rely on.
+# Drop them in raw PREROUTING, which runs before any NAT. This block runs only AFTER DOCKER-USER is
+# complete (its public DROP included), so a raw-table failure can never leave the substrate ports
+# open: it aborts loudly with DOCKER-USER intact. Same tag. APPEND THEN DELETE: the new rule is added
+# before the older tagged lines are removed (highest line first, so lower numbers stay valid), so the
+# mesh NodePorts are never unguarded, even if the append fails.
+# ORDER: on each VM, this reconcile must run before the k3s rollout that creates its mesh NodePorts.
+old_raw_lines=$(iptables -t raw -L PREROUTING --line-numbers -n 2>/dev/null | awk -v t="$TAG" '$0 ~ t {print $1}' | sort -rn)
+iptables -t raw -A PREROUTING -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$MESH_EDGE_ONLY_PORTS" -m comment --comment "$TAG:drop-public-mesh-edge-only" -j DROP
+for ln in $old_raw_lines; do
+  iptables -t raw -D PREROUTING "$ln"
+done
 
 # Day-2 flights must not contend with unattended-upgrades when persistence is
 # already installed. Package state alone is insufficient: save can succeed with
@@ -211,3 +234,5 @@ fi
 
 echo "[harden] done. DOCKER-USER rules:"
 iptables -S DOCKER-USER | grep -- "$TAG" || true
+echo "[harden] raw PREROUTING rules:"
+iptables -t raw -S PREROUTING | grep -- "$TAG" || true

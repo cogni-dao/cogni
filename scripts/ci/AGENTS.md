@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-22
+- **Last reviewed:** 2026-11-05
 
 ## Purpose
 
@@ -40,6 +40,7 @@ CI/CD automation scripts and configuration documentation for multiple pipeline s
 - `lib/maintenance-fence.py check <deploy-tree>` is the read-only node-generic marker/audited-source-floor guard; no grant, claim, preserve or maintenance write command.
 - Normal node reconcile never starts/recreates shared PG/Dolt, rewrites shared runtime env/install-creds or rotates mirror custody. Existing engines are infra prerequisites; target provisioners always use `--no-deps`.
 - Bank calls distinguish target LANE from explicit CONTROL-owner intent even when operator has both roles. Missing target values never fall back to an owner; inheritance is declared by catalog `inheritFrom`.
+- `inheritEnvironmentByLane` selects lane/control byte authority through the typed catalog resolver. Omitted lanes retain control inheritance; caches include environment and service. Missing selected owners never fall back.
 - Every runner and direct reconcile resolves the actual catalog provider and refuses an explicit mismatch before materialization.
 
 ## Responsibilities
@@ -94,7 +95,7 @@ scripts/fetch_github_job_logs.sh  # Fetch job logs from GitHub Actions API (requ
 - `detect-affected.sh` mirrors the repo's turbo-aware SCM base/head selection and maps changed paths onto deployable image targets via each catalog entry's `path_prefix:` field (`CATALOG_IS_SSOT`, ci-cd.md axiom 16). Root workspace inputs and failed Turbo resolution select repository-context images, using normalized catalog `build_context` (default `.`); independent contexts retain their own path scope. Mixed changes union their targets. Lockfile changes ride with a selected locally built repository-context owner; infra-only or remote-source selections do not consume that fallback. Catalog target edits stay target-scoped; shared image-build machinery and the PR-build workflow remain global inputs.
 - `workflow-check.mjs` validates the GitHub Actions surface agents depend on: canonical `.yaml` CI filenames, removed legacy aliases, and which workflows are manually dispatchable.
 - `lib/image-tags.sh` is a thin shim that populates `ALL_TARGETS` / `NODE_TARGETS` and resolves image tags, node ports, DB names, and endpoint CSVs by reading `infra/catalog/*.yaml` at source time via the pre-installed `yq`. **Node IDs come from `nodes/<name>/.cogni/repo-spec.yaml`, not the catalog** (`REPO_SPEC_IS_IDENTITY_SSOT`, ci-cd.md axiom 16); `default_node_id` returns the `is_primary_host` node's `node_id` for `COGNI_DEFAULT_NODE_ID`. Repo-root-relative resolution; `COGNI_CATALOG_ROOT` overrides the catalog root for fixtures + the pre-merge birth flow, and the repo-spec tree is derived from it.
-- `next-free-node-port.sh` owns the scarce per-VM k8s `node_port` (NodePort 30000–32767). Default mode prints the next free port (`max(node_port)+100`, ~x00 stride) — the scaffolder (`scripts/setup/scaffold-node.sh`) defaults `$3` to it so minting a node needs no hand-picked value. `--check` asserts cross-file `node_port` uniqueness (inexpressible in pure JSON-schema) and runs in `pr-build.yml` alongside `check-jsonschema --schemafile infra/catalog/_schema.json`; a clash fails the build (CATALOG_IS_SSOT, ci-cd.md axiom 16). Tested by `scripts/ci/tests/next-free-node-port.test.sh`; aliases `pnpm node-port:next` / `pnpm check:node-port-unique`.
+- `next-free-node-port.sh` owns the scarce per-VM k8s `node_port` (NodePort 30000–32767). Default mode prints the next free port (`max(node_port)+100`, ~x00 stride). `--check` asserts cross-file `node_port` uniqueness (inexpressible in pure JSON-schema) and runs in `pr-build.yml` alongside `check-jsonschema --schemafile infra/catalog/_schema.json`; a clash fails the build (CATALOG_IS_SSOT, ci-cd.md axiom 16). Tested by `scripts/ci/tests/next-free-node-port.test.sh`; aliases `pnpm node-port:next` / `pnpm check:node-port-unique`.
 - `build-and-push-images.sh` is the PR-build entrypoint for affected image pushes; workflows should pass resolved targets, not inline Docker command graphs
 - `write-build-manifest.sh` writes the canonical build artifact consumed by later candidate-flight automation
 - `resolve-pr-build-images.sh` resolves digest refs from the deterministic PR tag convention when candidate-flight needs the current pushed image set

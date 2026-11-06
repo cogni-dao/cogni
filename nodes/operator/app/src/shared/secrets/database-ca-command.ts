@@ -2,9 +2,16 @@
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 /**
  * Module: `@shared/secrets/database-ca-command`
- * Purpose: Install the canonical public database CA before the declared process starts.
+ * Purpose: Install the canonical public database CA before the declared process starts, and (for a
+ *   node app given its migration DSN) migrate the node's own databases before it serves (task.5408).
  * Scope: Pure command construction; preserves every original argument as a positional value.
  * Invariants: No caller text is shell code; Node loads trust before any database client imports.
+ *   GREEN_MIGRATES_ITSELF (task.5408): a `cogni-node-app-v1` app whose env carries
+ *   DATABASE_MIGRATION_URL runs the image's own migrators (Postgres, then Doltgres when DOLTGRES_URL
+ *   is set) with the CA trust above, unsets the migration DSN, then execs the app. Any migrator exit
+ *   other than 0 stops the container before the app starts, so the release never proves and blue keeps
+ *   serving. This is the legacy k3s `migrate` initContainer (infra/k8s/base/node-app/deployment.yaml),
+ *   folded into the one Akash container.
  * Side-effects: none (the resulting command writes an owner-only temporary CA at runtime).
  * Links: docs/spec/secrets-management.md, features/compute/node-services-workload-spec.ts
  * @internal
@@ -23,15 +30,47 @@ const installTrust = [
   'exec "$@"',
 ].join("\n");
 
+/**
+ * The node app image's bundled migrators (node-template Dockerfile runner stage): drizzle Postgres
+ * migrator and the Doltgres migrator + verifier. Both read DATABASE_URL and require NODE_NAME.
+ */
+const NODE_APP_MIGRATIONS = [
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal runtime shell expansion
+  ': "${NODE_NAME:?NODE_NAME is required to migrate}"',
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal runtime shell expansion
+  ': "${DATABASE_MIGRATION_URL:?DATABASE_MIGRATION_URL is required to migrate}"',
+  // The migration credential is scoped to this one command's env, never exported to the shell.
+  'DATABASE_URL="$DATABASE_MIGRATION_URL" NODE_NAME="$NODE_NAME" node /app/app/migrate.mjs /app/app/migrations',
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal runtime shell expansion
+  'if [ -n "${DOLTGRES_URL:-}" ]; then',
+  '  DATABASE_URL="$DOLTGRES_URL" NODE_NAME="$NODE_NAME" node /app/app/migrate-doltgres.mjs /app/app/doltgres-migrations',
+  "fi",
+  // Never reaches the app: under `set -e` a failed migrator exits before this line and before exec.
+  "unset DATABASE_MIGRATION_URL",
+];
+
+function trustScript(migrate: boolean): string {
+  if (!migrate) return installTrust;
+  const lines = installTrust.split("\n");
+  const exec = lines.pop();
+  return [...lines, ...NODE_APP_MIGRATIONS, exec].join("\n");
+}
+
 export function withDatabaseCaTrust(
   command: readonly string[],
-  args: readonly string[] = []
+  args: readonly string[] = [],
+  options: { migrateNodeApp?: boolean } = {}
 ): { command: string[]; args: string[] } {
   if (!command.length || !command[0]) {
     throw new Error("database CA startup requires a declared process command");
   }
   return {
-    command: ["/bin/sh", "-ec", installTrust, "cogni-database-trust"],
+    command: [
+      "/bin/sh",
+      "-ec",
+      trustScript(options.migrateNodeApp === true),
+      "cogni-database-trust",
+    ],
     args: [...command, ...args],
   };
 }
@@ -60,5 +99,9 @@ export function databaseConsumerCommand(input: {
       : undefined);
   if (!command)
     throw new Error("database-consuming image requires a declared command");
-  return withDatabaseCaTrust(command, input.args);
+  // GREEN_MIGRATES_ITSELF: only the node app profile, and only when its env carries the migration DSN.
+  const migrateNodeApp =
+    input.runtimeProfile === "cogni-node-app-v1" &&
+    input.secretRefs.some((ref) => ref.key === "DATABASE_MIGRATION_URL");
+  return withDatabaseCaTrust(command, input.args, { migrateNodeApp });
 }

@@ -38,6 +38,8 @@ Bottom-of-tree type definitions. TS utility types, branded types, ambient global
 
 ## Public Surface
 
+- `akash-native-state.ts`: app-private native observation and full lease identity DTOs; independent deployment/lease coverage, safe errors and observation times. No runtime code or Console lifecycle dependency.
+
 - **Exports:** TS utility types, branded types, global.d.ts, Env interfaces, domain enums
   - `payments.ts` - PaymentFlowState, PaymentStatus, PaymentAttemptStatus, PaymentErrorCode (canonical source)
   - `billing.ts` - Re-exports SourceSystem from @cogni/ai-core; defines ChargeReason, BillingCommitFn (DI callback type for billing decorator)

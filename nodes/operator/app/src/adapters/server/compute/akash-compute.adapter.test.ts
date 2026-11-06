@@ -5,6 +5,8 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { PayerError } from "@/ports";
+import { ActuatorPayer } from "../node-deploy/actuator-payer.adapter";
 import {
   AKASH_OVERCLOCK_AUDITOR,
   AkashComputeAdapter,
@@ -1122,6 +1124,95 @@ describe("AkashComputeAdapter bid screening", () => {
     expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
   });
 
+  it("native excluded-bidder evidence survives a roster beyond both downstream caps", async () => {
+    const blue = `akash1${"b".repeat(38)}`;
+    const other = `akash1${"c".repeat(38)}`;
+    const filler = Array.from(
+      { length: 90 },
+      (_, i) => `akash1${String(i).padStart(38, "0")}`
+    );
+    const h = harness({
+      providers: [
+        ...filler.map((p) => providerEntry(p, { isAudited: false })),
+        providerEntry(blue),
+      ],
+      bids: (dseq) => [
+        ...filler.map((p) => bidEntry(dseq, p, "100")),
+        bidEntry(dseq, blue, "100"),
+      ],
+    });
+    const nativeError: unknown = await makeAdapter(h.fetchImpl)
+      .allocateAndLease({
+        spec: SPEC,
+        excludedProviders: new Set([blue, other]),
+      })
+      .catch((error: unknown) => error);
+    expect(nativeError).toBeInstanceOf(AkashComputeError);
+    if (!(nativeError instanceof AkashComputeError))
+      throw new Error("missing native refusal");
+    // Real native writer over Console responses, not a fabricated refusal string.
+    expect(nativeError.message).toContain(`[excluded-bidders-v1:["${blue}"]]`);
+    expect(nativeError.message).not.toContain(`"${other}"`);
+    expect(nativeError.message.length).toBeLessThan(2000);
+    expect(h.createBodies).toHaveLength(1);
+    expect(h.leased).toEqual([]);
+    expect(h.deletes).toEqual([`${BASE}/v1/deployments/1`]);
+    const payer = new ActuatorPayer({
+      actuatorUrl: "http://actuator",
+      token: "test-token",
+      fetchImpl: async () =>
+        jsonResponse(
+          { code: "provider_rejected", message: nativeError.message },
+          422
+        ),
+    });
+    const projected: unknown = await payer
+      .create({
+        cogniKey: "native-roster",
+        environment: "preview",
+        identity: {
+          nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+          compositeUid: "native-roster",
+          compositeGeneration: 1,
+        },
+        spec: SPEC,
+      })
+      .catch((error: unknown) => error);
+    expect(projected).toBeInstanceOf(PayerError);
+    if (!(projected instanceof PayerError))
+      throw new Error("payer refused no error");
+    expect(projected.message).toContain(`[excluded-bidders-v1:["${blue}"]]`);
+    expect(projected.message.length).toBeLessThanOrEqual(2000);
+  });
+
+  it.each([
+    0, 16, 17,
+  ])("native excluded-bidder summary is complete or explicit overflow: %i", async (count) => {
+    const providers = Array.from(
+      { length: Math.max(count, 1) },
+      (_, i) => `akash1${String(i).padStart(38, "0")}`
+    );
+    const h = harness({
+      providers: providers.map((p) => providerEntry(p, { isAudited: false })),
+      bids: (dseq) => providers.map((p) => bidEntry(dseq, p, "100")),
+    });
+    const error: unknown = await makeAdapter(h.fetchImpl)
+      .allocateAndLease({
+        spec: SPEC,
+        excludedProviders: new Set(providers.slice(0, count)),
+      })
+      .catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(AkashComputeError);
+    if (!(error instanceof AkashComputeError))
+      throw new Error("missing native refusal");
+    expect(error.message).toContain(
+      `[excluded-bidders-v1:${count > 16 ? "overflow" : JSON.stringify(providers.slice(0, count))}]`
+    );
+    expect(error.message.length).toBeLessThan(2000);
+    expect(h.leased).toEqual([]);
+    expect(h.deletes).toHaveLength(1);
+  });
+
   it("excludes a blacklisted provider (3 strikes in outcome history)", async () => {
     const h = harness({
       providers: [providerEntry("akash1struck"), providerEntry("akash1clean")],
@@ -1271,6 +1362,63 @@ describe("AkashComputeAdapter allowedProviders", () => {
     ).rejects.toMatchObject({ code: "NO_ELIGIBLE_BIDS" });
     expect(h.leased).toEqual([]);
     expect(h.deletes).toHaveLength(1);
+  });
+});
+
+describe("AkashComputeAdapter caller allowProviders (task.5405)", () => {
+  const allowed = "akash16yr3wxt97ae045a06kr3ycde9srcgpg8syjxxm";
+  const other = "akash1v0f04wr3tkh9uf43q9eqfd0whpfeu8qevlq99h";
+  const stranger = "akash1froggy";
+  const harnessWith = () =>
+    harness({
+      providers: [
+        providerEntry(allowed),
+        providerEntry(other),
+        providerEntry(stranger),
+      ],
+      bids: (dseq) => [
+        bidEntry(dseq, stranger, "1"),
+        bidEntry(dseq, other, "500"),
+        bidEntry(dseq, allowed, "900"),
+      ],
+    });
+
+  it("with NO operator pin the caller list is the pin: only a listed provider can win", async () => {
+    const h = harnessWith();
+    await makeAdapter(h.fetchImpl, { bidTimeoutMs: 0 }).allocateAndLease({
+      spec: SPEC,
+      allowedProviders: new Set([allowed]),
+    });
+    expect(h.leased).toEqual([{ dseq: "1", provider: allowed }]);
+  });
+
+  it("with an operator pin the caller list only NARROWS: a caller-listed provider outside the pin never wins", async () => {
+    const h = harnessWith();
+    await makeAdapter(h.fetchImpl, {
+      bidTimeoutMs: 0,
+      allowedProviders: [allowed, other],
+    }).allocateAndLease({
+      spec: SPEC,
+      allowedProviders: new Set([other, stranger]),
+    });
+    expect(h.leased).toEqual([{ dseq: "1", provider: other }]);
+  });
+
+  it("providerPinRefusal names an unsatisfiable list BEFORE anything is paid, and is undefined otherwise", () => {
+    const h = harnessWith();
+    const adapter = makeAdapter(h.fetchImpl, {
+      allowedProviders: [allowed],
+    });
+    expect(adapter.providerPinRefusal(new Set([stranger]))).toMatch(
+      /share no provider/
+    );
+    expect(adapter.providerPinRefusal(new Set([allowed, stranger]))).toBe(
+      undefined
+    );
+    expect(
+      makeAdapter(h.fetchImpl, {}).providerPinRefusal(new Set([stranger]))
+    ).toBe(undefined);
+    expect(h.leased).toEqual([]);
   });
 });
 

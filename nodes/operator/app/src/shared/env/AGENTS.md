@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-09-15
+- **Last reviewed:** 2026-11-04
 - **Status:** draft
 
 ## Purpose
@@ -61,6 +61,7 @@ Single source of truth for environment variables. Lazy validation with Zod preve
 
 **Server-only (`server.ts`)**
 
+- Workload routing: `NODE_DEPLOY_WORKLOAD_ZONE` is required explicitly by the operator deploy binding, separate from auth `DOMAIN` and shared substrate `FORK_DOMAIN_ROOT`.
 - Runtime: `NODE_ENV`, `APP_ENV`, `SERVICE_NAME`, `DEPLOY_ENVIRONMENT`, `PORT`, `PINO_LOG_LEVEL`
 - Database: `DATABASE_URL`, `DATABASE_SERVICE_URL`; both are explicit DSNs, no component-piece fallback, startup rejects same-user/superuser DSNs
 - LLM/billing/ops: `LITELLM_BASE_URL`, `LITELLM_MASTER_KEY`, `LITELLM_MVP_API_KEY`, `OPENROUTER_API_KEY`, `BILLING_INGEST_TOKEN`, `SCHEDULER_API_TOKEN`, `INTERNAL_OPS_TOKEN`

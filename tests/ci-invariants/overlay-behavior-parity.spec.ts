@@ -174,6 +174,7 @@ const IDENTITY: Record<string, Rule[]> = {
       "NODE_MINT_OWNER",
       "NODE_TEMPLATE_OWNER",
       "NODE_SUBMODULE_PARENT_OWNER",
+      "NODE_DEPLOY_WORKLOAD_ZONE",
       "NODE_SUBMODULE_PARENT_REPO",
       "DOLTHUB_OWNER",
       "DOLTHUB_NONPROD_OWNER",
@@ -198,6 +199,57 @@ const IDENTITY: Record<string, Rule[]> = {
     {
       why: "env name",
       pattern: envValue("lease-log-pump", "pump", "DEPLOY_ENVIRONMENT"),
+    },
+    {
+      why: "env name",
+      pattern: envValue(
+        "node-deploy-sequencer",
+        "sequencer",
+        "DEPLOY_ENVIRONMENT"
+      ),
+    },
+    {
+      why: "dedicated per-env secrets namespace for the sequencer (name is the env identity, task.5400)",
+      pattern: /^resource\[Namespace\/cogni-node-deploy-[a-z0-9-]+\]\..+$/,
+    },
+    {
+      why: "dedicated per-env secrets namespace for the sequencer (replacement target + env value)",
+      pattern:
+        /^kustomization\.replacements\[\d+\]\.targets\[\d+\]\.select\.name$/,
+    },
+    {
+      why: "dedicated per-env secrets namespace for the sequencer (env value)",
+      pattern: envValue(
+        "node-deploy-sequencer",
+        "sequencer",
+        "NODE_DEPLOY_SECRETS_NAMESPACE"
+      ),
+    },
+    {
+      why: "sequencer RoleBinding subject names the env's wallet-namespace ServiceAccount",
+      pattern:
+        /^patch\[RoleBinding\/node-deploy-sequencer\] replace \/subjects\/0\.namespace$/,
+    },
+    {
+      why: "sponsor account (public chain address, same value the actuator pins)",
+      pattern: envValue(
+        "node-deploy-sequencer",
+        "sequencer",
+        "AKASH_CHAIN_OWNER"
+      ),
+    },
+    {
+      why: "the admission binding selects THIS env's dedicated node-deploy namespace (task.5405)",
+      pattern:
+        /^patch\[ValidatingAdmissionPolicyBinding\/node-deploy-sequencer-externalsecrets\] replace \/spec\/matchResources\/namespaceSelector\/matchExpressions\/0\/values\[0\]$/,
+    },
+    {
+      why: "the environment VM's DNS alias (`vm_host_for_env`) the shared substrate answers on (task.5405)",
+      pattern: envValue(
+        "node-deploy-sequencer",
+        "sequencer",
+        "NODE_DEPLOY_SUBSTRATE_HOST"
+      ),
     },
     {
       why: "env name",
@@ -244,7 +296,38 @@ const IDENTITY: Record<string, Rule[]> = {
  * pattern widened to make CI pass.
  */
 const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
-  operator: [],
+  operator: [
+    {
+      why:
+        "ONE FRONT DOOR (story.5137): the production cluster is the FLEET CONTROL ENV, so its one " +
+        "node-deploy sequencer also serves the candidate-a and preview lanes of canonical Akash nodes " +
+        "(NODE_DEPLOY_ENVS, a per-env substrate host map, the fleet owner filter, the two extra " +
+        "`cogni-node-deploy-<env>` namespaces delivered by a sibling Application (and its argocd namespace replacement), the admission binding's " +
+        "extra namespaces, and the app config list the route reads). candidate-a is the TEST fleet's " +
+        "control plane: it serves only itself and claims no canonical node, so it cannot carry these; " +
+        "tests/ci-invariants/node-deploy-sequencer-admission.spec.ts pins the production side.",
+      pattern:
+        /^(patch\[ConfigMap\/node-app-config\] add \/data\/NODE_DEPLOY_ENVS|patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[(NODE_DEPLOY_ENVS|NODE_DEPLOY_FLEET_OWNER|NODE_DEPLOY_SUBSTRATE_HOSTS)\]\.(name|value)|patch\[ValidatingAdmissionPolicyBinding\/node-deploy-sequencer-externalsecrets\] replace \/spec\/matchResources\/namespaceSelector\/matchExpressions\/0\/values\[[12]\]|resource\[Application\/node-deploy-env-namespaces\]\..+|kustomization\.replacements\[1\]\.(source\.(fieldPath|kind|name)|targets\[0\]\.(fieldPaths\[0\]|select\.kind)))$/,
+    },
+    {
+      why:
+        "ONE COORDINATOR PER TAILNET (task.5428, hub node-service-delivery §1 + test-fleet parity): each " +
+        "operator overlay includes the Headscale Components of exactly the tailnets its sequencer writes. " +
+        "Production: the canonical candidate-a, preview and production tailnets. candidate-a (test operator): " +
+        "only its own test-candidate-a tailnet, with no production identity. The same Component code, a " +
+        "different tailnet set; tests/ci-invariants/node-deploy-mesh-coordinators.spec.ts pins both sides.",
+      pattern: /^kustomization\.components\[\d+\]$/,
+    },
+    {
+      why:
+        "MESH DNS IN THE TEST ZONE (task.5428, CD4): the test tailnet's DNS-only hosts live in the isolated " +
+        "test zone, whose token only the candidate-a test operator holds, so its sequencer is their one " +
+        "writer. Production's canonical mesh hosts are written by scripts/ci/reconcile-node-dns.sh, so it " +
+        "declares none. tests/ci-invariants/node-deploy-mesh-coordinators.spec.ts pins the value to the table.",
+      pattern:
+        /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_MESH_DNS_RECORDS\]\.(name|value)$/,
+    },
+  ],
   "scheduler-worker": [
     {
       why:

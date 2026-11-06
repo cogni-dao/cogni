@@ -39,6 +39,13 @@ export const colorKeys = [
   "syntax-delimiter",
   "syntax-string",
   "syntax-keyword",
+  "brain-loading-blue",
+  "brain-loading-teal",
+  "brain-loading-green",
+  "brain-loading-cyan",
+  "brain-loading-indigo",
+  "brain-loading-violet",
+  "brain-loading-magenta",
 ] as const;
 
 // Radius token keys (semantic keys for CVA props - map to CSS vars)

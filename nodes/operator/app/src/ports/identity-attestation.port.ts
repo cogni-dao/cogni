@@ -6,6 +6,7 @@
 export interface IdentityAttestationNode {
   readonly nodeId: string;
   readonly slug: string;
+  readonly repoOwner: string | null;
   readonly deployEnvs: readonly string[];
 }
 

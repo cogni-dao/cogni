@@ -143,7 +143,7 @@ export interface NodeServiceConfig {
 // ---------------------------------------------------------------------------
 
 /** Extract node_id from parsed repo-spec. */
-export function extractNodeId(spec: RepoSpec): string {
+export function extractNodeId(spec: Pick<RepoSpec, "node_id">): string {
   return spec.node_id;
 }
 
@@ -168,6 +168,22 @@ export function hasDeclaredNodeDeployment(spec: RepoSpec): boolean {
 }
 
 /**
+ * The node app's extra secret KEY names beyond the `cogni-node-app-v1` profile (story.5137 /
+ * task.5411). Source order: the top-level repo-spec `secret_refs` (the node-deploy shape) when
+ * present; otherwise the legacy `deployment.services[]` app service's `secret_refs`, kept so a
+ * node whose repo-spec was not yet migrated keeps its declared keys. Absent both, none.
+ */
+export function extractNodeAppSecretRefs(
+  spec: RepoSpec
+): readonly { readonly key: string }[] {
+  if (spec.secret_refs !== undefined) return spec.secret_refs;
+  const service = extractNodeServices(spec).find(
+    (s) => s.runtimeProfile === "cogni-node-app-v1"
+  );
+  return service?.secretRefs ?? [];
+}
+
+/**
  * Resolve the node's app-tier service declaration.
  *
  * Existing repo-specs intentionally need no migration: omission produces the
@@ -176,7 +192,7 @@ export function hasDeclaredNodeDeployment(spec: RepoSpec): boolean {
  * result to build off-cluster-compute desired state.
  */
 export function extractNodeServices(
-  spec: RepoSpec
+  spec: Pick<RepoSpec, "deployment">
 ): readonly NodeServiceConfig[] {
   const deployment = spec.deployment ?? LEGACY_DEFAULT_NODE_DEPLOYMENT;
   return deployment.services.map((service) => ({

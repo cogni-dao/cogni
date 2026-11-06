@@ -18,7 +18,7 @@ tags: [deployment, infra, env, provision, gitops, openbao]
 
 You want a **whole environment** stood up from zero — a Cherry VM running k3s + Argo CD + the OpenBao/ESO secrets substrate + your node formation, reachable over HTTPS. Targets: `candidate-a`, `candidate-b`, `preview`, `production`, or a downstream **fork**.
 
-This is the **env axis**. For the **node axis** — taking one `nodes/<node>/app` live across already-existing envs — see [`create-node.md`](./create-node.md). The two compose: an env is a formation of nodes; a node is enabled across a set of envs.
+This is the **env axis**. For the **node axis** — shipping a node across envs — see [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) (one call, `POST /api/v1/deploy/workloads`). The two compose: an env is a formation of nodes; a node is enabled across a set of envs.
 
 > **Canonical path: the `provision-env.yml` workflow.** Never hand-provision (`pnpm bootstrap` / running `provision-env-vm.sh` on a laptop) for a real env — that puts substrate creds on a laptop (against the secrets charter). The GitHub Actions runner owns the `tofu` + `bao` + `kubectl` session; init artifacts come back passphrase-encrypted. The laptop path is debug-only.
 
@@ -27,7 +27,7 @@ This is the **env axis**. For the **node axis** — taking one `nodes/<node>/app
 ```
 provision-env.yml  (workflow_dispatch: env, encryption_passphrase)
   └─ bootstrap.sh           Phase 1 validate · 2 gen secrets · 3 GH env+secrets · 4 →
-       └─ provision-env-vm.sh   Cherry VM · DNS · OpenBao+ESO · seed paths · AppSets · /readyz
+       └─ provision-env-vm.sh   Cherry VM · DNS · OpenBao+ESO · seed paths · operator Argo apps · /readyz
   └─ encrypt + upload init artifacts (1-day GHA artifact, AES-256-CBC + passphrase)
 ```
 
@@ -40,7 +40,7 @@ provision-env.yml  (workflow_dispatch: env, encryption_passphrase)
    - Full per-secret instructions: fork-quickstart §6.2. The _generated_ app secrets (DB passwords, `AUTH_SECRET`, tokens…) are auto-created by `bootstrap.sh` Phase 3 — don't set those by hand.
 2. **`FORK_DOMAIN_ROOT`** repo variable (defaults `cognidao.org` for the hub).
 3. **Cherry Servers account balance.** The VM costs money; provisioning fails mid-`tofu apply` with `Insufficient balance!` if the account is empty. Fund it first.
-4. **The node formation must exist in git** for the env: AppSet generator(s) + `infra/k8s/overlays/<env>/<node>/` + per-node/service ExternalSecrets. For an existing slot these are present; for a brand-new slot author them (see [`create-node.md`](./create-node.md) and the candidate-b formation pilot in `infra/k8s/argocd/candidate-b-applicationset.yaml`). A genuinely new slot name (e.g. `candidate-c`) also needs adding to the `env` choice list in `provision-env.yml`.
+4. **The operator formation must exist in the repo** for the env (operator only): the operator's Argo app and overlay. Nodes need no formation here. A node app ships with `POST /api/v1/deploy/workloads` (see [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence)). A genuinely new slot name (e.g. `candidate-c`) also needs adding to the `env` choice list in `provision-env.yml`.
 5. **An operator-owned passphrase** (the init-artifact encryption key — §6.3). Save it to a password manager **before** dispatch; without it the encrypted OpenBao unseal keys + kubeconfig are unrecoverable.
 
 ## Dispatch + verify
@@ -88,12 +88,11 @@ The `provision-env.yml` path (ported in #1426) was first exercised end-to-end on
 - **Ephemeral runner tofu state.** No remote backend (`infra/provision/cherry/base/main.tf` has the backend commented out) → each run starts with empty state; a failed `tofu apply` after the SSH-key resource is created leaves an **orphaned Cherry SSH key** per failed run. Wants a remote backend (or a pre-apply orphan sweep).
 - **No Cherry balance pre-flight.** Balance is only discovered _during_ `tofu apply`, after side effects (SSH key created). A pre-flight balance probe (like the Cloudflare/Cherry-token probes) would fail fast at zero side-effect.
 - **Manual passphrase.** v-next (per `proj.agentic-fork-bootstrap`): once a **parent OpenBao** exists, replace encrypt+upload-with-passphrase with `vault-action` pushes — no operator passphrase.
-- **New slot ≠ one-line.** A brand-new env name still requires editing the `provision-env.yml` `env` choice + authoring AppSet/overlays/ExternalSecrets per node. Formation-driven generation is tracked in `task.5097` (env-as-formation list generator) + `task.5098` (generate overlays/ExternalSecrets).
+- **New slot ≠ one-line.** A brand-new env name still requires editing the `provision-env.yml` `env` choice. Nodes need no per-env formation: they ship with `POST /api/v1/deploy/workloads`. Formation-driven generation is tracked in `task.5097` (env-as-formation list generator) + `task.5098` (generate overlays/ExternalSecrets).
 
 ## See also
 
 - [`docs/runbooks/fork-quickstart.md`](../runbooks/fork-quickstart.md) — the per-secret walkthrough (§6) + init-artifact custody (§6.3, §6.5).
-- [`create-node.md`](./create-node.md) — the node axis (one node across the env matrix).
 - [`.claude/skills/cicd-secrets-expert/SKILL.md`](../../.claude/skills/cicd-secrets-expert/SKILL.md) — where each secret value lives (tier system + OpenBao paths).
 - [`.claude/skills/devops-expert/SKILL.md`](../../.claude/skills/devops-expert/SKILL.md) — CI/CD architecture + provisioning arsenal.
 - [`work/projects/proj.cicd-services-gitops.md`](../../work/projects/proj.cicd-services-gitops.md) — the GitOps provisioning project this guide serves.

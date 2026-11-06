@@ -138,7 +138,7 @@ Phase 0 is **decoupling, not platform-building.** Zero new platform code; the on
 - `operator_node_registrations` table + GH App installation webhook → auto-register
 - Per-installation auth, per-node API keys, per-node DB tenancy
 - Operator agent loop iterates registered installations rather than hardcoding one repo
-- PR review + candidate-flight dispatch work cross-repo
+- PR review + operator candidate flight dispatch work cross-repo
 - **Unblocks**: Cogni Operator becomes useful as an opt-in service for forked `node-template` users
 
 #### Phase 3 — Operator-hosted node tenancy (Railway model)
@@ -190,7 +190,7 @@ The day of the rename, a real poly trading fix landed in `cogni`'s main: `c08c95
 
 Today's v0 architecture is **per-repo independent VMs** for any private node. `cogni-poly` runs on its own production VM, its own postgres, its own doltgres, its own Argo CD, its own secrets — completely independent of `cogni`'s deployment plane. This is what the original spec described under "Why poly runs its own VMs in v0".
 
-**This is NOT a permanent architectural ceiling.** Cogni's operator product vision FULLY intends to support external + private git repos consuming shared Cogni infrastructure as a hosted service. That's the Phase 2 + Phase 3 work below. Today the operator agent hardcodes a single target repo, so cross-repo operator features (PR review, candidate-flight dispatch, multi-tenant deploy plane) aren't yet possible — even though the codebase to do so exists in `cogni`.
+**This is NOT a permanent architectural ceiling.** Cogni's operator product vision FULLY intends to support external + private git repos consuming shared Cogni infrastructure as a hosted service. That's the Phase 2 + Phase 3 work below. Today the operator agent hardcodes a single target repo, so cross-repo operator features (PR review, operator candidate flight dispatch, multi-tenant deploy plane) aren't yet possible — even though the codebase to do so exists in `cogni`.
 
 If a future external operator-tenant arrives before Phase 2 ships, the bridge is independent VMs (the same v0 path `cogni-poly` is taking). Once Phase 2 (multi-tenant operator GH App) and Phase 3 (operator-hosted node tenancy) land, sovereignty-preserving external/private repos can opt into shared infra without the per-VM cost.
 
@@ -211,7 +211,7 @@ GitHub auto-redirects all references from old → new slug after rename. The red
 | R.2  | PR in `cogni` updating Argo `Application.spec.source.repoURL` to `Cogni-DAO/cogni`                                                             |
 | R.3  | Audit + update hardcoded `Cogni-DAO/cogni` strings in scripts, docs, env-config                                                                |
 | R.4  | Update PR/branch references in any pinned GitHub Actions URLs                                                                                  |
-| R.5  | Re-test candidate-flight + promote-and-deploy on `cogni`                                                                                       |
+| R.5  | Re-test operator candidate flight + promote-and-deploy on `cogni`                                                                              |
 | R.6  | After settle, attempt to create `Cogni-DAO/node-template`. If blocked, escalate via GH support or use interim name `node-template-quickstart`. |
 
 GHCR image refs are org-scoped (`ghcr.io/cogni-dao/<image>`), unaffected by repo rename. ✅
@@ -231,7 +231,7 @@ GHCR image refs are org-scoped (`ghcr.io/cogni-dao/<image>`), unaffected by repo
 - [x] `Cogni-DAO/cogni-poly` exists, private, full history, single-node mono
 - [ ] `cogni-poly` has its own running VMs across all 3 envs; flighted at least one PR end-to-end _(in flight — production VM only for v0, preview + candidate-a deferred)_
 - [ ] `cogni` no longer contains any `poly` directories or catalog/overlay/secret entries _(step 0.8, blocked on data migration)_
-- [x] `cogni` candidate-flight + promote-and-deploy still green on a representative PR (verified by post-#1324 preview deploy)
+- [x] `cogni` operator candidate flight + promote-and-deploy still green on a representative PR (verified by post-#1324 preview deploy)
 - [x] New `Cogni-DAO/node-template` exists, public, minimal — quickstart README works for a clean fork
 
 **Sovereignty preserved (manual):**

@@ -33,9 +33,9 @@ The test GitHub App is deliberately broad inside `cogni-test-org`. That makes th
 3. Create a token with `Zone · DNS · Edit` and `Zone · Zone · Read`, restricted to the single `cogni-testing.org` zone.
 4. Give the token to the secrets-manager lane, which writes it to candidate-a OpenBao and forces ESO refresh. Do not paste it into chat, a file, a PR, or GitHub Actions.
 5. Set the test parent inputs: `DOMAIN=cogni-testing.org`; keep `FORK_DOMAIN_ROOT=cognidao.org`; set `CLOUDFLARE_ZONE_ID` to the new zone's id through the current candidate-a environment interface.
-6. Prove the boundary with one disposable Akash node. Green means its generated `XComputeWorkload.spec.workload.publicHost` is `<node>.cogni-testing.org`, DNS exists in only that zone, `/version` returns the expected SHA, and the old-SHA → new-SHA probe has zero DNS/TLS/HTTP failures.
+6. Prove the boundary with one disposable Akash node. Green means its declared workload host is `<node>.cogni-testing.org`, DNS exists in only that zone, `/version` returns the expected SHA, and the old-SHA → new-SHA probe has zero DNS/TLS/HTTP failures.
 
-Do not create an apex/VM record for this Akash-only workload zone. Crossplane creates each workload CNAME from the provider endpoint. The candidate operator and shared substrate keep their existing records under `cognidao.org`.
+Do not create an apex/VM record for this Akash-only workload zone. The node-deploy sequencer creates each workload host record from the provider endpoint. The candidate operator and shared substrate keep their existing records under `cognidao.org`.
 
 Buying the domain or merging workflow code is not completion. Until step 6 passes, report the new as-will-be design as **not live-proven**; do not fall back to the old shared-zone design.
 
@@ -43,11 +43,10 @@ Buying the domain or merging workflow code is not completion. Until step 6 passe
 
 For the production fleet, per-node public hosts — `<node>-test.cognidao.org` (candidate-a), `<node>-preview.cognidao.org` (preview), `<node>.cognidao.org` (prod) — are reconciled on **every flight/promote**, idempotently. The isolated test parent overrides its workload `DOMAIN` as described above, yielding `<node>.cogni-testing.org` without moving the operator endpoint:
 
-- `scripts/ci/reconcile-node-dns.sh <env>` runs as the env-level `reconcile-dns` job in `candidate-flight.yml` (candidate-a) and `promote-and-deploy.yml` (preview/prod).
-- It loops the catalog `type:node` set, derives each host via `host_for_node` (`scripts/ci/lib/image-tags.sh`), reads the env VM IP from the **operator apex** A record, and upserts `<node>-<env>` → that IP, mirroring the apex's proxy state.
-- **Placement decides ownership (`PLACEMENT_OWNS_DNS`, story.5016).** It reconciles only nodes whose catalog `deployment_provider.<env>` is `k3s` (absent → `k3s`). A node placed on an external provider (`akash`) has its host **CNAME**'d to the provider by the operator's ComputeWorkload DNS reconciler — this script skips it (logged `external`, `state: external` in the Grafana summary) and `--check` stays green. Never hand-upsert an A record over one of those hosts.
-- The per-node `/version` verify `needs:` it, so a node added to `infra/catalog/<node>.yaml` resolves at its public host on its **first** flight — no `*-test` wildcard, no hand-made record.
-- Legacy k3s writer: `scripts/ci/lib/cloudflare-dns.sh` — refuses the zone apex / `www` unless `CF_ALLOW_PROTECTED=1`. Its `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ZONE_ID` are env-scoped GH secrets; an env without them logs a warning and skips. Akash DNS is different: the Crossplane Composition writes with the controller's OpenBao/ESO-backed `operator-env-secrets` token and the workload's declared zone id. Do not copy that runtime token into the test repo to satisfy the skipped k3s job.
+- **The deploy verb owns node hosts.** `POST /api/v1/deploy/workloads` makes the node-deploy sequencer move the proxied Cloudflare edge for the node host to the new lease. It moves only after 8 public reads in a row show the exact commit. The old lease keeps serving until then. See [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload). Never hand-upsert a record over a node host.
+- The host must be the node's own host. The workload manifest declares the production host. Other environments use a sibling (`-test`, `-preview`). The sequencer refuses another node's host (`edge_host_refused`).
+- The sequencer writes with the control environment's OpenBao/ESO-backed `operator-env-secrets` token and the workload's declared zone id. Do not copy that runtime token into the test repo.
+- **Operator only:** `scripts/ci/reconcile-node-dns.sh <env>` and `scripts/ci/lib/cloudflare-dns.sh` serve the operator's own k3s hosts. `cloudflare-dns.sh` refuses the zone apex and `www` unless `CF_ALLOW_PROTECTED=1`. Its `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ZONE_ID` are env-scoped GH secrets.
 - **Single source of truth:** [`docs/spec/ci-cd.md` Axiom 21 `DNS_IS_RECONCILED_PER_ENV`](../../../docs/spec/ci-cd.md). Don't duplicate the flow — point here.
 
 **Therefore:**
@@ -64,7 +63,7 @@ Only needed when standing up a brand-new zone. Existing envs are already wired.
 
 1. Cloudflare account → add the domain (Free plan) → set the registrar's nameservers to Cloudflare's (verify: `dig <domain> NS +short` shows cloudflare).
 2. API token: **Zone · DNS · Edit** + **Zone · Zone · Read**, scoped to the specific zone. Zone ID from the dashboard → domain → API section.
-3. Choose custody by writer. Legacy k3s CI keeps its token in the env-scoped GitHub environment. Akash/Crossplane keeps its token in the control environment's OpenBao operator path and exposes it only to the controller through ESO. Never seed both merely to silence a skipped job.
+3. Choose custody by writer. Operator k3s CI keeps its token in the env-scoped GitHub environment. The node-deploy sequencer keeps its token in the control environment's OpenBao operator path and exposes it only to the operator through ESO. Never seed both merely to silence a skipped job.
 
 ### 2. The env apex record (`<env>` domain + `<env>.vm.cognidao.org`)
 

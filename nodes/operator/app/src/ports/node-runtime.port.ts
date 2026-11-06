@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+/**
+ * Module: `@ports/node-runtime.port`
+ * Purpose: The two read seams the node-deploy sequencer needs to give a node app the SAME runtime
+ *   env the retired Crossplane lane gave it (task.5405, story.5127): the node's runtime secrets, read
+ *   (OpenBao custody, rendered by ESO), and the node's catalog row (slug + placement policy), read from the operator image.
+ * Scope: Types, one error class. No IO.
+ * Invariants:
+ *   - READ_ONLY_CUSTODY: neither port can write OpenBao. Secrets reach the sequencer through the existing
+ *     OpenBao -> ESO (`eso-reader`) -> Secret path; no new OpenBao role exists.
+ *   - NO_HALF_ENV: a missing or unreadable key is an ERROR with the key NAMES, never a value-less
+ *     env var. The sequencer maps it to "dependency not ready" and creates nothing.
+ *   - NO_VALUES_IN_ERRORS: `NodeRuntimeSecretsError` carries key names and a stable code only.
+ * Side-effects: none
+ * Links: features/node-deploy/node-app-env.ts, task.5405
+ * @public
+ */
+
+export type NodeRuntimeSecretsErrorCode =
+  /** A requested key is an operator/fleet/substrate credential that may not leave the cluster. */
+  | "denied_keys"
+  /** One or more required keys are absent or empty in the node's OpenBao bucket. */
+  | "missing_keys"
+  /** The ExternalSecret is not Ready (yet), or the Kubernetes API refused or failed the read. */
+  | "unavailable";
+
+export class NodeRuntimeSecretsError extends Error {
+  constructor(
+    readonly code: NodeRuntimeSecretsErrorCode,
+    message: string,
+    /** Key NAMES only. Never values. */
+    readonly keys: readonly string[] = []
+  ) {
+    super(message);
+    this.name = "NodeRuntimeSecretsError";
+  }
+}
+
+export interface NodeRuntimeSecretsPort {
+  /**
+   * Read EXACTLY `keys` from the node's own bucket `cogni/<env>/<slug>` (DATABASE_MIGRATION_URL from its
+   * `cogni/<env>/<slug>-database-migration`, task.5408) and return them, all with
+   * non-empty values. `keys` is the release's declared secret key list (value-free), never discovered
+   * from the bucket. Throws `NodeRuntimeSecretsError`: `denied_keys` when any key is an operator/fleet
+   * credential, `missing_keys` when any is absent or empty, `unavailable` otherwise. It never returns a
+   * half map.
+   */
+  read(
+    env: string,
+    slug: string,
+    keys: readonly string[]
+  ): Promise<Readonly<Record<string, string>>>;
+}
+
+/** One node's identity and placement policy as the operator image's catalog states it. */
+export interface NodeCatalogEntry {
+  readonly slug: string;
+  /** The raw catalog row; the sequencer's feature code parses the cells it needs. */
+  readonly row: unknown;
+}
+
+export interface NodeCatalogPort {
+  /** The catalog entry whose node id is `nodeId`, or undefined when the image does not know it. */
+  entryFor(nodeId: string): Promise<NodeCatalogEntry | undefined>;
+  /** Every slug in the image's catalog (any placement). Host-collision checks read it (task.5272). */
+  slugs(): Promise<readonly string[]>;
+}

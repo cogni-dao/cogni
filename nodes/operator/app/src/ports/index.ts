@@ -100,6 +100,8 @@ export type {
   BillingResolver,
   PreflightCreditCheckFn,
 } from "./billing-context";
+export type { BuiltImageResolverPort } from "./built-image.port";
+export { BuiltImageRegistryError } from "./built-image.port";
 export type {
   CatalogNodeOwnerProjection,
   CatalogNodeRegistryPort,
@@ -208,18 +210,20 @@ export type {
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
   ClassifyEnvManagerPrInput,
+  DeclarationReadPort,
   DeployPlanePort,
   EnvManagerPrClassificationResult,
   NodeInfraReconcileResult,
   NodePromoteResult,
+  NodeSourceResolverPort,
   ObservedWorkflowDispatchResult,
   PreparedNodeRefCandidateFlight,
   PrepareNodeRefCandidateFlightInput,
   PromoteNodeFromPreviewInput,
   PromoteNodeInput,
-  PruneNodeEnvironmentInput,
   ReconcileNodeInfraInput,
   ResolvedNodeRepo,
+  ResolvedNodeSource,
   ResolveNodeRepoInput,
   SharedLaneInfraEnv,
 } from "./deploy-plane.port";
@@ -309,6 +313,47 @@ export type { ModelProviderResolverPort } from "./model-provider-resolver.port";
 export type { NodeAddressPort } from "./node-address.port";
 export { NodeAddressError } from "./node-address.port";
 export type {
+  AttemptMesh,
+  AttemptPatch,
+  AttemptPhase,
+  AttemptRow,
+  AttemptStep,
+  ChainTruthPort,
+  DesiredRow,
+  DesiredState,
+  DnsOnlyRecordInput,
+  DnsRecord,
+  DnsRecordInput,
+  DnsRecordsPort,
+  HttpResult,
+  NodeWorkloadSpec,
+  PayerCreateRequest,
+  PayerErrorCode,
+  PayerPort,
+  PayerResource,
+  PayerSpec,
+  ProbePort,
+  RecordReleaseInput,
+  ReleaseRow,
+  SecretsPort,
+  SequencerClock,
+  SequencerLog,
+  StorePort,
+  SubstrateTransport,
+  WorkloadKey,
+} from "./node-deploy.port";
+export {
+  buildCogniKey,
+  buildIdentity,
+  consecutiveFailures,
+  DnsZoneIdentityError,
+  IN_FLIGHT_PHASES,
+  keyString,
+  MAX_ATTEMPT_STEPS,
+  PayerError,
+  withResolvedImage,
+} from "./node-deploy.port";
+export type {
   NodeDeployedService,
   NodeDeploymentTopologyPort,
 } from "./node-deployment-topology.port";
@@ -325,6 +370,33 @@ export type {
   ServingResult,
 } from "./node-flight.port";
 export type {
+  CreatePreAuthKeyInput,
+  HeadscaleDeviceId,
+  HeadscaleKeyId,
+  HeadscaleUser,
+  MeshApiKey,
+  MeshDevice,
+  MeshKeyStorePort,
+  MeshPolicy,
+  MeshPreAuthKey,
+  MeshUser,
+  MintedPreAuthKey,
+  NodeMeshErrorCode,
+  NodeMeshErrorReason,
+  NodeMeshPort,
+  PublishedSubstrateRequest,
+  StoredMeshKey,
+  SubstrateRequestSourcePort,
+} from "./node-mesh.port";
+export {
+  headscaleDeviceId,
+  headscaleKeyId,
+  headscaleUser,
+  isNodeMeshError,
+  MESH_ATTEMPT_SECRET_NAME_RE,
+  NodeMeshError,
+} from "./node-mesh.port";
+export type {
   NodeMigrationReportRecord,
   NodeMigrationReportStorePort,
   RecordNodeMigrationReportInput,
@@ -335,6 +407,13 @@ export type {
   NodeRegistryPort,
   NodeSummary,
 } from "./node-registry.port";
+export type {
+  NodeCatalogEntry,
+  NodeCatalogPort,
+  NodeRuntimeSecretsErrorCode,
+  NodeRuntimeSecretsPort,
+} from "./node-runtime.port";
+export { NodeRuntimeSecretsError } from "./node-runtime.port";
 export type {
   OnChainVerifier,
   VerificationResult,

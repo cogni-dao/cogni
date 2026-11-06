@@ -5,8 +5,8 @@
  * Module: `@shared/node-app-scaffold/gens/repo-spec`
  * Purpose: Pin BORN_REVIEWABLE — the minted `.cogni/repo-spec.yaml` must carry the default review
  *   gates, and the ai-rule filenames must match the external node-template's inherited rules — and
- *   BORN_DEPLOYABLE: the minted spec must declare a complete `deployment:` block so a fresh node is
- *   external-compute capable with zero hand-editing (task.5079).
+ *   NO_LEGACY_DEPLOYMENT_BLOCK: the minted spec carries no `deployment:` block; workloads live in
+ *   `.cogni/workloads/*.yaml` (task.5411).
  * Scope: Pure unit test over `renderRepoSpec` output; does not exercise the mint network path.
  * Invariants: minted spec has gates, has no `nodes:` registry (single-node-fork signal), and its
  *   ai-rule `rule_file`s match the template contract.
@@ -16,9 +16,8 @@
  */
 
 import {
-  COGNI_NODE_APP_V1_DEPLOYMENT,
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
-  extractNodeServices,
+  extractNodeAppSecretRefs,
   hasDeclaredNodeDeployment,
   parseRepoSpec,
   resolveRuntimeProfileSecretRefs,
@@ -165,39 +164,29 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
   });
 });
 
-describe("renderRepoSpec — BORN_DEPLOYABLE", () => {
+describe("renderRepoSpec — NO_LEGACY_DEPLOYMENT_BLOCK (task.5411)", () => {
   const parsed = parseRepoSpec(rendered);
 
-  it("declares its own deployment instead of inheriting the legacy fallback", () => {
-    expect(hasDeclaredNodeDeployment(parsed)).toBe(true);
-    expect(parsed.deployment).toEqual(COGNI_NODE_APP_V1_DEPLOYMENT);
+  it("mints no deployment: block (workloads live in .cogni/workloads)", () => {
+    expect(hasDeclaredNodeDeployment(parsed)).toBe(false);
+    expect(rendered).not.toMatch(/^deployment:/m);
   });
 
-  it("declares exactly one public service with complete resources", () => {
-    const services = extractNodeServices(parsed);
-    expect(
-      services.filter((service) => service.visibility === "public")
-    ).toHaveLength(1);
-    for (const service of services) {
-      expect(service.resources.cpuUnits).toBeGreaterThan(0);
-      expect(service.resources.memoryMi).toBeGreaterThan(0);
-      expect(service.resources.storageMi).toBeGreaterThan(0);
-    }
-  });
-
-  it("mints a clean block: no per-node profile refs, resolved to the full contract at build time", () => {
-    const [app] = extractNodeServices(parsed);
-    expect(app?.runtimeProfile).toBe("cogni-node-app-v1");
-    // The minted spec does not re-list the profile's keys (bug.5175 prune)...
-    expect(app?.secretRefs).toEqual([]);
-    // ...and the raw minted YAML never contains them either.
+  it("declares no extra secret_refs; the profile supplies the full contract", () => {
+    expect(extractNodeAppSecretRefs(parsed)).toEqual([]);
     expect(rendered).not.toContain("EVM_RPC_URL");
-    // The profile supplies the complete contract when the workload is built.
     expect(
       resolveRuntimeProfileSecretRefs({
-        runtimeProfile: app?.runtimeProfile,
-        secretRefs: app?.secretRefs ?? [],
+        runtimeProfile: "cogni-node-app-v1",
+        secretRefs: extractNodeAppSecretRefs(parsed),
       }).map((ref) => ref.key)
     ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
+  });
+
+  it("reads a top-level secret_refs before the legacy deployment block", () => {
+    const withRefs = parseRepoSpec(
+      `${rendered}\nsecret_refs:\n  - key: EXTRA_KEY\n`
+    );
+    expect(extractNodeAppSecretRefs(withRefs)).toEqual([{ key: "EXTRA_KEY" }]);
   });
 });

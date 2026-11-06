@@ -51,10 +51,10 @@ import {
   candidateDeploymentFingerprint,
   resolveDeploymentTargets,
 } from "@/features/compute/node-deployment-targets";
-import {
-  CROSSPLANE_ACTUATOR_WALLET_ENVS,
-  CROSSPLANE_CONTROL_PLANE_ENVS,
-} from "@/shared/node-registry/crossplane-control-plane";
+import { CROSSPLANE_ACTUATOR_WALLET_ENVS } from "@/shared/node-registry/crossplane-control-plane";
+
+/** Every deploy environment with an operator overlay (task.5411: Crossplane control plane deleted). */
+const OPERATOR_ENVIRONMENTS = ["candidate-a", "preview", "production"] as const;
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const read = (relative: string): string =>
@@ -165,7 +165,7 @@ const ACTUATOR_ENVIRONMENTS = CROSSPLANE_ACTUATOR_WALLET_ENVS;
  * mirrors the account-injective guard at the overlay layer: an unfunded env that shipped an
  * actuator would be a second active writer on a shared wallet.
  */
-const DORMANT_CONTROL_PLANE_ENVIRONMENTS = CROSSPLANE_CONTROL_PLANE_ENVS.filter(
+const DORMANT_CONTROL_PLANE_ENVIRONMENTS = OPERATOR_ENVIRONMENTS.filter(
   (environment) =>
     !(CROSSPLANE_ACTUATOR_WALLET_ENVS as readonly string[]).includes(
       environment
@@ -621,8 +621,6 @@ describe("akash-tx-actuator runtime", () => {
       candidate_a_branch: "deploy/candidate-a-alpha",
       envs: ["candidate-a", "production"],
       deployment_provider: { "candidate-a": "akash" },
-      compute_api: { "candidate-a": "crossplane" },
-      lease_generation: { "candidate-a": 0 },
     };
     const baseFingerprint = candidateDeploymentFingerprint(base);
     expect(
@@ -642,13 +640,11 @@ describe("akash-tx-actuator runtime", () => {
     for (const changed of [
       { ...base, source_sha: "a".repeat(40) },
       { ...base, deployment_provider: { "candidate-a": "k3s" } },
-      { ...base, compute_api: { "candidate-a": "legacy" } },
-      { ...base, lease_generation: { "candidate-a": 1 } },
+      { ...base, compute_api: { "candidate-a": "node-deploy" } },
       {
         ...base,
         required_placement_countries: { "candidate-a": ["DE"] },
       },
-      { ...base, boot_recovery: { "candidate-a": "hold" } },
     ]) {
       expect(candidateDeploymentFingerprint(changed)).not.toBe(baseFingerprint);
     }
@@ -847,5 +843,225 @@ describe("akash-tx-actuator runtime", () => {
     );
     expect(profiles).toHaveProperty("dedicated-high-throughput-v1");
     expect(profiles).not.toHaveProperty("poly-dedicated-v1");
+  });
+});
+
+/**
+ * task.5400 — the node-deploy sequencer rides beside the actuator but must hold NO secrets verb in the
+ * wallet namespace (WALLET_IS_UNREACHABLE_FROM_THE_OPERATOR_APP / LEAST_KUBERNETES_PRIVILEGE). Its
+ * generated state passwords live in a dedicated `cogni-node-deploy-<env>` namespace that its Role and
+ * RoleBinding are moved into. Asserted on the RENDERED overlay (the namespace transformer, not the source
+ * files, decides where a Role lands).
+ */
+describe("node-deploy sequencer has no secrets reach in the wallet namespace", () => {
+  interface Doc {
+    kind: string;
+    metadata: { name: string; namespace?: string };
+    data?: Record<string, string>;
+    rules?: { resources?: string[]; verbs?: string[] }[];
+    roleRef?: { kind: string; name: string };
+    subjects?: { kind: string; name: string; namespace?: string }[];
+    spec?: {
+      template?: {
+        spec?: {
+          containers?: {
+            env?: {
+              name: string;
+              value?: string;
+              valueFrom?: {
+                configMapKeyRef?: {
+                  name: string;
+                  key: string;
+                  optional?: boolean;
+                };
+              };
+            }[];
+          }[];
+        };
+      };
+    };
+  }
+  const renderOverlay = (env: string): Doc[] => {
+    const out = execFileSync(
+      "kubectl",
+      ["kustomize", path.join(REPO_ROOT, `infra/k8s/overlays/${env}/operator`)],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }
+    );
+    return yaml
+      .parseAllDocuments(out)
+      .map((d) => d.toJS() as Doc)
+      .filter(Boolean);
+  };
+  const kubectlAvailable = (() => {
+    try {
+      execFileSync("kubectl", ["version", "--client"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  it.skipIf(!kubectlAvailable).each([
+    ["candidate-a", "cogni-test-org", "cogni-testing.org"],
+    ["preview", "cogni-test-org", undefined],
+    ["production", "cogni-dao", "cognidao.org"],
+  ])(
+    "%s renders the origin bindings and recovery-safe sequencer refs",
+    (env, owner, zone) => {
+      const docs = renderOverlay(env);
+      const config = docs.find(
+        (d) =>
+          d.kind === "ConfigMap" &&
+          d.metadata.name === "operator-node-app-config"
+      );
+      expect(config?.data?.NODE_SUBMODULE_PARENT_OWNER).toBe(owner);
+      expect(config?.data?.NODE_DEPLOY_WORKLOAD_ZONE).toBe(zone);
+      expect(config?.data?.NODE_REGISTRY_WORKLOAD_ZONE).toBe("cognidao.org");
+      if (env === "preview") return;
+      const deployment = docs.find(
+        (d) =>
+          d.kind === "Deployment" &&
+          d.metadata.name === "operator-node-deploy-sequencer"
+      );
+      const variables =
+        deployment?.spec?.template?.spec?.containers?.flatMap(
+          (c) => c.env ?? []
+        ) ?? [];
+      for (const [name, key] of [
+        ["NODE_DEPLOY_FLEET_OWNER", "NODE_SUBMODULE_PARENT_OWNER"],
+        ["NODE_DEPLOY_WORKLOAD_ZONE", "NODE_DEPLOY_WORKLOAD_ZONE"],
+      ]) {
+        expect(
+          variables.find((v) => v.name === name)?.valueFrom?.configMapKeyRef
+        ).toEqual({ name: "operator-node-app-config", key, optional: true });
+      }
+    }
+  );
+
+  it("the base Role grants only secrets get+create+delete plus its own externalsecrets (task.5405), and every overlay moves it to a dedicated namespace", () => {
+    const rbac = yaml
+      .parseAllDocuments(read("infra/k8s/base/node-deploy-sequencer/rbac.yaml"))
+      .map((d) => d.toJS() as Doc);
+    const role = rbac.find((d) => d.kind === "Role");
+    expect(role?.rules).toEqual([
+      // task.5430: delete is admission-bounded to mesh attempt-key Secrets
+      // (base/node-deploy-sequencer/attempt-secret-delete-policy.yaml); state passwords stay undeletable.
+      {
+        apiGroups: [""],
+        resources: ["secrets"],
+        verbs: ["get", "create", "delete"],
+      },
+      // task.5405: the sequencer is the ONE writer of the ExternalSecrets that render a node's
+      // OpenBao bucket into a Secret in this same dedicated namespace. No delete, no list.
+      {
+        apiGroups: ["external-secrets.io"],
+        resources: ["externalsecrets"],
+        verbs: ["get", "create", "patch", "update"],
+      },
+    ]);
+    for (const env of ["candidate-a", "production"]) {
+      const kustomization = read(
+        `infra/k8s/overlays/${env}/operator/kustomization.yaml`
+      );
+      expect(kustomization, env).toContain(
+        "./node-deploy-secrets-namespace.yaml"
+      );
+      expect(kustomization, env).toContain(
+        `name: NODE_DEPLOY_SECRETS_NAMESPACE\n                    value: cogni-node-deploy-${env}`
+      );
+    }
+  });
+
+  it.skipIf(!kubectlAvailable).each(["candidate-a", "production"])(
+    "%s: no Role the sequencer SA is bound to grants secrets in the wallet namespace",
+    (env) => {
+      const docs = renderOverlay(env);
+      const wallet = `cogni-${env}`;
+      const sa = docs.find(
+        (d) =>
+          d.kind === "ServiceAccount" &&
+          d.metadata.name.endsWith("node-deploy-sequencer")
+      );
+      expect(sa?.metadata.namespace).toBe(wallet);
+      const mine = (b: Doc) =>
+        (b.subjects ?? []).some(
+          (x) =>
+            x.kind === "ServiceAccount" &&
+            x.name === sa?.metadata.name &&
+            x.namespace === wallet
+        );
+      // no cluster-wide grant at all
+      expect(
+        docs.filter((d) => d.kind === "ClusterRoleBinding" && mine(d))
+      ).toEqual([]);
+      const bindings = docs.filter((d) => d.kind === "RoleBinding" && mine(d));
+      expect(bindings.length).toBeGreaterThan(0);
+      for (const binding of bindings) {
+        const role = docs.find(
+          (d) =>
+            d.kind === binding.roleRef?.kind &&
+            d.metadata.name === binding.roleRef?.name &&
+            d.metadata.namespace === binding.metadata.namespace
+        );
+        expect(
+          role,
+          `${binding.metadata.name} resolves its Role in its own namespace`
+        ).toBeDefined();
+        const touchesSecrets = (role?.rules ?? []).some((r) =>
+          r.resources?.includes("secrets")
+        );
+        if (binding.metadata.namespace === wallet)
+          expect(
+            touchesSecrets,
+            "no secrets verb in the wallet namespace"
+          ).toBe(false);
+        else expect(touchesSecrets).toBe(true);
+      }
+      // the dedicated namespace exists, is not the wallet's, and is exactly what the process is told
+      const envVar = docs
+        .find(
+          (d) =>
+            d.kind === "Deployment" &&
+            d.metadata.name.endsWith("node-deploy-sequencer")
+        )
+        ?.spec?.template?.spec?.containers?.[0]?.env?.find(
+          (e) => e.name === "NODE_DEPLOY_SECRETS_NAMESPACE"
+        )?.value;
+      expect(envVar).toBe(`cogni-node-deploy-${env}`);
+      expect(envVar).not.toBe(wallet);
+      expect(
+        docs.some((d) => d.kind === "Namespace" && d.metadata.name === envVar)
+      ).toBe(true);
+      expect(
+        docs.some((d) => d.kind === "Namespace" && d.metadata.name === wallet)
+      ).toBe(false);
+      // and nothing else in the wallet namespace grants this SA secrets via any other Role in the render
+      const walletRolesWithSecrets = docs.filter(
+        (d) =>
+          d.kind === "Role" &&
+          d.metadata.namespace === wallet &&
+          d.metadata.name.endsWith("node-deploy-sequencer") &&
+          (d.rules ?? []).some((r) => r.resources?.includes("secrets"))
+      );
+      expect(walletRolesWithSecrets).toEqual([]);
+    }
+  );
+
+  it("the sequencer process refuses to boot when its secrets namespace is its own (wallet) namespace", () => {
+    const source = read(
+      "nodes/operator/app/src/bootstrap/node-deploy-sequencer.ts"
+    );
+    // story.5137: the namespace/env resolution moved into the pure `resolveEnvLanes` (one lane per env the
+    // process serves); the boot refusal moved with it and the root still builds every lane from it.
+    const lanes = read(
+      "nodes/operator/app/src/features/node-deploy/env-lanes.ts"
+    );
+    expect(lanes).toMatch(/secretsNamespace === input\.podNamespace/);
+    expect(lanes).toMatch(/ns === input\.podNamespace/);
+    expect(source).toContain("resolveEnvLanes({");
+    expect(source).toContain("podNamespace: namespace");
+    expect(source).toMatch(
+      /new KubernetesStatePasswords\(\s*lane\.secretsNamespace,\s*lane\.environment\s*\)/
+    );
   });
 });

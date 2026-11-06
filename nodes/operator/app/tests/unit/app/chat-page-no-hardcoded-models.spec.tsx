@@ -55,6 +55,7 @@ vi.mock("@/features/ai/chat/providers/ChatRuntimeProvider.client", () => ({
 }));
 
 vi.mock("@/components", () => ({
+  BrainLoading: () => <output aria-label="Loading" />,
   Button: (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
     <button {...props} />
   ),

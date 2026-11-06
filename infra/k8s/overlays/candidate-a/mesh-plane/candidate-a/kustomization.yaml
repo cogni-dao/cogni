@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the `candidate-a` tailnet's env-plane instance on the candidate-a VM's own k3s (canonical; its coordinator runs in the production sequencer).
+# Reconciled by infra/k8s/argocd/control-plane/candidate-a/candidate-a-mesh-plane-candidate-a-application.yaml.
+# Every value comes from the tailnet table in scripts/ci/lib/mesh-plane.sh (generated, then pinned by
+# tests/ci-invariants/mesh-env-plane.spec.ts); the forwarder ClusterIPs are in the k3s static band
+# (10.43.0.16-.254), unique in the repo. No instance writes a target another instance writes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: cogni-mesh-candidate-a
+nameSuffix: -candidate-a
+resources:
+  - namespace.yaml
+components:
+  - ../../../../base/mesh-env-plane
+configMapGenerator:
+  - name: mesh-env
+    literals:
+      - MESH_TAILNET=candidate-a
+      - MESH_CONTROL_HOST=mesh-candidate-a.cognidao.org
+      - MESH_RELAY_HOST=derp-candidate-a.cognidao.org
+      - MESH_VM_HOST=cogni-candidate-a.vm.cognidao.org
+      - MESH_STUN_PORT=3478
+      - MESH_WIREGUARD_PORT=41641
+      # HR20 bound: 4 h. The short-bound test sets a smaller value here in a reviewed PR, flights it
+      # through the control-plane lane, and reverts it the same way.
+      - SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS=14400
+patches:
+  - target: { kind: Service, name: mesh-control-fwd }
+    patch: |
+      - op: replace
+        path: /spec/clusterIP
+        value: 10.43.0.41
+  - target: { kind: Service, name: substrate-fwd }
+    patch: |
+      - op: replace
+        path: /spec/clusterIP
+        value: 10.43.0.42
+  - target: { kind: Service, name: derper }
+    patch: |
+      - op: replace
+        path: /spec/ports/0/nodePort
+        value: 32340
+  - target: { kind: Service, name: substrate-gw-publisher }
+    patch: |
+      - op: replace
+        path: /spec/ports/0/nodePort
+        value: 32341
+  - target: { kind: Deployment, name: derper }
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/ports/1/containerPort
+        value: 3478
+      - op: replace
+        path: /spec/template/spec/containers/0/ports/1/hostPort
+        value: 3478
+  - target: { kind: Deployment, name: substrate-gw }
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/ports/0/containerPort
+        value: 41641
+      - op: replace
+        path: /spec/template/spec/containers/0/ports/0/hostPort
+        value: 41641
+  - target: { kind: NetworkPolicy, name: substrate-gw }
+    patch: |
+      - op: replace
+        path: /spec/ingress/0/ports/0/port
+        value: 41641
+  # substrate-fwd's translated destination for node:30900 is the scheduler-worker pod of this env.
+  - target: { kind: NetworkPolicy, name: substrate-fwd }
+    patch: |
+      - op: replace
+        path: /spec/egress/1/to/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name
+        value: cogni-candidate-a
+replacements:
+  # hostAliases ips = the forwarder Services' ClusterIPs (one source; after the patches above).
+  - source: { kind: Service, name: mesh-control-fwd, fieldPath: spec.clusterIP }
+    targets:
+      - select: { kind: Deployment, name: substrate-gw }
+        fieldPaths: [spec.template.spec.hostAliases.0.ip]
+  - source: { kind: Service, name: substrate-fwd, fieldPath: spec.clusterIP }
+    targets:
+      - select: { kind: Deployment, name: substrate-gw }
+        fieldPaths: [spec.template.spec.hostAliases.1.ip]
+  # hostAliases names = this tailnet's control and relay hosts (one source: mesh-env).
+  - source: { kind: ConfigMap, name: mesh-env, fieldPath: data.MESH_CONTROL_HOST }
+    targets:
+      - select: { kind: Deployment, name: substrate-gw }
+        fieldPaths: [spec.template.spec.hostAliases.0.hostnames.0]
+  - source: { kind: ConfigMap, name: mesh-env, fieldPath: data.MESH_RELAY_HOST }
+    targets:
+      - select: { kind: Deployment, name: substrate-gw }
+        fieldPaths: [spec.template.spec.hostAliases.1.hostnames.0]

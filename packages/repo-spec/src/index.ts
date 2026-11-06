@@ -24,6 +24,7 @@ export {
   extractKnowledgeConfig,
   extractLedgerApprovers,
   extractLedgerConfig,
+  extractNodeAppSecretRefs,
   extractNodeBrandColor,
   extractNodeBrandIcon,
   extractNodeHook,
@@ -74,9 +75,12 @@ export {
   resolveNodeArtifactBundleForEnvironment,
 } from "./artifact-bundle.js";
 export {
-  hasDeploymentActivationSpec,
-  renderDeploymentActivationSpec,
-} from "./deployment-activation.js";
+  buildNodeBundleTagRef,
+  NODE_BUNDLE_ARTIFACT_TYPE,
+  NODE_BUNDLE_PAYLOAD_FILE,
+  NODE_BUNDLE_PAYLOAD_MEDIA_TYPE,
+  verifyNodeBundleManifest,
+} from "./artifact-bundle-oci.js";
 export {
   COGNI_NODE_APP_V1_DEPLOYMENT,
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
@@ -124,6 +128,7 @@ export {
   type NodeServiceRuntimeProfileSpec,
   type NodeServiceSecretRefSpec,
   type NodeServiceSpec,
+  type NodeWorkloadSpec,
   nodeDeploymentSchema,
   nodeRegistryEntrySchema,
   nodeScheduleSchema,
@@ -133,6 +138,8 @@ export {
   nodeServiceRuntimeProfileSchema,
   nodeServiceSecretRefSchema,
   nodeServiceSpecSchema,
+  nodeWorkloadExposeSchema,
+  nodeWorkloadSpecSchema,
   type OperatorWalletSpec,
   operatorWalletSpecSchema,
   type PoolConfigSpec,
@@ -153,3 +160,24 @@ export {
   type ThresholdCriterion,
   thresholdCriterionSchema,
 } from "./schema.js";
+export { SCORE_V1B1_SOURCE } from "./vendor/score-v1b1.schema.js";
+export {
+  checkWorkloadDirectoryEntries,
+  DATA_BEARING_DEPENDENCY_TYPES,
+  type LowerWorkloadOptions,
+  lowerWorkloadManifest,
+  lowerWorkloadManifests,
+  MAX_WORKLOAD_MANIFEST_BYTES,
+  MAX_WORKLOAD_MANIFESTS,
+  POSTGRES_DEDICATED_PROFILE_V1,
+  parseWorkloadManifest,
+  type ScoreWorkload,
+  WORKLOAD_MANIFEST_DIR,
+  WORKLOAD_MANIFEST_SUFFIX,
+  WORKLOAD_NAME_RE,
+  type WorkloadDirectoryEntry,
+  WorkloadManifestError,
+  type WorkloadManifestFile,
+  type WorkloadManifestIssue,
+  type WorkloadManifestIssueCode,
+} from "./workload-manifest.js";

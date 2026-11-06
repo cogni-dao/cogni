@@ -48,7 +48,7 @@ PATCH_BASENAME="node-endpoints.patch.yaml"
 # The public WORKLOAD zone this repo's node hosts hang off. Comes from DOMAIN
 # (e.g. cogni-testing.org on the test-parent mirror), falling back to the substrate
 # root FORK_DOMAIN_ROOT (cognidao.org) for a plain fork — identical precedence to
-# render-node-overlays.sh so the committed artifact and the CI drift gate agree on
+# the retired node overlay renderer, so the committed artifact and the CI drift gate agree on
 # an isolated fleet where the two DIVERGE (bug.5330). A fork exports DOMAIN/FORK_DOMAIN_ROOT and re-runs --write.
 FORK_ROOT="${DOMAIN:-${FORK_DOMAIN_ROOT:-cognidao.org}}"
 

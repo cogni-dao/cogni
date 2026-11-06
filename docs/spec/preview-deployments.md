@@ -301,5 +301,5 @@ This is not blocking for MVP but must be designed before previews are available 
 - [task.0188](../../work/items/task.0188.per-branch-preview-environments.md) — implementation task
 - ContainerRuntimePort — port interface, see `feat/akash-deploy-service` branch `packages/container-runtime/` (to be merged as part of P1)
 - Akash Prototype — working testnet deploy script, see `feat/akash-deploy-service` branch `services/akash-deployer/src/runtime/akash-prototype.ts`
-- [CD Pipeline E2E](./cd-pipeline-e2e.md) — staging/prod deployment (Argo CD, separate concern)
+- [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) (hub) - node delivery sequence and deploy call
 - [Node Launch](./node-launch.md) — zero-touch provisioning (ClusterProvider, separate interface)

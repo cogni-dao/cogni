@@ -10,9 +10,8 @@
  *     `decide` sets head_sha = source_sha ?: github.sha and `app-src` is checked out AT
  *     head_sha, so that commit IS the one whose catalog source_sha was read. An explicit
  *     sourceSha resolves identically, because then head_sha == inputs.source_sha.
- *   - EVERY_CONSUMER_AGREES: the digest job and node-substrate must resolve the SAME
- *     revision. Two different provenances is the bug.5043 split-brain that
- *     verify-buildsha cannot catch, because it self-confirms the pin it wrote.
+ *   - EVERY_CONSUMER_AGREES: any consumer resolves the SAME revision. Two different
+ *     provenances is the bug.5043 split-brain that verify-buildsha cannot catch.
  * Side-effects: IO (reads the workflow file)
  * Links: bug.5195, scripts/ci/lib/image-tags.sh (resolve_remote_source_sha),
  *   scripts/ci/tests/resolve-remote-source-sha.test.sh
@@ -29,16 +28,14 @@ const WORKFLOW = path.resolve(
 );
 const body = readFileSync(WORKFLOW, "utf8");
 describe("promote provenance wiring (bug.5195 defect #2)", () => {
-  it("feeds OPERATOR_SOURCE_SHA from the resolved head at every consumer", () => {
+  it("feeds OPERATOR_SOURCE_SHA, if at all, only from the resolved head", () => {
+    // story.5137: remote-source node lanes ship through the node-deploy verb, so the
+    // promote workflow no longer resolves a remote source sha. Any remaining consumer
+    // must still read the resolved head, never a second provenance.
+    expect(body).not.toContain("resolve_remote_source_sha");
     const assignments = [
       ...body.matchAll(/^\s*OPERATOR_SOURCE_SHA:\s*(.+)$/gm),
     ].map((m) => m[1].trim());
-
-    expect(
-      assignments.length,
-      "expected the digest job and node-substrate to both state provenance"
-    ).toBeGreaterThanOrEqual(2);
-
     for (const value of assignments) {
       expect(value).toBe("${{ needs.decide.outputs.head_sha }}");
     }

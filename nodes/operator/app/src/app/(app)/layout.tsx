@@ -15,21 +15,12 @@
 
 import type { ReactNode } from "react";
 
-import { SidebarInset, SidebarProvider } from "@/components";
-import { AppSidebar, AppTopBar } from "@/features/layout";
+import { AppShell } from "@/features/layout";
 
 export default function AppLayout({
   children,
 }: {
   children: ReactNode;
 }): ReactNode {
-  return (
-    <SidebarProvider>
-      <AppSidebar />
-      <SidebarInset className="min-w-0">
-        <AppTopBar />
-        <div className="flex flex-1 flex-col overflow-auto">{children}</div>
-      </SidebarInset>
-    </SidebarProvider>
-  );
+  return <AppShell>{children}</AppShell>;
 }

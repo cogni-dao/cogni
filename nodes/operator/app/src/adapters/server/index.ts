@@ -81,6 +81,7 @@ export {
   AkashComputeError,
   type AkashComputeErrorCode,
 } from "./compute/akash-compute.adapter";
+export { AkashNativeStateReader } from "./compute/akash-native-state.adapter";
 export { DrizzleAkashTxAllocationLedger } from "./compute/akash-tx-allocation-ledger.adapter";
 export { AkashTxSourcesClient } from "./compute/akash-tx-sources.client";
 export {
@@ -164,6 +165,24 @@ export {
   TemplateQueryError,
   type TemplateQueryErrorCode,
 } from "./metrics/mimir.adapter";
+export { ActuatorPayer } from "./node-deploy/actuator-payer.adapter";
+export { AdvisoryLeader } from "./node-deploy/advisory-leader.adapter";
+export { AkashChainTruth } from "./node-deploy/akash-chain-truth.adapter";
+export {
+  CloudflareDnsRecords,
+  resolveCloudflareZoneId,
+} from "./node-deploy/cloudflare-dns.adapter";
+export { HttpProbe } from "./node-deploy/http-probe.adapter";
+export { ImageCatalogNodes } from "./node-deploy/image-catalog.adapter";
+export { ImageCatalogNodeSource } from "./node-deploy/image-catalog-source.adapter";
+export { KubernetesMeshKeys } from "./node-deploy/mesh-keys.adapter";
+export { EsoNodeRuntimeSecrets } from "./node-deploy/node-runtime-secrets.adapter";
+export { PostgresNodeDeployStore } from "./node-deploy/postgres-store.adapter";
+// DEV-ONLY adapters (ConsolePayer pays straight from a Console key; FileStatePasswords writes secrets
+// to disk) are deliberately NOT exported here: the production sequencer bootstrap imports this barrel,
+// and a dev payer must be unreachable from it. Only `scripts/node-deploy-local.ts` imports them, by path.
+export { KubernetesStatePasswords } from "./node-deploy/state-secrets.adapter";
+export { HttpsSubstrateRequestSource } from "./node-deploy/substrate-request.adapter";
 export {
   GitHubNodeDeploymentTopologyAdapter,
   type NodeDeploymentFileReader,
@@ -187,6 +206,7 @@ export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
 export { HttpLangfuseRootOwnershipVerifier } from "./observability/langfuse-root-ownership.adapter";
 export { HttpLokiPusher } from "./observability/loki-push.adapter";
 export { HttpLokiReader } from "./observability/loki-reader.adapter";
+export { GhcrBuiltImageResolver } from "./oci/ghcr-built-image.adapter";
 export { ViemEvmOnchainClient } from "./onchain/viem-evm-onchain-client.adapter";
 export { ViemTreasuryAdapter } from "./onchain/viem-treasury.adapter";
 export { UserDrizzlePaymentAttemptRepository } from "./payments/drizzle-payment-attempt.adapter";
@@ -221,6 +241,10 @@ export {
   type TemporalScheduleControlConfig,
 } from "./temporal";
 export { SystemClock } from "./time/system.adapter";
+export {
+  AppOrPublicDeclarationReader,
+  GitHubPublicReader,
+} from "./vcs/github-declaration-reader.adapter";
 // Operator-only GitHub-App repo writer — node formation + candidate-flight prep.
 export {
   type ForkFromTemplateInput,

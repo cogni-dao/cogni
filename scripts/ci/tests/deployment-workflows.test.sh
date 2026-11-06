@@ -48,29 +48,7 @@ printf '{"targets":[{"target":"operator"}]}\n' > "$work/images.json"
 NODE=operator PAYLOAD_FILE="$work/images.json" bash "$work/require-image.sh"
 echo '[PASS] requested app image remains mandatory for an affected app'
 
-# Production's exact explicit source must reach the pin writer, while an
-# incidental catalog selection must keep its existing rollback fence.
 promote="$REPO_ROOT/.github/workflows/promote-and-deploy.yml"
-yq -r '.jobs.promote-k8s.steps[] | select(.name == "Record external workload source-sha") | .run' "$promote" > "$work/pin.sh"
-mkdir -p "$work/ci-src/scripts/ci" "$work/app-src/infra/catalog" "$work/deploy-branch/.promote-state"
-ln -s "$REPO_ROOT/scripts/ci/update-source-sha-map.sh" "$work/ci-src/scripts/ci/update-source-sha-map.sh"
-birth=1111111111111111111111111111111111111111
-prior=2222222222222222222222222222222222222222
-printf 'source_sha: %s\n' "$birth" > "$work/app-src/infra/catalog/poly.yaml"
-for explicit in '' 3333333333333333333333333333333333333333 "$birth"; do
-  printf '{"poly":"%s","operator":"retained"}\n' "$prior" > "$work/deploy-branch/.promote-state/source-sha-by-app.json"
-  result=0
-  (cd "$work/deploy-branch"; APP=poly NODE=poly SOURCE_SHA="$birth" NODE_SOURCE_SHA="$explicit" bash "$work/pin.sh") > "$work/pin.log" 2>&1 || result=$?
-  if [[ "$explicit" == "$birth" ]]; then
-    [[ "$result" == 0 ]] || { cat "$work/pin.log"; exit 1; }
-    jq -e --arg sha "$birth" '.poly == $sha and .operator == "retained"' "$work/deploy-branch/.promote-state/source-sha-by-app.json" >/dev/null
-  else
-    [[ "$result" != 0 ]] || { echo '[FAIL] implicit birth regression accepted'; exit 1; }
-    grep -q PIN_REGRESSION_REFUSED "$work/pin.log"
-    jq -e --arg sha "$prior" '.poly == $sha' "$work/deploy-branch/.promote-state/source-sha-by-app.json" >/dev/null
-  fi
-done
-echo '[PASS] only exact source-addressed promotions may deliberately select birth metadata'
 
 # Preview must recognize a CI-only affected set before probing globally cached
 # infra images, and report the no-op without asserting that a deploy happened.
@@ -84,3 +62,24 @@ GITHUB_OUTPUT="$work/noop.out" GITHUB_STEP_SUMMARY="$work/noop-summary.md" bash 
 grep -qx 'status=noop' "$work/noop.out"
 grep -q 'nothing deployed' "$work/noop-summary.md"
 echo '[PASS] CI-only preview scope is an explicit no-op'
+
+# Run the actual digest step with a missing app tag. The explicitly requested
+# k3s target (the operator lane) must fail its image lookup, never skip it.
+yq -r '.jobs.promote-k8s.steps[] | select(.id == "digest") | .run' "$promote" > "$work/digest.sh"
+mkdir -p "$work/app-src/scripts/ci/lib" "$work/bin"
+ln -s "$REPO_ROOT/scripts/ci/lib/image-tags.sh" "$work/app-src/scripts/ci/lib/image-tags.sh"
+cat > "$work/bin/docker" <<'DOCKER'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DOCKER_CALLS"
+exit 1
+DOCKER
+chmod +x "$work/bin/docker"
+sha=1111111111111111111111111111111111111111
+result=0
+(cd "$work"; PATH="$work/bin:$PATH" DOCKER_CALLS="$work/docker.calls" \
+  COGNI_CATALOG_ROOT="$REPO_ROOT/infra/catalog" NODE=operator PREVIEW_FORWARD=false BUILD_SHA="$sha" \
+  EXPLICIT_TARGETS=operator GITHUB_OUTPUT="$work/k3s.out" \
+  bash "$work/digest.sh") > "$work/k3s.log" 2>&1 || result=$?
+[[ "$result" != 0 && -s "$work/docker.calls" ]] || { cat "$work/k3s.log"; exit 1; }
+grep -q 'Image not found' "$work/k3s.log"
+echo '[PASS] an explicitly requested k3s target requires its image'

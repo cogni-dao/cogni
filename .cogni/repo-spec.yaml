@@ -146,3 +146,6 @@ gates:
   #   with:
   #     rule_file: ai-rule-template.yaml
 # (governance.schedules merged into the unified `governance` section above)
+
+# Workloads that the node-deploy sequencer ships are declared one per file in `.cogni/workloads/`
+# (workload manifests, story.5137), not in this file.

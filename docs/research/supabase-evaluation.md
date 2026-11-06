@@ -432,33 +432,33 @@ This evaluation confirms that assessment is correct. The overlap between Supabas
 
 ## Appendix: File Citation Index
 
-| Claim                       | File                                                                            | Lines/Excerpt                                         |
-| --------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| SIWE auth implementation    | src/auth.ts                                                                     | Lines 54-163: Credentials provider with siwe.verify() |
-| JWT 30-day sessions         | src/auth.ts                                                                     | Line 50: maxAge: 30 _ 24 _ 60 \* 60                   |
-| Proxy auth boundary         | src/proxy.ts                                                                    | Lines 21-57: getToken() validation on /api/v1/\*      |
-| RLS policies (10 tables)    | src/adapters/server/db/migrations/0004_enable_rls.sql                           | 11,171 bytes of ALTER TABLE + CREATE POLICY           |
-| Tenant scoping              | packages/db-client/src/tenant-scope.ts                                          | withTenantScope() wraps Drizzle tx + SET LOCAL        |
-| Role separation enforcement | src/shared/env/invariants.ts                                                    | assertEnvInvariants() rejects same-user DSNs          |
-| No backups                  | work/projects/proj.database-ops.md                                              | "No backup exists today" (Crawl P0)                   |
-| WAL-G plan                  | work/projects/proj.database-ops.md                                              | Crawl P0: backups with WAL-G                          |
-| pgBouncer plan              | work/projects/proj.database-ops.md                                              | Run P2: connection pooler                             |
-| Supabase OSS only decision  | work/projects/proj.database-ops.md                                              | Goal: "adopt only Supabase OSS building blocks"       |
-| 79 event names              | src/shared/observability/events/index.ts                                        | EVENT_NAMES const registry                            |
-| Prometheus metrics          | src/shared/observability/server/metrics.ts                                      | 8 metrics defined (166 lines)                         |
-| OTel tracing                | src/bootstrap/otel.ts                                                           | withRootSpan() + withChildSpan()                      |
-| Sandbox network isolation   | src/adapters/server/sandbox/sandbox-runner.adapter.ts                           | NetworkMode: 'none', CapDrop: ["ALL"]                 |
-| Docker compose services     | infra/compose/runtime/docker-compose.yml                                        | 12 services, 352 lines                                |
-| 3-layer deployment          | docs/spec/cd-pipeline-e2e.md (was runbooks/DEPLOYMENT_ARCHITECTURE.md, deleted) | Base (OpenTofu) → Edge (Caddy) → Runtime (compose)    |
-| 6 deployment modes          | docs/spec/environments.md                                                       | App-only through full Docker stack                    |
-| Drizzle migrations          | drizzle.config.ts + src/adapters/server/db/migrations/                          | 4 migration files                                     |
-| Application pool config     | packages/db-client/src/build-client.ts                                          | max: 10, idle_timeout: 20                             |
-| Temporal worker             | services/scheduler-worker/src/main.ts                                           | 94 lines, graceful shutdown                           |
-| LiteLLM config              | infra/compose/configs/litellm.config.yaml                                       | 204 lines, 20+ models                                 |
-| AI telemetry port           | src/ports/ai-telemetry.port.ts                                                  | RecordInvocationParams with correlation IDs           |
-| Usage port (LiteLLM API)    | src/ports/usage.port.ts                                                         | ActivityUsagePort with spend logs/charts              |
-| RBAC design (not built)     | docs/spec/rbac.md                                                               | OpenFGA, dual-check, actor/subject model              |
-| Sandbox spec                | docs/spec/sandboxed-agents.md                                                   | P0 complete, P0.5a complete, P0.5 complete            |
+| Claim                       | File                                                                                    | Lines/Excerpt                                         |
+| --------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| SIWE auth implementation    | src/auth.ts                                                                             | Lines 54-163: Credentials provider with siwe.verify() |
+| JWT 30-day sessions         | src/auth.ts                                                                             | Line 50: maxAge: 30 _ 24 _ 60 \* 60                   |
+| Proxy auth boundary         | src/proxy.ts                                                                            | Lines 21-57: getToken() validation on /api/v1/\*      |
+| RLS policies (10 tables)    | src/adapters/server/db/migrations/0004_enable_rls.sql                                   | 11,171 bytes of ALTER TABLE + CREATE POLICY           |
+| Tenant scoping              | packages/db-client/src/tenant-scope.ts                                                  | withTenantScope() wraps Drizzle tx + SET LOCAL        |
+| Role separation enforcement | src/shared/env/invariants.ts                                                            | assertEnvInvariants() rejects same-user DSNs          |
+| No backups                  | work/projects/proj.database-ops.md                                                      | "No backup exists today" (Crawl P0)                   |
+| WAL-G plan                  | work/projects/proj.database-ops.md                                                      | Crawl P0: backups with WAL-G                          |
+| pgBouncer plan              | work/projects/proj.database-ops.md                                                      | Run P2: connection pooler                             |
+| Supabase OSS only decision  | work/projects/proj.database-ops.md                                                      | Goal: "adopt only Supabase OSS building blocks"       |
+| 79 event names              | src/shared/observability/events/index.ts                                                | EVENT_NAMES const registry                            |
+| Prometheus metrics          | src/shared/observability/server/metrics.ts                                              | 8 metrics defined (166 lines)                         |
+| OTel tracing                | src/bootstrap/otel.ts                                                                   | withRootSpan() + withChildSpan()                      |
+| Sandbox network isolation   | src/adapters/server/sandbox/sandbox-runner.adapter.ts                                   | NetworkMode: 'none', CapDrop: ["ALL"]                 |
+| Docker compose services     | infra/compose/runtime/docker-compose.yml                                                | 12 services, 352 lines                                |
+| 3-layer deployment          | hub guide cicd-e2e-required-sequence (was runbooks/DEPLOYMENT_ARCHITECTURE.md, deleted) | Base (OpenTofu) → Edge (Caddy) → Runtime (compose)    |
+| 6 deployment modes          | docs/spec/environments.md                                                               | App-only through full Docker stack                    |
+| Drizzle migrations          | drizzle.config.ts + src/adapters/server/db/migrations/                                  | 4 migration files                                     |
+| Application pool config     | packages/db-client/src/build-client.ts                                                  | max: 10, idle_timeout: 20                             |
+| Temporal worker             | services/scheduler-worker/src/main.ts                                                   | 94 lines, graceful shutdown                           |
+| LiteLLM config              | infra/compose/configs/litellm.config.yaml                                               | 204 lines, 20+ models                                 |
+| AI telemetry port           | src/ports/ai-telemetry.port.ts                                                          | RecordInvocationParams with correlation IDs           |
+| Usage port (LiteLLM API)    | src/ports/usage.port.ts                                                                 | ActivityUsagePort with spend logs/charts              |
+| RBAC design (not built)     | docs/spec/rbac.md                                                                       | OpenFGA, dual-check, actor/subject model              |
+| Sandbox spec                | docs/spec/sandboxed-agents.md                                                           | P0 complete, P0.5a complete, P0.5 complete            |
 
 ## Acceptance Checks
 

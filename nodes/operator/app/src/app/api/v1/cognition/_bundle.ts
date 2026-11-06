@@ -73,9 +73,9 @@ export const SESSION_BOOTSTRAP_INVARIANTS: readonly string[] = [
  */
 export const SESSION_WATCH_GATE = `<watch-gate rule="ONE blocking command; its exit code or matched value IS the verdict — no harness-specific monitor/background/notification primitive, never fire-and-forget, re-read the ground-truth signal before reporting">
   <ci-green>gh pr checks {PR} --watch --fail-fast — blocks; 0=all pass, nonzero=failed. NOT --required (omits real gates, e.g. build). Re-read after (one-shot 8=pending) — finished ≠ green.</ci-green>
-  <flight-landed>poll curl -s {candidate}/version until .buildSha == PR-head SHA → then /validate-candidate. Bound it; no match = flight FAILED, report not hang. host: test.cognidao.org ({node}-test… non-operator).</flight-landed>
-  <deploy-landed>poll curl -s {target}/version until .buildSha == promoted SHA; bound, report on no-match. host: {node-}{preview,}cognidao.org.</deploy-landed>
-  <truth>/version.buildSha is the only ground truth — CI and workflow "success" can lie.</truth>
+  <flight-landed>node: follow GET /api/v1/deploy/workloads/releases/{releaseId}?nodeId=&env= to its end: active=landed; parked=FAILED (read step reasons); superseded=newer release; no phase change 15 min=stalled, report. Nodes use no GitHub workflow. Operator only: gh run watch {run} --exit-status. Then ONE .buildSha read. Bound it.</flight-landed>
+  <deploy-landed>preview/production: same rule. Never poll /version (blind to failure).</deploy-landed>
+  <truth>verdict = release or run end + one .buildSha read; green run + wrong SHA = FAILED.</truth>
 </watch-gate>`;
 
 /**

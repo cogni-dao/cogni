@@ -88,7 +88,6 @@ describe("test-parent divergence policy", () => {
     "scripts/ci/lib/image-tags.sh",
     "infra/catalog/_schema.json",
     "infra/k8s/base/node-app/deployment.yaml",
-    "infra/crossplane/xcomputeworkload/composition.yaml",
     "nodes/operator/app/src/shared/node-app-scaffold/gens/env-membership-plan.ts",
     "packages/repo-spec/src/index.ts",
     ".cogni/sync-manifest.yaml",
@@ -131,7 +130,6 @@ describe("test-parent divergence policy", () => {
     expect(policy.regenerate.commands).toEqual([
       "scripts/ci/render-scheduler-worker-endpoints.sh --write",
       "scripts/ci/render-node-appset.sh --write",
-      "scripts/ci/render-node-overlays.sh --write",
     ]);
     // task.5270 — identity is DECLARED on the artifact entry; the sync never reads repo
     // variables, so the writer App keeps 1:1 permission parity with the production operator App.

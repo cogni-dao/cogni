@@ -67,6 +67,7 @@ node_local:
   - "public/branding/**" # static brand assets
   - ".cogni/repo-spec.yaml" # node identity
   - ".cogni/persona/**" # persona / character
+  - ".cogni/workloads/**" # the node's own workload manifests (story.5137)
 
 # Per-artifact divergences. Three shapes:
 #   omit_from_artifact: paths the hub has that the artifact intentionally lacks.
@@ -106,6 +107,7 @@ divergences:
       - "infra/k8s/secrets/.sops.yaml" # hub sops key config
       - "infra/k8s/secrets/README.md" # hub secrets-layout doc
       - "scripts/experiments/**" # hub-only research scripts
+      - ".cogni/workloads/**" # operator canary manifest; hub-only (story.5137)
     artifact_only:
       # The node BODY. standalone-node ships the whole single node under nodes/node-template/**;
       # the hub has ZERO files there (node-template is a catalog-pinned remote source, not in-tree),
@@ -128,6 +130,7 @@ divergences:
       - "nodes/node-template/**"
       - "infra/catalog/operator.yaml"
       - "infra/catalog/scheduler-worker.yaml"
+      - ".cogni/workloads/**" # operator canary manifest; hub-only (story.5137)
     artifact_only:
       - "nodes/poly/**"
 
@@ -236,4 +239,3 @@ divergences:
       commands:
         - scripts/ci/render-scheduler-worker-endpoints.sh --write
         - scripts/ci/render-node-appset.sh --write
-        - scripts/ci/render-node-overlays.sh --write

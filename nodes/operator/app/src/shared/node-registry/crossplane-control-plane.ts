@@ -3,14 +3,10 @@
 
 /**
  * Module: `@shared/node-registry/crossplane-control-plane`
- * Purpose: CROSSPLANE_IS_INSTALLED_PER_ENVIRONMENT — the ONE enumeration of the deploy
- *   environments whose Argo control plane actually installs Crossplane (core chart, pinned
- *   packages, the `XComputeWorkload` XRD + Composition, and the credential-free
- *   ClusterProviderConfig). task.5097 added production; task.5129 completes preview.
- * Scope: A static fact about the deploy substrate, expressed as data. No I/O, no env read, no
- *   cluster contact — the fact is asserted against git by `tests/ci-invariants/
- *   crossplane-dormant-substrate.spec.ts`, which fails CI the moment this list and the
- *   installed reality disagree in either direction.
+ * Purpose: The akash-tx-actuator WRITER map — which actuator Deployment pays for which
+ *   environment's Akash leases, per owner org. The Crossplane control plane this file once also
+ *   enumerated was deleted by task.5411 (CD9); the actuator stays as the node-deploy sequencer's payer.
+ * Scope: A static fact about the deploy substrate, expressed as data. No I/O.
  * Invariants:
  *   - AUTHORITY_REQUIRES_AN_INSTALLED_API: naming `crossplane` for an environment that has no
  *     control plane renders an `XComputeWorkload` into a namespace where that CRD does not
@@ -43,31 +39,6 @@
  *   task.5096, task.5097, task.5104, task.5129, story.5016, bug.5187
  * @public
  */
-
-/**
- * Environments carrying a Crossplane control plane — i.e. where `XComputeWorkload` is an
- * INSTALLED API that something will reconcile.
- *
- * task.5094/task.5096 installed it on candidate-a alone (CANDIDATE_FIRST); task.5097 staged the
- * same three Applications for production, and task.5129 completes preview. Adding an environment
- * here without also
- * committing its
- * `infra/k8s/argocd/control-plane/<env>/crossplane-xcomputeworkload-application.yaml`
- * turns CI red, and so does the reverse.
- *
- * WIDENING THIS LIST ACTIVATES NOTHING. It states where a composite COULD be reconciled, not
- * where one IS: the selector is the per-row `compute_api.<env>` cell in `infra/catalog/*.yaml`,
- * and `resolveNodeComputeApi` resolves an absent cell to `legacy` (LEGACY_IS_DEFAULT). Every
- * fleet row omits the cell, so every fleet row is untouched by this constant's value.
- */
-export const CROSSPLANE_CONTROL_PLANE_ENVS = [
-  "candidate-a",
-  "preview",
-  "production",
-] as const;
-
-export type CrossplaneControlPlaneEnv =
-  (typeof CROSSPLANE_CONTROL_PLANE_ENVS)[number];
 
 /**
  * ONE actuator WRITER — the reviewed `writerFor(env) -> cluster/writer` map.
@@ -193,40 +164,3 @@ export function writerFor(
  */
 export const CROSSPLANE_ACTUATOR_WALLET_ENVS: readonly string[] =
   CROSSPLANE_ACTUATOR_WRITERS.map((writer) => writer.cluster);
-
-/**
- * The Argo Application that installs the `XComputeWorkload` composite API in `environment`.
- * Named in error messages so a failure states the exact file that has to exist.
- */
-export function crossplaneCompositeApplicationPath(
-  environment: string
-): string {
-  return `infra/k8s/argocd/control-plane/${environment}/crossplane-xcomputeworkload-application.yaml`;
-}
-
-/** Does `environment` have a Crossplane control plane to reconcile an `XComputeWorkload`? */
-export function hasCrossplaneControlPlane(environment: string): boolean {
-  return (CROSSPLANE_CONTROL_PLANE_ENVS as readonly string[]).includes(
-    environment
-  );
-}
-
-/**
- * May a NEWLY BORN node be minted onto the Crossplane authority in `environment`? Requires both
- * facts: an installed composite API to reconcile the workload, AND exactly one actuator writer
- * that mints for it. Staging a control plane therefore does not change what a birth renders.
- *
- * The second fact asks {@link writerFor}, not "does this environment pin an account" (bug.5187).
- * Under the north star an environment can be fully funded by a writer living in another cluster
- * and a birth row must be legal there; conversely an environment two writers both claimed to
- * serve is ambiguous, and `writerFor` returns undefined rather than picking one.
- */
-export function canBirthOnCrossplane(
-  environment: string,
-  ownerOrg: string
-): boolean {
-  return (
-    hasCrossplaneControlPlane(environment) &&
-    writerFor(environment, ownerOrg) !== undefined
-  );
-}

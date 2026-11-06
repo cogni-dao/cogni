@@ -11,7 +11,7 @@
  * Scope: `parseCatalogEnvs` reads the flow-sequence `envs: [a, b, c]` line; `setCatalogEnvs` re-emits
  *   that single line with a new, canonically-ordered env-set, leaving the rest of the file untouched.
  *   `parseCatalogPlacementMap`/`setCatalogPlacementCell` do the same block-level edit for the per-env
- *   placement maps — `deployment_provider`, `compute_api`, `lease_generation` (story.5039) — each a
+ *   placement maps — `deployment_provider`, `compute_api`, `required_placement_countries` (story.5039) — each a
  *   `<key>:\n  <env>: <value>` block whose cells are upserted/dropped per env. `setCatalogPlacement`
  *   stays as the placement-verb wrapper (story.5016 T5): k3s is the schema default there, so it
  *   deletes the env's entry and drops an emptied block.
@@ -170,14 +170,13 @@ export type PlacementProvider = (typeof PLACEMENT_PROVIDERS)[number];
 
 /**
  * The per-env placement map keys the catalog carries, in the ORDER a row emits them — the shape
- * PR #2301 hand-wrote for poly: `deployment_provider`, then `compute_api`, then `lease_generation`.
+ * PR #2301 hand-wrote for poly: `deployment_provider`, then `compute_api`, then `required_placement_countries`.
  * A new block is inserted after the nearest preceding key's block (else after the `envs:` line), so
  * generated rows keep that ordering.
  */
 export const CATALOG_PLACEMENT_KEYS = [
   "deployment_provider",
   "compute_api",
-  "lease_generation",
   // story.5050 — the node-owned HARD placement requirement. Last in the order because it is the
   // only OPTIONAL cell: a row without it is unconstrained, which is what every existing row is.
   "required_placement_countries",
@@ -187,8 +186,8 @@ export type CatalogPlacementKey = (typeof CATALOG_PLACEMENT_KEYS)[number];
 /** Per-key value vocabulary, mirroring `infra/catalog/_schema.json`. */
 const PLACEMENT_VALUE_RES: Readonly<Record<CatalogPlacementKey, RegExp>> = {
   deployment_provider: /^(?:k3s|akash)$/,
-  compute_api: /^(?:legacy|crossplane)$/,
-  lease_generation: /^(?:0|[1-9][0-9]*)$/,
+  // `node-deploy` (story.5137, CD4; task.5411): the deploy verb is every node lane's only writer.
+  compute_api: /^node-deploy$/,
   // A YAML flow sequence of ISO 3166-1 alpha-2 codes, e.g. `[PT, NL]`. Kept on ONE line so the
   // existing single-line-per-env block machinery still owns the edit — a block sequence would
   // need a second indent level this module deliberately does not model. Rejects `[]`: the
@@ -208,7 +207,7 @@ const placementBlockRe = (key: CatalogPlacementKey): RegExp =>
 // The value group accepts a bare scalar OR a one-line flow sequence (story.5050). Widening it is
 // inert for the scalar keys — none of their vocabularies contain a bracket.
 const PLACEMENT_ENTRY_RE =
-  /^[ \t]+([a-z-]+):[^\S\r\n]*(\[[^\]\n]*\]|[a-z0-9]+)[^\S\r\n]*(?:#.*)?$/;
+  /^[ \t]+([a-z-]+):[^\S\r\n]*(\[[^\]\n]*\]|[a-z0-9-]+)[^\S\r\n]*(?:#.*)?$/;
 const SOURCE_REPO_LINE_RE = /^source_repo:[^\S\r\n]*(\S+)[^\S\r\n]*$/m;
 
 /** True when the catalog row declares a `source_repo:` (an external build plane exists). */
@@ -245,7 +244,7 @@ export function parseCatalogNodeId(catalogYaml: string): string {
 }
 
 /**
- * Read one placement map's per-env cells (`deployment_provider`, `compute_api`, `lease_generation`).
+ * Read one placement map's per-env cells (`deployment_provider`, `compute_api`, `required_placement_countries`).
  * An absent block (or an env absent from it) means that key's schema default — callers resolve
  * `map[env] ?? <default>`. Throws on unknown env keys or out-of-vocabulary values so a hand-mangled
  * catalog fails loudly, not silently-as-default.
@@ -286,7 +285,7 @@ export function parseCatalogPlacementMap(
  * order; other envs' parsed values are carried through verbatim.
  *
  * A block created from scratch is inserted after the nearest PRECEDING key's block per
- * {@link CATALOG_PLACEMENT_KEYS} order (deployment_provider → compute_api → lease_generation, the
+ * {@link CATALOG_PLACEMENT_KEYS} order (deployment_provider → compute_api → required_placement_countries, the
  * shape #2301 hand-wrote), else immediately after the `envs:` line (the one line every catalog row
  * is guaranteed to carry). Like `setCatalogEnvs`, this is a line-level edit, NOT a YAML round-trip —
  * every other byte of the file (comments included) is preserved.

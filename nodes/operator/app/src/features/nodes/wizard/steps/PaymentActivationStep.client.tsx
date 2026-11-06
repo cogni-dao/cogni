@@ -146,7 +146,7 @@ Goal: merge the activation PR, promote the resulting node build to production, a
 
 Read first:
 - docs/guides/payments-setup.md
-- docs/guides/multi-node-deploy.md
+- .claude/skills/deploy-node/SKILL.md (POST /api/v1/deploy/workloads)
 - docs/runbooks/dolthub-remote-bootstrap.md if DoltHub or knowledge mirror config appears in the diff
 
 Do:

@@ -5,19 +5,34 @@ description: Promote a sha to preview or production in cogni-template, OR diagno
 
 # Promote — preview + production playbook
 
-You are operating the cogni-template release pipeline. The pipeline is multi-layered (per-node deploy branches, per-node Argo apps, per-node verify-deploy matrix legs) and has several silent-success seams that can make a green workflow lie about what's deployed. **Trust `/version.buildSha` from outside the cluster**, not workflow conclusions and not `/readyz` (Service-level — the old pod can answer it during rolling cutover, returning the prior buildSha while CI thinks rollout is done).
+## Nodes use the verb
+
+A node ships to every env with one call. Only `env` changes. This skill does not own that journey.
+
+```text
+POST https://cognidao.org/api/v1/deploy/workloads   {nodeId, env, workload, sourceSha}
+GET  https://cognidao.org/api/v1/deploy/workloads?nodeId=<id>&env=<env>
+```
+
+`candidate-a` takes the PR head. `preview` is automatic on merge. `production` is an explicit call with the validated merge commit. Authz: production needs `production_promoter`. candidate-a and preview need `env_manager`. Read [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence), [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload) and [node-service-delivery](https://cognidao.org/knowledge/node-service-delivery).
+
+**Everything below is operator only.** The operator stays on k3s and Argo with its own deploy branches. It ships through `vcs/flight` and `deploy/promote`.
+
+---
+
+You are operating the operator release pipeline. The pipeline is multi-layered (deploy branches, Argo apps, verify-deploy matrix legs) and has several silent-success seams that can make a green workflow lie about what's deployed. **Trust `/version.buildSha` from outside the cluster**, not workflow conclusions and not `/readyz` (Service-level — the old pod can answer it during rolling cutover, returning the prior buildSha while CI thinks rollout is done).
 
 ## Promotion runs as the operator — call the API, never personal `gh`
 
-`PROMOTION_RUNS_AS_THE_OPERATOR` ([node-ci-cd-contract.md](../../../docs/spec/node-ci-cd-contract.md) § Env-promotion): every dispatch is an operator-GitHub-App action keyed off your registered Bearer token. **Do not `gh workflow run` a promote/flight — that uses a personal credential and is not allowed.** Drive the ladder over HTTP:
+`PROMOTION_RUNS_AS_THE_OPERATOR` ([node-ci-cd-contract.md](../../../docs/spec/node-ci-cd-contract.md) § Env-promotion): every dispatch is an operator-GitHub-App action keyed off your registered Bearer token. **Do not `gh workflow run` a promote/flight — that uses a personal credential and is not allowed.** For the operator node, drive the ladder over HTTP:
 
-| Step                    | Call                                                                 | Authz (action → relation)                                                                        | Result                                                     |
-| ----------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| Flight to candidate-a   | `POST /api/v1/vcs/flight {nodeRef:{nodeId, sourceSha}}`              | `node.flight` → `can_flight` (`developer`)                                                       | `202` + `candidate-flight.yml` dispatch (candidate-a only) |
-| Promote to production   | `POST /api/v1/deploy/promote {nodeId, env:"production", sourceSha?}` | `node.promote_production` → `can_promote_production` (`production_promoter`; `admin` inherits)   | `200` dispatched; **app-digest only, `skip_infra=true`**   |
-| Reconcile prod infra    | `POST /api/v1/deploy/infra-reconcile {nodeId, env:"production"}`     | same production action, **operator node only**                                                   | `200` dispatched; current app pin preserved                |
-| Reconcile preview infra | `POST /api/v1/deploy/infra-reconcile {nodeId, env:"preview"}`        | `node.manage_envs` → `can_manage_envs` (`env_manager`; `admin` inherits), **operator node only** | `200` dispatched; preview's own app pin preserved          |
-| Preview                 | automatic on node `main`-merge                                       | ungated                                                                                          | no agent endpoint — see Preview below                      |
+| Step                           | Call                                                                 | Authz (action → relation)                                                                        | Result                                                     |
+| ------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| Flight operator to candidate-a | `POST /api/v1/vcs/flight {nodeRef:{nodeId, sourceSha}}`              | `node.flight` → `can_flight` (`developer`)                                                       | `202` + `candidate-flight.yml` dispatch (candidate-a only) |
+| Promote operator to production | `POST /api/v1/deploy/promote {nodeId, env:"production", sourceSha?}` | `node.promote_production` → `can_promote_production` (`production_promoter`; `admin` inherits)   | `200` dispatched; **app-digest only, `skip_infra=true`**   |
+| Reconcile prod infra           | `POST /api/v1/deploy/infra-reconcile {nodeId, env:"production"}`     | same production action, **operator node only**                                                   | `200` dispatched; current app pin preserved                |
+| Reconcile preview infra        | `POST /api/v1/deploy/infra-reconcile {nodeId, env:"preview"}`        | `node.manage_envs` → `can_manage_envs` (`env_manager`; `admin` inherits), **operator node only** | `200` dispatched; preview's own app pin preserved          |
+| Preview                        | automatic on node `main`-merge                                       | ungated                                                                                          | no agent endpoint — see Preview below                      |
 
 Need the production grant? Agent files `POST /api/v1/nodes/{id}/access-requests {role:"production_promoter"}`; the node owner approves once with `POST /api/v1/nodes/{id}/developers {agentUserId, decision:"approve", role}`. Result codes: `403 authz_denied` = no grant; `503 authz_unavailable` = the env's OpenFGA store is unbootstrapped (≠ denial); `502 dispatch_failed` = RBAC passed but that env's operator App isn't installed. Full playbook: operator knowledge hub, `infrastructure` domain, entry `cicd-agent-playbook`.
 
@@ -41,7 +56,7 @@ Do NOT use for code review, test fixes, or routine PR work.
 - `scripts/ci/aggregate-decide-outcome.sh` — closes the silent-success seam (bug.0443)
 - `scripts/ci/aggregate-rollup.sh` — computes `current-sha = merge-base` of per-node deploy-branch tips; merges per-node `source-sha-by-app.json` preserving unaffected entries
 - `scripts/ci/lib/image-tags.sh` — `ALL_TARGETS` / `NODE_TARGETS` from `infra/catalog/*.yaml` (axiom 16, CATALOG_IS_SSOT). Source this; never hardcode target lists.
-- Per-env deploy branches: `deploy/{candidate-a,preview,production}-<node>` for each node the catalog declares (roster is LIVE STATE — read `GET /api/v1/nodes` / `infra/catalog/*.yaml`, never hardcode; Dolt `operator-node-catalog`) — per-node since task.0376
+- Per-env deploy branches for the operator (operator only). The roster is LIVE STATE: read `GET /api/v1/nodes` and `infra/catalog/*.yaml`, never hardcode.
 - `.promote-state/` files on each deploy branch: `current-sha`, `source-sha-by-app.json`
 
 ## Hostname rule (per `verify-buildsha.sh`)
@@ -52,7 +67,7 @@ Do NOT use for code review, test fixes, or routine PR work.
   - production swaps `preview` for the prod hostname (typically `https://www.cognidao.org` for operator + `<node>.cognidao.org` for others — confirm via `vars.DOMAIN` in the production environment).
 - scheduler-worker / migrators → no Ingress, no /version. Use `kubectl rollout status` or trust the verify-deploy job's marker emission.
 
-## Preview promotion
+## Preview promotion (operator only)
 
 **Auto path (default + only path):** a PR merged via merge-queue triggers `flight-preview.yml` on `push:main` → the operator promotes the proven digest. No action, no dispatch. Verify by watching (Monitoring section).
 
@@ -68,7 +83,7 @@ If preview is stuck, it is **not** healed by a hand-dispatch — it is healed by
 
 Admin-merging bypasses `merge_group` → no `mq-*` images → `flight-preview.yml`'s "Hard-fail when no images found for resolved PR" step fires. Same recovery: ship a follow-up PR through merge-queue. Do NOT try to dispatch a deleted `build-multi-node.yml`.
 
-## Production promotion
+## Production promotion (operator only)
 
 Explicit, RBAC-gated, operator-dispatched. There is no production auto-trigger (`promote-to-production.yml` was removed in bug.0361).
 
@@ -90,9 +105,13 @@ curl -sS -X POST "$BASE/api/v1/deploy/infra-reconcile" \
   -d '{"nodeId":"<operator-node-uuid>","env":"production"}'
 ```
 
-Swap `"production"` for `"preview"` to converge the preview lane instead (bug.5409) — same verb, same workflow, gated on `node.manage_envs`. This is shared-lane-only (`preview` | `production`) and operator-node-only. It accepts no SHA, ref, workflow, or mode: the adapter replays that lane's deployed app pin and the existing workflow consumes the merged infrastructure from `main`. The deployment parent is environment-scoped (`NODE_SUBMODULE_PARENT_{OWNER,REPO}`): candidate/test App operations stay in `cogni-test-org`; production App operations stay in `Cogni-DAO`. A `403 authz_denied` currently requires the same one-time production-promoter approval. That role reuse is a two-phase bootstrap bridge—the infra lever must first deploy the OpenFGA model before story.5028's dedicated `production_infra_promoter → can_reconcile_production_infra` grant can take over. Never replace it with personal `gh workflow run … -f skip_infra=false` or an SSH mutation. For node app placement/scale, use the Akash compute API instead; this verb owns only the shared state/edge substrate.
+Swap `"production"` for `"preview"` to converge the preview lane instead (bug.5409) — same verb, same workflow, gated on `node.manage_envs`. This is shared-lane-only (`preview` | `production`) and operator-node-only. It accepts no SHA, ref, workflow, or mode: the adapter replays that lane's deployed app pin and the existing workflow consumes the merged infrastructure from `main`. The deployment parent is environment-scoped (`NODE_SUBMODULE_PARENT_{OWNER,REPO}`): candidate/test App operations stay in `cogni-test-org`; production App operations stay in `Cogni-DAO`. A `403 authz_denied` currently requires the same one-time production-promoter approval. That role reuse is a two-phase bootstrap bridge—the infra lever must first deploy the OpenFGA model before story.5028's dedicated `production_infra_promoter → can_reconcile_production_infra` grant can take over. Never replace it with personal `gh workflow run … -f skip_infra=false` or an SSH mutation. For node apps, use `POST /api/v1/deploy/workloads`; this verb owns only the shared state/edge substrate.
 
 After dispatch, **always** confirm production `/version.buildSha` actually advanced — see Monitoring. Discover the dispatched run via the unauthenticated GitHub API (`GET /repos/Cogni-DAO/cogni/actions/workflows/promote-and-deploy.yml/runs`); no personal token required.
+
+## Declared workloads
+
+Node workloads do not use the flight and promote calls. They use the verb at the top of this file. For a node, read progress with `GET /api/v1/deploy/workloads` and prove the served `/version.buildSha`. The sequencer log is `{env="<env>",service="sequencer"} |= "node_deploy_step"`.
 
 ## Monitoring — Monitor tool, not eyeballing
 
@@ -169,7 +188,7 @@ same Loki:
 # (OOMKilled, ImagePullBackOff, Liveness probe failed) only lives in events,
 # not in container logs.
 
-# 4. Argo control-plane — "a node's app never appeared" / "stuck OutOfSync"
+# 4. Argo control-plane (operator only) — "the operator app never appeared" / "stuck OutOfSync"
 {namespace="argocd",source="k8s-events",kind="ApplicationSet"} | json
 # msg: created/Deleted Application "<env>-<node>" — proves the AppSet IS
 # generating (a `created`+`Deleted` pair on the same app = it generated then
@@ -187,12 +206,9 @@ PR #1233 to be deployed in the env you're querying. If empty: check
 is the anti-pattern.** The `applicationset-controller` and
 `application-controller` emit every generate / create / prune / sync
 transition as a k8s Event — already in Loki via stream #4 above. `kind=ApplicationSet`
-answers "is the AppSet generating this node's app at all"; `kind=Application`
+answers "is the AppSet generating this app at all"; `kind=Application`
 answers "is Argo syncing it to the expected sha." No SSH, no kubeconfig — which
 is also the SOC2 posture (read-only, audited, zero standing cluster credential).
-Verified 2026-06-02: the `candidate-a-wisp` "AppSet won't generate" report was
-false — Loki showed the controller had `created` then `Deleted` the Application.
-
 New compose services don't ship logs until added to the host-alloy allowlist
 regex in `infra/compose/runtime/configs/alloy-config.{,metrics.}alloy`. If
 `{service=<svc>}` returns silence post-deploy, fix the regex before
@@ -217,7 +233,7 @@ There is **no preview review-lease** (removed 2026-06-16, `kill-preview-review-l
 ## Discipline
 
 - **`/version.buildSha` is the only deploy verification that matters.** CI conclusions can lie. `/readyz` can lie (old pod answers during rolling cutover).
-- **Per-node truth, not per-workflow.** Every promotion advances _some_ nodes, not necessarily all. Check each `deploy/<env>-<node>:.promote-state/current-sha` independently.
+- **Per-target truth, not per-workflow (operator only).** Check each operator deploy branch's `.promote-state/current-sha` independently. For a node, read `GET /api/v1/deploy/workloads`.
 - **Admin-merge breaks the pipeline.** If you see a CD-affecting PR getting admin-merged, file a bug AND propose a merge-queue follow-up; don't pretend the resulting silent-skip will heal itself.
 - **Don't dispatch without arming a Monitor.** Fire-and-forget is how outages survive shift changes.
 - **Catalog-as-SSOT for target lists.** Source `scripts/ci/lib/image-tags.sh`; never inline a node list. `resy` outlived the node by months precisely because it was inlined here.

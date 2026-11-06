@@ -28,6 +28,20 @@
  *     `app` (actuator, scheduler-worker, …) stay out of reach exactly as before. Shared-infra
  *     services are still NOT node-attributable; the Phase 1 generic route remains their path.
  *     See docs/spec/grafana-observability-access.md §"Node-dev log scope envelope".
+ *   - DEPLOY_EVENTS_PIN_BY_LINE (task.5400): `service=deploy` is the one exception to the stream pin.
+ *     The sequencer is operator-side, so its streams carry no trustworthy per-node label; the node pin
+ *     is a FORCED pipeline stage `|= "node_deploy" | json | nodeId="<id>"` placed between the selector
+ *     and the caller's stages AND repeated as the LAST stage (`| nodeId="<id>"`), so a caller stage that
+ *     rewrote the label cannot widen it. A line without a parseable `nodeId` (leadership events, JSON
+ *     errors) is dropped by the forced filter. The selector is `{env, service="sequencer"}` with no
+ *     `source="lease"` (the sequencer is not a lease stream).
+ *   - CALLER_STAGES_ARE_WHOLE_STAGES (every scope): the caller's remainder after the selector must be a
+ *     sequence of pipeline stages starting `|`, `|=`, `|~`, `!=` or `!~`, and may contain no
+ *     `or`/`and`/`unless` (an `or nodeId=~".+"` would widen the forced label filter that precedes it:
+ *     `| nodeId="<id>" or nodeId=~".+"`), no brace or unbalanced parenthesis outside a string, and no
+ *     `label_format` that writes `nodeId`, `node`, `env` or `service`. Refused with `invalid_query`
+ *     (400). For the stream-pinned scopes (app, lease) a filter could never widen the selector, so
+ *     there this is hardening, not a fix.
  * Side-effects: none (pure)
  * Links: docs/spec/grafana-observability-access.md, docs/design/substrate-grafana-observability.md,
  *   ./flight-status (FLIGHT_ENVS), task.5025
@@ -44,6 +58,19 @@ export const NODE_SCOPED_SERVICE = "app";
 
 /** The `source` label the lease-log pump stamps on every provider-lease stream (bug.5240). */
 export const LEASE_LOG_SOURCE = "lease";
+
+/**
+ * The virtual `service=deploy` a node dev selects to read ITS OWN node-deploy sequencer events
+ * (task.5400). It is not a Loki label value: it maps to the operator's `service="sequencer"` stream and
+ * pins the node through the log line's `nodeId` field (see `scopeNodeLogQL`).
+ */
+export const DEPLOY_LOG_SERVICE = "deploy";
+
+/** The operator-side Loki `service` the node-deploy sequencer process logs under. */
+export const SEQUENCER_LOKI_SERVICE = "sequencer";
+
+/** Cheap pre-filter: every node-deploy event message starts `node_deploy` (step, strike, alert, ...). */
+export const DEPLOY_EVENT_LINE_FILTER = "node_deploy";
 
 /** Defensive bound on the caller-supplied LogQL query (not a real LogQL limit). */
 export const MAX_QUERY_LENGTH = 2048;
@@ -107,18 +134,37 @@ export function scopeNodeLogQL(input: {
       "'service' must be a lowercase DNS-label service name"
     );
   }
-  const forcedValues: Record<string, string> = {
-    env: input.env,
-    service,
-    node: input.nodeId,
-    // PER_SERVICE_ENVELOPE: beyond `app`, only pump-labeled lease streams are node-attributable.
-    ...(service === NODE_SCOPED_SERVICE ? {} : { source: LEASE_LOG_SOURCE }),
+  const deploy = service === DEPLOY_LOG_SERVICE;
+  // What the selector is re-emitted with, and which caller values for a forced label are accepted
+  // (the virtual `deploy` also accepts its stream name; both are the same, narrow-only scope).
+  const forcedValues: Record<string, string> = deploy
+    ? { env: input.env, service: SEQUENCER_LOKI_SERVICE }
+    : {
+        env: input.env,
+        service,
+        node: input.nodeId,
+        // PER_SERVICE_ENVELOPE: beyond `app`, only pump-labeled lease streams are node-attributable.
+        ...(service === NODE_SCOPED_SERVICE
+          ? {}
+          : { source: LEASE_LOG_SOURCE }),
+      };
+  const accepted = (label: string): readonly string[] | undefined => {
+    const v = forcedValues[label];
+    if (v === undefined) return undefined;
+    return deploy && label === "service" ? [v, DEPLOY_LOG_SERVICE] : [v];
   };
   const forced = Object.entries(forcedValues).map(
     ([label, value]) => `${label}=${quote(value)}`
   );
+  // DEPLOY_EVENTS_PIN_BY_LINE: the forced node pin of a deploy query, before any caller pipeline.
+  const pin = deploy
+    ? ` |= ${quote(DEPLOY_EVENT_LINE_FILTER)} | json | nodeId=${quote(input.nodeId)}`
+    : "";
+  // The same node filter again AFTER the caller's stages: a caller stage that rewrote `nodeId` can
+  // only ever narrow what the first pin admitted. Only emitted when the caller added stages.
+  const tail = deploy ? ` | nodeId=${quote(input.nodeId)}` : "";
   const raw = (input.query ?? "").trim();
-  if (raw === "") return `{${forced.join(", ")}}`;
+  if (raw === "") return `{${forced.join(", ")}}${pin}`;
 
   if (raw.length > MAX_QUERY_LENGTH) {
     throw new ObservabilityQueryError(
@@ -135,7 +181,7 @@ export function scopeNodeLogQL(input: {
         "query must begin with a stream selector {…} or be a bare LogQL pipeline"
       );
     }
-    return `{${forced.join(", ")}} ${raw}`;
+    return `{${forced.join(", ")}}${pin} ${validateCallerStages(raw)}${tail}`;
   }
 
   // Full LogQL: split the leading stream selector from the trailing pipeline.
@@ -152,22 +198,84 @@ export function scopeNodeLogQL(input: {
 
   const narrowing: string[] = [];
   for (const m of parseMatchers(matchersRaw)) {
-    const required = forcedValues[m.label];
-    if (required === undefined) {
+    const allowed = accepted(m.label);
+    if (allowed === undefined) {
       narrowing.push(`${m.label}${m.op}"${m.value}"`);
       continue;
     }
-    if (m.op !== "=" || m.value !== required) {
+    if (m.op !== "=" || !allowed.includes(m.value)) {
       throw new ObservabilityQueryError(
         "query_out_of_scope",
-        `selector label '${m.label}' must be ${m.label}="${required}" for a node-scoped query`
+        `selector label '${m.label}' must be ${m.label}="${allowed[0]}" for a node-scoped query`
       );
     }
   }
 
-  const selector = `{${[...forced, ...narrowing].join(", ")}}`;
-  const pipeline = pipelineRaw.trim();
-  return pipeline === "" ? selector : `${selector} ${pipeline}`;
+  const selector = `{${[...forced, ...narrowing].join(", ")}}${pin}`;
+  const pipeline = validateCallerStages(pipelineRaw);
+  return pipeline === "" ? selector : `${selector} ${pipeline}${tail}`;
+}
+
+/** Labels a caller stage may never write: they carry the node/env/service pin. */
+const PROTECTED_LABELS: readonly string[] = [
+  "nodeId",
+  "node",
+  "env",
+  "service",
+];
+
+/**
+ * Validate the caller's pipeline remainder (CALLER_STAGES_ARE_WHOLE_STAGES) and return it trimmed.
+ * String literals ("…" with escapes, `…`) are blanked first so quoted text can never trip or hide a rule.
+ */
+function validateCallerStages(remainder: string): string {
+  const text = remainder.trim();
+  if (text === "") return "";
+  const bad = (why: string): never => {
+    throw new ObservabilityQueryError("invalid_query", `query pipeline ${why}`);
+  };
+
+  let blanked = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charAt(i);
+    if (c === '"') {
+      i++;
+      while (i < text.length && text.charAt(i) !== '"')
+        i += text.charAt(i) === "\\" ? 2 : 1;
+      if (i >= text.length) bad("has an unterminated string");
+      blanked += '""';
+    } else if (c === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end < 0) bad("has an unterminated string");
+      i = end;
+      blanked += '""';
+    } else {
+      blanked += c;
+    }
+  }
+
+  if (!/^(\||!=|!~)/.test(blanked))
+    bad("must be whole stages, each starting with |, |=, |~, != or !~");
+  if (/[{}]/.test(blanked)) bad("may not contain a stream selector or braces");
+  let depth = 0;
+  for (const c of blanked) {
+    depth += c === "(" ? 1 : c === ")" ? -1 : 0;
+    if (depth < 0) break;
+  }
+  if (depth !== 0) bad("has unbalanced parentheses");
+  if (/\b(or|and|unless)\b/i.test(blanked))
+    bad("may not use or/and/unless (they could widen the forced node filter)");
+
+  for (const stage of blanked.split("|")) {
+    const m = /^\s*label_format\s+(.*)$/s.exec(stage);
+    if (!m) continue;
+    for (const assignment of (m[1] ?? "").split(",")) {
+      const target = assignment.split("=")[0]?.trim() ?? "";
+      if (PROTECTED_LABELS.includes(target))
+        bad(`may not write the label '${target}'`);
+    }
+  }
+  return text;
 }
 
 /** Parse the comma-separated label matchers inside a stream selector; reject anything unparseable. */

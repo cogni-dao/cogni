@@ -224,6 +224,8 @@ function errorResponse(error: AkashTxError): AkashTxHttpResponse {
       code: error.code,
       message: error.message,
       ...(error.ownerCogniKey ? { ownerCogniKey: error.ownerCogniKey } : {}),
+      // bug.5569: sent only on positive proof; absent stays byte-identical to the old wire.
+      ...(error.nothingBilling ? { nothingBilling: true } : {}),
     },
   };
 }
@@ -483,6 +485,12 @@ export function createAkashTxDispatcher(
               environment: input.environment,
               identity: input.identity,
               spec: toSpec(input.spec),
+              ...(input.excludeProviders
+                ? { excludeProviders: input.excludeProviders }
+                : {}),
+              ...(input.allowProviders
+                ? { allowProviders: input.allowProviders }
+                : {}),
             }),
           };
         }
@@ -535,6 +543,7 @@ export function createAkashTxDispatcher(
             ...(error.ownerCogniKey
               ? { ownerCogniKey: error.ownerCogniKey }
               : {}),
+            ...(error.nothingBilling ? { nothingBilling: true } : {}),
           },
           "akash_tx_http_op_failed"
         );

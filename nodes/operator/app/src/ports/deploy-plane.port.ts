@@ -97,15 +97,6 @@ export interface PromoteNodeFromPreviewInput {
   readonly allowRollback?: boolean;
 }
 
-export interface PruneNodeEnvironmentInput {
-  readonly parentOwner: string;
-  readonly parentRepo: string;
-  readonly slug: string;
-  readonly env: "candidate-a" | "preview" | "production";
-  /** GitHub environment whose VM owns this lane's Argo/Crossplane control plane. */
-  readonly controlEnv: "candidate-a" | "preview" | "production";
-}
-
 export interface NodePromoteResult {
   /**
    * Always `dispatched`: every rung source-addresses the node sha on the dispatch (no main write,
@@ -262,6 +253,40 @@ export interface ResolvedNodeRepo {
   readonly repo: string;
 }
 
+/** Where a node's own declarations and built image live (story.5127). */
+export interface ResolvedNodeSource extends ResolvedNodeRepo {
+  /**
+   * Catalog `image_repository` (`ghcr.io/<owner>/<repo>`) of a REMOTE-SOURCE node. `null` for an
+   * IN-REPO node (the operator): no built image is resolved for it.
+   */
+  readonly imageRepository: string | null;
+}
+
+/**
+ * Resolve a node's source repo and image repository from the catalog baked into the operator image
+ * (story.5137): the same declaration the node-deploy sequencer reads, so every env resolves a node
+ * the same way. An IN-REPO node (the operator, no `source_repo`) resolves to the given parent repo
+ * with `imageRepository: null`. Throws a coded `catalog_missing` (404) when the image does not know
+ * the node.
+ */
+export interface NodeSourceResolverPort {
+  resolveNodeSource(input: {
+    readonly nodeId: string;
+    readonly parentOwner: string;
+    readonly parentRepo: string;
+  }): Promise<ResolvedNodeSource>;
+}
+
+/**
+ * Read a node's declarations (repo-spec and workload manifests) from a repository at a sha. Read-only.
+ * The reader prefers the operator App; for a public repository the App is not installed on, it reads
+ * anonymously. A repository that is neither App-readable nor public reads as absent (`null`).
+ */
+export type DeclarationReadPort = Pick<
+  DeployPlanePort,
+  "fetchFileText" | "listDirectoryEntries"
+>;
+
 /** Input to `classifyEnvManagerPr` — a PR addressed in the parent monorepo. */
 export interface ClassifyEnvManagerPrInput {
   readonly owner: string;
@@ -339,6 +364,21 @@ export interface DeployPlanePort {
     path: string;
     ref?: string;
   }): Promise<string | null>;
+
+  /**
+   * List EVERY entry directly inside a repo directory via the operator App (contents:read): name,
+   * type (`file`, `dir`, `symlink` or `submodule`) and size in bytes. GitHub's directory listing
+   * reports a submodule as `file`; the adapter maps it to `submodule` (its git_url points at
+   * `/git/trees/`). Returns null when the directory is absent at `ref`. Nothing is filtered here:
+   * the node-deploy verb refuses any `.cogni/workloads/` entry that is not a regular `*.yaml` file
+   * or that is over the manifest size cap (story.5137).
+   */
+  listDirectoryEntries(input: {
+    owner: string;
+    repo: string;
+    path: string;
+    ref: string;
+  }): Promise<readonly { name: string; type: string; size: number }[] | null>;
 
   /**
    * Grant a GitHub identity branch-push (Write) on a node repo — the operator App as the privilege
@@ -423,15 +463,6 @@ export interface DeployPlanePort {
   promoteNodeFromPreview(
     input: PromoteNodeFromPreviewInput
   ): Promise<CandidateFlightDispatchResult>;
-
-  /**
-   * Remove one retired lane from its control cluster. Env-membership REMOVE deletes the generated
-   * AppSet from git; this workflow bridge deletes the live per-node AppSet/Application so Argo
-   * prunes the workload and Crossplane closes any paid lease. It never changes another lane.
-   */
-  pruneNodeEnvironment(
-    input: PruneNodeEnvironmentInput
-  ): Promise<ObservedWorkflowDispatchResult>;
 
   /**
    * The sha an environment is ACTUALLY running for one node: `<slug>` in

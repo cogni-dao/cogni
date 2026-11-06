@@ -27,7 +27,7 @@ description: >
 ## Operator's role: node declares shape; operator wires environment
 
 - **Node owns** (edit in the node repo): app code, packages, base manifests, image build, declarations (`repo-spec.yaml`, DB schema, `secrets-catalog.yaml`).
-- **Operator owns** (the deploy plane): catalog, overlays/AppSets, provisioning, DNS, **flight + promotion**, secret **values**, env ownership.
+- **Operator owns** (the deploy plane): the catalog, provisioning, DNS, the deploy verb `POST /api/v1/deploy/workloads` and its sequencer, secret **values**, env ownership. Nodes declare `.cogni/workloads/<name>.yaml`; see [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence).
 - **Identity SSOT is one value:** repo-spec `node_id` = `nodes.id` = OpenFGA `node:<id>` = Loki `node` label. Address a node by that id (slug also resolves). The operator is itself a uniform node.
 
 ## What the operator can do to a node — and its limits (all OpenFGA-gated)

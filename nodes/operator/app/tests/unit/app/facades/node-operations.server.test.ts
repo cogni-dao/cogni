@@ -127,6 +127,7 @@ describe("listAccessibleNodeOperations", () => {
     expect(reportByNodeIds).toHaveBeenCalledExactlyOnceWith([NODE_A]);
     expect(output.nodes.map((node) => node.id)).toEqual([NODE_A]);
     expect(listServices).toHaveBeenCalledExactlyOnceWith({
+      nodeId: NODE_A,
       slug: "alpha",
       environment: "production",
     });

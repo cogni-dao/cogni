@@ -86,8 +86,6 @@ jobs:
       k3s_targets_json: ${{ steps.targets.outputs.k3s_targets_json }}
       k3s_node_targets_json: ${{ steps.targets.outputs.k3s_node_targets_json }}
       has_k3s_node_targets: ${{ steps.targets.outputs.has_k3s_node_targets }}
-      external_compute_node_targets_json: ${{ steps.targets.outputs.external_compute_node_targets_json }}
-      has_external_compute_node_targets: ${{ steps.targets.outputs.has_external_compute_node_targets }}
       deployment_provider_by_target_json: ${{ steps.targets.outputs.deployment_provider_by_target_json }}
       source_repository_by_target_json: ${{ steps.targets.outputs.source_repository_by_target_json }}
       source_sha_by_target_json: ${{ steps.targets.outputs.source_sha_by_target_json }}
@@ -191,11 +189,7 @@ jobs:
       group: reconcile-appset-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    # Argo lives in the CONTROL cluster. For an Akash lane there is no lane cluster, so
-    # reading the lane environment's VM credentials either produces an empty VM_HOST
-    # (isolated test fleets) or points at a cluster that can never observe the workload.
-    # This is the same lane-vs-control split used by promote-k8s below.
-    environment: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') || needs.decide.outputs.environment }}
+    environment: ${{ needs.decide.outputs.environment }}
     steps:
       # Checkout the head ref — the per-node AppSet YAML is catalog-derived CI
       # control plane (CATALOG_IS_SSOT), and a node ADDED in this promote carries
@@ -221,22 +215,6 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Reconcile fleet-control migration access
-        if: steps.ssh-setup.outputs.has_vm == 'true' && fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash'
-        env:
-          FLEET_CONTROL_ENV: ${{ vars.FLEET_CONTROL_ENV || 'production' }}
-          VM_HOST: ${{ secrets.VM_HOST }}
-          SSH_OPTS: "-i /home/runner/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
-        run: |
-          set -euo pipefail
-          # shellcheck source=scripts/ci/lib/ssh-retry.sh
-          . scripts/ci/lib/ssh-retry.sh
-          access_file="$RUNNER_TEMP/akash-tx-actuator-lane-access.yaml"
-          bash scripts/ci/render-akash-tx-actuator-lane-access.sh "$FLEET_CONTROL_ENV" >"$access_file"
-          read -r -a ssh_opts <<< "$SSH_OPTS"
-          ci_ssh_retry scp "${ssh_opts[@]}" "$access_file" "root@${VM_HOST}:/tmp/akash-tx-actuator-lane-access.yaml"
-          ci_ssh_retry ssh "${ssh_opts[@]}" "root@${VM_HOST}" "kubectl apply -f /tmp/akash-tx-actuator-lane-access.yaml && rm -f /tmp/akash-tx-actuator-lane-access.yaml"
-
       - name: Apply ${{ needs.decide.outputs.environment }}-${{ matrix.node }}-applicationset.yaml
         if: steps.ssh-setup.outputs.has_vm == 'true'
         env:
@@ -246,8 +224,7 @@ jobs:
           NODE: ${{ matrix.node }}
         run: |
           set -euo pipefail
-          # THE definition, never rebuilt from the env (bug.5204). An akash node's
-          # non-production lane is reconciled by the PRODUCTION cluster (task.5132).
+          # THE definition, never rebuilt from the env (bug.5204).
           # shellcheck source=scripts/ci/lib/appset-paths.sh
           . scripts/ci/lib/appset-paths.sh
           APPSET_FILE="$(appset_rel_path "$DEPLOY_ENVIRONMENT" "$NODE")"
@@ -363,11 +340,7 @@ jobs:
       group: flight-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    # Identity, secrets and deployment variables follow the control env for Akash. The lane
-    # remains `needs.decide.outputs.environment` everywhere desired state is named/written.
-    # Identity, secrets and deployment variables follow the control env for Akash. The lane
-    # remains `needs.decide.outputs.environment` everywhere desired state is named/written.
-    environment: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') || needs.decide.outputs.environment }}
+    environment: ${{ needs.decide.outputs.environment }}
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
@@ -410,19 +383,6 @@ jobs:
           HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
           BUILD_SHA: ${{ needs.decide.outputs.build_sha }}
           PREVIEW_FORWARD: ${{ fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node] }}
-          NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
-          # The RESOLVED head, not the raw input (bug.5195 defect #2). `decide` sets
-          # head_sha = source_sha ?: github.sha, and app-src is checked out AT head_sha —
-          # so this IS the operator commit whose catalog `source_sha_by_target_json` was
-          # read from. Passing the raw input made a promote that states no sourceSha (the
-          # product contract; the UI never sends one) look like ABSENT authority, and
-          # resolve_remote_source_sha correctly failed closed. The authority was never
-          # absent, only unstated. `resolve_remote_source_sha` is unchanged: truly-absent
-          # authority (both empty) still fails closed, and an explicit sourceSha resolves
-          # identically because then head_sha == inputs.source_sha.
-          OPERATOR_SOURCE_SHA: ${{ needs.decide.outputs.head_sha }}
-          CATALOG_SOURCE_SHA: ${{ fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
-          PREVIEW_SOURCE_SHA_MAP: ${{ github.workspace }}/preview-src/.promote-state/source-sha-by-app.json
           # Did the CALLER name its targets? The operator API always dispatches ONE named
           # node, and for a named node a missing image must fail loudly rather than skip
           # into a green run (bug.5248). Empty = fleet fan-out, where skipping is correct.
@@ -431,12 +391,7 @@ jobs:
           set -euo pipefail
           # shellcheck source=scripts/ci/lib/image-tags.sh
           . app-src/scripts/ci/lib/image-tags.sh
-          if [ "$PREVIEW_FORWARD" = "true" ] && [ "$DEPLOYMENT_PROVIDER" = "akash" ]; then
-            APP_SOURCE_SHA=$(resolve_remote_source_sha "$NODE" "$NODE_SOURCE_SHA" "$OPERATOR_SOURCE_SHA" "$CATALOG_SOURCE_SHA" "$PREVIEW_FORWARD" "$PREVIEW_SOURCE_SHA_MAP")
-            # External desired state is sourced from the immutable OCI bundle,
-            # not a kustomization image pin. The materializer below resolves it.
-            DIGEST=""
-          elif [ "$PREVIEW_FORWARD" = "true" ]; then
+          if [ "$PREVIEW_FORWARD" = "true" ]; then
             # Reuse the existing per-overlay digest resolver (battle-tested);
             # it emits digests_json={...} for ALL_TARGETS, then we index by NODE.
             PREVIEW_OVERLAY_ROOT="${{ github.workspace }}/preview-src/infra/k8s/overlays/preview"
@@ -457,26 +412,6 @@ jobs:
               echo "::error::preview-forward: no source_sha for $NODE in preview map"
               exit 1
             fi
-          elif is_remote_source_artifact_target "$NODE"; then
-            catalog="app-src/infra/catalog/${NODE}.yaml"
-            image_repository="$(yq -N '.image_repository // ""' "$catalog")"
-            if [ -z "$image_repository" ]; then
-              echo "::error::remote-source artifact ${NODE} missing image_repository"
-              exit 1
-            fi
-            APP_SOURCE_SHA=$(resolve_remote_source_sha "$NODE" "$NODE_SOURCE_SHA" "$OPERATOR_SOURCE_SHA" "$CATALOG_SOURCE_SHA" "$PREVIEW_FORWARD" "$PREVIEW_SOURCE_SHA_MAP")
-            full_tag="${image_repository}:sha-${APP_SOURCE_SHA}"
-            digest_only=$(docker buildx imagetools inspect "$full_tag" --raw 2>/dev/null \
-              | python3 -c "import json,sys; print(json.load(sys.stdin).get('digest',''))" 2>/dev/null || true)
-            if [ -z "$digest_only" ]; then
-              digest_only=$(docker buildx imagetools inspect "$full_tag" 2>/dev/null \
-                | grep -oP 'Digest:\s+\Ksha256:[a-f0-9]+' | head -1 || true)
-            fi
-            if [ -z "$digest_only" ]; then
-              echo "::error::remote-source artifact image not found: $full_tag"
-              exit 1
-            fi
-            DIGEST="${full_tag%%:*}@${digest_only}"
           else
             # In-repo artifact (operator, scheduler-worker): ONE identity —
             # `<image>:sha-<sourceSha>{suffix}` (SOURCE_SHA_IS_DEPLOY_IDENTITY).
@@ -506,22 +441,6 @@ jobs:
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
           echo "source_sha=$APP_SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "promoted=true" >> "$GITHUB_OUTPUT"
-
-      - name: Materialize provider-neutral external workload
-        if: steps.digest.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER == 'akash'
-        uses: ./app-src/.github/actions/materialize-compute-workload
-        with:
-          app_source_root: ${{ github.workspace }}/app-src
-          node: ${{ matrix.node }}
-          environment: ${{ needs.decide.outputs.environment }}
-          source_sha: ${{ steps.digest.outputs.source_sha }}
-          source_repository: ${{ fromJSON(needs.decide.outputs.source_repository_by_target_json)[matrix.node] }}
-          git_read_token: ${{ secrets.GIT_READ_TOKEN || github.token }}
-          domain: ${{ vars.DOMAIN }}
-          ghcr_username: ${{ secrets.GHCR_DEPLOY_USERNAME || github.actor }}
-          ghcr_token: ${{ secrets.GHCR_DEPLOY_TOKEN || github.token }}
-          dns_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          domain_root: ${{ vars.FORK_DOMAIN_ROOT || 'cognidao.org' }}
 
       - name: Prepare per-node deploy branch (bootstrap from umbrella if missing)
         if: steps.digest.outputs.promoted == 'true'
@@ -598,28 +517,6 @@ jobs:
           APP="$NODE" SOURCE_SHA="$SOURCE_SHA" \
             bash ../ci-src/scripts/ci/update-source-sha-map.sh
 
-      - name: Record external workload source-sha
-        if: steps.digest.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER == 'akash'
-        working-directory: deploy-branch
-        env:
-          APP: ${{ matrix.node }}
-          SOURCE_SHA: ${{ steps.digest.outputs.source_sha }}
-          NODE: ${{ matrix.node }}
-          NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
-        run: |
-          set -euo pipefail
-          # PIN_IS_NEVER_REPINNED_TO_BIRTH (bug.5306) — hand the guard this node's catalog
-          # birth sha so it can refuse a silent rollback. Absent/unreadable leaves the guard
-          # inert, which is the pre-bug.5306 behaviour.
-          CATALOG_BIRTH_SHA="$(yq -N '.source_sha // ""' "../app-src/infra/catalog/${NODE}.yaml" 2>/dev/null || true)"
-          # An exact source-addressed request is deliberate deploy authority.
-          # Keep the birth-regression fence for every implicit or mismatched pin.
-          if [ -n "$NODE_SOURCE_SHA" ] && [ "$NODE_SOURCE_SHA" = "$SOURCE_SHA" ]; then
-            CATALOG_BIRTH_SHA=""
-          fi
-          export CATALOG_BIRTH_SHA
-          bash ../ci-src/scripts/ci/update-source-sha-map.sh
-
       - name: Commit and push
         id: push
         if: steps.digest.outputs.promoted == 'true'
@@ -667,11 +564,9 @@ jobs:
           path: out/
           retention-days: 1
 
-  # Per-node provider preflight on EVERY env (Invariants 16-17). All nodes
-  # materialize source:agent secrets and reconcile placement-neutral state (DB,
-  # ExternalSecret, shared runtime inventory). Only placement-specific steps branch:
-  # k3s owns Caddy/NodePort edge mutation; Akash adds read-only controller/credential/
-  # secret/egress assertions before promote-k8s writes a ComputeWorkload generation.
+  # Per-node provider preflight on EVERY env (Invariants 16-17). Materializes
+  # source:agent secrets and reconciles DB, ExternalSecret, shared runtime inventory
+  # and the k3s Caddy/NodePort edge for the operator lane.
   node-substrate:
     needs: [decide, deploy-infra, reconcile-appset, reconcile-dns]
     if: |
@@ -695,7 +590,7 @@ jobs:
       group: node-substrate-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    environment: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') || needs.decide.outputs.environment }}
+    environment: ${{ needs.decide.outputs.environment }}
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
@@ -732,55 +627,6 @@ jobs:
           pnpm --dir ci-src install --frozen-lockfile
           pnpm --dir app-src install --frozen-lockfile
 
-      - name: Checkout per-node preview branch (preview-forward mode)
-        if: fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node]
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-        with:
-          ref: deploy/preview-${{ matrix.node }}
-          fetch-depth: 1
-          token: ${{ secrets.ACTIONS_AUTOMATION_BOT_PAT || github.token }}
-          path: preview-src
-
-      - name: Materialize remote node source at the resolved source SHA
-        env:
-          GH_TOKEN: ${{ secrets.GIT_READ_TOKEN || github.token }}
-          NODE: ${{ matrix.node }}
-          NODE_SOURCE_SHA: ${{ inputs.node_source_sha }}
-          # The RESOLVED head, not the raw input (bug.5195 defect #2). `decide` sets
-          # head_sha = source_sha ?: github.sha, and app-src is checked out AT head_sha —
-          # so this IS the operator commit whose catalog `source_sha_by_target_json` was
-          # read from. Passing the raw input made a promote that states no sourceSha (the
-          # product contract; the UI never sends one) look like ABSENT authority, and
-          # resolve_remote_source_sha correctly failed closed. The authority was never
-          # absent, only unstated. `resolve_remote_source_sha` is unchanged: truly-absent
-          # authority (both empty) still fails closed, and an explicit sourceSha resolves
-          # identically because then head_sha == inputs.source_sha.
-          OPERATOR_SOURCE_SHA: ${{ needs.decide.outputs.head_sha }}
-          CATALOG_SOURCE_SHA: ${{ fromJSON(needs.decide.outputs.source_sha_by_target_json)[matrix.node] }}
-          PREVIEW_FORWARD: ${{ fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node] }}
-          PREVIEW_SOURCE_SHA_MAP: ${{ github.workspace }}/preview-src/.promote-state/source-sha-by-app.json
-        run: |
-          set -euo pipefail
-          # Remote-source node: fetch its tree into nodes/<NODE> — no submodule,
-          # no gitlink, private-safe (GIT_READ_TOKEN). In-repo nodes carry no
-          # source_repo and are already in app-src. spec.node-submodule-retirement.
-          catalog="app-src/infra/catalog/${NODE}.yaml"
-          [ -f "$catalog" ] || exit 0
-          src_repo="$(yq -N '.source_repo // ""' "$catalog")"
-          [ -n "$src_repo" ] || exit 0
-          # The digest resolver and this checkout MUST select the same immutable
-          # revision. Source the shared catalog-aware resolver instead of growing
-          # a second promotion authority here.
-          # shellcheck source=scripts/ci/lib/image-tags.sh
-          . app-src/scripts/ci/lib/image-tags.sh
-          src_sha=$(resolve_remote_source_sha "$NODE" "$NODE_SOURCE_SHA" "$OPERATOR_SOURCE_SHA" "$CATALOG_SOURCE_SHA" "$PREVIEW_FORWARD" "$PREVIEW_SOURCE_SHA_MAP")
-          repo_path="${src_repo#https://github.com/}"; repo_path="${repo_path%.git}"
-          rm -rf "app-src/nodes/${NODE}"
-          git init -q "app-src/nodes/${NODE}"
-          git -C "app-src/nodes/${NODE}" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${repo_path}.git"
-          git -C "app-src/nodes/${NODE}" fetch -q --depth 1 origin "$src_sha"
-          git -C "app-src/nodes/${NODE}" checkout -q --detach FETCH_HEAD
-
       - name: Setup SSH
         id: ssh-setup
         env:
@@ -788,11 +634,6 @@ jobs:
           SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
         run: |
           set -euo pipefail
-          NODE="${{ matrix.node }}"
-          LANE="${{ needs.decide.outputs.environment }}"
-          CATALOG_DIR="app-src/infra/catalog" . app-src/scripts/ci/lib/appset-paths.sh
-          CONTROL_ENV="$(CATALOG_DIR=app-src/infra/catalog control_env_for "$LANE" "$NODE")"
-          echo "control_env=$CONTROL_ENV" >> "$GITHUB_OUTPUT"
           if [ -z "$VM_HOST" ]; then
             echo "::error::VM_HOST is required for node substrate"
             exit 1
@@ -1039,7 +880,7 @@ jobs:
       group: verify-deploy-${{ needs.decide.outputs.environment }}-${{ matrix.node }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    environment: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] == 'akash' && (vars.FLEET_CONTROL_ENV || 'production') || needs.decide.outputs.environment }}
+    environment: ${{ needs.decide.outputs.environment }}
     env:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
       VM_HOST: ${{ secrets.VM_HOST }}
@@ -1084,18 +925,8 @@ jobs:
         run: |
           set -euo pipefail
           source app-src/scripts/setup/lib/cogni-deployment-identity.sh
-          # k3s jobs already read the lane-scoped GitHub environment, whose DOMAIN is the
-          # final public host. Akash jobs read the fleet-control environment, so only that
-          # foreign-control case needs the preview prefix derived from its configured apex.
-          if [ "$DEPLOY_ENVIRONMENT" = "preview" ] && [ "$DEPLOYMENT_PROVIDER" != "k3s" ]; then
-            LANE_DOMAIN="$(cogni_operator_domain_for_env preview "${DOMAIN:?}")" || {
-              echo "::error::cannot derive public domain for lane '$DEPLOY_ENVIRONMENT'"
-              exit 1
-            }
-          else
-            LANE_DOMAIN="${DOMAIN:?}"
-          fi
-          echo "domain=$LANE_DOMAIN" >> "$GITHUB_OUTPUT"
+          # The lane-scoped GitHub environment's DOMAIN is the final public host.
+          echo "domain=${DOMAIN:?}" >> "$GITHUB_OUTPUT"
 
       - name: Setup SSH
         if: steps.cell.outputs.promoted == 'true'
@@ -1108,8 +939,6 @@ jobs:
           ssh-keyscan -T 10 -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Wait for ArgoCD sync (per-node)
-        # This verifier requires a Kubernetes Deployment. External workloads are
-        # gated by the current-generation ComputeWorkload check below.
         if: steps.cell.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s'
         env:
           SSH_OPTS: "-i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=10 -o ServerAliveCountMax=6"
@@ -1118,34 +947,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: bash app-src/scripts/ci/wait-for-argocd.sh
-
-      # bug.5148 — resolve the rendered manifest's filename from the catalog authority in a
-      # prior step, because a composite-action input cannot call a primitive. No decision here:
-      # the lib is the single shell reader of `compute_api`.
-      - name: Resolve rendered ComputeWorkload manifest
-        id: workload-manifest
-        if: steps.cell.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
-        env:
-          NODE: ${{ matrix.node }}
-          ENVIRONMENT: ${{ needs.decide.outputs.environment }}
-        run: |
-          set -euo pipefail
-          # shellcheck source=scripts/ci/lib/image-tags.sh
-          . app-src/scripts/ci/lib/image-tags.sh
-          WORKLOAD_FILE="$(compute_workload_manifest_file "$NODE" "$ENVIRONMENT")"
-          echo "path=${GITHUB_WORKSPACE}/deploy-branch/infra/k8s/overlays/${ENVIRONMENT}/${NODE}/${WORKLOAD_FILE}" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for external ComputeWorkload readiness
-        # This Akash job is already bound to the control GitHub environment above, so VM_HOST
-        # is the cluster that actually owns the XR. Skipping foreign lanes here would turn the
-        # public probe into a false proof whenever another lane happened to serve the same SHA.
-        if: steps.cell.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER != 'k3s'
-        uses: ./.github/actions/wait-for-compute-workload
-        with:
-          app_source_root: ${{ github.workspace }}/app-src
-          manifest: ${{ steps.workload-manifest.outputs.path }}
-          vm_host: ${{ secrets.VM_HOST }}
-          ssh_identity: /home/runner/.ssh/deploy_key
 
       - name: Wait for in-cluster services (per-node)
         if: steps.cell.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s'

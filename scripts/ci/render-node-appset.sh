@@ -62,7 +62,8 @@ deployable_nodes() {
   done | LC_ALL=C sort
 }
 
-# Deployable node slugs whose per-env node-set (`envs:`) includes $1, sorted.
+# Deployable node slugs whose per-env node-set (`envs:`) includes $1, sorted, minus any
+# (node, env) cell handed to the node-deploy verb (`compute_api.<env>: node-deploy`).
 # task.5017 — deploy ⊆ provisioned: an env only deploys the nodes that list it.
 # A deployable row that omits `envs` (schema-required) is a hard error, not a
 # silent all-env fallback — fail loud so a missing field can't fan out to a VM
@@ -81,6 +82,11 @@ deployable_nodes_for_env() {
     # silently skipping the very nodes that DO claim the env.
     envs="$(yq -r '.envs[]' "$f")"
     grep -qxF "$env" <<<"$envs" || continue
+    # ONE_WRITER_PER_NODE_LANE (story.5137, CD4): a cell the node-deploy sequencer owns
+    # (`compute_api.<env>: node-deploy`) gets NO per-(env, node) AppSet. The file leaves the
+    # tree, Argo prunes the Application, and the Application's XR / ExternalSecrets cascade
+    # away, so no Crossplane/Argo path remains that can write that lane's lease or DNS.
+    [ "$(env_name="$env" yq -r '.compute_api[strenv(env_name)] // ""' "$f")" != "node-deploy" ] || continue
     printf '%s\n' "$name"
   done | LC_ALL=C sort
 }

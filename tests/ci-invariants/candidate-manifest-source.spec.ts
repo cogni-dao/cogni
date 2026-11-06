@@ -571,100 +571,32 @@ describe("candidate-a manifest source", () => {
     );
   });
 
-  it("never publishes shared scheduler routing before selected external preflight succeeds", () => {
+  it("publishes shared scheduler routing only after a successful, uncancelled decide", () => {
     const routing = parsed.jobs["reconcile-scheduler-worker-routing"];
-    expect(routing.needs).toEqual(["decide", "external-node-preflight"]);
+    // story.5137: node lanes ship through the node-deploy verb, so no external
+    // preflight gates the operator flight's scheduler routing any more.
+    expect(routing.needs).toEqual(["decide"]);
+    expect(parsed.jobs["external-node-preflight"]).toBeUndefined();
     const condition = routing.if;
     if (!condition) throw new Error("routing job condition is required");
-    // Evaluate the actual YAML condition, including the explicit cancellation
-    // function. Hyphenated GitHub job identifiers use bracket syntax in JS.
-    const expression = condition.replaceAll(
-      "needs.external-node-preflight",
-      'needs["external-node-preflight"]'
-    );
     const cases = [
+      { label: "decide success", decide: "success", allowed: true },
+      { label: "decide failure", decide: "failure", allowed: false },
+      { label: "decide skipped", decide: "skipped", allowed: false },
       {
-        label: "external success",
-        external: "true",
-        result: "success",
-        allowed: true,
-      },
-      {
-        label: "external failure",
-        external: "true",
-        result: "failure",
-        allowed: false,
-      },
-      {
-        label: "external cancelled",
-        external: "true",
-        result: "cancelled",
-        allowed: false,
-      },
-      {
-        label: "external accidentally skipped",
-        external: "true",
-        result: "skipped",
-        allowed: false,
-      },
-      {
-        label: "external unknown",
-        external: "true",
-        result: "",
-        allowed: false,
-      },
-      {
-        label: "operator-only flight",
-        external: "false",
-        result: "skipped",
-        allowed: true,
-      },
-      {
-        label: "k3s service-only flight",
-        external: "false",
-        result: "skipped",
-        allowed: true,
-      },
-      {
-        label: "no-external failed preflight",
-        external: "false",
-        result: "failure",
-        allowed: false,
-      },
-      {
-        label: "missing selected-set output",
-        external: "",
-        result: "skipped",
-        allowed: false,
-      },
-      {
-        label: "cancelled workflow after successful preflight",
-        external: "true",
-        result: "success",
+        label: "cancelled workflow",
+        decide: "success",
         cancelled: true,
-        allowed: false,
-      },
-      {
-        label: "failed decide",
-        external: "false",
-        result: "skipped",
-        decide: "failure",
         allowed: false,
       },
     ];
     for (const scenario of cases) {
       const allowed = runInNewContext(
-        expression,
+        condition,
         {
           always: () => true,
           cancelled: () => scenario.cancelled === true,
-          needs: {
-            decide: {
-              result: scenario.decide ?? "success",
-              outputs: { has_external_compute_node_targets: scenario.external },
-            },
-            "external-node-preflight": { result: scenario.result },
-          },
+          needs: { decide: { result: scenario.decide } },
         },
         { timeout: 100 }
       );
@@ -798,11 +730,7 @@ describe("candidate-a manifest source", () => {
         /maintenance-fence\.py (begin|audited|finish)/
       );
     }
-    expect(
-      parsed.jobs["external-node-preflight"].steps.some((step) =>
-        (step.run ?? "").includes("maintenance-drain.mjs")
-      )
-    ).toBe(false);
+    expect(parsed.jobs["external-node-preflight"]).toBeUndefined();
   });
 
   it("keeps every ordinary node outside shared native lifecycle and custody", () => {
@@ -841,7 +769,12 @@ describe("candidate-a manifest source", () => {
       expect(source).not.toContain("node-template");
     }
     expect(materialize).not.toContain("node-template");
-    expect(materialize).toContain('bao_get_field "$inherit_from" "$k" owner');
+    expect(
+      materialize.match(/v="\$\(inherited_key_value "\$k"\)"/g)
+    ).toHaveLength(2);
+    expect(materialize).toContain(
+      'file="${CACHE_DIR}/__owners__/${env}/${svc}/${key}"'
+    );
     const guard = readFileSync(
       path.join(REPO_ROOT, "scripts/ci/lib/maintenance-fence.py"),
       "utf8"

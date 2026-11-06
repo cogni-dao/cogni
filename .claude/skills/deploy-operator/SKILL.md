@@ -1,6 +1,6 @@
 ---
 name: deploy-operator
-description: "Deploy/provision the Cogni operator + node apps (candidate-a / preview / production) on k3s + Argo CD. Use for provisioning a VM/env, bringing a node live, promoting an image digest, debugging Argo sync / ImagePullBackOff / CreateContainerConfigError, or verifying deployment health. REDIRECT skill — the maintained detail lives in provision-env, devops-expert, cicd-secrets-expert."
+description: "Deploy/provision the Cogni operator (k3s + Argo CD). Node apps ship with POST /api/v1/deploy/workloads. Use for provisioning a VM/env, bringing a node live, promoting an image digest, debugging Argo sync / ImagePullBackOff / CreateContainerConfigError, or verifying deployment health. REDIRECT skill — the maintained detail lives in provision-env, devops-expert, cicd-secrets-expert."
 ---
 
 # Deploy Operator — redirect
@@ -13,25 +13,25 @@ description: "Deploy/provision the Cogni operator + node apps (candidate-a / pre
 
 ## Where the current knowledge lives
 
-| You want to…                                                                                       | Skill                     |
-| -------------------------------------------------------------------------------------------------- | ------------------------- |
-| Provision / reprovision an env (VM→k3s→OpenBao→Compose infra→edge→DNS→AppSets), phase map, gotchas | **`provision-env`**       |
-| CI/CD pipeline, deploy branches, image promotion, the freeze policy, VM SSH policy                 | **`devops-expert`**       |
-| Secrets: OpenBao vs GitHub-env, ESO, the `pnpm secrets:set` roll, split-brain                      | **`cicd-secrets-expert`** |
-| Promote a SHA to preview/production, or diagnose a stuck promote                                   | **`promote`**             |
-| RBAC / node access grants (register → approve → OpenFGA)                                           | **`rbac-expert`**         |
-| Which DB a table belongs in, migrations, Doltgres                                                  | **`database-expert`**     |
+| You want to…                                                                                                  | Skill                     |
+| ------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| Provision / reprovision an env (VM→k3s→OpenBao→Compose infra→edge→DNS→operator Argo apps), phase map, gotchas | **`provision-env`**       |
+| CI/CD pipeline, the one node deploy verb, the freeze policy, VM SSH policy                                    | **`devops-expert`**       |
+| Secrets: OpenBao vs GitHub-env, ESO, the `pnpm secrets:set` roll, split-brain                                 | **`cicd-secrets-expert`** |
+| Promote a SHA to preview/production, or diagnose a stuck promote                                              | **`promote`**             |
+| RBAC / node access grants (register → approve → OpenFGA)                                                      | **`rbac-expert`**         |
+| Which DB a table belongs in, migrations, Doltgres                                                             | **`database-expert`**     |
 
 ## The one mental model to carry over
 
 **Provision builds the house; promote fills the furniture; the operator DB is the address book.**
 
 1. **Provision** (`provision-env.yml`) stands up the **substrate + infra** (VM, k3s, OpenBao/ESO,
-   Compose infra incl. scheduler-worker/litellm/doltgres, Caddy, DNS, Argo AppSets) and seeds
-   deploy branches — often with **placeholder image digests**. A green provision can still serve
+   Compose infra incl. scheduler-worker/litellm/doltgres, Caddy, DNS, the operator's Argo apps) and seeds
+   the operator deploy branch — often with **placeholder image digests**. A green provision can still serve
    502: `/version.buildSha` from outside is the only "really live" signal.
-2. **Promote** (`/promote`) fills the deploy branch with a **real per-node image digest** → Argo
-   runs the actual app. Placeholder digest = `ImagePullBackOff` that never self-heals → promote.
+2. **Promote** (`/promote`, operator only) fills the deploy branch with a **real image digest** → Argo
+   runs the actual app. A node does not use this path; it calls `POST /api/v1/deploy/workloads`. Placeholder digest = `ImagePullBackOff` that never self-heals → promote.
 3. **A node is only operable the "standard" way once it's a row in the operator `nodes` table.**
    The table can be empty even when the node's Postgres DB, k8s overlay, and pod all exist — infra
    ≠ registration. Without the registry row, `resolveNodeRef` 404s, so self-serve secrets / RBAC /
