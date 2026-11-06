@@ -6,10 +6,15 @@
 # This Role and RoleBinding are placed in THAT namespace by each overlay (a `replacements` entry sourced
 # from the overlay's Namespace), bound to the sequencer ServiceAccount that lives in the wallet
 # namespace. The wallet namespace therefore carries NO secrets verb for this ServiceAccount.
-# It creates a Secret once and reuses it after, so the Secret rule is exactly get + create: no update (a
-# password that guards live data is never replaced), no delete, no list. `get` is unscoped by name only
-# because the namespace is dedicated; `create` could never be name-scoped anyway (Kubernetes limitation:
-# the name is not known to RBAC at create time).
+# It creates a Secret once and reuses it after, so the Secret rule has no update (a password that guards
+# live data is never replaced) and no list. `get` is unscoped by name only because the namespace is
+# dedicated; `create` could never be name-scoped anyway (Kubernetes limitation: the name is not known to
+# RBAC at create time).
+#
+# task.5430 — `delete` is for the mesh attempt-key Secrets `nd-<nodeId8>-<workload>-mesh-<releaseId>-a<n>`
+# (create-once, deleted one pass after the attempt's revoke is read back). RBAC cannot scope it by name, so
+# attempt-secret-delete-policy.yaml (a ValidatingAdmissionPolicy) refuses a sequencer DELETE of any other
+# name: a state password `nd-<nodeId8>-<workload>` stays undeletable.
 #
 # task.5405 — the sequencer is also the ONE writer of the ExternalSecrets `nd-<slug>-env` in this same
 # namespace: they render a node's OpenBao bucket (via ESO's own eso-reader role) into a Secret it then
@@ -24,7 +29,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, create]
+    verbs: [get, create, delete]
   - apiGroups: [external-secrets.io]
     resources: [externalsecrets]
     verbs: [get, create, patch, update]
