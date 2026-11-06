@@ -91,6 +91,8 @@ class FakeHeadscale implements NodeMeshPort {
   loseNextMintResponse = false;
   failExpire = false;
   readbackOverride: string | null = null;
+  /** When set, ListNodes waits for it (one shot) to let a test interleave calls. */
+  holdListNodes: Promise<void> | null = null;
 
   private enter(method: string): void {
     this.calls.push(method);
@@ -176,6 +178,11 @@ class FakeHeadscale implements NodeMeshPort {
   }
   async listNodes(): Promise<readonly MeshDevice[]> {
     this.enter("ListNodes");
+    if (this.holdListNodes) {
+      const hold = this.holdListNodes;
+      this.holdListNodes = null;
+      await hold;
+    }
     return [...this.devices.values()];
   }
   async deleteNode(id: HeadscaleDeviceId): Promise<void> {
@@ -448,19 +455,109 @@ describe("HR 5 — a fresh key per release and attempt, and a lost mint response
       stored,
       fake.now
     );
-    expect(minted.outcome).toBe("minted");
-    if (minted.outcome !== "minted") return;
-    stored.add(minted.headscaleKeyId);
-    expect(minted.expiredOrphans).toEqual([headscaleKeyId("1")]);
-
+    if (minted.outcome !== "minted") throw new Error("mint");
+    stored.add(minted.headscaleKeyId); // create-once Secret, before the paid create
+    // The orphan is younger than one pass, so the mint leaves it (it could be a sibling's unstored key).
+    expect(minted.expiredOrphans).toEqual([]);
     expect(fake.calls.filter((c) => c === "CreatePreAuthKey")).toHaveLength(2);
+
+    // One pass later the sweep expires the unstored key; only the stored key stays usable.
+    fake.now += 61_000;
+    const swept = await after.sweep(stored, fake.now);
+    expect(swept).toMatchObject({
+      ok: true,
+      expiredKeys: [headscaleKeyId("1")],
+    });
     expect(fake.usableKeys().map((k) => k.id)).toEqual([minted.headscaleKeyId]);
-    // The orphan was expired BEFORE the new key existed.
-    const expireAt = fake.calls.indexOf("ExpirePreAuthKey:1");
-    const createAt = fake.calls.lastIndexOf("CreatePreAuthKey");
-    expect(expireAt).toBeGreaterThan(-1);
-    expect(expireAt).toBeLessThan(createAt);
     expect(() => fake.join("hskey-auth-1-secret")).toThrow("authkey expired");
+    expect(fake.calls.filter((c) => c === "CreatePreAuthKey")).toHaveLength(2);
+  });
+
+  it("a mint expires an unstored same-tag key older than one pass BEFORE it creates the new key", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake);
+    fake.loseNextMintResponse = true;
+    await plane.mintAttemptKey(attempt(RELEASE_1, 1), new Set(), fake.now);
+    fake.now += 61_000;
+    // Reconcile again, but sweep with the orphan treated as live (e.g. a stale caller set) so only
+    // the mint's own orphan rule can expire it.
+    await plane.reconcilePolicy(GRANTS);
+    await plane.sweep(new Set([headscaleKeyId("1")]), fake.now);
+    const minted = await plane.mintAttemptKey(
+      attempt(RELEASE_1, 1),
+      new Set(),
+      fake.now
+    );
+    if (minted.outcome !== "minted") throw new Error("mint");
+    expect(minted.expiredOrphans).toEqual([headscaleKeyId("1")]);
+    const expireAt = fake.calls.indexOf("ExpirePreAuthKey:1");
+    expect(expireAt).toBeGreaterThan(-1);
+    expect(expireAt).toBeLessThan(fake.calls.lastIndexOf("CreatePreAuthKey"));
+    expect(fake.usableKeys().map((k) => k.id)).toEqual([minted.headscaleKeyId]);
+  });
+
+  it("concurrent mints for two workloads of one node never expire each other's unstored keys (CD8)", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake);
+    const stored = new Set<HeadscaleKeyId>(); // neither Secret is written yet
+    const app = { ...attempt(RELEASE_1, 1), workload: "app" };
+    const worker = { ...attempt(RELEASE_2, 1), workload: "worker" };
+    fake.calls.length = 0;
+    const [a, b] = await Promise.all([
+      plane.mintAttemptKey(app, stored, fake.now),
+      plane.mintAttemptKey(worker, stored, fake.now),
+    ]);
+    if (a.outcome !== "minted" || b.outcome !== "minted")
+      throw new Error("mint");
+    expect(a.expiredOrphans).toEqual([]);
+    expect(b.expiredOrphans).toEqual([]);
+    expect(fake.calls.some((c) => c.startsWith("ExpirePreAuthKey:"))).toBe(
+      false
+    );
+    expect(
+      fake
+        .usableKeys()
+        .map((k) => k.id)
+        .sort()
+    ).toEqual([a.headscaleKeyId, b.headscaleKeyId].sort());
+    // Sequential too: the second mint, one second later, still leaves the first's unstored key.
+    fake.now += 1_000;
+    const c = await plane.mintAttemptKey(app, stored, fake.now);
+    if (c.outcome !== "minted") throw new Error("mint");
+    expect(c.expiredOrphans).toEqual([]);
+    expect(fake.usableKeys()).toHaveLength(3);
+  });
+
+  it("a sweep in flight when another call fails does not reopen minting (failure counter)", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake);
+    let release = () => {};
+    fake.holdListNodes = new Promise<void>((r) => {
+      release = r;
+    });
+    fake.calls.length = 0;
+    const sweeping = plane.sweep(new Set(), fake.now);
+    for (let i = 0; i < 50 && !fake.calls.includes("ListNodes"); i++)
+      await Promise.resolve();
+    expect(fake.calls).toContain("ListNodes"); // the sweep is parked inside ListNodes
+    // While the sweep waits on ListNodes, a reconcile fails.
+    fake.down = true;
+    expect((await plane.reconcilePolicy(GRANTS)).outcome).toBe(
+      "coordinator_failed"
+    );
+    fake.down = false;
+    // A reconcile that succeeds now does not stand in for the sweep.
+    expect((await plane.reconcilePolicy(GRANTS)).ready).toBe(true);
+    release();
+    const swept = await sweeping;
+    expect(swept.ok).toBe(false);
+    expect(plane.mintAllowed).toBe(false);
+    expect(
+      await plane.mintAttemptKey(attempt(RELEASE_1, 1), new Set(), fake.now)
+    ).toEqual({ outcome: "refused", reason: "sweep_pending" });
+    // A sweep that starts after the failure reopens it.
+    expect((await plane.sweep(new Set(), fake.now)).ok).toBe(true);
+    expect(plane.mintAllowed).toBe(true);
   });
 
   it("the sweep alone expires an unstored key once it is older than one pass", async () => {
@@ -624,6 +721,13 @@ describe("HR 6 — revocation expires the key first, then deletes its devices", 
       nodeKey: "n",
       keyId: null,
     });
+    // A node-tagged device with no key is anomalous: skipped and counted, never deleted.
+    const unkeyed = fake.addDevice({
+      tags: [`tag:node-${NODE_B}`],
+      machineKey: "m2",
+      nodeKey: "n2",
+      keyId: null,
+    });
     fake.now += 120_000;
 
     const swept = await plane.sweep(live, fake.now);
@@ -631,12 +735,14 @@ describe("HR 6 — revocation expires the key first, then deletes its devices", 
       ok: true,
       expiredKeys: [orphan.headscaleKeyId],
       deletedDevices: [orphanDevice.headscaleDeviceId],
+      unkeyedNodeDevices: [unkeyed.headscaleDeviceId],
     });
     expect([...fake.devices.keys()].sort()).toEqual(
       [
         keptDevice.headscaleDeviceId,
         foreignDevice.headscaleDeviceId,
         gw.headscaleDeviceId,
+        unkeyed.headscaleDeviceId,
       ].sort()
     );
     expect(
@@ -766,24 +872,37 @@ describe("HR 12 — no Headscale admin surface", () => {
     expect(await plane.checkAdminSurface()).toEqual({ ok: false, apiKeys: 1 });
   });
 
-  it("the port offers no call that creates an API key", () => {
-    const methods: Array<keyof NodeMeshPort> = [
-      "health",
-      "getPolicy",
-      "setPolicy",
-      "createUser",
-      "listUsers",
-      "createPreAuthKey",
-      "expirePreAuthKey",
-      "listPreAuthKeys",
-      "listNodes",
-      "deleteNode",
-      "authRegister",
-      "listApiKeys",
-    ];
-    expect(methods.some((m) => /apikey/i.test(m) && m !== "listApiKeys")).toBe(
-      false
-    );
+  it("the port offers no call that creates an API key (exhaustive over NodeMeshPort)", () => {
+    // `satisfies` fails to compile if a port method is added or removed without updating this list.
+    const methods = {
+      health: true,
+      getPolicy: true,
+      setPolicy: true,
+      createUser: true,
+      listUsers: true,
+      createPreAuthKey: true,
+      expirePreAuthKey: true,
+      listPreAuthKeys: true,
+      listNodes: true,
+      deleteNode: true,
+      authRegister: true,
+      listApiKeys: true,
+    } as const satisfies Record<keyof NodeMeshPort, true>;
+    const names = Object.keys(methods);
+    expect(names.filter((m) => /api.?key/i.test(m))).toEqual(["listApiKeys"]);
+    expect(
+      names.some(
+        (m) =>
+          /^(create|set|add|new|register|issue)/i.test(m) &&
+          /key/i.test(m) &&
+          m !== "createPreAuthKey"
+      )
+    ).toBe(false);
+    // The fake implements exactly the port too.
+    const fakeMethods = Object.getOwnPropertyNames(
+      FakeHeadscale.prototype
+    ).filter((m) => Object.hasOwn(methods, m));
+    expect(fakeMethods.sort()).toEqual(names.sort());
   });
 });
 

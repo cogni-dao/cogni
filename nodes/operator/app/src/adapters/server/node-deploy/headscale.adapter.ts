@@ -13,7 +13,8 @@
  *     REST gateway lives on the HTTP listener behind an API key, which this client never uses.
  *   - PINNED_SCHEMA: messages come from `HEADSCALE_V0_29_7_DESCRIPTOR`, drift-pinned to the vendored
  *     v0.29.7 protos. No `.proto` file is read at run time, so the bundled sequencer works.
- *   - BOUNDED: every call carries a gRPC deadline (`timeoutMs`, default 5 s).
+ *   - BOUNDED: every call carries a gRPC deadline (`timeoutMs`, default 5 s), and reconnect backoff is
+ *     capped at 3 s so a restarted Headscale is reached on the next pass.
  *   - NORMALIZED_ERRORS: every failure is a `NodeMeshError` (closed code + reason). Neither a request
  *     payload (policy, key) nor Headscale's raw message is put in the error.
  *   - NO_VALUES_IN_LOGS: this module never logs; the minted key value is returned once to the caller.
@@ -59,6 +60,15 @@ import {
 } from "./headscale-v0.29.7.descriptor";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
+
+/**
+ * Headscale restarts with every sequencer rollout (design CD5). grpc-js backs off up to 120 s by default;
+ * a few seconds keeps the first pass after a restart from failing on a stale backoff.
+ */
+export const CHANNEL_OPTIONS = {
+  "grpc.initial_reconnect_backoff_ms": 500,
+  "grpc.max_reconnect_backoff_ms": 3_000,
+} as const;
 
 /** The JSON literal is plain data; protobufjs' INamespace marks optional members as required. */
 export const HEADSCALE_DESCRIPTOR =
@@ -114,14 +124,25 @@ type UnaryFn = (
   callback: (error: ServiceError | null, response?: unknown) => void
 ) => unknown;
 
-/** A protobuf Timestamp as ISO-8601; null for absent or the zero value Go sends for "unset". */
+/** `timestamppb.New(time.Time{})`: Go's zero time, 0001-01-01T00:00:00Z. */
+export const GO_ZERO_TIME_SECONDS = -62_135_596_800;
+/** The past instant a zero key expiration maps to: such a key is already expired in Headscale. */
+const EXPIRED_AT_ZERO = new Date(0).toISOString();
+
+/**
+ * A protobuf Timestamp as ISO-8601. Absent, the proto3 default (0 s) and Go's zero time all mean
+ * "unset" and map to null, except where `zero: "expired"`: Headscale v0.29.7 treats a pre-auth key whose
+ * expiration is the zero time as expired (`types/preauth_key.go` Validate), so that maps to a past instant.
+ */
 export const timestampToIso = (
-  ts: WireTimestamp | null | undefined
+  ts: WireTimestamp | null | undefined,
+  zero: "null" | "expired" = "null"
 ): string | null => {
   if (!ts) return null;
   const seconds = Number(ts.seconds ?? 0);
   const nanos = ts.nanos ?? 0;
-  if (seconds === 0 && nanos === 0) return null;
+  if ((seconds === 0 && nanos === 0) || seconds <= GO_ZERO_TIME_SECONDS)
+    return zero === "expired" ? EXPIRED_AT_ZERO : null;
   const ms = seconds * 1000 + Math.floor(nanos / 1e6);
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 };
@@ -177,9 +198,15 @@ const toKey = (k: WirePreAuthKey): MeshPreAuthKey => ({
   reusable: k.reusable ?? false,
   ephemeral: k.ephemeral ?? false,
   used: k.used ?? false,
-  expiration: timestampToIso(k.expiration),
+  expiration: timestampToIso(k.expiration, "expired"),
   createdAt: timestampToIso(k.created_at),
 });
+
+/**
+ * Headscale renders a tag-owned node with the synthetic user `tagged-devices`, id 2147455555
+ * (`types/users.go` TaggedDevices). It is not an owner object, so it maps to null.
+ */
+export const TAGGED_DEVICES_USER_ID = "2147455555";
 
 const toDevice = (n: WireNode): MeshDevice => ({
   headscaleDeviceId: headscaleDeviceId(String(n.id ?? "")),
@@ -193,7 +220,10 @@ const toDevice = (n: WireNode): MeshDevice => ({
     n.pre_auth_key?.id && n.pre_auth_key.id !== "0"
       ? headscaleKeyId(String(n.pre_auth_key.id))
       : null,
-  headscaleUser: n.user?.name ? headscaleUser(n.user.name) : null,
+  headscaleUser:
+    n.user?.name && n.user.id !== TAGGED_DEVICES_USER_ID
+      ? headscaleUser(n.user.name)
+      : null,
   createdAt: timestampToIso(n.created_at),
   lastSeen: timestampToIso(n.last_seen),
   expiry: timestampToIso(n.expiry),
@@ -239,7 +269,8 @@ export class HeadscaleSocketAdapter implements NodeMeshPort {
     const Ctor = headscaleServiceCtor();
     this.client = new Ctor(
       `unix:${options.socketPath}`,
-      credentials.createInsecure()
+      credentials.createInsecure(),
+      CHANNEL_OPTIONS
     );
   }
 
@@ -313,7 +344,8 @@ export class HeadscaleSocketAdapter implements NodeMeshPort {
       }
     );
     const k = r.pre_auth_key;
-    if (!k?.key || !k.id)
+    // defaults:true decodes a missing uint64 as "0"; Headscale never issues id 0.
+    if (!k?.key || !k.id || k.id === "0")
       throw new NodeMeshError("CreatePreAuthKey", "unknown", "other");
     return { ...toKey(k), key: k.key };
   }

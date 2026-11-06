@@ -11,8 +11,10 @@
  *   - PINNED_TO_THE_TAG: every message and method here equals the vendored upstream files in
  *     `headscale-proto-v0.29.7/` (tag v0.29.7, commit c9cf210b8bc84d13177e18b91f555788a44b47b6), field
  *     by field. `tests/component/node-deploy/headscale.adapter.int.test.ts` fails on any drift.
- *   - SUBSET_ONLY: adding a method means adding it to HEADSCALE_CLIENT_METHODS and regenerating this file
- *     from the vendored protos; never hand-edit a field.
+ *   - SUBSET_ONLY: it holds only the methods in HEADSCALE_CLIENT_METHODS and the messages they reach.
+ *     To add a method, add it to that list and copy its request, response and any new nested messages
+ *     from the vendored `.proto` files, field number for field number. The contract test compares every
+ *     message and method here with the vendored files, so a wrong or drifted field fails CI.
  * Side-effects: none
  * Links: headscale.adapter.ts, headscale-proto-v0.29.7/headscale/v1/headscale.proto
  * @internal

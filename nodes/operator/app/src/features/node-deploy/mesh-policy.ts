@@ -13,7 +13,7 @@
  *     `FilterAllowAll`), so `acls: []` is the deny-all seed.
  *   - LEAST_PORTS (HR 3): one rule per node, `tag:node-<nodeId>` -> `tag:substrate:<its ports>`, TCP only.
  *     No rule names a node tag as a destination, so node to node is refused, and no port outside the
- *     service-type registry (5432, 5435, 6379, 4000, 7233) can be granted.
+ *     service-type registry (`substrate-ports.ts`, the one port table) can be granted.
  *   - SUBSTRATE_OWNER_ALWAYS: `tagOwners` always holds `tag:substrate` owned by the env owner
  *     `cogni-mesh-<env>@`. Node tags are defined with NO owner: only a tagged pre-auth key can carry one.
  *   - STABLE_FORM: owners, rules and ports are sorted, and the serializer orders object keys, so a
@@ -25,20 +25,7 @@
 
 import { type HeadscaleUser, headscaleUser } from "@/ports";
 
-/** The service-type registry's shared substrate ports (hub `service-type-registry`). */
-export const SUBSTRATE_PORTS = {
-  postgres: 5432,
-  doltgres: 5435,
-  redis: 6379,
-  "ai-gateway": 4000,
-  temporal: 7233,
-} as const;
-
-export type SubstrateType = keyof typeof SUBSTRATE_PORTS;
-
-const ALLOWED_PORTS: ReadonlySet<number> = new Set(
-  Object.values(SUBSTRATE_PORTS)
-);
+import { SUBSTRATE_PORT_SET as ALLOWED_PORTS } from "./substrate-ports";
 
 export const SUBSTRATE_TAG = "tag:substrate";
 export const NODE_TAG_PREFIX = "tag:node-";
@@ -91,10 +78,6 @@ export interface MeshPolicyDocument {
   readonly tagOwners: Readonly<Record<string, readonly string[]>>;
   readonly acls: readonly MeshAclRule[];
 }
-
-/** The ports of the given substrate types, sorted and deduplicated. */
-export const portsForTypes = (types: readonly SubstrateType[]): number[] =>
-  [...new Set(types.map((t) => SUBSTRATE_PORTS[t]))].sort((a, b) => a - b);
 
 /** The seed: nothing may talk to anything, and `tag:substrate` stays owned by the env owner. */
 export const denyAllPolicy = (owner: HeadscaleUser): MeshPolicyDocument => ({

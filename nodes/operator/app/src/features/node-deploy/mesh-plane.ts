@@ -13,14 +13,18 @@
  *     in this process matched the derivation. An absent or different policy is first replaced by the
  *     deny-all seed, then by the derived policy, then read back.
  *   - SWEEP_BEFORE_MINT (HR 5): after a process start or any failed Headscale call, a mint is refused until
- *     a sweep has succeeded, so a key whose mint response was lost is expired before a new one exists.
- *   - ONE_TRY_PER_MINT (HR 5): a mint that fails or loses its response is never retried inside the call.
- *     The unstored key, if Headscale made one, is expired by the sweep or, at the latest, by the next
- *     mint for that node before it creates a key: at most one usable unstored key exists.
+ *     a sweep that STARTED after that failure has succeeded (a failure counter, so an in-flight sweep
+ *     cannot reopen minting after a concurrent failure).
+ *   - ONE_TRY_PER_MINT (HR 5, CD8): a mint that fails or loses its response is never retried inside the
+ *     call. The unstored key, if Headscale made one, grants nothing (its value reached no lease) and is
+ *     expired once it is older than one pass: by the sweep, or by the next mint for that node tag.
+ *   - FRESH_KEYS_ARE_NOT_ORPHANS (CD8): neither the sweep nor a mint expires a key younger than one pass,
+ *     so a sibling workload's key that is minted but not yet stored is never expired by a concurrent mint.
  *   - EXPIRE_THEN_DELETE (HR 6): revoke and sweep expire the key first and delete its devices only after
  *     the expire succeeded; a reusable key that still works would re-join a deleted device.
  *   - NODE_SCOPE_ONLY: revoke and sweep act only on keys and devices whose tags are all `tag:node-*`.
- *     They never touch `tag:substrate` or any other tag.
+ *     They never touch `tag:substrate` or any other tag. A node-tagged device with no key is anomalous:
+ *     the sweep skips and counts it (`unkeyedNodeDevices`) instead of deleting it.
  *   - VERIFIED_APPROVAL (HR 11): a published request older than 5 minutes is refused. After
  *     `AuthRegister` the device must have tags exactly `[tag:substrate]` and the published machine and
  *     node keys, else it is deleted at once and the result carries `node_mesh_substrate_mismatch`.
@@ -188,6 +192,8 @@ export interface SweepResult {
   readonly ok: boolean;
   readonly expiredKeys: readonly HeadscaleKeyId[];
   readonly deletedDevices: readonly HeadscaleDeviceId[];
+  /** Node-tagged devices Headscale reports with no key: skipped, never deleted (log them). */
+  readonly unkeyedNodeDevices: readonly HeadscaleDeviceId[];
   readonly reason?: NodeMeshErrorReason;
 }
 
@@ -216,6 +222,8 @@ export class MeshPlane {
   private matched: MeshPolicyDocument | null = null;
   /** A sweep succeeded since process start and since the last failed call. */
   private swept = false;
+  /** Bumped by every failed call; a sweep or reconcile opens the gate only if it saw no failure. */
+  private failures = 0;
 
   constructor(
     private readonly mesh: NodeMeshPort,
@@ -227,6 +235,7 @@ export class MeshPlane {
 
   /** Any failed call closes minting and approval until the next good reconcile and sweep. */
   private fail(error: unknown): NodeMeshErrorReason {
+    this.failures += 1;
     this.matched = null;
     this.swept = false;
     return reasonOf(error);
@@ -252,6 +261,7 @@ export class MeshPlane {
     grants: readonly NodeSubstrateGrant[]
   ): Promise<ReconcileResult> {
     const derived = deriveMeshPolicy({ owner: this.owner, grants });
+    const generation = this.failures;
     let wasAbsent = false;
     let drift = false;
     try {
@@ -259,8 +269,13 @@ export class MeshPlane {
       const read = await this.mesh.getPolicy();
       wasAbsent = read === null;
       if (read && policyMatches(read.policy, derived)) {
-        this.matched = derived;
-        return { outcome: "matched", ready: true, drift, wasAbsent };
+        if (this.failures === generation) this.matched = derived;
+        return {
+          outcome: "matched",
+          ready: this.failures === generation,
+          drift,
+          wasAbsent,
+        };
       }
       drift = read !== null;
       this.matched = null;
@@ -269,8 +284,13 @@ export class MeshPlane {
       const back = await this.mesh.getPolicy();
       if (!back || !policyMatches(back.policy, derived))
         return { outcome: "readback_mismatch", ready: false, drift, wasAbsent };
-      this.matched = derived;
-      return { outcome: "written", ready: true, drift, wasAbsent };
+      if (this.failures === generation) this.matched = derived;
+      return {
+        outcome: "written",
+        ready: this.failures === generation,
+        drift,
+        wasAbsent,
+      };
     } catch (error) {
       return {
         outcome: "coordinator_failed",
@@ -342,9 +362,10 @@ export class MeshPlane {
 
   /**
    * Mint the one reusable, ephemeral `tag:node-<nodeId>` key for this attempt. First expire every
-   * still-usable key of this node tag that no live attempt stores (the orphan of a lost mint response),
-   * so at most one usable unstored key exists at any time. Exactly one create call; a failure or a lost
-   * response is reported, never retried here.
+   * still-usable key of this node tag that no live attempt stores AND that is older than one pass (the
+   * orphan of a lost mint response). A younger unstored key may belong to a sibling workload whose mint
+   * has not been stored yet, so it is left alone. Exactly one create call; a failure or a lost response
+   * is reported, never retried here.
    */
   async mintAttemptKey(
     attempt: AttemptRef,
@@ -365,6 +386,7 @@ export class MeshPlane {
           key.tags.length === 1 &&
           key.tags[0] === tag &&
           !liveKeyIds.has(key.headscaleKeyId) &&
+          !this.isFresh(key.createdAt, now) &&
           !isExpired(key.expiration, now);
         if (!orphan) continue;
         await this.mesh.expirePreAuthKey(key.headscaleKeyId);
@@ -392,15 +414,27 @@ export class MeshPlane {
     }
   }
 
-  /** Expire every given key, then delete every node-scoped device of a key not in `live`. */
+  /** A key created within one pass of `now` (unknown creation time counts as old). */
+  private isFresh(createdAt: string | null, now: number): boolean {
+    const created = createdAt ? Date.parse(createdAt) : 0;
+    return now - created < this.sweepMinAgeMs;
+  }
+
+  /** Expire every given key, then delete every node-scoped device that `isDoomed` names. */
   private async expireThenDelete(
     expire: readonly HeadscaleKeyId[],
-    isDoomed: (device: MeshDevice) => boolean
+    isDoomed: (device: MeshDevice) => boolean,
+    unkeyed: HeadscaleDeviceId[] = []
   ): Promise<HeadscaleDeviceId[]> {
     for (const id of expire) await this.mesh.expirePreAuthKey(id);
     const deleted: HeadscaleDeviceId[] = [];
     for (const device of await this.mesh.listNodes()) {
-      if (!nodeScoped(device.tags) || !isDoomed(device)) continue;
+      if (!nodeScoped(device.tags)) continue;
+      if (device.headscaleKeyId === null) {
+        unkeyed.push(device.headscaleDeviceId);
+        continue;
+      }
+      if (!isDoomed(device)) continue;
       try {
         await this.mesh.deleteNode(device.headscaleDeviceId);
       } catch (error) {
@@ -459,13 +493,14 @@ export class MeshPlane {
     now: number
   ): Promise<SweepResult> {
     const expiredKeys: HeadscaleKeyId[] = [];
+    const unkeyedNodeDevices: HeadscaleDeviceId[] = [];
+    const generation = this.failures;
     try {
       const keys = await this.mesh.listPreAuthKeys();
       const live = new Set(liveKeyIds);
       for (const key of keys) {
         if (!nodeScoped(key.tags) || live.has(key.headscaleKeyId)) continue;
-        const created = key.createdAt ? Date.parse(key.createdAt) : 0;
-        if (now - created < this.sweepMinAgeMs) {
+        if (this.isFresh(key.createdAt, now)) {
           // Too new to judge: its device (if any) must survive this pass too.
           live.add(key.headscaleKeyId);
           continue;
@@ -475,15 +510,27 @@ export class MeshPlane {
       }
       const deletedDevices = await this.expireThenDelete(
         expiredKeys,
-        (d) => d.headscaleKeyId === null || !live.has(d.headscaleKeyId)
+        (d) => d.headscaleKeyId !== null && !live.has(d.headscaleKeyId),
+        unkeyedNodeDevices
       );
-      this.swept = true;
-      return { ok: true, expiredKeys, deletedDevices };
+      // Only a sweep that saw no concurrent failure may reopen minting.
+      const clean = this.failures === generation;
+      if (clean) this.swept = true;
+      return clean
+        ? { ok: true, expiredKeys, deletedDevices, unkeyedNodeDevices }
+        : {
+            ok: false,
+            expiredKeys,
+            deletedDevices,
+            unkeyedNodeDevices,
+            reason: "other",
+          };
     } catch (error) {
       return {
         ok: false,
         expiredKeys,
         deletedDevices: [],
+        unkeyedNodeDevices,
         reason: this.fail(error),
       };
     }

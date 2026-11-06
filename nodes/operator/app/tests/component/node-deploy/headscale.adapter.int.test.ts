@@ -17,7 +17,9 @@
  * Side-effects: IO (Docker container, unix socket, temp dirs)
  * Notes: The container lane runs where a bind-mounted unix socket is reachable from the test process
  *   (Linux, i.e. CI). Elsewhere set HEADSCALE_CONTRACT_SOCKET to the socket of a FRESH, disposable
- *   v0.29.7 Headscale (for example bridged out of Docker Desktop); otherwise the live lane skips.
+ *   v0.29.7 Headscale (for example bridged out of Docker Desktop), whose config uses
+ *   `server_url: http://headscale:8080`, and HEADSCALE_CONTRACT_NETWORK to the Docker network on which it
+ *   has the alias `headscale` (for the real-client join case); otherwise the live lane skips.
  * Links: src/adapters/server/node-deploy/headscale.adapter.ts, src/ports/node-mesh.port.ts
  * @internal
  */
@@ -36,12 +38,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { fromJSON, loadSync } from "@grpc/proto-loader";
-import { GenericContainer, type StartedTestContainer } from "testcontainers";
+import {
+  GenericContainer,
+  Network,
+  type StartedNetwork,
+  type StartedTestContainer,
+} from "testcontainers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  GO_ZERO_TIME_SECONDS,
   HEADSCALE_DESCRIPTOR,
   HeadscaleSocketAdapter,
+  timestampToIso,
 } from "@/adapters/server/node-deploy/headscale.adapter";
 import { HEADSCALE_CLIENT_METHODS } from "@/adapters/server/node-deploy/headscale-v0.29.7.descriptor";
 import {
@@ -82,7 +91,14 @@ const UPSTREAM_SHA256: Record<string, string> = {
 const VENDOR_HEADER_LINES = 4;
 
 /** The smallest config that boots v0.29.7 in database policy mode with the socket world-connectable. */
-const HEADSCALE_CONFIG = `server_url: https://mesh-contract.invalid
+/** The client container reaches Headscale at this alias on the test network. */
+const HEADSCALE_ALIAS = "headscale";
+const LOGIN_SERVER = `http://${HEADSCALE_ALIAS}:8080`;
+/** Tailscale 1.104.4, the qualified client (design: phase-2 stack), pinned by index digest. */
+const TAILSCALE_IMAGE =
+  "tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c";
+
+const HEADSCALE_CONFIG = `server_url: ${LOGIN_SERVER}
 listen_addr: 0.0.0.0:8080
 metrics_listen_addr: 127.0.0.1:9090
 grpc_listen_addr: 127.0.0.1:50443
@@ -147,6 +163,19 @@ const PROTO_OPTIONS = {
 } as const;
 
 describe("Headscale v0.29.7 schema pin", () => {
+  it("maps Go's zero time to null, except a zero key expiration, which is already expired", () => {
+    const zero = { seconds: String(GO_ZERO_TIME_SECONDS), nanos: 0 };
+    expect(timestampToIso(zero)).toBeNull();
+    expect(timestampToIso({ seconds: "0", nanos: 0 })).toBeNull();
+    expect(timestampToIso(null)).toBeNull();
+    expect(Date.parse(timestampToIso(zero, "expired") ?? "")).toBeLessThan(
+      Date.now()
+    );
+    expect(timestampToIso({ seconds: "4102444800", nanos: 0 })).toBe(
+      "2100-01-01T00:00:00.000Z"
+    );
+  });
+
   it("vendored protos are the upstream v0.29.7 bytes under a provenance header", () => {
     for (const [file, sha] of Object.entries(UPSTREAM_SHA256)) {
       const text = readFileSync(
@@ -223,11 +252,14 @@ describe("Headscale v0.29.7 schema pin", () => {
 
 const providedSocket = process.env.HEADSCALE_CONTRACT_SOCKET;
 const liveLane = Boolean(providedSocket) || process.platform === "linux";
+/** With a provided socket, the join case also needs the Docker network that Headscale's alias is on. */
+const providedNetwork = process.env.HEADSCALE_CONTRACT_NETWORK;
 
 describe.skipIf(!liveLane)(
   "HeadscaleSocketAdapter against headscale:v0.29.7",
   () => {
     let container: StartedTestContainer | undefined;
+    let network: StartedNetwork | undefined;
     let socketDir: string | undefined;
     let configDir: string | undefined;
     let adapter: HeadscaleSocketAdapter;
@@ -242,7 +274,10 @@ describe.skipIf(!liveLane)(
         chmodSync(path.join(configDir, "config.yaml"), 0o644);
         socketDir = mkdtempSync(path.join(tmpdir(), "hs-sock-"));
         chmodSync(socketDir, 0o777);
+        network = await new Network().start();
         container = await new GenericContainer(HEADSCALE_IMAGE)
+          .withNetwork(network)
+          .withNetworkAliases(HEADSCALE_ALIAS)
           .withBindMounts([
             { source: configDir, target: "/etc/headscale", mode: "ro" },
             { source: socketDir, target: "/var/run/headscale" },
@@ -266,6 +301,7 @@ describe.skipIf(!liveLane)(
     afterAll(async () => {
       adapter?.close();
       await container?.stop();
+      await network?.stop();
       if (socketDir) rmSync(socketDir, { recursive: true, force: true });
       if (configDir) rmSync(configDir, { recursive: true, force: true });
     });
@@ -358,6 +394,59 @@ describe.skipIf(!liveLane)(
       expect((err as NodeMeshError).message).not.toContain(authId);
       expect(await adapter.listNodes()).toEqual([]);
     });
+
+    it("a real tailscale client joins with a minted node key: ListNodes maps its key id, tags and expiry; expire-then-delete removes it (HR 6)", async () => {
+      const networkName = network?.getName() ?? providedNetwork;
+      if (!networkName) return; // provided-socket lane without a network: nothing to join through
+      const minted = await adapter.createPreAuthKey({
+        tags: [`tag:node-${NODE_A}`],
+        reusable: true,
+        ephemeral: true,
+        expiration: new Date(Date.UTC(2100, 0, 1)),
+      });
+      const client = await new GenericContainer(TAILSCALE_IMAGE)
+        .withNetworkMode(networkName)
+        .withEnvironment({
+          TS_USERSPACE: "true",
+          TS_AUTH_ONCE: "true",
+          TS_STATE_DIR: "/tmp/tailscale",
+          TS_HOSTNAME: "contract-node",
+          TS_AUTHKEY: minted.key,
+          TS_EXTRA_ARGS: `--login-server=${LOGIN_SERVER}`,
+          TS_NO_LOGS_NO_SUPPORT: "true",
+        })
+        .start();
+      try {
+        let device:
+          | Awaited<ReturnType<typeof adapter.listNodes>>[number]
+          | undefined;
+        const deadline = Date.now() + 90_000;
+        while (!device && Date.now() < deadline) {
+          device = (await adapter.listNodes()).find(
+            (d) => d.headscaleKeyId === minted.headscaleKeyId
+          );
+          if (!device) await new Promise((r) => setTimeout(r, 1_000));
+        }
+        expect(device, "the client never registered").toBeDefined();
+        if (!device) return;
+        expect(device.tags).toEqual([`tag:node-${NODE_A}`]);
+        expect(device.headscaleKeyId).toBe(minted.headscaleKeyId);
+        expect(device.machineKey).toMatch(/^mkey:/);
+        expect(device.nodeKey).toMatch(/^nodekey:/);
+        expect(device.expiry).toBeNull(); // a tagged device never expires
+        expect(device.headscaleUser).toBeNull(); // tag-owned, not user-owned
+
+        // Revoke in the design's order: expire the key, then delete the device.
+        await adapter.expirePreAuthKey(minted.headscaleKeyId);
+        await adapter.deleteNode(device.headscaleDeviceId);
+        const left = (await adapter.listNodes()).filter(
+          (d) => d.headscaleKeyId === minted.headscaleKeyId
+        );
+        expect(left).toEqual([]);
+      } finally {
+        await client.stop();
+      }
+    }, 180_000);
 
     it("holds zero API keys (HR 12)", async () => {
       expect(await adapter.listApiKeys()).toEqual([]);

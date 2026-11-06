@@ -25,10 +25,9 @@ import {
   nodeTag,
   policyMatches,
   policyNodeTags,
-  portsForTypes,
-  SUBSTRATE_PORTS,
   serializeMeshPolicy,
 } from "./mesh-policy";
+import { portsForTypes, SUBSTRATE_PORTS } from "./substrate-ports";
 
 const NODE_A = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 const NODE_B = "0b9d3c2e-1111-4222-8333-944455556666";

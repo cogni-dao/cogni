@@ -29,6 +29,8 @@ Infrastructure implementations of ports including server/, worker/, cli/, and te
 
 ## Public Surface
 
+- Node mesh (`server/node-deploy/headscale.adapter.ts`, task.5429): `HeadscaleSocketAdapter` implements `NodeMeshPort` over ONE env Headscale v0.29.7's unix socket (gRPC, no API key, bounded deadlines, normalized payload-free errors). Its schema is `headscale-v0.29.7.descriptor.ts`, drift-pinned to the vendored protos in `headscale-proto-v0.29.7/` (BSD-3-Clause, LICENSE beside them). Contract test: `tests/component/node-deploy/headscale.adapter.int.test.ts`. Not exported through `@/adapters/server`; the sequencer bootstrap wires it (T4).
+
 - App-private `AkashNativeStateReader` (exported through `@/adapters/server`) reads only fixed public Akash deployment/lease GETs. Bootstrap injects public owner and transport; full identities, pagination, bytes, concurrency and deadlines are bounded. It returns observations, never closure or recovery policy.
 
 - Finance (`server/finance/`): `akashHostingReaders` (one operator-covered USD/day row per node from the exact on-chain lease price, measured blocks/day or 5.884 s/block), `akashCreditReader` (injected expected Console granter; verified available-credit/burn estimate, escrow excluded) + `readAkashBlocksPerDay`, `cherryFinanceReader` (port of `cherryPlane`), `grafanaOverageReader`, `domainExpiryReader`, `readAkashReports`, `collapseAkash` (hosting rows become children of the one Akash row), `creditedPurchasesQuery` (CREDITED payment_attempts for the package income reader), `unavailableFinanceReader` — every row in the hub money-plane-registry as a never-throwing `PlaneReader`, each carrying its `rail`.
@@ -68,7 +70,7 @@ pnpm test tests/contract/
 ## Dependencies
 
 - **Internal:** ports/, shared/
-- **External:** drizzle-orm, postgres, langfuse, pino, siwe, viem, litellm
+- **External:** drizzle-orm, postgres, langfuse, pino, siwe, viem, litellm, @grpc/grpc-js + @grpc/proto-loader (Headscale socket client)
 
 ## Change Protocol
 
