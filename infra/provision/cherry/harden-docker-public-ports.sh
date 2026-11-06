@@ -33,6 +33,14 @@ exec 9>"$HARDEN_LOCK_FILE"
 flock -x 9
 
 INTERNAL_PORTS="5432,5435,6379,4000,7233,8080"
+# task.5428 — mesh plane (hub node-service-delivery §2 "Firewall"). The env VM opens only 443 (open
+# today), UDP 3478 (relay STUN) and UDP 41641 (WireGuard direct path); keys authenticate that traffic.
+MESH_UDP_PORTS="3478,41641"
+# The per-env Headscale client NodePorts (infra/k8s/base/node-deploy-mesh/service.yaml; pinned equal by
+# tests/ci-invariants/node-deploy-mesh-plane.spec.ts). Only the local edge Caddy may reach them; from
+# the public NIC they are dropped, so no plain-HTTP control port and no /api surface is public (hard
+# requirements 12 and 22). k3s NodePort traffic is DNAT'd to a pod and forwarded, so it passes here.
+MESH_CONTROL_NODEPORTS="32441:32443"
 POD_CIDR="10.42.0.0/16"
 SVC_CIDR="10.43.0.0/16"
 TAG="cogni-harden-internal-ports"
@@ -61,7 +69,19 @@ while :; do
   iptables -D DOCKER-USER "$ln"
 done
 
+# The coordinator NodePorts are k3s (kube-proxy) DNAT targets, not Docker-published ports, and the
+# FORWARD order between k3s and Docker chains is not ours to rely on. Drop them in raw PREROUTING,
+# which runs before any NAT: public bytes never reach Headscale's plain-HTTP listener. Same tag and
+# same delete-by-line-number reconcile as DOCKER-USER above.
+while :; do
+  ln=$(iptables -t raw -L PREROUTING --line-numbers -n 2>/dev/null | awk -v t="$TAG" '!found && $0 ~ t {print $1; found=1}')
+  [ -z "$ln" ] && break
+  iptables -t raw -D PREROUTING "$ln"
+done
+iptables -t raw -A PREROUTING -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$MESH_CONTROL_NODEPORTS" -m comment --comment "$TAG:drop-public-mesh-control" -j DROP
+
 iptables -A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment "$TAG:established" -j ACCEPT
+iptables -A DOCKER-USER -i "$PUBLIC_IFACE" -p udp -m multiport --dports "$MESH_UDP_PORTS" -m comment --comment "$TAG:mesh-udp-open" -j ACCEPT
 iptables -A DOCKER-USER -s "$POD_CIDR" -m comment --comment "$TAG:pod-cidr" -j ACCEPT
 iptables -A DOCKER-USER -s "$SVC_CIDR" -m comment --comment "$TAG:svc-cidr" -j ACCEPT
 iptables -A DOCKER-USER -s 127.0.0.0/8 -m comment --comment "$TAG:loopback" -j ACCEPT

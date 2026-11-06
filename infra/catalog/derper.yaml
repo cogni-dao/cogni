@@ -1,0 +1,23 @@
+name: derper
+# task.5428 — the env VM half of the per-env mesh plane (hub node-service-delivery §1-§2, task.5384).
+# type: infra = built in CI like litellm/doltgres (content-hash tag `derper-<hash>`), deployed by
+# Compose on the env VM and pinned BY DIGEST in infra/compose/runtime/docker-compose.yml (CD10).
+type: infra
+port: 3340
+dockerfile: infra/images/derper/Dockerfile
+build_context: infra/images/derper
+image_tag_suffix: "-derper"
+migrator_tag_suffix: ""
+path_prefix: infra/images/derper/
+# The env VMs that run the relay + gateway. candidate-a first (task.5428); production is slice T1p
+# and preview follows it (design §6 order). Adding an env here is the whole switch: deploy-infra
+# starts `compose_services` and render-caddyfile.sh renders the VM's DNS-only relay/publish site
+# ONLY for these envs.
+envs: [candidate-a]
+# The Compose services of the VM mesh plane (infra/compose/runtime/docker-compose.yml).
+compose_services:
+  - derper
+  - substrate-gw
+  - substrate-gw-publisher
+  - mesh-control-fwd
+  - substrate-fwd

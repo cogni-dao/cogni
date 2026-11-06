@@ -47,6 +47,12 @@ resources:
 
 namePrefix: operator-
 
+# task.5428 — the per-env mesh coordinators (one Headscale container + PVC per env this sequencer
+# serves) ride beside their one writer. Only this overlay includes them: this sequencer serves the
+# canonical candidate-a, preview and production lanes (NODE_DEPLOY_ENVS below).
+components:
+  - ../../../base/node-deploy-mesh
+
 # Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
 # name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.

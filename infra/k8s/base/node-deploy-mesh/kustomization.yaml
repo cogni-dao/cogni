@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the per-env mesh COORDINATORS (Headscale), as a Component on the node-deploy sequencer.
+# Included ONLY by the overlay whose sequencer serves the canonical Akash lanes (production:
+# NODE_DEPLOY_ENVS=candidate-a,preview,production). The candidate-a TEST operator's sequencer does not
+# include it: one tailnet per env must have exactly one coordinator and one writer.
+#
+# What else derives from these files (one source, no second list):
+#   - scripts/ci/render-caddyfile.sh renders the edge route of each `config/headscale-<env>.yaml`
+#     (host = its server_url) to the NodePort named `headscale-<env>` in service.yaml, on the edge of
+#     the env whose operator overlay lists this component;
+#   - scripts/ci/deploy-infra.sh gives each env VM its control URL from the same server_url.
+# Design: hub node-service-delivery §1 (contrib-flock-leader-conductor-0d01550b).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - pvc.yaml
+  - service.yaml
+configMapGenerator:
+  - name: node-deploy-mesh-config
+    files:
+      - config/headscale-candidate-a.yaml
+      - config/headscale-preview.yaml
+      - config/headscale-production.yaml
+      - config/derp-candidate-a.yaml
+      - config/derp-preview.yaml
+      - config/derp-production.yaml
+patches:
+  - path: deployment-patch.yaml
+    target:
+      kind: Deployment
+      name: node-deploy-sequencer

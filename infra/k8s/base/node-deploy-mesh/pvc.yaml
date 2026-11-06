@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — one Headscale database + server key per env tailnet (hard requirement 2). A lost volume is
+# a wipe: it recovers by re-derivation with no person (hard requirement 10), never by restore.
+# `local-path` is the k3s default class the cluster already uses for OpenBao
+# (infra/k8s/argocd/openbao/values.yaml dataStorage: storageClass omitted -> local-path on k3s); it is
+# named here so a cluster default change can never move this state silently.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: headscale-candidate-a
+  labels:
+    app.kubernetes.io/name: node-deploy-sequencer
+    app.kubernetes.io/component: mesh-coordinator
+    cogni.dev/mesh-env: candidate-a
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: headscale-preview
+  labels:
+    app.kubernetes.io/name: node-deploy-sequencer
+    app.kubernetes.io/component: mesh-coordinator
+    cogni.dev/mesh-env: preview
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: headscale-production
+  labels:
+    app.kubernetes.io/name: node-deploy-sequencer
+    app.kubernetes.io/component: mesh-coordinator
+    cogni.dev/mesh-env: production
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

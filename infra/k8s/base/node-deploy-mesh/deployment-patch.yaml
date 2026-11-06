@@ -1,0 +1,135 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — one Headscale container per env this sequencer serves, BESIDE its one writer (hub
+# node-service-delivery §1, "Headscale per env as containers in the sequencer pod"). The sequencer is
+# Headscale's only client: it reaches each server over that env's pod-local unix socket, so no
+# Headscale API key exists and no gRPC listener is reachable (hard requirement 12).
+#
+# Per env: own process, own PVC (`headscale-<env>`), own socket, own client port (hard requirement 2).
+# Restarts are expected (CD5): the server key + database stay on the PVC and running sessions continue.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node-deploy-sequencer
+spec:
+  template:
+    spec:
+      containers:
+        - name: sequencer
+          volumeMounts:
+            # Read-write: connect(2) on a unix socket needs write permission on the socket inode.
+            # The emptyDir holds only the three sockets.
+            - name: headscale-sockets
+              mountPath: /var/run/headscale
+        - name: headscale-candidate-a
+          image: ghcr.io/juanfont/headscale:v0.29.7@sha256:11f81665e842809db9fe3006a38c56a66e968baa5abd4bac498e86445572b970
+          imagePullPolicy: IfNotPresent
+          args: [serve, --config, /etc/headscale/config.yaml]
+          ports:
+            - name: headscale-ca
+              containerPort: 8181
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          readinessProbe:
+            httpGet: { path: /health, port: headscale-ca }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: headscale-ca }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - { name: headscale-candidate-a, mountPath: /var/lib/headscale }
+            - { name: headscale-sockets, mountPath: /var/run/headscale }
+            - name: headscale-config
+              mountPath: /etc/headscale/config.yaml
+              subPath: headscale-candidate-a.yaml
+              readOnly: true
+            - name: headscale-config
+              mountPath: /etc/headscale/derp.yaml
+              subPath: derp-candidate-a.yaml
+              readOnly: true
+        - name: headscale-preview
+          image: ghcr.io/juanfont/headscale:v0.29.7@sha256:11f81665e842809db9fe3006a38c56a66e968baa5abd4bac498e86445572b970
+          imagePullPolicy: IfNotPresent
+          args: [serve, --config, /etc/headscale/config.yaml]
+          ports:
+            - name: headscale-pv
+              containerPort: 8182
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          readinessProbe:
+            httpGet: { path: /health, port: headscale-pv }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: headscale-pv }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - { name: headscale-preview, mountPath: /var/lib/headscale }
+            - { name: headscale-sockets, mountPath: /var/run/headscale }
+            - name: headscale-config
+              mountPath: /etc/headscale/config.yaml
+              subPath: headscale-preview.yaml
+              readOnly: true
+            - name: headscale-config
+              mountPath: /etc/headscale/derp.yaml
+              subPath: derp-preview.yaml
+              readOnly: true
+        - name: headscale-production
+          image: ghcr.io/juanfont/headscale:v0.29.7@sha256:11f81665e842809db9fe3006a38c56a66e968baa5abd4bac498e86445572b970
+          imagePullPolicy: IfNotPresent
+          args: [serve, --config, /etc/headscale/config.yaml]
+          ports:
+            - name: headscale-pd
+              containerPort: 8183
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          readinessProbe:
+            httpGet: { path: /health, port: headscale-pd }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: headscale-pd }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - { name: headscale-production, mountPath: /var/lib/headscale }
+            - { name: headscale-sockets, mountPath: /var/run/headscale }
+            - name: headscale-config
+              mountPath: /etc/headscale/config.yaml
+              subPath: headscale-production.yaml
+              readOnly: true
+            - name: headscale-config
+              mountPath: /etc/headscale/derp.yaml
+              subPath: derp-production.yaml
+              readOnly: true
+      volumes:
+        - name: headscale-sockets
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }
+        - name: headscale-config
+          configMap:
+            name: node-deploy-mesh-config
+        - name: headscale-candidate-a
+          persistentVolumeClaim: { claimName: headscale-candidate-a }
+        - name: headscale-preview
+          persistentVolumeClaim: { claimName: headscale-preview }
+        - name: headscale-production
+          persistentVolumeClaim: { claimName: headscale-production }

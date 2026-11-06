@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — Headscale v0.29.7 for the production tailnet (one tailnet per env, hard requirement 2).
+# The three env files differ ONLY in the env name and the three pod-local ports; the CI invariant
+# tests/ci-invariants/node-deploy-mesh-plane.spec.ts pins that. Design: hub node-service-delivery §1-§2.
+#
+# Control over TLS on 443 only (hard requirement 22): clients reach this server ONLY at server_url.
+# TLS ends at the production edge Caddy (public ACME certificate on a DNS-only host); the listener
+# below is plain HTTP inside the pod and is dropped from the public NIC by the VM hardener.
+server_url: https://mesh-production.cognidao.org
+# Pod-local ports: every Headscale container shares the sequencer pod's network namespace, so each env
+# owns its own triple. 8080 is the sequencer's health port.
+listen_addr: 0.0.0.0:8183
+metrics_listen_addr: 127.0.0.1:9183
+# No reachable gRPC listener (hard requirement 12): loopback only, no TLS, insecure refused. The
+# sequencer drives Headscale over the unix socket below, which needs no API key. No API key exists.
+grpc_listen_addr: 127.0.0.1:50483
+grpc_allow_insecure: false
+noise:
+  # On the env PVC: a container or pod restart keeps the server key (roll falsifier).
+  private_key_path: /var/lib/headscale/noise_private.key
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+derp:
+  server:
+    # No embedded relay: the env relay is the standalone derper on the env VM.
+    enabled: false
+  # NO Tailscale public relay map (hard requirements 9 and 21). Our region only.
+  urls: []
+  paths:
+    - /etc/headscale/derp.yaml
+  auto_update_enabled: false
+disable_check_updates: true
+node:
+  # Tagged devices never expire; attempt keys are revoked by the sequencer, not by a clock (§3).
+  expiry: 0
+  ephemeral:
+    # An offline companion device is removed after 5 minutes, so restarts do not build up (HR7).
+    inactivity_timeout: 5m
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+log:
+  level: info
+  format: json
+policy:
+  # The sequencer is the only policy writer (CD4). A wiped database has NO policy and Headscale then
+  # allows all traffic, so the sequencer seeds deny-all before any approval or mint (HR4, slice T2).
+  mode: database
+dns:
+  magic_dns: true
+  base_domain: mesh.cogni
+  override_local_dns: false
+  nameservers:
+    global: []
+# Pod-local socket on the shared emptyDir. Only the sequencer container mounts it (HR12).
+unix_socket: /var/run/headscale/production.sock
+unix_socket_permission: "0770"
+logtail:
+  enabled: false
+taildrop:
+  enabled: false

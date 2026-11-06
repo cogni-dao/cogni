@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the Headscale CLIENT port of each env tailnet, for the production edge only.
+# The env VM's Caddy (a Docker container beside k3s) reaches a k3s Service by NodePort, as it does for
+# the operator. It terminates TLS for `mesh-<env>.<zone>` with a public ACME certificate and forwards
+# ONLY the Tailscale client paths + /verify (scripts/ci/render-caddyfile.sh, derived from the files of
+# this component). The NodePorts themselves are DROPPED from the public NIC by
+# infra/provision/cherry/harden-docker-public-ports.sh (MESH_CONTROL_NODEPORTS), so no plain-HTTP
+# control port and no /api surface is public (hard requirements 12 and 22).
+#
+# NodePorts sit OFF the catalog node_port 100-stride (scripts/ci/next-free-node-port.sh), so a node
+# allocation can never take one. Port names carry the env: the renderer and the CI invariant read
+# `headscale-<env>` by name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-deploy-mesh
+  labels:
+    app.kubernetes.io/name: node-deploy-sequencer
+    app.kubernetes.io/component: mesh-coordinator
+    app.kubernetes.io/part-of: cogni
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: node-deploy-sequencer
+  ports:
+    - name: headscale-candidate-a
+      port: 8181
+      targetPort: headscale-ca
+      nodePort: 32441
+    - name: headscale-preview
+      port: 8182
+      targetPort: headscale-pv
+      nodePort: 32442
+    - name: headscale-production
+      port: 8183
+      targetPort: headscale-pd
+      nodePort: 32443

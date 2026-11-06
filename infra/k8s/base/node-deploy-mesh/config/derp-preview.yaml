@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the preview relay map: ONLY our region (hard requirements 9 and 21). The relay is the
+# derper Compose service on the preview env VM, behind that VM's Caddy on 443 (TLS with a public
+# ACME certificate on the DNS-only VM alias `vm_host_for_env`). STUN stays on UDP 3478.
+# No ipv4 pin: clients resolve the VM alias, so a VM migration needs no edit here.
+regions:
+  902:
+    regionid: 902
+    regioncode: cogni-preview
+    regionname: Cogni preview relay
+    nodes:
+      - name: 902a
+        regionid: 902
+        hostname: cogni-preview.vm.cognidao.org
+        stunport: 3478
+        stunonly: false
+        derpport: 443

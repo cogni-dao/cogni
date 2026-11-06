@@ -18,12 +18,19 @@ kind: Deployment
 metadata:
   name: node-deploy-sequencer
   annotations:
-    reloader.stakater.com/auto: "true"
+    # task.5428 (CD5) — NAMED Secrets only, never `auto`. Reloader rolls the whole pod, and in production
+    # the pod also runs the per-env Headscale coordinators (base/node-deploy-mesh), so an unrelated
+    # Secret must not restart them. These are exactly the Secrets the projected volume below reads.
+    secret.reloader.stakater.com/reload: "akash-tx-actuator-env-secrets,operator-env-secrets"
   labels:
     app.kubernetes.io/name: node-deploy-sequencer
     app.kubernetes.io/part-of: cogni
 spec:
   replicas: 1
+  # task.5428 — a rollout that is not Available in 10 minutes is a failed rollout (Argo Degraded), and
+  # the sequencer-rollout alert (infra/grafana/alerts/mesh-plane.alerts.yaml) pages on the same bound:
+  # in production the coordinators restart with this pod.
+  progressDeadlineSeconds: 600
   strategy:
     type: Recreate
   selector:
