@@ -301,4 +301,21 @@ grep -q 'Selection reason: operator-image-input:infra/k8s/base/akash-tx-actuator
 grep -q '^Targets: operator$' <<< "$actuator_output"
 grep -q '^Flight targets: operator$' <<< "$actuator_output"
 
+# task.5430 — the node-deploy sequencer also runs inside the operator image, and its env-namespace
+# RBAC ships with it, so a manifest-only change to either must select (and flight) operator.
+for sequencer_path in \
+  infra/k8s/base/node-deploy-sequencer/attempt-secret-delete-policy.yaml \
+  infra/k8s/base/node-deploy-env-namespaces/rbac.yaml; do
+  printf '%s\n' "$sequencer_path" > "$tmpdir/sequencer-paths.txt"
+  sequencer_output=$(
+    TURBO_SCM_BASE=origin/main \
+    TURBO_SCM_HEAD=HEAD \
+    CHANGED_PATHS_FILE="$tmpdir/sequencer-paths.txt" \
+    bash scripts/ci/detect-affected.sh
+  )
+  grep -q "Selection reason: operator-image-input:${sequencer_path}" <<< "$sequencer_output"
+  grep -q '^Targets: operator$' <<< "$sequencer_output"
+  grep -q '^Flight targets: operator$' <<< "$sequencer_output"
+done
+
 echo "detect-affected.test.sh OK"
