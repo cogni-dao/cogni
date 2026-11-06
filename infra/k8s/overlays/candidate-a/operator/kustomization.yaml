@@ -305,6 +305,13 @@ patches:
                   # Pinned equal to scripts/ci/lib/mesh-plane.sh by node-deploy-mesh-coordinators.spec.ts.
                   - name: NODE_DEPLOY_MESH_DNS_RECORDS
                     value: mesh-test-candidate-a=cogni-candidate-a.vm.cognidao.org,derp-test-candidate-a=cogni-candidate-a.vm.cognidao.org
+                  # task.5428 — the test operator's candidate-a lane reaches the substrate over its OWN tailnet
+                  # (test-fleet parity): its node apps get a per-attempt mesh key, the socket
+                  # /var/run/headscale/test-candidate-a/headscale.sock and the control URL
+                  # https://mesh-test-candidate-a.cogni-testing.org (env-lanes.ts). Production's lanes stay
+                  # egress until their own lane flip (T6b).
+                  - name: NODE_DEPLOY_SUBSTRATE_TRANSPORTS
+                    value: candidate-a=mesh:test-candidate-a
   - target:
       kind: ConfigMap
       name: node-app-config
