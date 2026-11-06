@@ -74,9 +74,9 @@
  *     attempt then waits unpaid and `node_mesh_mint_refused` names the reason, so a release with no
  *     gateway never pays for a lease that cannot reach its substrate.
  *   - MESH_PASS_UNDER_THE_LOCK (HR 4, 5, 6, 8): each reconcile pass, under the leader lock, first runs the
- *     env mesh pass: reconcile the derived policy (fail closed), retry failed gateway deletes, approve the
- *     published `substrate-gw` (fresh verified auth id; exactly `[tag:substrate]`, else deleted; it
- *     supersedes older `tag:substrate` devices),
+ *     env mesh pass: reconcile the derived policy (fail closed), keep only the newest `tag:substrate`
+ *     device (stateless, every pass), approve the published `substrate-gw` (fresh verified auth id;
+ *     exactly `[tag:substrate]`, else deleted; it supersedes older gateways),
  *     revoke every terminal attempt's key (expire, then delete its devices; a retiring blue only after it
  *     retires), delete a revoked attempt's Secret one pass later, sweep unstored keys, then the device
  *     check. A failed Headscale call stops every mesh write for that pass and resets the device window.
@@ -3011,26 +3011,10 @@ export class NodeDeploySequencer {
     const listed = await mesh.plane.listDevices();
     if (!listed.ok) return down("devices", listed.reason);
 
-    // N1: a gateway delete that failed on an earlier pass is retried (intents of this epoch only).
-    const retried = await mesh.plane.retryPendingDeletes();
-    if (
-      retried.deleted.length > 0 ||
-      retried.dropped.length > 0 ||
-      retried.failed.length > 0
-    )
-      await this.meshEvent(
-        retried.reason ? "warn" : "info",
-        "node_mesh_substrate_delete_retry",
-        undefined,
-        undefined,
-        {
-          outcome: retried.reason ? "failed" : "ok",
-          deletedDeviceIds: retried.deleted,
-          droppedDeviceIds: retried.dropped,
-          pendingDeviceIds: retried.failed,
-        }
-      );
-    if (retried.reason) return down("substrate_delete", retried.reason);
+    // NEWEST_GATEWAY_WINS, recomputed every pass with no state: a restart or a failed delete is retried here.
+    const sup = await mesh.plane.supersedeGateways();
+    await this.logSupersede(sup);
+    if (!sup.ok && sup.reason) return down("substrate_supersede", sup.reason);
 
     // HR 11: approve the env VM's published `substrate-gw` request, verified after the fact.
     await this.approveGateway(mesh, startedAt);
@@ -3187,37 +3171,11 @@ export class NodeDeploySequencer {
           expiryDisabled: r.expiryDisabled,
         }
       );
-      if (r.superseded.length > 0 || r.supersedePending.length > 0)
-        // A verified approval replaces the VM's older registrations (HR 10, HR 11 self-heal).
-        await this.meshEvent(
-          "warn",
-          "node_mesh_substrate_superseded",
-          undefined,
-          undefined,
-          {
-            outcome:
-              r.supersedePending.length > 0 ? "delete_pending" : "deleted",
-            headscaleDeviceId: r.headscaleDeviceId,
-            deletedDeviceIds: r.superseded,
-            pendingDeviceIds: r.supersedePending,
-          }
-        );
+      await this.logSupersede(r.supersede);
     } else if (r.outcome === "mismatch")
       await this.meshEvent(
         "error",
         "node_mesh_substrate_mismatch",
-        undefined,
-        undefined,
-        {
-          outcome: r.deleted ? "deleted" : "delete_failed",
-          reason: r.reason,
-          headscaleDeviceId: r.headscaleDeviceId,
-        }
-      );
-    else if (r.outcome === "unverified")
-      await this.meshEvent(
-        "warn",
-        "node_mesh_substrate_unverified",
         undefined,
         undefined,
         {
@@ -3233,6 +3191,34 @@ export class NodeDeploySequencer {
         undefined,
         undefined,
         { outcome: "refused", reason: r.reason }
+      );
+  }
+
+  /** One NEWEST_GATEWAY_WINS outcome: superseded gateways and wrong-tag deletes (each only when non-empty). */
+  private async logSupersede(
+    sup: Awaited<ReturnType<MeshPlane["supersedeGateways"]>>
+  ): Promise<void> {
+    if (sup.superseded.length > 0 || sup.failed.length > 0)
+      await this.meshEvent(
+        "warn",
+        "node_mesh_substrate_superseded",
+        undefined,
+        undefined,
+        {
+          outcome: sup.failed.length > 0 ? "delete_failed" : "deleted",
+          keptDeviceId: sup.kept,
+          deletedDeviceIds: sup.superseded,
+          failedDeviceIds: sup.failed,
+          ...(sup.reason ? { reason: sup.reason } : {}),
+        }
+      );
+    if (sup.mismatched.length > 0)
+      await this.meshEvent(
+        "error",
+        "node_mesh_substrate_mismatch",
+        undefined,
+        undefined,
+        { outcome: "deleted", reason: "tags", deletedDeviceIds: sup.mismatched }
       );
   }
 

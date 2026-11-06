@@ -1151,9 +1151,9 @@ describe("HR 11: substrate-gw approval over the verified channel, no key compare
     const log = meshLogs(h, "node_mesh_substrate_superseded")[0];
     expect(log?.fields).toMatchObject({
       outcome: "deleted",
-      headscaleDeviceId: now?.headscaleDeviceId,
+      keptDeviceId: now?.headscaleDeviceId,
       deletedDeviceIds: [old.headscaleDeviceId],
-      pendingDeviceIds: [],
+      failedDeviceIds: [],
     });
     expect(meshLogs(h, "node_mesh_substrate_mismatch")).toHaveLength(0);
     expect(h.payer.createRequests).toHaveLength(0);
@@ -1162,17 +1162,17 @@ describe("HR 11: substrate-gw approval over the verified channel, no key compare
     expect(appCreates(h)).toHaveLength(1);
   });
 
-  it("N1: a failed supersede delete is retried on the next pass; the release stays unpaid until it lands", async () => {
+  it("a failed supersede delete is recomputed and retried by the next pass; the release stays unpaid until it lands", async () => {
     const h = harness();
     const old = await stateLoss(h);
     h.hs.failDelete.add(old.headscaleDeviceId);
     await h.passes(1);
-    expect(gateways(h)).toHaveLength(2); // the approved device is kept; the old one waits on the retry
+    expect(gateways(h)).toHaveLength(2); // the approved device is kept
     expect(
       meshLogs(h, "node_mesh_substrate_superseded")[0]?.fields
     ).toMatchObject({
-      outcome: "delete_pending",
-      pendingDeviceIds: [old.headscaleDeviceId],
+      outcome: "delete_failed",
+      failedDeviceIds: [old.headscaleDeviceId],
     });
     await h.seq.step(h.key("poly"));
     expect((await h.attempts("poly"))[0]?.error).toBe(
@@ -1182,12 +1182,42 @@ describe("HR 11: substrate-gw approval over the verified channel, no key compare
     h.published.request = null; // registered: the publisher clears its auth id
     await h.passes(1);
     expect(
-      meshLogs(h, "node_mesh_substrate_delete_retry")[0]?.fields
+      meshLogs(h, "node_mesh_substrate_superseded").at(-1)?.fields
     ).toMatchObject({
-      outcome: "ok",
+      outcome: "deleted",
       deletedDeviceIds: [old.headscaleDeviceId],
     });
     expect(gateways(h)).toHaveLength(1);
+    await h.seq.step(h.key("poly"));
+    expect((await h.attempts("poly"))[0]?.phase).toBe("active");
+  });
+
+  it("restart: a fresh sequencer with two tag:substrate devices deletes the older on its first pass; mint opens once the newest is online", async () => {
+    const h = harness(); // gateway "1" enrolled
+    await h.seq.reconcileAll();
+    const [old] = gateways(h);
+    h.clock.advance(60_000);
+    const newest = h.hs.addGateway("mkey:gw2", "nodekey:gw2"); // re-enrolled, still joining
+    h.hs.devices.set(newest.headscaleDeviceId, { ...newest, online: false });
+    h.restart(); // a new sequencer process: nothing in memory
+    await h.release("poly");
+    await h.passes(1);
+    expect(gateways(h).map((d) => d.headscaleDeviceId)).toEqual([
+      newest.headscaleDeviceId,
+    ]);
+    expect(
+      meshLogs(h, "node_mesh_substrate_superseded")[0]?.fields
+    ).toMatchObject({
+      outcome: "deleted",
+      keptDeviceId: newest.headscaleDeviceId,
+      deletedDeviceIds: [old?.headscaleDeviceId],
+    });
+    await h.seq.step(h.key("poly"));
+    expect((await h.attempts("poly"))[0]?.error).toBe(
+      "mesh_key_pending: mint_gateway_offline"
+    );
+    expect(h.payer.createRequests).toHaveLength(0);
+    h.hs.devices.set(newest.headscaleDeviceId, newest); // online
     await h.seq.step(h.key("poly"));
     expect((await h.attempts("poly"))[0]?.phase).toBe("active");
   });

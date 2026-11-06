@@ -29,15 +29,13 @@
  *     minutes is refused). The auth id binds the approval to the machine that asked, so no machine or
  *     node key is compared and there is no second stage (design section 2, Pareto cut). A new device
  *     whose tags are not exactly `[tag:substrate]` is deleted at once (`node_mesh_substrate_mismatch`).
- *   - VERIFIED_APPROVAL_SUPERSEDES (HR 10, HR 11 self-heal): only the env VM can publish on the verified
- *     channel, so every OTHER `tag:substrate` device in the current epoch is an older registration of
- *     the same VM (for example one that lost its tailscaled state). After approval they are deleted,
- *     then a readback must show exactly the approved device with tags exactly `[tag:substrate]`. The
- *     approved device is never deleted because an older device is present. A device read that fails
- *     after `AuthRegister` deletes the new device (an unverified approval is not kept).
- *   - DELETE_INTENT_RETRIED (N1): a gateway delete that fails is kept as an intent keyed by coordinator
- *     epoch AND device id, and `retryPendingDeletes` retries it on every pass. An intent from another
- *     epoch is dropped with no call (a wiped Headscale reuses device ids).
+ *   - NEWEST_GATEWAY_WINS (HR 10, HR 11 self-heal), stateless: in the current epoch only the sequencer
+ *     creates a `tag:substrate` device, and only by a verified approval, so every such device is a real
+ *     registration of the env VM (an older one may have lost its tailscaled state). `supersedeGateways`
+ *     reads the device list and keeps the exact-tag device with the newest `createdAt`; it deletes every
+ *     other `tag:substrate` device (a wrong-tag one as a mismatch). It holds no state: the sequencer runs
+ *     it on every pass, so a failed delete, or a restart, is retried by the next pass. An approval runs
+ *     it at once and keeps the approved device; that device is never deleted for an older one.
  *   - GATEWAY_BEFORE_MINT (HR 23, task.5431): no attempt key is minted unless the coordinator epoch read
  *     by the last reconcile is still the owner's creation time AND the tailnet has exactly one
  *     `tag:substrate` device, tagged exactly `[tag:substrate]` and online. Otherwise the mint is refused
@@ -147,10 +145,8 @@ export type ApprovalResult =
       readonly headscaleDeviceId: HeadscaleDeviceId;
       /** The design's tagged-device rule: a `substrate-gw` device never expires. */
       readonly expiryDisabled: boolean;
-      /** Older `tag:substrate` devices deleted because this verified approval supersedes them. */
-      readonly superseded: readonly HeadscaleDeviceId[];
-      /** Older devices whose delete failed: kept as intents, retried by `retryPendingDeletes`. */
-      readonly supersedePending: readonly HeadscaleDeviceId[];
+      /** NEWEST_GATEWAY_WINS run at once; a failure here is retried by the next pass. */
+      readonly supersede: SupersedeResult;
     }
   | {
       readonly outcome: "refused";
@@ -165,31 +161,36 @@ export type ApprovalResult =
       readonly outcome: "mismatch";
       readonly alert: typeof SUBSTRATE_MISMATCH_ALERT;
       readonly headscaleDeviceId: HeadscaleDeviceId;
-      /**
-       * `tags`: the new device is not exactly `[tag:substrate]`. `readback`: after superseding, the
-       * approved device is gone or its tags changed.
-       */
-      readonly reason: "tags" | "readback";
-      /** False when the delete failed: kept as an intent and retried next pass (DELETE_INTENT_RETRIED). */
-      readonly deleted: boolean;
-    }
-  /** A device read after `AuthRegister` failed: the new device is deleted (or its delete is retried). */
-  | {
-      readonly outcome: "unverified";
-      readonly headscaleDeviceId: HeadscaleDeviceId;
-      readonly reason: NodeMeshErrorReason;
+      /** The new device is not exactly `[tag:substrate]`. */
+      readonly reason: "tags";
+      /** False when the delete failed; the next pass's `supersedeGateways` deletes it. */
       readonly deleted: boolean;
     };
 
-export interface PendingDeleteResult {
-  /** Intents of the current epoch whose delete now succeeded (or the device was already gone). */
-  readonly deleted: readonly HeadscaleDeviceId[];
-  /** Intents from another coordinator epoch: dropped with no call. */
-  readonly dropped: readonly HeadscaleDeviceId[];
-  /** Still pending after a failed call; the failure closes minting like any other. */
+export interface SupersedeResult {
+  /** False when the device read or a delete failed; the next pass recomputes and retries. */
+  readonly ok: boolean;
+  /** The exact-tag `tag:substrate` device kept (newest `createdAt`), or null when none exists. */
+  readonly kept: HeadscaleDeviceId | null;
+  /** Older exact-tag gateways deleted. */
+  readonly superseded: readonly HeadscaleDeviceId[];
+  /** `tag:substrate` devices with other tags too, deleted as a mismatch. */
+  readonly mismatched: readonly HeadscaleDeviceId[];
+  /** Deletes that failed this pass. */
   readonly failed: readonly HeadscaleDeviceId[];
   readonly reason?: NodeMeshErrorReason;
 }
+
+const isExactGateway = (d: MeshDevice): boolean =>
+  d.tags.length === 1 && d.tags[0] === SUBSTRATE_TAG;
+
+/** Newest first: `createdAt` (unknown = oldest), then the larger id (Headscale ids only grow). */
+const newestFirst = (a: MeshDevice, b: MeshDevice): number =>
+  (b.createdAt ? Date.parse(b.createdAt) : 0) -
+    (a.createdAt ? Date.parse(a.createdAt) : 0) ||
+  b.headscaleDeviceId.localeCompare(a.headscaleDeviceId, undefined, {
+    numeric: true,
+  });
 
 /** Why GATEWAY_BEFORE_MINT refuses a mint. */
 export type GatewayRefusal =
@@ -302,11 +303,6 @@ export class MeshPlane {
   private epochValue: string | null = null;
   /** Auth ids this process approved: a publish that still names one (lag) is not registered again. */
   private readonly approvedAuthIds = new Set<string>();
-  /** DELETE_INTENT_RETRIED: `<epoch>/<device id>` -> the intent. Never keyed by device id alone. */
-  private readonly pendingDeletes = new Map<
-    string,
-    { readonly epoch: string; readonly id: HeadscaleDeviceId }
-  >();
 
   constructor(
     private readonly mesh: NodeMeshPort,
@@ -422,49 +418,13 @@ export class MeshPlane {
     }
 
     const id = device.headscaleDeviceId;
-    const exact = (d: MeshDevice) =>
-      d.tags.length === 1 && d.tags[0] === SUBSTRATE_TAG;
-    if (!exact(device))
+    if (!isExactGateway(device))
       return {
         outcome: "mismatch",
         alert: SUBSTRATE_MISMATCH_ALERT,
         headscaleDeviceId: id,
         reason: "tags",
-        deleted: await this.deleteOrQueue(id),
-      };
-
-    // VERIFIED_APPROVAL_SUPERSEDES: every other tag:substrate device is an older registration of this VM.
-    const superseded: HeadscaleDeviceId[] = [];
-    const supersedePending: HeadscaleDeviceId[] = [];
-    let retained: MeshDevice | undefined;
-    try {
-      for (const d of await this.mesh.listNodes()) {
-        if (d.headscaleDeviceId === id || !d.tags.includes(SUBSTRATE_TAG))
-          continue;
-        if (await this.deleteOrQueue(d.headscaleDeviceId))
-          superseded.push(d.headscaleDeviceId);
-        else supersedePending.push(d.headscaleDeviceId);
-      }
-      // Readback: exactly the approved device remains (an older one may wait on its retried delete).
-      retained = (await this.mesh.listNodes()).find(
-        (d) => d.headscaleDeviceId === id
-      );
-    } catch (error) {
-      const reason = this.fail(error);
-      return {
-        outcome: "unverified",
-        headscaleDeviceId: id,
-        reason,
-        deleted: await this.deleteOrQueue(id),
-      };
-    }
-    if (!retained || !exact(retained))
-      return {
-        outcome: "mismatch",
-        alert: SUBSTRATE_MISMATCH_ALERT,
-        headscaleDeviceId: id,
-        reason: "readback",
-        deleted: retained ? await this.deleteOrQueue(id) : true,
+        deleted: (await this.deleteDevice(id)) === true,
       };
     if (this.approvedAuthIds.size >= MAX_REMEMBERED_AUTH_IDS)
       this.approvedAuthIds.clear();
@@ -472,69 +432,75 @@ export class MeshPlane {
     return {
       outcome: "approved",
       headscaleDeviceId: id,
-      expiryDisabled: retained.expiry === null,
-      superseded,
-      supersedePending,
+      expiryDisabled: device.expiry === null,
+      // The approved device is kept even if an older one has the same `createdAt`.
+      supersede: await this.supersedeGateways(id),
     };
   }
 
   /**
-   * Delete a gateway device now; an already absent device counts as deleted. A failed delete closes
-   * minting and is kept as an intent of the current epoch (DELETE_INTENT_RETRIED).
+   * Delete a gateway device: `true`, or the failure reason (which closes minting). An already absent
+   * device counts as deleted.
    */
-  private async deleteOrQueue(id: HeadscaleDeviceId): Promise<boolean> {
-    const epoch = this.epochValue ?? "";
-    const k = `${epoch}/${id}`;
+  private async deleteDevice(
+    id: HeadscaleDeviceId
+  ): Promise<true | NodeMeshErrorReason> {
     try {
       await this.mesh.deleteNode(id);
-      this.pendingDeletes.delete(k);
       return true;
     } catch (error) {
-      if (isNodeMeshError(error) && error.reason === "node_not_found") {
-        this.pendingDeletes.delete(k);
+      if (isNodeMeshError(error) && error.reason === "node_not_found")
         return true;
-      }
-      this.fail(error);
-      this.pendingDeletes.set(k, { epoch, id });
-      return false;
+      return this.fail(error);
     }
-  }
-
-  /** Gateway delete intents still pending (`<epoch>/<device id>`). */
-  get pendingDeleteIds(): readonly HeadscaleDeviceId[] {
-    return [...this.pendingDeletes.values()].map((x) => x.id);
   }
 
   /**
-   * DELETE_INTENT_RETRIED: retry every failed gateway delete of the current epoch (run once per pass,
-   * after the reconcile read the epoch). An intent from another epoch is dropped with no call. Stops at
-   * the first failed call.
+   * NEWEST_GATEWAY_WINS, recomputed from one device read (no state). Keep `prefer` when it is an
+   * exact-tag gateway, else the newest exact-tag gateway; delete every other `tag:substrate` device.
    */
-  async retryPendingDeletes(): Promise<PendingDeleteResult> {
-    const epoch = this.epochValue ?? "";
-    const deleted: HeadscaleDeviceId[] = [];
-    const dropped: HeadscaleDeviceId[] = [];
-    for (const [k, intent] of [...this.pendingDeletes]) {
-      if (intent.epoch !== epoch) {
-        this.pendingDeletes.delete(k);
-        dropped.push(intent.id);
-        continue;
-      }
-      try {
-        await this.mesh.deleteNode(intent.id);
-      } catch (error) {
-        if (!(isNodeMeshError(error) && error.reason === "node_not_found"))
-          return {
-            deleted,
-            dropped,
-            failed: this.pendingDeleteIds,
-            reason: this.fail(error),
-          };
-      }
-      this.pendingDeletes.delete(k);
-      deleted.push(intent.id);
+  async supersedeGateways(
+    prefer?: HeadscaleDeviceId
+  ): Promise<SupersedeResult> {
+    let devices: readonly MeshDevice[];
+    try {
+      devices = await this.mesh.listNodes();
+    } catch (error) {
+      return {
+        ok: false,
+        kept: null,
+        superseded: [],
+        mismatched: [],
+        failed: [],
+        reason: this.fail(error),
+      };
     }
-    return { deleted, dropped, failed: [] };
+    const substrate = devices.filter((d) => d.tags.includes(SUBSTRATE_TAG));
+    const exact = substrate.filter(isExactGateway).sort(newestFirst);
+    const kept =
+      exact.find((d) => d.headscaleDeviceId === prefer) ?? exact[0] ?? null;
+    const superseded: HeadscaleDeviceId[] = [];
+    const mismatched: HeadscaleDeviceId[] = [];
+    const failed: HeadscaleDeviceId[] = [];
+    let reason: NodeMeshErrorReason | undefined;
+    for (const d of substrate) {
+      if (d === kept) continue;
+      const deleted = await this.deleteDevice(d.headscaleDeviceId);
+      if (deleted === true)
+        (isExactGateway(d) ? superseded : mismatched).push(d.headscaleDeviceId);
+      else {
+        failed.push(d.headscaleDeviceId);
+        reason = deleted;
+      }
+    }
+    return {
+      ok: failed.length === 0,
+      kept: kept?.headscaleDeviceId ?? null,
+      superseded,
+      mismatched,
+      failed,
+      ...(reason ? { reason } : {}),
+    };
   }
 
   /**
