@@ -1466,22 +1466,18 @@ describe("private release companions", () => {
     restored.attempts.push(...structuredClone(h.store.attempts));
     h.payer.observeThrows = false;
     await h.newSequencer(restored).step(key);
+    // BLUE_KEEPS_SERVING (bug.5582): the verdict never closes blue, with or without a capability.
     expect(restored.attempts.find((a) => a.id === blue.id)?.phase).toBe(
-      capability ? "active" : "retired"
+      "active"
     );
     expect(h.payer.byDseq(requiredFixture(blue.externalName)).state).toBe(
-      capability ? "active" : "closed"
+      "active"
     );
-    expect(h.log.steps().includes("stop_then_start:blue_closed")).toBe(
-      !capability
-    );
-    if (capability) {
-      expect([...h.dns.records.values()]).toEqual(edge);
-      expect(modes).toEqual([]);
-      expect(
-        restored.attempts.filter((a) => a.releaseId === release.id)
-      ).toHaveLength(3);
-    }
+    expect([...h.dns.records.values()]).toEqual(edge);
+    expect(modes).toEqual([]);
+    expect(
+      restored.attempts.filter((a) => a.releaseId === release.id)
+    ).toHaveLength(3);
   });
 
   it("qualifies exact 512-character companion readiness observations", async () => {

@@ -170,7 +170,7 @@ describe("deriveReleaseTimeline STATE_TABLE", () => {
     expect(derive([attempt(R1, 1, "lost")]).releaseState).toBe("failed");
   });
 
-  it("failed, not parked: 3 consecutive failures WITHOUT the sequencer's verdict (it may grant a last-resort stop, task.5409)", () => {
+  it("failed, not parked: 3 consecutive failures WITHOUT the sequencer's verdict (it writes the park on its next tick)", () => {
     const t = derive([
       attempt(R1, 3, "failed", { error: "proof_timeout: version 502" }),
       attempt(R1, 2, "failed", { error: "lease_not_ready" }),

@@ -27,9 +27,9 @@
  *     no longer in flight. It only skips the in-flight grace; the attempt still runs the ONE cleanup
  *     chain (ORPHAN_GUARD: observe, then bind + close + confirm a found lease, else failed) in that tick.
  *   - NOT_BLUES_PROVIDER: a green lease that lands on blue's provider is a failed proof and is closed.
- *   - STOP_THEN_START (task.5409): when a green create is refused because blue's provider was the only
- *     bidder screening could pass, an `app` blue is closed (confirmed) BEFORE the next create, which then
- *     may land on blue's provider. At most once per release; never for `state`. Accepted downtime.
+ *   - BLUE_KEEPS_SERVING (bug.5582): no create path closes the serving blue first. When blue's provider is
+ *     the only bidder screening could pass, every green create is refused and the release parks after
+ *     `maxFailedAttempts` like any other; blue and the edge stay as they were.
  *   - CUTOVER_IS_READ_BACK: a cutover counts only after the edge record reads back AND 8 consecutive
  *     public reads (host resolved at its zone's authoritative nameservers) return the exact sha.
  *   - CLOSE_IS_CONFIRMED: a lease counts as closed only after observe says closed AND chain truth
@@ -483,20 +483,11 @@ export class NodeDeploySequencer {
     if (ofRelease.some((a) => a.error?.startsWith("artifact_bundle_invalid")))
       return "parked";
     const failures = consecutiveFailures(ofRelease);
-    // LAST_RESORT_STOP (task.5409): when the release's last refusal shows blue's provider as the only bidder
-    // screening could pass, the park limit grants exactly ONE stop-then-start attempt. Parking first would
-    // leave the node on blue forever (blue never moves, green never places). After that attempt, blue is
-    // retired, so the predicate is false and a further failure parks as usual.
-    const lastResort =
-      !release.spec.health?.qualification &&
-      failures === this.d.config.maxFailedAttempts &&
-      (await this.stopThenStartVerdict(key, release, ofRelease, active)) ===
-        "eligible";
-    if (failures >= this.d.config.maxFailedAttempts && !lastResort) {
+    if (failures >= this.d.config.maxFailedAttempts) {
       // Attached to the release's newest attempt so the park is a durable step on its timeline:
       // `release-view` reads `alert/release_parked` as the sequencer's own verdict.
       await this.alert(key, release, ofRelease[0], "release_parked", {
-        failedAttempts: consecutiveFailures(ofRelease),
+        failedAttempts: failures,
       });
       return "parked";
     }
@@ -554,22 +545,12 @@ export class NodeDeploySequencer {
       });
       return "driven";
     }
-    let blue = active;
-    // STOP_THEN_START (task.5409): blue's provider was the only bidder that could pass screening, so a
-    // green beside blue can never be placed. Close blue first (accepted downtime), then create.
-    // A useful-work capability requires blue to survive failed or unknown qualification.
-    const verdict = release.spec.health?.qualification
-      ? "none"
-      : await this.stopThenStartVerdict(key, release, ofRelease, active);
-    const willStop = verdict === "eligible";
-
-    // HR 18, decided BEFORE any stop (CD6): `all` shows the pre-stop phases, so a blue about to be
-    // stopped counts as serving and its replacement keeps the node's served transport.
+    // HR 18: a create never closes blue first (BLUE_KEEPS_SERVING), so a serving blue is retained.
     const transport =
       this.d.mesh?.mode === "mint" && nodeApp && deployable.spec.kind === "app"
         ? attemptTransport({
             lane: "mesh",
-            blueRetained: active !== undefined && !willStop,
+            blueRetained: active !== undefined,
             releaseId: release.id,
             workloadAttempts: all,
             nodeAttempts: await this.nodeAttempts(key),
@@ -584,18 +565,11 @@ export class NodeDeploySequencer {
       return "waiting_dependency";
     }
 
-    // `not_admitted` also goes through stopThenStart: it alerts and keeps blue.
-    const stop =
-      verdict === "none"
-        ? "none"
-        : await this.stopThenStart(key, release, ofRelease, active);
-    if (stop === "unconfirmed") return "close_pending";
-    if (stop === "stopped") blue = undefined;
     const attempt = await allocateAttempt(transport);
     await this.emit(key, release, attempt, "attempt_planned", "ok", {
-      blue: blue?.externalName,
+      blue: active?.externalName,
     });
-    await this.drive(key, deployable, attempt, blue, true);
+    await this.drive(key, deployable, attempt, active, true);
     return "driven";
   }
 
@@ -617,131 +591,6 @@ export class NodeDeploySequencer {
       throw new Error(
         "admission refusal outcome unknown; awaiting durable readback"
       );
-  }
-
-  /**
-   * STOP_THEN_START (task.5409, CEO ruling 2026-11-03: a node may go DOWN during a switch). Blue/green
-   * excludes blue's provider, because one Akash provider cannot serve the same custom host from two
-   * leases. When that provider is the ONLY one that can pass screening, every green create is refused
-   * and the lane can never ship again. So, for an `app` only (a state lease is never stopped):
-   *  - trigger: the release's newest attempt failed with a create refusal in which bids arrived, none
-   *    passed screening, and blue's provider was refused only as `already_tried` (the actuator's
-   *    exclusion verdict, `akash-provider-screen.ts` `rejectionFor`). With no bound-state exclusion the
-   *    caller's exclude list is exactly {blue}, so `already_tried=N>0` names blue; otherwise the bid
-   *    roster must name blue's address as `already_tried`.
-   *  - action: close blue chain-confirmed (`closeAndConfirm`), mark it `retired`, and let the next create
-   *    run with no blue, so blue's provider is no longer excluded. The edge keeps pointing at the
-   *    closed lease until green's proof moves it (the accepted downtime window).
-   *  - an unconfirmed close stops here: no create while blue may still be live (`close_unconfirmed`).
-   *  - at most once per release: after the stop the workload has no active blue, so it cannot trigger
-   *    again until this release (or a newer one) serves. If green then fails, the normal park applies.
-   * Never for a first release (no blue) or a lane where another provider passed screening.
-   */
-  /**
-   * The read-only half of stop-then-start: `eligible` when blue may be closed so green can take its provider,
-   * `not_admitted` when blue's provider is the only screened bidder but is no longer admitted (closing blue would
-   * trade a live node for a dead one), `none` otherwise. ONE predicate for both the park-limit decision and the act.
-   */
-  private async stopThenStartVerdict(
-    key: WorkloadKey,
-    release: ReleaseRow,
-    ofRelease: readonly AttemptRow[],
-    blue: AttemptRow | undefined
-  ): Promise<"eligible" | "not_admitted" | "none"> {
-    if (release.spec.kind !== "app") return "none";
-    if (!blue?.provider || !blue.externalName || blue.releaseId === release.id)
-      return "none";
-    const newest = ofRelease[0];
-    if (newest?.phase !== "failed") return "none";
-    const stateExcluded = await this.excludedProviders(key, release, undefined);
-    // HAIRPIN_RULE still holds: if blue's provider also hosts a bound state lease, reopening it is useless.
-    if (stateExcluded.includes(blue.provider)) return "none";
-    // What the refused create excluded besides blue: bound state providers AND this release's failed-after-
-    // bind tries (bug.5569). Only when that is empty was `already_tried>=1` blue's; otherwise the roster must
-    // name blue itself, so a failed try's provider can never close blue.
-    const others = await this.excludedProviders(key, release, undefined, true);
-    // LANE_MEMORY (story.5137) depends on the clock, so a recompute can differ from what the refused create
-    // actually excluded (a strike aged out of the 24h window). The refused attempt's own `providers_excluded`
-    // step is that record: when it names anything besides blue, the shortcut is off. A missing step (the
-    // timeline is best-effort) only falls back to the recompute; the record can make the check stricter,
-    // never looser.
-    const refusedExcluded = [...newest.steps]
-      .reverse()
-      .find((s) => s.step === "providers_excluded")?.reason;
-    const onlyBlueExcluded =
-      others.length === 0 &&
-      (refusedExcluded === undefined || refusedExcluded === blue.provider);
-    if (
-      !blueWasOnlyScreenedBidder(newest.error, blue.provider, onlyBlueExcluded)
-    )
-      return "none";
-    // Only an app blue is ever stopped.
-    const blueRelease = await this.d.store.getRelease(blue.releaseId);
-    if (blueRelease?.spec.kind !== "app") return "none";
-    const admitted = (this.d.config.appProviders ?? []).slice(
-      0,
-      MAX_ALLOWED_PROVIDERS
-    );
-    if (admitted.length > 0 && !admitted.includes(blue.provider))
-      return "not_admitted";
-    return "eligible";
-  }
-
-  private async stopThenStart(
-    key: WorkloadKey,
-    release: ReleaseRow,
-    ofRelease: readonly AttemptRow[],
-    blue: AttemptRow | undefined
-  ): Promise<"none" | "stopped" | "unconfirmed"> {
-    const verdict = await this.stopThenStartVerdict(
-      key,
-      release,
-      ofRelease,
-      blue
-    );
-    if (verdict === "none" || !blue?.provider || !blue.externalName)
-      return "none";
-    const newest = ofRelease[0] as AttemptRow;
-    if (verdict === "not_admitted") {
-      await this.alert(key, release, newest, "stop_then_start_refused", {
-        provider: blue.provider,
-        reason: `blue provider ${blue.provider} is no longer admitted (appProviders); blue kept, no stop`,
-      });
-      return "none";
-    }
-    const blueRelease = await this.d.store.getRelease(blue.releaseId);
-    if (!blueRelease) return "none";
-
-    const reason = `blue provider ${blue.provider} is the only bidder that passes screening; closing blue ${blue.externalName} before green (accepted downtime)`;
-    await this.emit(key, release, newest, "stop_then_start", "closing_blue", {
-      blueDseq: blue.externalName,
-      provider: blue.provider,
-      reason,
-    });
-    await this.alert(key, release, newest, "stop_then_start", {
-      blueDseq: blue.externalName,
-      provider: blue.provider,
-      reason,
-    });
-    if (!(await this.closeAndConfirm(blue))) {
-      await this.alert(key, release, blue, "close_unconfirmed", {
-        reason: "stop_then_start: blue close not confirmed; no green create",
-      });
-      return "unconfirmed";
-    }
-    const retired = await this.d.store.updateAttempt(blue.id, {
-      phase: "retired",
-    });
-    await this.emit(key, blueRelease, retired, "old_closed", "ok", {
-      dseq: retired.externalName,
-      verified: true,
-      reason: "stop_then_start",
-    });
-    await this.emit(key, release, newest, "stop_then_start", "blue_closed", {
-      blueDseq: retired.externalName,
-      provider: blue.provider,
-    });
-    return "stopped";
   }
 
   /**
@@ -1292,18 +1141,8 @@ export class NodeDeploySequencer {
    * (proof_timeout, failed proof, lease lost): a provider whose egress is not admitted must not be
    * retried (bug.5569). A refused create bound no provider, so it adds none. Also with `withFailedTries`,
    * the LANE MEMORY (story.5137): see `rememberedStrikes`. Deduped, blue first, capped at the wire's 16.
+   * `remembered` names which entries came from the lane memory (for the one log line).
    */
-  private async excludedProviders(
-    key: WorkloadKey,
-    release: ReleaseRow,
-    blue: AttemptRow | undefined,
-    withFailedTries = false
-  ): Promise<string[]> {
-    return (await this.exclusion(key, release, blue, withFailedTries))
-      .providers;
-  }
-
-  /** `excludedProviders`, plus which entries came from the lane memory (for the one log line). */
   private async exclusion(
     key: WorkloadKey,
     release: ReleaseRow,
@@ -1350,7 +1189,7 @@ export class NodeDeploySequencer {
    * every release). It reads the attempts store: a struck attempt keeps its provider and its error.
    * NO LOCKOUT: a `proof_timeout` can be the app's own fault, so memory never names
    *  - the lane's most recent served provider (newest active, retiring, retired or lost attempt: blue, or
-   *    the blue a stop-then-start just retired), so HAIRPIN_RULE and STOP_THEN_START alone decide blue;
+   *    or the blue a lost lease left behind), so HAIRPIN_RULE alone decides blue;
    *  - any provider that served this lane (same phases) in the window;
    *  - the last admitted provider (`appProviders`) not already excluded: memory alone never empties an
    *    admitted pool. With no allowlist the open market is the pool; memory cannot see bids, so that case
@@ -1658,7 +1497,7 @@ export class NodeDeploySequencer {
       return attempt;
     }
     // A refused create is not an orphan (bug.5567): it keeps its plain `create refused:` reason, so the
-    // no-replay rail and the refusal reading (task.5409) still see it. The alert below still fires.
+    // no-replay rail still sees it. The alert below still fires.
     const reason = (
       context.startsWith(REFUSED_PREFIX)
         ? `${context}; observe unavailable since ${since.toISOString()}: ${errText(error)}`
@@ -3675,54 +3514,6 @@ const MESH_KEY_PENDING = "mesh_key_pending: ";
 
 /** Max diagnostic text. Native decision evidence is bounded independently and comes first. */
 const ERROR_TEXT_MAX = 2000;
-
-/**
- * True when a persisted create refusal shows blue's provider as the only bidder screening could pass
- * (task.5409). The native bounded excluded-bidder summary carries full provider identities before
- * diagnostic text. Legacy fallback keys on the actuator's NO_ELIGIBLE_BIDS text (`akash-compute.adapter.ts`
- * `awaitScreenedBid`: "none passed provider screening [refused: ...] [bids: ...]") and its exclusion
- * verdict `already_tried` (`akash-provider-screen.ts` `rejectionFor`: an excluded provider's bid). When
- * `onlyBlueExcluded`, the caller's exclude list was exactly {blue}, so any `already_tried` bid is blue's;
- * otherwise the roster (`formatBidRoster`: `<addr> <cc> <price> <verdict>`) must name blue's address.
- */
-function blueWasOnlyScreenedBidder(
-  error: string | undefined,
-  blueProvider: string,
-  onlyBlueExcluded: boolean
-): boolean {
-  if (!error?.startsWith(REFUSED_PREFIX)) return false;
-  if (!error.includes("none passed provider screening")) return false;
-  if (error.includes("[excluded-bidders-v1:")) {
-    const encoded = /\[excluded-bidders-v1:(\[[^\]]*\])\]/u.exec(error)?.[1];
-    if (!encoded) return false;
-    try {
-      const providers: unknown = JSON.parse(encoded);
-      return (
-        Array.isArray(providers) &&
-        providers.length <= 16 &&
-        providers.every(
-          (p: unknown) =>
-            typeof p === "string" && /^akash1[0-9a-z]{38}$/u.test(p)
-        ) &&
-        providers.includes(blueProvider)
-      );
-    } catch {
-      return false;
-    }
-  }
-  const tried = /already_tried=(\d+)/u.exec(error);
-  if (!tried?.[1] || Number(tried[1]) < 1) return false;
-  if (onlyBlueExcluded) return true;
-  const addr =
-    blueProvider.length > 17
-      ? `${blueProvider.slice(0, 9)}…${blueProvider.slice(-4)}`
-      : blueProvider;
-  // Legacy fallback needs a complete roster; clipped diagnostics cannot authorize a stop.
-  const roster = /\[bids: ([^\]]*)\]/u.exec(error)?.[1] ?? "";
-  return roster
-    .split(", ")
-    .some((r) => r.startsWith(`${addr} `) && r.endsWith(" already_tried"));
-}
 
 /** Marker on an ACTIVE attempt (whose `error` is otherwise null): its failing proof is a dependency outage. */
 const DEPENDENCY_DOWN_MARK = "dependency_down";

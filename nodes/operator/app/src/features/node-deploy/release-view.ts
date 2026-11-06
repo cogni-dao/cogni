@@ -23,7 +23,7 @@
  *       parked       no attempt serves or is mid-flight and the sequencer recorded its park verdict
  *                    (`alert/release_parked` step): no further paid create until a NEW release. The
  *                    verdict wins over a third attempt that is still `closing`. A failure count alone
- *                    is not a park: at the limit the sequencer may grant one stop-then-start (task.5409).
+ *                    is not a park: the sequencer writes its verdict on the tick after the limit.
  *       queued       the release has no attempt yet (the sequencer has not picked it up).
  *       failed       the newest attempt failed (or its live lease was lost) and fewer than
  *                    `maxFailedAttempts` have failed: the sequencer will plan the next attempt.
@@ -168,8 +168,8 @@ export function deriveReleaseTimeline(input: {
     return done("deploying");
   if (input.release.admissionRefusal)
     return done("parked", input.release.admissionRefusal.reason);
-  // PARK_IS_THE_SEQUENCER'S_VERDICT (task.5409): only the sequencer's own `release_parked` step parks a
-  // release. At the limit it may still grant one last-resort stop-then-start, so a count alone is `failed`.
+  // PARK_IS_THE_SEQUENCER'S_VERDICT: only the sequencer's own `release_parked` step parks a release. It
+  // writes that step on the tick after the limit, so until then a count alone is `failed`.
   if (parkedByStep) {
     const last = ofRelease[0]?.error ?? "no error recorded";
     return done(

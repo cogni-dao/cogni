@@ -13,8 +13,7 @@
  *     retained for the workload, or the node served on the mesh before in this lane, or nothing of the
  *     workload serves and the attempt belongs to a new release). Otherwise egress: the node's last served
  *     transport is egress whenever it never served on the mesh, so a lane switch never leaves a node
- *     without a serving path. A stop-then-start or a lost-lease redeploy of a never-meshed node stays
- *     egress.
+ *     without a serving path. A lost-lease redeploy of a never-meshed node stays egress.
  *   - LISTENERS_ARE_THE_GRANT (HR 3): the companion listeners and the policy grant are the SAME port set,
  *     the attempt's substrate binding ports (`nodeAppSubstrateBinding`, the input `nodeAppEnv` derives the
  *     env from). A port outside the registry (`substrate-ports.ts`) is never a listener.
@@ -111,8 +110,8 @@ const SERVED_PHASES: readonly AttemptPhase[] = [
 const SERVING_PHASES: readonly AttemptPhase[] = ["active", "retiring"];
 
 /**
- * HR 18. `workloadAttempts` = every attempt of this workload BEFORE this create (any stop-then-start has
- * not yet changed a phase); `nodeAttempts` = every attempt of the node in this env, all workloads.
+ * HR 18. `workloadAttempts` = every attempt of this workload BEFORE this create; `nodeAttempts` = every
+ * attempt of the node in this env, all workloads.
  */
 export function attemptTransport(input: {
   readonly lane: SubstrateTransport;
