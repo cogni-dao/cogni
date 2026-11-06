@@ -43,6 +43,12 @@ resources:
   - ../../../base/database-reliability-actuator
   - ./database-reliability-actuator-external-secret.yaml
 namePrefix: operator-
+# task.5428 — the mesh coordinators (one Headscale container + PVC + socket volume + client NodePort
+# per tailnet) ride beside their one writer: this sequencer serves the canonical candidate-a, preview and production lanes (NODE_DEPLOY_ENVS below).
+components:
+  - ../../../base/node-deploy-mesh/tailnets/candidate-a
+  - ../../../base/node-deploy-mesh/tailnets/preview
+  - ../../../base/node-deploy-mesh/tailnets/production
 # Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
 # name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
@@ -75,7 +81,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:e8e1d240c1523c2bafa4d65b469a9ec2de7fa6c0a9b492958ab2763b4f061bb1"
+    digest: "sha256:f0bbd462dc122b2cc86d52240e02a82aa651c924f8cca1bb1ae23e433fbfeb38"
 patches:
   - target:
       kind: ExternalSecret

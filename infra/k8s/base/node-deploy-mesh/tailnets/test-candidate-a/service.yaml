@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the `test-candidate-a` Headscale CLIENT port, for the coordinator env VM's edge Caddy only (NodePort,
+# host.docker.internal). The edge serves `mesh-test-candidate-a.cogni-testing.org` with a public ACME certificate and
+# forwards ONLY the Tailscale client paths + /verify (scripts/ci/render-caddyfile.sh); the hardener
+# drops the NodePort from the public NIC before NAT (hard requirements 12, 22). NodePort from the
+# tailnet table. publishNotReadyAddresses: a NotReady sequencer pod never withdraws the coordinator.
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-deploy-mesh-test-candidate-a
+  labels:
+    app.kubernetes.io/name: node-deploy-sequencer
+    app.kubernetes.io/component: mesh-coordinator
+    cogni.dev/mesh-tailnet: test-candidate-a
+spec:
+  type: NodePort
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: node-deploy-sequencer
+  ports:
+    - name: headscale
+      port: 8184
+      targetPort: hs-tca
+      nodePort: 32444

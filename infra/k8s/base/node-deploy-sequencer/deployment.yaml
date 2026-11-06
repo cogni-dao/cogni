@@ -11,19 +11,32 @@
 #   2. SINGLE INSTANCE by a Postgres advisory lock, so strategy is Recreate: a surged pod would
 #      sit not-ready (it is not the leader) and a RollingUpdate would never finish.
 #   3. Its Role allows get/create on Secrets in this namespace and nothing else (rbac.yaml).
-#   4. Nothing dials this pod. It has no Service; the health port exists for kubelet probes only.
-#      Losing it can never block a deploy of the operator: it only drives workloads declared to it.
+#   4. Nothing dials the sequencer itself; its health port exists for kubelet probes only. Losing it
+#      can never block a deploy of the operator: it only drives workloads declared to it. In production
+#      and candidate-a the pod also carries one Headscale coordinator per tailnet its sequencer writes
+#      (base/node-deploy-mesh/tailnets/<tailnet>), whose client ports ARE dialed through that tailnet's
+#      own `node-deploy-mesh-<tailnet>` Service (publishNotReadyAddresses).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: node-deploy-sequencer
   annotations:
-    reloader.stakater.com/auto: "true"
+    # task.5428 (CD5) — NAMED Secrets only, never `auto`. Reloader rolls the whole pod, and in production
+    # and candidate-a the pod also runs the per-tailnet Headscale coordinators (base/node-deploy-mesh), so an unrelated
+    # Secret must not restart them. These are exactly the Secrets the projected volume below reads.
+    secret.reloader.stakater.com/reload: "akash-tx-actuator-env-secrets,operator-env-secrets"
+    # The sequencer reads operator-node-app-config through configMapKeyRef (every operator overlay
+    # uses the `operator-` prefix); it has no hash suffix, so Reloader must roll on its changes.
+    configmap.reloader.stakater.com/reload: "operator-node-app-config"
   labels:
     app.kubernetes.io/name: node-deploy-sequencer
     app.kubernetes.io/part-of: cogni
 spec:
   replicas: 1
+  # task.5428 — a rollout that is not Available in 10 minutes is a failed rollout (Argo Degraded), and
+  # the sequencer-rollout alert (infra/grafana/alerts/mesh-plane.alerts.yaml) pages on the same bound:
+  # in production the coordinators restart with this pod.
+  progressDeadlineSeconds: 600
   strategy:
     type: Recreate
   selector:

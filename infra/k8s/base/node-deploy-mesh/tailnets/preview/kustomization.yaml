@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the `preview` tailnet coordinator (Headscale) as a Component on the node-deploy sequencer.
+# Included by the operator overlay whose sequencer is this tailnet's one writer (production).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - pvc.yaml
+  - service.yaml
+configMapGenerator:
+  - name: node-deploy-mesh-preview
+    files:
+      - headscale.yaml
+      - derp.yaml
+patches:
+  - path: deployment-patch.yaml
+    target:
+      kind: Deployment
+      name: node-deploy-sequencer
