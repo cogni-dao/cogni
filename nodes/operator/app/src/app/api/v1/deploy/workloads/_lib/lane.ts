@@ -94,12 +94,15 @@ export interface LaneConfig {
   DEPLOY_ENVIRONMENT?: string | undefined;
   NODE_DEPLOY_ENVS?: string | undefined;
   NODE_SUBMODULE_PARENT_OWNER?: string | undefined;
+  NODE_DEPLOY_WORKLOAD_ZONE?: string | undefined;
   FLEET_CONTROL_ENV?: string | undefined;
 }
 
 /**
  * CD4 (a)+(b) as a RESULT, shared by every caller of the release writer (the verb route and the merge
  * webhook): refuse a lane this deployment does not serve or a node this fleet does not own.
+ * Existing release reads need only these scope checks. New zone admission belongs to the release
+ * writer and sequencer, so a broken DNS configuration cannot hide paid-effect evidence.
  * `reason` is the stable machine name. 503 when the deployment has no served env at all.
  */
 export function laneRefusal(

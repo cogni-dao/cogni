@@ -475,8 +475,44 @@ const workloadHealthPathSchema = z.string().regex(/^\/[A-Za-z0-9._~/-]*$/);
  * One blue/green workload (task.5400). An `app` is replaced by immutable blue/green; a `state`
  * workload is created once and NEVER auto-replaced.
  */
+/** A stateless private member of one authorized release; Score owns runtime shape. */
+const workloadCompanionSchema = z
+  .object({
+    name: serviceNameSchema,
+    image: z.string().max(512),
+    imagePending: z.literal(true).optional(),
+    command: z.array(z.string().max(8192)).min(1).max(32).optional(),
+    port: z.number().int().min(1).max(65535),
+    cpu: z.number().min(0.1).max(64),
+    memoryMi: z.number().int().min(128).max(262144),
+    storageMi: z.number().int().min(128).max(1048576),
+    env: z.record(serviceEnvKeySchema, z.string().max(4096)),
+    // The same path must fit the qualification observation before a release can be recorded.
+    ready: workloadHealthPathSchema.max(512),
+    secretKeys: z.array(serviceEnvKeySchema).max(32).optional(),
+  })
+  .strict();
+
 export const nodeWorkloadSpecSchema = z
   .object({
+    /** Present only for the explicit Score/repo-spec companion bridge. */
+    serviceName: serviceNameSchema.optional(),
+    companions: z.array(workloadCompanionSchema).min(1).max(7).optional(),
+    artifactPlan: z
+      .object({
+        repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+        imageRepository: z
+          .string()
+          .regex(/^ghcr\.io\/[a-z0-9._-]+\/[a-z0-9._-]+$/),
+        /** Frozen same-SHA build declarations, including services pruned in this environment. */
+        services: z.array(nodeServiceSpecSchema).min(1).max(8),
+        bundleDigest: workloadImageSchema.optional(),
+        selectedImages: z
+          .record(serviceNameSchema, workloadImageSchema)
+          .optional(),
+      })
+      .strict()
+      .optional(),
     name: serviceNameSchema,
     kind: z.enum(["app", "state"]),
     /** Digest-pinned, or `<repo>:sha-<40 hex>` when `imagePending` is true (resolved before any create). */
@@ -534,6 +570,13 @@ export const nodeWorkloadSpecSchema = z
       .object({
         version: workloadHealthPathSchema,
         ready: workloadHealthPathSchema,
+        qualification: z
+          .object({
+            path: workloadHealthPathSchema,
+            timeoutMs: z.number().int().min(1).max(20000),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -541,6 +584,58 @@ export const nodeWorkloadSpecSchema = z
   .strict()
   .superRefine((w, ctx) => {
     const http = "http" in w.expose;
+    const companions = w.companions ?? [];
+    const plan = w.artifactPlan;
+    if (plan && !!plan.bundleDigest !== !!plan.selectedImages)
+      ctx.addIssue({
+        code: "custom",
+        path: ["artifactPlan"],
+        message: "bundle identity and digest set must be sealed together",
+      });
+    if (plan?.bundleDigest && plan.selectedImages) {
+      const actual = Object.fromEntries([
+        [w.serviceName ?? w.name, w.image],
+        ...companions.map((c) => [c.name, c.image]),
+      ]);
+      if (
+        w.imagePending ||
+        companions.some((c) => c.imagePending) ||
+        JSON.stringify(Object.entries(actual).sort()) !==
+          JSON.stringify(Object.entries(plan.selectedImages).sort())
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: ["artifactPlan"],
+          message: "accepted digest set must match every selected service",
+        });
+    }
+    if (companions.length && (!w.health?.qualification || w.kind !== "app"))
+      ctx.addIssue({
+        code: "custom",
+        path: ["companions"],
+        message: "private companions require app qualification",
+      });
+    if (
+      new Set(companions.map((c) => c.name)).size !== companions.length ||
+      companions.some((c) => c.name === (w.serviceName ?? w.name))
+    )
+      ctx.addIssue({
+        code: "custom",
+        path: ["companions"],
+        message: "service names must be unique",
+      });
+    for (const c of companions) {
+      if (
+        !(
+          c.imagePending ? pendingWorkloadImageSchema : workloadImageSchema
+        ).safeParse(c.image).success
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: ["companions", c.name, "image"],
+          message: "invalid companion image",
+        });
+    }
     const imageSchema = w.imagePending
       ? pendingWorkloadImageSchema
       : workloadImageSchema;

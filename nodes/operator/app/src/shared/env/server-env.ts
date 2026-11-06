@@ -80,8 +80,7 @@ export const serverSchema = z.object({
   APP_ENV: z.enum(["test", "production"]),
   APP_BASE_URL: z.string().url().optional(),
   DOMAIN: z.string().optional(),
-  // Public workload zone owned by this fleet. Canonical deployments omit it and keep cognidao.org;
-  // the isolated test operator sets cogni-testing.org for generated node routes and overlays.
+  // Shared substrate root. Keep this distinct from NODE_DEPLOY_WORKLOAD_ZONE and auth DOMAIN.
   FORK_DOMAIN_ROOT: z.string().min(1).optional(),
 
   // Deployment environment (for observability labels and analytics filtering)
@@ -97,6 +96,8 @@ export const serverSchema = z.object({
   // Envs this deployment's node-deploy sequencer serves (comma-separated; story.5137 ONE FRONT DOOR). The
   // production operator serves `candidate-a,preview,production`. Unset => only DEPLOY_ENVIRONMENT.
   NODE_DEPLOY_ENVS: z.string().optional(),
+  // Explicit fleet-owned workload DNS zone. Never DOMAIN (auth) or FORK_DOMAIN_ROOT (substrate).
+  NODE_DEPLOY_WORKLOAD_ZONE: z.string().optional(),
 
   // Build SHA for observability (canonical source for /metrics, /readyz, agent.json)
   APP_BUILD_SHA: z.string().optional(),
@@ -225,6 +226,7 @@ export const serverSchema = z.object({
   NODE_SUBMODULE_PARENT_REPO: optionalString,
   // Which repo's infra/catalog/ defines this env's nodes. Defaults to the submodule
   // parent; set separately where the pin-PR target is a throwaway org (bug.5073).
+  NODE_REGISTRY_WORKLOAD_ZONE: z.string().optional(),
   NODE_REGISTRY_CATALOG_OWNER: optionalString,
   NODE_REGISTRY_CATALOG_REPO: optionalString,
 

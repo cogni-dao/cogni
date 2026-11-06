@@ -857,13 +857,26 @@ describe("node-deploy sequencer has no secrets reach in the wallet namespace", (
   interface Doc {
     kind: string;
     metadata: { name: string; namespace?: string };
+    data?: Record<string, string>;
     rules?: { resources?: string[]; verbs?: string[] }[];
     roleRef?: { kind: string; name: string };
     subjects?: { kind: string; name: string; namespace?: string }[];
     spec?: {
       template?: {
         spec?: {
-          containers?: { env?: { name: string; value?: string }[] }[];
+          containers?: {
+            env?: {
+              name: string;
+              value?: string;
+              valueFrom?: {
+                configMapKeyRef?: {
+                  name: string;
+                  key: string;
+                  optional?: boolean;
+                };
+              };
+            }[];
+          }[];
         };
       };
     };
@@ -887,6 +900,43 @@ describe("node-deploy sequencer has no secrets reach in the wallet namespace", (
       return false;
     }
   })();
+
+  it.skipIf(!kubectlAvailable).each([
+    ["candidate-a", "cogni-test-org", "cogni-testing.org"],
+    ["preview", "cogni-test-org", undefined],
+    ["production", "cogni-dao", "cognidao.org"],
+  ])(
+    "%s renders the origin bindings and recovery-safe sequencer refs",
+    (env, owner, zone) => {
+      const docs = renderOverlay(env);
+      const config = docs.find(
+        (d) =>
+          d.kind === "ConfigMap" &&
+          d.metadata.name === "operator-node-app-config"
+      );
+      expect(config?.data?.NODE_SUBMODULE_PARENT_OWNER).toBe(owner);
+      expect(config?.data?.NODE_DEPLOY_WORKLOAD_ZONE).toBe(zone);
+      expect(config?.data?.NODE_REGISTRY_WORKLOAD_ZONE).toBe("cognidao.org");
+      if (env === "preview") return;
+      const deployment = docs.find(
+        (d) =>
+          d.kind === "Deployment" &&
+          d.metadata.name === "operator-node-deploy-sequencer"
+      );
+      const variables =
+        deployment?.spec?.template?.spec?.containers?.flatMap(
+          (c) => c.env ?? []
+        ) ?? [];
+      for (const [name, key] of [
+        ["NODE_DEPLOY_FLEET_OWNER", "NODE_SUBMODULE_PARENT_OWNER"],
+        ["NODE_DEPLOY_WORKLOAD_ZONE", "NODE_DEPLOY_WORKLOAD_ZONE"],
+      ]) {
+        expect(
+          variables.find((v) => v.name === name)?.valueFrom?.configMapKeyRef
+        ).toEqual({ name: "operator-node-app-config", key, optional: true });
+      }
+    }
+  );
 
   it("the base Role grants only secrets get+create plus its own externalsecrets (task.5405), and every overlay moves it to a dedicated namespace", () => {
     const rbac = yaml

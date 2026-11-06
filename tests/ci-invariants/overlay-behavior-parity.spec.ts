@@ -174,6 +174,7 @@ const IDENTITY: Record<string, Rule[]> = {
       "NODE_MINT_OWNER",
       "NODE_TEMPLATE_OWNER",
       "NODE_SUBMODULE_PARENT_OWNER",
+      "NODE_DEPLOY_WORKLOAD_ZONE",
       "NODE_SUBMODULE_PARENT_REPO",
       "DOLTHUB_OWNER",
       "DOLTHUB_NONPROD_OWNER",
@@ -249,11 +250,6 @@ const IDENTITY: Record<string, Rule[]> = {
         "sequencer",
         "NODE_DEPLOY_SUBSTRATE_HOST"
       ),
-    },
-    {
-      why: "the DNS zone this fleet's node hosts live in (domain identity: the test fleet's own zone; production leaves the default, story.5137)",
-      pattern:
-        /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_EDGE_ZONE\]\.(name|value)$/,
     },
     {
       why: "env name",

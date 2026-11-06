@@ -211,6 +211,8 @@ patches:
                 env:
                   - name: DEPLOY_ENVIRONMENT
                     value: production
+                  - name: NODE_DEPLOY_OPERATOR_DOMAIN_ROOT
+                    value: cognidao.org
                   - name: NODE_DEPLOY_SECRETS_NAMESPACE
                     value: cogni-node-deploy-production
                   - name: AKASH_CHAIN_OWNER
@@ -234,7 +236,17 @@ patches:
                   # NODE_SUBMODULE_PARENT_OWNER), so this process never deploys another fleet's node. Unset
                   # admits no remote-source node (fail closed).
                   - name: NODE_DEPLOY_FLEET_OWNER
-                    value: cogni-dao
+                    valueFrom:
+                      configMapKeyRef:
+                        name: node-app-config
+                        key: NODE_SUBMODULE_PARENT_OWNER
+                        optional: true
+                  - name: NODE_DEPLOY_WORKLOAD_ZONE
+                    valueFrom:
+                      configMapKeyRef:
+                        name: node-app-config
+                        key: NODE_DEPLOY_WORKLOAD_ZONE
+                        optional: true
                   - name: NODE_DEPLOY_SUBSTRATE_HOSTS
                     value: candidate-a=cogni-candidate-a.vm.cognidao.org,preview=cogni-preview.vm.cognidao.org,production=cogni.vm.cognidao.org
   # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists
@@ -411,6 +423,9 @@ patches:
       - op: add
         path: /data/NODE_TEMPLATE_OWNER
         value: "cogni-dao"
+      - op: add
+        path: /data/NODE_DEPLOY_WORKLOAD_ZONE
+        value: "cognidao.org"
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_OWNER
         value: "cogni-dao"

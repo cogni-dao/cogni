@@ -30,8 +30,23 @@ export interface OperatorIdentityAttestationRepositoryConfig {
 export type FindNodeRow = (nodeId: string) => Promise<{
   readonly id: string;
   readonly slug: string;
+  readonly repoOwner: string;
+  readonly repoUrl: string;
   readonly deployEnvs: readonly string[];
 } | null>;
+
+function registeredOwner(owner: string, repoUrl: string): string | null {
+  const normalized = owner?.trim().toLowerCase();
+  const match =
+    /^https:\/\/github\.com\/([^/\s]+)\/[^/\s]+(?:\.git)?\/?$/i.exec(
+      repoUrl?.trim() ?? ""
+    );
+  return normalized &&
+    /^[a-z0-9][a-z0-9-]*$/.test(normalized) &&
+    match?.[1]?.toLowerCase() === normalized
+    ? normalized
+    : null;
+}
 
 /**
  * Short-TTL cache for the merged-catalog read.
@@ -115,6 +130,7 @@ export class OperatorIdentityAttestationRepository
         return {
           nodeId: row.id,
           slug: row.slug,
+          repoOwner: registeredOwner(row.repoOwner, row.repoUrl),
           deployEnvs: row.deployEnvs,
         };
       }
@@ -141,6 +157,7 @@ export class OperatorIdentityAttestationRepository
     return {
       nodeId: node.nodeId,
       slug: node.slug,
+      repoOwner: registeredOwner(node.repoOwner, node.repoUrl),
       deployEnvs: node.deployEnvs,
     };
   }

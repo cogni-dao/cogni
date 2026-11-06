@@ -229,7 +229,7 @@ export function buildNodeArtifactBundle(input: {
  * Exact service+artifact equality is checked before any workload assembly.
  */
 export function resolveNodeArtifactBundle(
-  spec: RepoSpec,
+  spec: Pick<RepoSpec, "node_id" | "deployment">,
   input: unknown,
   expected: ExpectedNodeArtifactBundleIdentity
 ): ResolvedNodeArtifactBundle {

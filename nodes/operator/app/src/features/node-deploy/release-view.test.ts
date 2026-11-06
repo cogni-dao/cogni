@@ -67,6 +67,52 @@ const derive = (attemptsNewestFirst: AttemptRow[], current: string = R1) =>
   });
 
 describe("deriveReleaseTimeline STATE_TABLE", () => {
+  it.each([
+    ["planned", "deploying"],
+    ["closing", "deploying"],
+    ["failed", "parked"],
+    ["active", "active"],
+  ] as const)("exposes terminal refusal independently of %s recovery/serving state", (phase, releaseState) => {
+    const admissionRefusal = {
+      reason: "artifact_bundle_invalid: digest mismatch",
+      at: new Date(T0).toISOString(),
+    };
+    const refused = { ...release, admissionRefusal };
+    const rows = [attempt(R1, 1, phase)];
+    const desired = {
+      workload: "canary",
+      state: "running",
+      releaseId: R1,
+    } as const;
+    expect(
+      buildWorkloadView({
+        desired,
+        release: refused,
+        attemptsNewestFirst: rows,
+      }).desired
+    ).toMatchObject({
+      releaseState,
+      admissionRefusal,
+      admissionRefusedAt: admissionRefusal.at,
+    });
+    const detail = buildReleaseDetail({
+      desired,
+      release: refused,
+      attemptsNewestFirst: rows,
+    });
+    expect(DeployReleaseDetailSchema.parse(detail).release).toMatchObject({
+      releaseState,
+      admissionRefusal,
+    });
+    expect(
+      deriveReleaseTimeline({
+        release: refused,
+        currentReleaseId: R2,
+        attemptsNewestFirst: rows,
+      })
+    ).toMatchObject({ releaseState: "superseded", admissionRefusal });
+  });
+
   it("queued: current release with no attempt", () => {
     expect(derive([])).toMatchObject({
       releaseState: "queued",

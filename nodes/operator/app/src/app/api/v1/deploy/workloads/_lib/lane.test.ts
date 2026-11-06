@@ -21,6 +21,7 @@ const env: {
   FLEET_CONTROL_ENV?: string | undefined;
   NODE_DEPLOY_ENVS?: string | undefined;
   NODE_SUBMODULE_PARENT_OWNER?: string | undefined;
+  NODE_DEPLOY_WORKLOAD_ZONE?: string | undefined;
 } = {};
 vi.mock("@/shared/env", () => ({ serverEnv: () => env }));
 vi.mock("@/shared/config", () => ({ getNodeId: () => OPERATOR_ID }));
@@ -62,6 +63,7 @@ function productionOperator(): void {
   env.FLEET_CONTROL_ENV = "production";
   env.NODE_DEPLOY_ENVS = "candidate-a,preview,production";
   env.NODE_SUBMODULE_PARENT_OWNER = "cogni-dao";
+  env.NODE_DEPLOY_WORKLOAD_ZONE = "cognidao.org";
 }
 
 function testOperator(): void {
@@ -69,6 +71,7 @@ function testOperator(): void {
   env.FLEET_CONTROL_ENV = "candidate-a";
   env.NODE_DEPLOY_ENVS = undefined;
   env.NODE_SUBMODULE_PARENT_OWNER = "cogni-test-org";
+  env.NODE_DEPLOY_WORKLOAD_ZONE = "cogni-testing.org";
 }
 
 describe("servedEnvs", () => {
@@ -171,6 +174,25 @@ describe("envNotServed: the served env set and the fleet (CD4 a, b)", () => {
 
 describe("the test operator never serves canonical nodes (CD4 b)", () => {
   beforeEach(testOperator);
+
+  it.each([
+    undefined,
+    "https://invalid/zone",
+  ])("keeps scoped reads independent of new DNS admission (%s)", async (zone) => {
+    env.NODE_DEPLOY_WORKLOAD_ZONE = zone;
+    const own = {
+      ...AKASH_NODE,
+      source_repo: "https://github.com/cogni-test-org/own",
+    };
+    expect(envNotServed("candidate-a", TOKS5_ID, own)).toBeUndefined();
+    expect(
+      envNotServed("candidate-a", OPERATOR_ID, OPERATOR_ROW)
+    ).toBeUndefined();
+    expect(
+      await bodyOf(envNotServed("candidate-a", TOKS5_ID, AKASH_NODE))
+    ).toEqual({ error: "node_not_in_fleet" });
+    expect(envNotServed("production", TOKS5_ID, own)?.status).toBe(409);
+  });
 
   it("refuses canonical toks5 in candidate-a: it is another fleet's node, though its catalog is baked into the test image", async () => {
     const res = envNotServed("candidate-a", TOKS5_ID, AKASH_NODE);

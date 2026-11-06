@@ -58,6 +58,7 @@ const envState = vi.hoisted(() => ({
   NODE_SUBMODULE_PARENT_OWNER: "test-owner" as string | undefined,
   NODE_SUBMODULE_PARENT_REPO: "test-repo" as string | undefined,
   DEPLOY_ENVIRONMENT: "production" as string | undefined,
+  NODE_DEPLOY_WORKLOAD_ZONE: "cognidao.org",
 }));
 const mockGetSessionUser = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
@@ -467,6 +468,14 @@ describe("/api/v1/deploy/workloads", () => {
       const POLY_ID = "4b06359a-a859-4399-888e-a8c7a6696f7e";
       dbState.node = { id: POLY_ID, slug: "poly" };
       envState.NODE_SUBMODULE_PARENT_OWNER = "cogni-dao";
+      // The entire declaration set must belong to Poly, including the app beside this state.
+      files.byPath.set(
+        CANARY_PATH,
+        CANARY.replaceAll(
+          "node-deploy-canary.cognidao.org",
+          "poly.cognidao.org"
+        )
+      );
       files.byPath.set(
         ".cogni/repo-spec.yaml",
         ROOT_SPEC.replaceAll(NODE_ID, POLY_ID)

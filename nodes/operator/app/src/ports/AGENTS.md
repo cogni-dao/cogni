@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-10-26
+- **Last reviewed:** 2026-11-04
 - **Status:** stable
 
 ## Purpose
@@ -85,6 +85,8 @@ Biome `noRestrictedImports` enforces this in `biome/app.json`.
 
 Note: src/ports/** is separate from src/contracts/**.
 Ports = internal dependencies; contracts = edge IO (HTTP/MCP).
+
+- Node-deploy DNS records include typed `DnsZoneIdentityError` and bounded native zone identity validation before new paid use; the DNS port still has no delete.
 
 ## Responsibilities
 

@@ -57,6 +57,8 @@ spec:
             # overlay). Never the pod's own namespace: the actuator's namespace stays free of any secrets
             # verb for this ServiceAccount (LEAST_KUBERNETES_PRIVILEGE). The process refuses to boot if
             # the two are equal. Set BY NAME in every overlay.
+            - name: NODE_DEPLOY_OPERATOR_DOMAIN_ROOT
+              value: replace-in-overlay
             - name: NODE_DEPLOY_SECRETS_NAMESPACE
               value: replace-in-overlay
             # PUBLIC on-chain address of the wallet the actuator pays from; chain-truth reads

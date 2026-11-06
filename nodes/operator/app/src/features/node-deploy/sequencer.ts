@@ -11,10 +11,13 @@
  *   in local dev and over the private actuator in production.
  * Invariants:
  *   - ATTEMPT_ROW_BEFORE_CREATE: the attempt row (phase `planned`) is durable BEFORE the paid create.
+ *     A dispatch marker is durable before native IO; resumed keys are observed before admission waits.
  *   - KEY_IS_NEVER_REUSED: every create takes the next attempt ordinal; a failed attempt's key is dead.
  *     An ambiguous create is RESOLVED through `observe(cogniKey)`, never blindly repeated.
  *   - PARK_AFTER_3: after 3 consecutive failed attempts of one release no further paid create happens
  *     until a new release arrives. No clock resets that count.
+ *   - TERMINAL_ADMISSION: refusal fences every resumed phase before proof/cutover. Old paid effects
+ *     keep observation/adoption and confirmed stateless cleanup; retained state keeps custody.
  *   - PROVE_BEFORE_CUTOVER: the edge never moves until the green lease serves the exact sha
  *     (`/version.buildSha`) and `/readyz` 200 through its provider ingress with the public Host header,
  *     within `proofMs` of lease creation; otherwise the NEW lease is closed and blue keeps serving.
@@ -77,10 +80,30 @@ import {
   type ReleaseRow,
   type WorkloadKey,
 } from "@/ports";
+import { isFleetOwnedRow } from "@/shared/node-registry/fleet-ownership";
+import { selectReleaseBundle } from "./artifact-selection";
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
-import { type EdgeRouter, hostOwnedBy, workerHostRefusal } from "./edge";
-import { nodeAppEnv, nodeAppSecretKeys, workerEnv } from "./node-app-env";
+import {
+  type EdgeRouter,
+  HOST_ENVS,
+  hostOwnedBy,
+  workerHostRefusal,
+} from "./edge";
+import {
+  nodeAppEnv,
+  nodeAppSecretKeys,
+  releaseIdentityEnv,
+  workerEnv,
+} from "./node-app-env";
 import { nodeCatalogPolicy } from "./node-catalog-policy";
+import {
+  asQualificationFailure,
+  checkQualification,
+  QualificationFailure,
+  qualificationChallenge,
+  savedQualification,
+  validationCode,
+} from "./qualification";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
 
 export interface SequencerConfig {
@@ -173,10 +196,10 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
 export interface NodeAppRuntimeDeps {
   readonly secrets: NodeRuntimeSecretsPort;
   readonly catalog: NodeCatalogPort;
+  /** Trusted public operator issuer host for this lane (`DOMAIN`, #3029). */
+  readonly operatorDomain: string;
   /** `vm_host_for_env` of the environment VM; absent omits the substrate env block. */
   readonly substrateHost?: string | undefined;
-  /** The DNS zone this lane's node hosts live in (ONE_EDGE_ZONE); absent = `cognidao.org`. */
-  readonly edgeZone?: string | undefined;
 }
 
 export interface SequencerDeps {
@@ -184,6 +207,12 @@ export interface SequencerDeps {
   readonly payer: PayerPort;
   /** Undefined when no edge credentials are configured: http apps are then refused BEFORE paying. */
   readonly edge: EdgeRouter | undefined;
+  /**
+   * Set when the lane's fleet binding (owner + workload zone) is missing or invalid. A fresh app then
+   * waits before any attempt or payment, and a proven green waits at cutover. It never revokes
+   * paid-effect recovery ownership (observe, adopt, close).
+   */
+  readonly httpAdmissionRefusal?: "workload_zone_not_configured";
   readonly probe: ProbePort;
   readonly secrets: SecretsPort;
   readonly runtime?: NodeAppRuntimeDeps;
@@ -240,9 +269,11 @@ const SERVED_PHASES: readonly AttemptPhase[] = [
 const MAX_ALLOWED_PROVIDERS = 16;
 
 class DependencyNotReady extends Error {}
+class InvalidArtifactSet extends Error {}
 
 interface ResolvedRuntime {
   readonly env: Record<string, string>;
+  readonly companionEnvs?: Record<string, Record<string, string>>;
   /** Catalog `required_placement_countries[<env>]`; empty = unconstrained. */
   readonly requiredCountryCodes: readonly string[];
   /** True when the env is a non-operator node app's full runtime env (`nodeAppEnv`). */
@@ -307,7 +338,18 @@ export class NodeDeploySequencer {
     await this.janitor(key);
     const all = await this.d.store.attemptsFor(key);
 
-    const inflight = all.find((a) => IN_FLIGHT_PHASES.includes(a.phase));
+    let inflight = all.find((a) => IN_FLIGHT_PHASES.includes(a.phase));
+    // Legacy planned creates may still be running in the actuator. Fence them before
+    // either supersession or normal recovery can observe and settle their receipt.
+    if (
+      inflight?.phase === "planned" &&
+      !inflight.externalName &&
+      !inflight.error
+    ) {
+      inflight = await this.d.store.updateAttempt(inflight.id, {
+        error: ambiguousMarker("network", this.d.clock.now()),
+      });
+    }
     const active = all.find((a) => a.phase === "active");
     if (desired.gameDayRequestedAt)
       await this.gameDayKill(key, release, active, inflight);
@@ -327,6 +369,9 @@ export class NodeDeploySequencer {
     }
 
     if (active && active.releaseId === release.id) return "converged";
+    // Existing paid attempts above retain recovery authority, never activation authority after
+    // terminal refusal. Every tick/restart reads the authoritative release.
+    if (release.admissionRefusal) return "parked";
 
     if (release.spec.kind === "state") {
       const everLive = all.some((a) =>
@@ -344,12 +389,15 @@ export class NodeDeploySequencer {
     }
 
     const ofRelease = all.filter((a) => a.releaseId === release.id);
+    if (ofRelease.some((a) => a.error?.startsWith("artifact_bundle_invalid")))
+      return "parked";
     const failures = consecutiveFailures(ofRelease);
     // LAST_RESORT_STOP (task.5409): when the release's last refusal shows blue's provider as the only bidder
     // screening could pass, the park limit grants exactly ONE stop-then-start attempt. Parking first would
     // leave the node on blue forever (blue never moves, green never places). After that attempt, blue is
     // retired, so the predicate is false and a further failure parks as usual.
     const lastResort =
+      !release.spec.health?.qualification &&
       failures === this.d.config.maxFailedAttempts &&
       (await this.stopThenStartVerdict(key, release, ofRelease, active)) ===
         "eligible";
@@ -367,8 +415,19 @@ export class NodeDeploySequencer {
       // The image first: a pending image (`<repo>:sha-<sha>`) is resolved to a digest ONCE, pinned
       // write-once on the release, and only then can an attempt exist (ALWAYS_DEFER, story.5137).
       deployable = await this.pinImage(key, release);
+      if (deployable.admissionRefusal) return "parked";
       await this.resolveEnv(key, deployable);
     } catch (error) {
+      if (error instanceof InvalidArtifactSet) {
+        // Admission failed: attribute the refusal to the existing release intent. An attempt
+        // identity is allocated only after the entire selected artifact set is admitted.
+        await this.persistAdmissionRefusal(release, error);
+        await this.alert(key, release, undefined, "release_parked", {
+          reason: "artifact_bundle_invalid",
+          detail: error.message,
+        });
+        return "parked";
+      }
       if (error instanceof DependencyNotReady) {
         await this.emit(key, release, undefined, "dependency", "waiting", {
           reason: error.message,
@@ -378,27 +437,64 @@ export class NodeDeploySequencer {
       throw error;
     }
 
+    const allocateAttempt = () =>
+      this.d.store.insertAttempt(release.id, (n) =>
+        buildCogniKey({
+          namespace: this.d.config.namespace,
+          nodeId: key.nodeId,
+          workload: key.workload,
+          releaseId: release.id,
+          attempt: n,
+        })
+      );
+    try {
+      await this.assertNewAppHost(key, deployable);
+    } catch (error) {
+      const refused = await allocateAttempt();
+      await this.emit(key, release, refused, "attempt_planned", "ok", {
+        blue: active?.externalName,
+      });
+      await this.failAttempt(key, deployable, refused, errText(error), {
+        createEnded: true,
+      });
+      return "driven";
+    }
+    let blue = active;
     // STOP_THEN_START (task.5409): blue's provider was the only bidder that could pass screening, so a
     // green beside blue can never be placed. Close blue first (accepted downtime), then create.
-    let blue = active;
-    const stop = await this.stopThenStart(key, release, ofRelease, active);
+    // A useful-work capability requires blue to survive failed or unknown qualification.
+    const stop = release.spec.health?.qualification
+      ? "none"
+      : await this.stopThenStart(key, release, ofRelease, active);
     if (stop === "unconfirmed") return "close_pending";
     if (stop === "stopped") blue = undefined;
 
-    const attempt = await this.d.store.insertAttempt(release.id, (n) =>
-      buildCogniKey({
-        namespace: this.d.config.namespace,
-        nodeId: key.nodeId,
-        workload: key.workload,
-        releaseId: release.id,
-        attempt: n,
-      })
-    );
+    const attempt = await allocateAttempt();
     await this.emit(key, release, attempt, "attempt_planned", "ok", {
       blue: blue?.externalName,
     });
-    await this.drive(key, deployable, attempt, blue);
+    await this.drive(key, deployable, attempt, blue, true);
     return "driven";
+  }
+
+  private async persistAdmissionRefusal(
+    release: ReleaseRow,
+    error: InvalidArtifactSet
+  ): Promise<void> {
+    try {
+      const refused = await this.d.store.refuseAdmission(release.id, {
+        reason: `artifact_bundle_invalid: ${error.message}`.slice(0, 600),
+        at: new Date(this.d.clock.now()).toISOString(),
+      });
+      if (refused.admissionRefusal) return;
+    } catch {
+      // A lost write response grants no authority. Only durable readback confirms the verdict.
+    }
+    const readback = await this.d.store.getRelease(release.id);
+    if (!readback?.admissionRefusal)
+      throw new Error(
+        "admission refusal outcome unknown; awaiting durable readback"
+      );
   }
 
   /**
@@ -539,6 +635,75 @@ export class NodeDeploySequencer {
     release: ReleaseRow
   ): Promise<ReleaseRow> {
     const w = release.spec;
+    if ((w.companions?.length || w.health?.qualification) && !w.artifactPlan)
+      throw new InvalidArtifactSet(
+        "qualified service set has no frozen artifact plan"
+      );
+    if (w.artifactPlan) {
+      if (w.artifactPlan.bundleDigest && release.resolvedImage) {
+        await this.checkSelectedImages(release.spec);
+        return release;
+      }
+      if (!this.d.images?.resolveArtifactBundle)
+        throw new DependencyNotReady("no bundle resolver configured");
+      const acceptedDigest = await this.d.store.acceptedBundle(release);
+      try {
+        const publication = await this.d.images.resolveArtifactBundle({
+          imageRepository: w.artifactPlan.imageRepository,
+          sourceSha: release.sourceSha,
+          ...(acceptedDigest ? { acceptedDigest } : {}),
+        });
+        if (!publication)
+          throw new DependencyNotReady(
+            "complete CI bundle is not published yet"
+          );
+        let spec: ReleaseRow["spec"];
+        try {
+          spec = selectReleaseBundle(release, publication);
+        } catch {
+          throw new InvalidArtifactSet(
+            "bundle identity or service coverage refused"
+          );
+        }
+        await this.checkSelectedImages(spec);
+        let sealed: ReleaseRow | undefined;
+        try {
+          sealed = await this.d.store.pinResolvedBundle(release.id, spec);
+        } catch {
+          // A lost COMMIT reply is unknown, not permission to resolve tags or create another set.
+          try {
+            sealed = await this.d.store.getRelease(release.id);
+          } catch {
+            /* next tick reads durable intent */
+          }
+          if (
+            !sealed?.resolvedImage ||
+            !sealed.spec.artifactPlan?.bundleDigest ||
+            !sealed.spec.artifactPlan.selectedImages
+          )
+            throw new DependencyNotReady(
+              "bundle seal outcome unknown; awaiting durable readback"
+            );
+        }
+        if (!sealed)
+          throw new DependencyNotReady(
+            "another environment accepted a bundle; retry its digest"
+          );
+        // CAS can return a concurrently accepted winner. Check the actual set we will create.
+        if (
+          JSON.stringify(sealed.spec.artifactPlan?.selectedImages) !==
+          JSON.stringify(spec.artifactPlan?.selectedImages)
+        )
+          await this.checkSelectedImages(sealed.spec);
+        return sealed;
+      } catch (e) {
+        if (e instanceof BuiltImageRegistryError) {
+          if (e.invalid) throw new InvalidArtifactSet(e.message);
+          throw new DependencyNotReady("bundle registry unavailable");
+        }
+        throw e;
+      }
+    }
     if (!w.imagePending) return release;
     const m = /^(.+):sha-([0-9a-f]{40})$/u.exec(w.image);
     if (!m?.[1] || !m[2])
@@ -568,6 +733,26 @@ export class NodeDeploySequencer {
       throw new DependencyNotReady(`image ${w.image} is not published yet`);
     }
     return this.d.store.pinResolvedImage(release.id, digest);
+  }
+
+  private async checkSelectedImages(spec: ReleaseRow["spec"]): Promise<void> {
+    const images = spec.artifactPlan?.selectedImages;
+    if (!images || !this.d.images?.checkImageManifests)
+      throw new DependencyNotReady(
+        "selected image manifest reader unavailable"
+      );
+    try {
+      if (!(await this.d.images.checkImageManifests(Object.values(images))))
+        throw new DependencyNotReady(
+          "selected image digest is not published or readable"
+        );
+    } catch (e) {
+      if (e instanceof BuiltImageRegistryError) {
+        if (e.invalid) throw new InvalidArtifactSet(e.message);
+        throw new DependencyNotReady("selected image registry unavailable");
+      }
+      throw e;
+    }
   }
 
   /**
@@ -628,9 +813,143 @@ export class NodeDeploySequencer {
     key: WorkloadKey,
     release: ReleaseRow,
     start: AttemptRow,
-    blue: AttemptRow | undefined
+    blue: AttemptRow | undefined,
+    freshAttempt = false
   ): Promise<void> {
+    if (release.admissionRefusal) {
+      if (!freshAttempt && this.createMayStillBeInFlight(start)) return;
+      if (release.spec.kind === "app") {
+        // The existing orphan guard observes, adopts and confirms closure under the original key.
+        // It also preserves the grace window while a paid create may still be running.
+        await this.failAttempt(
+          key,
+          release,
+          start,
+          release.admissionRefusal.reason
+        );
+      } else {
+        // Retained state cannot be destroyed by an admission verdict. Keep observation/custody,
+        // but grant neither proof nor activation. No new create or replacement is authorized.
+        if (this.createMayStillBeInFlight(start)) return;
+        try {
+          const obs = await this.d.payer.observe({
+            cogniKey: start.cogniKey,
+            ...(start.externalName ? { externalName: start.externalName } : {}),
+          });
+          if (obs.found && obs.resource && !start.externalName)
+            await this.bindLease(key, release, start, obs.resource);
+        } catch (error) {
+          await this.emit(
+            key,
+            release,
+            start,
+            "admission_refused",
+            "observe_unavailable",
+            {
+              error: errText(error),
+            }
+          );
+        }
+        await this.alert(
+          key,
+          release,
+          start,
+          "admission_refused_state_retained",
+          {
+            reason: release.admissionRefusal.reason,
+          }
+        );
+      }
+      return;
+    }
     let a = start;
+    let recoveryPending = false;
+    if (a.phase === "planned") {
+      if (a.error?.startsWith(REFUSED_PREFIX)) {
+        await this.failAttempt(key, release, a, a.error);
+        return;
+      }
+      // A dispatch marker survives loss before bindLease or the catch handler. Legacy
+      // unmarked rows get the same grace: their previous runner may still be paying.
+      if (!freshAttempt && this.createMayStillBeInFlight(a)) {
+        await this.emitGrace(key, release, a, "create", "inflight_grace", {
+          graceMs: this.d.config.inflightGraceMs,
+        });
+        recoveryPending = true;
+      }
+      if (!freshAttempt && !recoveryPending) {
+        try {
+          const obs = await this.d.payer.observe({ cogniKey: a.cogniKey });
+          if (obs.found && obs.resource) {
+            await this.emit(
+              key,
+              release,
+              a,
+              "create",
+              "adopted_after_ambiguity",
+              {
+                dseq: obs.resource.externalName,
+              }
+            );
+            a = await this.bindLease(key, release, a, obs.resource);
+          } else if (obs.found) {
+            // An effect exists under this key but names no resource yet: never re-create, never
+            // settle it as absent. observeUnavailable bounds the wait (orphan_suspect).
+            a = await this.observeUnavailable(
+              key,
+              release,
+              a,
+              "create",
+              "planned create unresolved",
+              new Error("existing effect has no resource")
+            );
+            recoveryPending = true;
+          } else if (a.error?.startsWith("ambiguous")) {
+            await this.failAttempt(
+              key,
+              release,
+              a,
+              "ambiguous create resolved to nothing; next ordinal"
+            );
+            return;
+          }
+        } catch (error) {
+          a = await this.observeUnavailable(
+            key,
+            release,
+            a,
+            "create",
+            "planned create unresolved",
+            error
+          );
+          recoveryPending = true;
+        }
+      }
+    }
+    // New admission cannot suppress native recovery. Missing publication holds the
+    // owned allocation without qualification, traffic or another attempt.
+    if (release.spec.artifactPlan) {
+      try {
+        await this.checkSelectedImages(release.spec);
+      } catch (error) {
+        if (error instanceof DependencyNotReady) {
+          await this.emit(key, release, a, "dependency", "waiting", {
+            reason: error.message,
+          });
+          return;
+        }
+        if (error instanceof InvalidArtifactSet) {
+          await this.persistAdmissionRefusal(release, error);
+          const refused = await this.d.store.getRelease(release.id);
+          if (!refused?.admissionRefusal)
+            throw new Error("admission refusal readback missing");
+          await this.drive(key, refused, a, blue, freshAttempt);
+          return;
+        }
+        throw error;
+      }
+    }
+    if (recoveryPending) return;
     if (a.phase === "planned") a = await this.doCreate(key, release, a, blue);
     if (a.phase === "created") a = await this.awaitLease(key, release, a, blue);
     if (a.phase === "proving") a = await this.prove(key, release, a);
@@ -650,21 +969,29 @@ export class NodeDeploySequencer {
     release: ReleaseRow
   ): Promise<ResolvedRuntime> {
     const w = release.spec;
+    const refusal = this.d.httpAdmissionRefusal;
+    if (w.kind === "app" && refusal) throw new DependencyNotReady(refusal);
     const env: Record<string, string> = {};
     let requiredCountryCodes: readonly string[] = [];
     let nodeApp = false;
+    let companionEnvs: Record<string, Record<string, string>> = {};
     if (w.kind === "app") {
       const node = await this.nodeAppRuntime(key, release);
       if (node) {
         Object.assign(env, node.env);
         requiredCountryCodes = node.requiredCountryCodes;
         nodeApp = node.nodeApp;
+        companionEnvs = node.companionEnvs ?? {};
       }
-      env.RELEASE_SHA = release.sourceSha;
+      Object.assign(env, releaseIdentityEnv(release.sourceSha));
     }
     if (w.kind === "state") {
       env.POSTGRES_PASSWORD = await this.d.secrets.ensureStatePassword(key);
     }
+    if (nodeApp && w.bindings.some((b) => b.env === "DOMAIN"))
+      throw new DependencyNotReady(
+        "DOMAIN is reserved for the operator issuer"
+      );
     const states = [...new Set(w.bindings.map((b) => b.workload))];
     for (const stateName of states) {
       const stateKey = { ...key, workload: stateName };
@@ -686,7 +1013,7 @@ export class NodeDeploySequencer {
       }))
         env[b.env] = b.value;
     }
-    return { env, requiredCountryCodes, nodeApp };
+    return { env, requiredCountryCodes, nodeApp, companionEnvs };
   }
 
   private async nodeAppRuntime(
@@ -697,11 +1024,18 @@ export class NodeDeploySequencer {
         env: Record<string, string>;
         requiredCountryCodes: string[];
         nodeApp: boolean;
+        companionEnvs?: Record<string, Record<string, string>>;
       }
     | undefined
   > {
     const rt = this.d.runtime;
-    if (!rt) return undefined;
+    if (!rt) {
+      if (release.spec.companions?.length)
+        throw new DependencyNotReady(
+          "private companions require scoped runtime secrets"
+        );
+      return undefined;
+    }
     const w = release.spec;
     const entry = await rt.catalog.entryFor(key.nodeId);
     if (!entry)
@@ -755,11 +1089,12 @@ export class NodeDeploySequencer {
     const boundEnvNames = w.bindings.map((b) => b.env);
     let bucket: Readonly<Record<string, string>>;
     try {
-      bucket = await rt.secrets.read(
-        key.env,
-        entry.slug,
-        nodeAppSecretKeys(w.secretKeys, boundEnvNames)
-      );
+      bucket = await rt.secrets.read(key.env, entry.slug, [
+        ...new Set([
+          ...nodeAppSecretKeys(w.secretKeys, boundEnvNames),
+          ...(w.companions ?? []).flatMap((c) => c.secretKeys ?? []),
+        ]),
+      ]);
     } catch (error) {
       if (error instanceof NodeRuntimeSecretsError)
         throw new DependencyNotReady(
@@ -775,6 +1110,7 @@ export class NodeDeploySequencer {
           nodeId: key.nodeId,
           sourceSha: release.sourceSha,
           publicHost,
+          operatorDomain: rt.operatorDomain,
           port: w.port,
           substrateHost: rt.substrateHost,
           databasePoolLimits: policy.databasePoolLimits,
@@ -784,6 +1120,18 @@ export class NodeDeploySequencer {
         }),
         requiredCountryCodes: [...policy.requiredCountryCodes],
         nodeApp: true,
+        companionEnvs: Object.fromEntries(
+          (w.companions ?? []).map((c) => [
+            c.name,
+            workerEnv({
+              env: key.env,
+              sourceSha: release.sourceSha,
+              port: c.port,
+              secretKeys: c.secretKeys ?? [],
+              secrets: bucket,
+            }),
+          ])
+        ),
       };
     } catch (error) {
       throw new DependencyNotReady(errText(error));
@@ -899,119 +1247,89 @@ export class NodeDeploySequencer {
     return out;
   }
 
+  /** New effects use current fleet authority; recorded hosts are never retargeted. */
+  private async assertNewAppHost(
+    key: WorkloadKey,
+    release: ReleaseRow
+  ): Promise<void> {
+    const w = release.spec;
+    const host = publicHostOf(w);
+    if (!host) return;
+    const edge = this.d.edge;
+    if (!edge)
+      throw new Error(this.d.httpAdmissionRefusal ?? "edge_not_configured");
+    try {
+      edge.assertHost(host);
+      if (this.d.runtime) {
+        const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
+        const worker = w.runtimeProfile === "worker" ? w.name : undefined;
+        if (
+          !owner ||
+          !isFleetOwnedRow(owner.row, edge.binding.fleetOwner) ||
+          !hostOwnedBy(edge.binding, host, key.env, owner.slug, worker)
+        )
+          throw new Error(
+            `${host} is not the host node ${owner?.slug ?? key.nodeId} may claim in ${key.env}`
+          );
+        const catalogSlugs = await this.d.runtime.catalog.slugs();
+        const refusal =
+          worker === undefined
+            ? undefined
+            : workerHostRefusal({
+                binding: edge.binding,
+                host,
+                env: key.env,
+                slug: owner.slug,
+                workload: worker,
+                catalogSlugs,
+              });
+        if (refusal) throw new Error(refusal);
+        for (const other of catalogSlugs) {
+          if (other === owner.slug) continue;
+          for (const env of HOST_ENVS)
+            if (hostOwnedBy(edge.binding, host, env, other))
+              throw new Error(`${host} belongs to node ${other}`);
+        }
+      }
+    } catch (error) {
+      throw new Error(`edge_host_refused: ${errText(error)}`);
+    }
+    await edge.assertZoneIdentity();
+    // Reuse the existing by-name read: protected or ambiguous native records refuse before payment.
+    await edge.current(host);
+  }
+
   private async doCreate(
     key: WorkloadKey,
     release: ReleaseRow,
     attempt: AttemptRow,
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
-    const w = release.spec;
-    if (publicHostOf(w) && !this.d.edge) {
-      // Refuse BEFORE paying: a lease no edge can ever route to is wasted spend.
-      return this.failAttempt(key, release, attempt, "edge_not_configured");
-    }
-    const declaredHost = publicHostOf(w);
-    if (declaredHost && this.d.edge) {
-      // The edge guard would refuse this host at cutover; refuse it NOW, before a paid create, with
-      // an explicit reason. Three of these park the release, still with zero creates.
-      try {
-        this.d.edge.assertHost(declaredHost);
-      } catch (error) {
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `edge_host_refused: ${errText(error)}`
-        );
-      }
-    }
-    if (declaredHost && this.d.runtime) {
-      // HOST_IS_THE_NODES_OWN: a node may claim only its own host, so node A can never take node B's.
-      const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
-      // Only an operator-lowered repo-spec sibling (a worker) may use `<slug>-<workload>`.
-      const worker = w.runtimeProfile === "worker" ? w.name : undefined;
-      const zone = this.d.runtime.edgeZone;
-      if (
-        !owner ||
-        !hostOwnedBy(declaredHost, key.env, owner.slug, worker, zone)
-      )
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `edge_host_refused: ${declaredHost} is not the host node ${owner?.slug ?? key.nodeId} may claim in ${key.env}`
-        );
-      const refusal =
-        worker !== undefined && declaredHost !== undefined
-          ? workerHostRefusal({
-              host: declaredHost,
-              env: key.env,
-              slug: owner.slug,
-              workload: worker,
-              catalogSlugs: await this.d.runtime.catalog.slugs(),
-              zone,
-            })
-          : undefined;
-      if (refusal)
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `edge_host_refused: ${refusal}`
-        );
-    }
-    let runtime: ResolvedRuntime;
-    try {
-      runtime = await this.resolveEnv(key, release);
-    } catch (error) {
-      return this.failAttempt(key, release, attempt, errText(error));
-    }
-
-    // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
-    // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
-    // the next attempt gets a new ordinal. If failAttempt had to defer (observe down) we land here again.
-    if (attempt.error?.startsWith(REFUSED_PREFIX))
-      return this.failAttempt(key, release, attempt, attempt.error);
-
-    // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
-    if (this.createMayStillBeInFlight(attempt)) {
-      await this.emitGrace(key, release, attempt, "create", "inflight_grace", {
-        graceMs: this.d.config.inflightGraceMs,
+    const refusal = this.d.httpAdmissionRefusal;
+    if (release.spec.kind === "app" && refusal) {
+      await this.emit(key, release, attempt, "dependency", "waiting", {
+        reason: refusal,
       });
       return attempt;
     }
-    if (attempt.error?.startsWith("ambiguous")) {
-      try {
-        const obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
-        if (obs.found && obs.resource) {
-          await this.emit(
-            key,
-            release,
-            attempt,
-            "create",
-            "adopted_after_ambiguity",
-            {
-              dseq: obs.resource.externalName,
-            }
-          );
-          return this.bindLease(key, release, attempt, obs.resource);
-        }
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          "ambiguous create resolved to nothing; next ordinal"
-        );
-      } catch (error) {
-        return this.observeUnavailable(
-          key,
-          release,
-          attempt,
-          "create",
-          "ambiguous create unresolved",
-          error
-        );
-      }
+    const w = release.spec;
+    if (release.admissionRefusal)
+      return this.failAttempt(
+        key,
+        release,
+        attempt,
+        release.admissionRefusal.reason,
+        { createEnded: true }
+      );
+
+    let runtime: ResolvedRuntime;
+    try {
+      await this.assertNewAppHost(key, release);
+      runtime = await this.resolveEnv(key, release);
+    } catch (error) {
+      return this.failAttempt(key, release, attempt, errText(error), {
+        createEnded: true,
+      });
     }
 
     const { providers: excludeProviders, remembered } = await this.exclusion(
@@ -1041,6 +1359,11 @@ export class NodeDeploySequencer {
         providers: allowProviders,
         reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
       });
+    // Durable before native IO: runner loss cannot make a paid call look never-paid. The actuator can
+    // outlive this sequencer process, so the marker opens the same in-flight grace as a transport failure.
+    attempt = await this.d.store.updateAttempt(attempt.id, {
+      error: ambiguousMarker("network", this.d.clock.now()),
+    });
     try {
       const resource = await this.d.payer.create({
         cogniKey: attempt.cogniKey,
@@ -1053,6 +1376,7 @@ export class NodeDeploySequencer {
         spec: toPayerSpec(w, runtime.env, {
           requiredCountryCodes,
           nodeApp: runtime.nodeApp,
+          companionEnvs: runtime.companionEnvs,
         }),
         ...(excludeProviders.length > 0 ? { excludeProviders } : {}),
         ...(allowProviders.length > 0 ? { allowProviders } : {}),
@@ -1068,8 +1392,13 @@ export class NodeDeploySequencer {
             this.d.config.leaseReadyMs
           ) {
             await this.emit(key, release, attempt, "create", "wallet_busy");
-            return attempt;
+            return this.d.store.updateAttempt(attempt.id, {
+              error: "unpaid: wallet_busy",
+            });
           }
+          attempt = await this.d.store.updateAttempt(attempt.id, {
+            error: "unpaid: wallet_busy",
+          });
           return this.failAttempt(key, release, attempt, "wallet_busy_timeout");
         }
         if (error.ambiguous) {
@@ -1082,7 +1411,12 @@ export class NodeDeploySequencer {
             code: error.code,
           });
           // Resolve now; on a failed read the marker makes the next tick resolve first.
-          return this.doCreate(key, release, marked, blue);
+          await this.drive(key, release, marked, blue);
+          return (
+            (await this.d.store.attemptsFor(key)).find(
+              (a) => a.id === marked.id
+            ) ?? marked
+          );
         }
         return this.refuseCreate(
           key,
@@ -1112,7 +1446,7 @@ export class NodeDeploySequencer {
     text: string,
     definitive = false
   ): Promise<AttemptRow> {
-    // The full bid roster must survive: blueWasOnlyScreenedBidder parses it (task.5409).
+    // The native bounded excluded-bidder summary precedes diagnostic text and survives this cap.
     const error = `${REFUSED_PREFIX}${text}`.slice(0, ERROR_TEXT_MAX);
     const refused = await this.d.store.updateAttempt(attempt.id, { error });
     return this.failAttempt(key, release, refused, refused.error ?? "", {
@@ -1174,13 +1508,16 @@ export class NodeDeploySequencer {
   }
 
   /**
-   * A transport-level create failure inside the grace window: the actuator may still be working. The
-   * window starts at the failure (`ambiguous: network@<epoch ms>`); a legacy marker without a stamp
-   * falls back to the attempt's creation time.
+   * A dispatched or unmarked legacy create may still be working. The window starts at dispatch or
+   * transport failure; an unstamped marker or legacy planned row uses its creation time.
    */
   private createMayStillBeInFlight(attempt: AttemptRow): boolean {
     if (attempt.externalName) return false;
-    const failedAt = networkFailureAt(attempt);
+    const failedAt =
+      networkFailureAt(attempt) ??
+      (attempt.phase === "planned" && !attempt.error
+        ? attempt.createdAt.getTime()
+        : undefined);
     return (
       failedAt !== undefined &&
       this.d.clock.now() - failedAt < this.d.config.inflightGraceMs
@@ -1332,6 +1669,23 @@ export class NodeDeploySequencer {
               health.ready
             );
             if (r.status === 200) {
+              try {
+                attempt = await this.qualify(release, attempt, "qualify");
+              } catch (error) {
+                await this.qualificationDiagnostic(
+                  key,
+                  release,
+                  attempt,
+                  "qualify",
+                  error
+                );
+                return this.failAttempt(
+                  key,
+                  release,
+                  attempt,
+                  "qualification_failed"
+                );
+              }
               const next = await this.d.store.updateAttempt(attempt.id, {
                 phase: "proven",
               });
@@ -1413,12 +1767,22 @@ export class NodeDeploySequencer {
     if (w.kind === "app" && host) {
       const edge = this.d.edge;
       const ingress = ingressHostOf(attempt.endpoints, host);
-      if (!edge || !ingress) {
+      const refusal = this.d.httpAdmissionRefusal;
+      if (!edge || refusal) {
+        await this.emit(key, release, attempt, "dependency", "waiting", {
+          reason: refusal ?? "edge_not_configured",
+        });
+        return;
+      }
+      if (!ingress) {
         await this.failAttempt(key, release, attempt, "edge_not_configured");
         return;
       }
       let touched = false;
+      let qualified = false;
       try {
+        await this.qualify(release, attempt, "readback");
+        qualified = true;
         const rec = await edge.point(host, ingress);
         touched = true;
         await this.emit(key, release, attempt, "edge_moved", "ok", {
@@ -1443,6 +1807,16 @@ export class NodeDeploySequencer {
           firstAt,
         });
       } catch (error) {
+        // A readback failure keeps only its bounded stage/code; edge and public failures keep theirs.
+        const readback = qualified ? undefined : asQualificationFailure(error);
+        if (readback)
+          await this.qualificationDiagnostic(
+            key,
+            release,
+            attempt,
+            "readback",
+            readback
+          );
         // Restore the edge to blue when we moved it (a re-point, NOT a withdrawal), then close green.
         const blueIngress = blue
           ? ingressHostOf(blue.endpoints, host)
@@ -1465,7 +1839,7 @@ export class NodeDeploySequencer {
           key,
           release,
           attempt,
-          `cutover_failed: ${errText(error)}`
+          `cutover_failed: ${readback ? readback.message : errText(error)}`
         );
         return;
       }
@@ -1488,6 +1862,243 @@ export class NodeDeploySequencer {
         dseq: retiring.externalName,
         retainMs: this.d.config.retainMs,
       });
+    }
+  }
+
+  /** Persist before proven; read the current subject again before any edge mutation. */
+  private async qualify(
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback"
+  ): Promise<AttemptRow> {
+    try {
+      return await this.qualifyBounded(release, attempt, mode);
+    } catch (error) {
+      // BOUNDED_DIAGNOSTIC: schema, jose, store and dependency errors leave only a stage and code.
+      throw asQualificationFailure(error);
+    }
+  }
+
+  private async qualifyBounded(
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback"
+  ): Promise<AttemptRow> {
+    const capability = release.spec.health?.qualification;
+    if (!capability)
+      return this.qualifyWithin(release, attempt, mode, () => false);
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        expired = true;
+        reject(new QualificationFailure("deadline", "expired"));
+      }, capability.timeoutMs);
+    });
+    try {
+      return await Promise.race([
+        this.qualifyWithin(release, attempt, mode, () => expired),
+        deadline,
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async qualifyWithin(
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback",
+    expired: () => boolean
+  ): Promise<AttemptRow> {
+    const capability = release.spec.health?.qualification;
+    if (!capability) {
+      if (release.spec.companions?.length)
+        throw new QualificationFailure("precondition", "capability_missing");
+      return attempt;
+    }
+    const startedAt = this.d.clock.now();
+    const deadline = startedAt + capability.timeoutMs;
+    const ingress = ingressHostOf(
+      attempt.endpoints,
+      publicHostOf(release.spec)
+    );
+    const host = publicHostOf(release.spec);
+    const post = this.d.probe.qualification?.bind(this.d.probe);
+    if (!ingress || !host || !post)
+      throw new QualificationFailure("precondition", "transport_missing");
+    const current = (await this.d.store.attemptsFor(release)).find(
+      (a) => a.id === attempt.id
+    );
+    if (!current || current.externalName !== attempt.externalName)
+      throw new QualificationFailure("precondition", "attempt_changed");
+    const prior = savedQualification(current);
+    if (mode === "qualify" && prior)
+      return this.qualifyWithin(release, current, "readback", expired);
+    if (mode === "readback" && !prior)
+      throw new QualificationFailure("precondition", "evidence_missing");
+    if (
+      mode === "qualify" &&
+      current.steps.some((s) => s.step === "qualification_started")
+    )
+      throw new QualificationFailure("reserve", "already_reserved");
+    const runtime = await this.nodeAppRuntime(release, release);
+    const authSecret = runtime?.env.AUTH_SECRET;
+    if (!authSecret)
+      throw new QualificationFailure("precondition", "auth_unavailable");
+    if (expired() || this.d.clock.now() >= deadline)
+      throw new QualificationFailure("deadline", "expired");
+    const challenge = await qualificationChallenge({
+      release,
+      attempt: current,
+      authSecret,
+      now: this.d.clock.now(),
+      mode,
+      ...(prior ? { prior } : {}),
+    });
+    if (mode === "qualify") {
+      // This is a required durable write, not best-effort telemetry. A lost write response never dispatches.
+      try {
+        await this.emit(
+          release,
+          release,
+          current,
+          "qualification_started",
+          "reserved",
+          {},
+          true
+        );
+      } catch {
+        throw new QualificationFailure("reserve", "write_failed");
+      }
+      const reserved = (await this.d.store.attemptsFor(release)).find(
+        (a) => a.id === current.id
+      );
+      if (!reserved?.steps.some((s) => s.step === "qualification_started"))
+        throw new QualificationFailure("reserve", "not_persisted");
+    }
+    const remaining = deadline - this.d.clock.now();
+    if (expired() || remaining <= 0)
+      throw new QualificationFailure("deadline", "expired");
+    // ONE_AUTHORITY (bug.5568): the static ingress is Host and SNI; the port takes no other host.
+    const result = await post({
+      ingressHost: ingress,
+      path: capability.path,
+      token: challenge.token,
+      mode,
+      timeoutMs: remaining,
+    });
+    const sent = { ms: result.ms };
+    if (result.status === 0)
+      throw new QualificationFailure(
+        "transport",
+        result.error ?? "transport_failed",
+        sent
+      );
+    if (result.status < 200 || result.status >= 300)
+      throw new QualificationFailure("http", "status", {
+        ...sent,
+        status: result.status,
+      });
+    if (expired() || this.d.clock.now() > deadline)
+      throw new QualificationFailure("deadline", "expired", {
+        ...sent,
+        status: result.status,
+      });
+    let evidence: ReturnType<typeof checkQualification>;
+    try {
+      evidence = checkQualification({
+        body: result.body,
+        release,
+        attempt: current,
+        nonce: challenge.nonce,
+        startedAt,
+        now: this.d.clock.now(),
+        ...(prior ? { prior } : {}),
+      });
+    } catch (error) {
+      throw new QualificationFailure("validate", validationCode(error), {
+        ...sent,
+        status: result.status,
+      });
+    }
+    // A late result grants no authority: re-check the deadline right before the durable write.
+    if (expired() || this.d.clock.now() > deadline)
+      throw new QualificationFailure("deadline", "expired", {
+        ...sent,
+        status: result.status,
+      });
+    const step = {
+      step: mode === "qualify" ? "qualification" : "qualification_readback",
+      outcome: "ok",
+      reason: JSON.stringify(evidence),
+      at: new Date(this.d.clock.now()).toISOString(),
+    };
+    try {
+      await this.emit(
+        release,
+        release,
+        current,
+        step.step,
+        step.outcome,
+        { reason: step.reason },
+        true
+      );
+    } catch {
+      throw new QualificationFailure("persist", "write_failed");
+    }
+    const saved = (await this.d.store.attemptsFor(release)).find(
+      (a) => a.id === current.id
+    );
+    if (
+      !saved ||
+      saved.externalName !== current.externalName ||
+      JSON.stringify(saved.endpoints) !== JSON.stringify(current.endpoints) ||
+      !saved.steps.some((s) => s.step === step.step && s.reason === step.reason)
+    )
+      throw new QualificationFailure("persist", "not_persisted");
+    return saved;
+  }
+
+  /**
+   * BOUNDED_DIAGNOSTIC (bug.5568): one correlated event for a failed qualification or readback. It
+   * carries mode, stage, allowlisted code, HTTP status, elapsed time, attempt, allocation and the
+   * ingress used as Host and SNI. Never the bearer, headers, body or a raw error. Best-effort: it does
+   * not change the failure and cleanup decision that follows.
+   */
+  private async qualificationDiagnostic(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback",
+    error: unknown
+  ): Promise<void> {
+    const f = asQualificationFailure(error);
+    const ingress = ingressHostOf(
+      attempt.endpoints,
+      publicHostOf(release.spec)
+    );
+    try {
+      await this.emit(
+        key,
+        release,
+        attempt,
+        "qualification_diagnostic",
+        f.stage,
+        {
+          reason: `${mode} ${f.message}`,
+          mode,
+          stage: f.stage,
+          code: f.code,
+          ...(f.status === undefined ? {} : { httpStatus: f.status }),
+          ...(f.ms === undefined ? {} : { qualificationMs: f.ms }),
+          attemptId: attempt.id,
+          allocation: attempt.externalName,
+          ...(ingress ? { ingress, host: ingress } : {}),
+        }
+      );
+    } catch {
+      // Telemetry never changes the verdict.
     }
   }
 
@@ -1915,14 +2526,16 @@ export class NodeDeploySequencer {
    * the Loki event and the persisted step cannot drift (task.5400 observability).
    *
    * Persistence is observability only: a failed append is logged `node_deploy_step_persist_failed` and
-   * NEVER fails or delays the deploy decision that emitted the step. Consecutive identical steps of one
+   * NEVER fails or delays the deploy decision that emitted the step. Qualification receipts use
+   * requiredPersistence: their complete bounded subject is saved and a failed write refuses proof. Consecutive identical steps of one
    * attempt (a poll loop) collapse into one persisted row; the log line is still written every time.
    */
   private async record(
     level: "info" | "warn" | "error",
     msg: string,
     attempt: AttemptRow | undefined,
-    fields: Record<string, unknown>
+    fields: Record<string, unknown>,
+    requiredPersistence = false
   ): Promise<void> {
     const now = this.d.clock.now();
     // `elapsedMs` = time since the attempt row was created: the step-latency series Grafana unwraps.
@@ -1935,7 +2548,9 @@ export class NodeDeploySequencer {
       msg
     );
     if (!attempt) return;
-    const reason = reasonOf(fields);
+    const reason = requiredPersistence
+      ? textOf(fields.reason)
+      : reasonOf(fields);
     const dseq = textOf(fields.dseq);
     const provider = textOf(fields.provider) ?? attempt.provider;
     const step: AttemptStep = {
@@ -1969,6 +2584,7 @@ export class NodeDeploySequencer {
         },
         "node_deploy_step_persist_failed"
       );
+      if (requiredPersistence) throw error;
     }
   }
 
@@ -1978,21 +2594,28 @@ export class NodeDeploySequencer {
     attempt: AttemptRow | undefined,
     step: string,
     outcome: string,
-    extra: Record<string, unknown> = {}
+    extra: Record<string, unknown> = {},
+    requiredPersistence = false
   ): Promise<void> {
-    return this.record("info", "node_deploy_step", attempt, {
-      component: "node-deploy-sequencer",
-      nodeId: key.nodeId,
-      env: key.env,
-      workload: key.workload,
-      releaseId: release?.id,
-      attempt: attempt?.attempt,
-      dseq: attempt?.externalName,
-      step,
-      outcome,
-      sourceSha: release?.sourceSha,
-      ...extra,
-    });
+    return this.record(
+      "info",
+      "node_deploy_step",
+      attempt,
+      {
+        component: "node-deploy-sequencer",
+        nodeId: key.nodeId,
+        env: key.env,
+        workload: key.workload,
+        releaseId: release?.id,
+        attempt: attempt?.attempt,
+        dseq: attempt?.externalName,
+        step,
+        outcome,
+        sourceSha: release?.sourceSha,
+        ...extra,
+      },
+      requiredPersistence
+    );
   }
 
   /**
@@ -2078,12 +2701,13 @@ export class NodeDeploySequencer {
 /** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
 const REFUSED_PREFIX = "create refused: ";
 
-/** Max persisted refusal/failure text. Large enough for a full bid roster (~10 bidders); the column is `text`. */
+/** Max diagnostic text. Native decision evidence is bounded independently and comes first. */
 const ERROR_TEXT_MAX = 2000;
 
 /**
  * True when a persisted create refusal shows blue's provider as the only bidder screening could pass
- * (task.5409). Keys on the actuator's NO_ELIGIBLE_BIDS text (`akash-compute.adapter.ts`
+ * (task.5409). The native bounded excluded-bidder summary carries full provider identities before
+ * diagnostic text. Legacy fallback keys on the actuator's NO_ELIGIBLE_BIDS text (`akash-compute.adapter.ts`
  * `awaitScreenedBid`: "none passed provider screening [refused: ...] [bids: ...]") and its exclusion
  * verdict `already_tried` (`akash-provider-screen.ts` `rejectionFor`: an excluded provider's bid). When
  * `onlyBlueExcluded`, the caller's exclude list was exactly {blue}, so any `already_tried` bid is blue's;
@@ -2096,6 +2720,24 @@ function blueWasOnlyScreenedBidder(
 ): boolean {
   if (!error?.startsWith(REFUSED_PREFIX)) return false;
   if (!error.includes("none passed provider screening")) return false;
+  if (error.includes("[excluded-bidders-v1:")) {
+    const encoded = /\[excluded-bidders-v1:(\[[^\]]*\])\]/u.exec(error)?.[1];
+    if (!encoded) return false;
+    try {
+      const providers: unknown = JSON.parse(encoded);
+      return (
+        Array.isArray(providers) &&
+        providers.length <= 16 &&
+        providers.every(
+          (p: unknown) =>
+            typeof p === "string" && /^akash1[0-9a-z]{38}$/u.test(p)
+        ) &&
+        providers.includes(blueProvider)
+      );
+    } catch {
+      return false;
+    }
+  }
   const tried = /already_tried=(\d+)/u.exec(error);
   if (!tried?.[1] || Number(tried[1]) < 1) return false;
   if (onlyBlueExcluded) return true;
@@ -2103,9 +2745,8 @@ function blueWasOnlyScreenedBidder(
     blueProvider.length > 17
       ? `${blueProvider.slice(0, 9)}…${blueProvider.slice(-4)}`
       : blueProvider;
-  // No closing `]`: persisted error text is capped (ERROR_TEXT_MAX), so a very long roster may still be cut off.
-  // A cut-off last entry simply fails to match (safe: no stop).
-  const roster = /\[bids: ([^\]]*)/u.exec(error)?.[1] ?? "";
+  // Legacy fallback needs a complete roster; clipped diagnostics cannot authorize a stop.
+  const roster = /\[bids: ([^\]]*)\]/u.exec(error)?.[1] ?? "";
   return roster
     .split(", ")
     .some((r) => r.startsWith(`${addr} `) && r.endsWith(" already_tried"));
@@ -2121,9 +2762,11 @@ function ambiguousMarker(code: string, now: number): string {
     : `ambiguous: ${code}`;
 }
 
-/** When the transport-level create failure happened (stamp, else legacy fallback to createdAt). */
+/** When a create entered native IO or failed in transit (stamp, else legacy createdAt). */
 function networkFailureAt(attempt: AttemptRow): number | undefined {
-  const m = /^ambiguous: network(?:@(\d+))?$/u.exec(attempt.error ?? "");
+  const m = /^ambiguous: (?:network|dispatch)(?:@(\d+))?$/u.exec(
+    attempt.error ?? ""
+  );
   if (!m) return undefined;
   return m[1] ? Number(m[1]) : attempt.createdAt.getTime();
 }

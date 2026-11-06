@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@features/node-deploy/declarations`
  * Purpose: Turn a node's workload manifests (`.cogni/workloads/*.yaml`) plus its `.cogni/repo-spec.yaml`,
  *   all read at one `sourceSha` through the operator's GitHub App, into the ONE resolved
  *   `NodeWorkloadSpec` a release stores (task.5400, story.5137).
- * Scope: Pure checks. The GitHub reads and the image-digest lookup live in the route; the release write lives in the store; the
+ * Scope: Pure checks; does not perform IO. The GitHub reads and the image-digest lookup live in the route; the release write lives in the store; the
  *   two-pass manifest check and the lowering live in `@cogni/repo-spec` (workload-manifest).
  * Invariants:
  *   - DECLARED_AT_THE_SHA: every manifest and the repo-spec come from the tree AT `sourceSha`, never
@@ -32,10 +32,12 @@
  *     `-test` (candidate-a) / `-preview` / `-dev` sibling of its first label, so one manifest serves
  *     every environment without a per-env copy.
  * Side-effects: none
+ * Links: artifact-selection.ts, node-app-env.ts, bug.5568
  * @internal
  */
 
 import {
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
   extractNodeAppSecretRefs,
   extractNodeId,
   extractNodeServices,
@@ -50,32 +52,16 @@ import {
 import { parse as parseYaml } from "yaml";
 
 import type { NodeWorkloadSpec } from "@/ports";
+import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
+import { hostForEnv, hostOwnedBy } from "./edge";
+import { runtimeOwnedEnvKeys } from "./node-app-env";
 
-/** Every deployment environment a host can be derived for. */
-export const HOST_ENVS: readonly string[] = [
-  "production",
-  "candidate-a",
-  "preview",
-  "dev",
-];
+const APP_PROFILE_KEYS: ReadonlySet<string> = new Set(
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS
+);
 
-const ENV_HOST_SUFFIX: Readonly<Record<string, string | undefined>> = {
-  production: undefined,
-  "candidate-a": "test",
-  preview: "preview",
-  dev: "dev",
-};
-
-/** `node-deploy-canary.cognidao.org` -> `node-deploy-canary-test.cognidao.org` for candidate-a. */
-export function hostForEnv(host: string, env: string): string {
-  if (!(env in ENV_HOST_SUFFIX)) throw new Error(`unknown environment ${env}`);
-  const suffix = ENV_HOST_SUFFIX[env];
-  if (!suffix) return host;
-  const dot = host.indexOf(".");
-  if (dot <= 0) throw new Error(`host ${host} has no zone`);
-  return `${host.slice(0, dot)}-${suffix}${host.slice(dot)}`;
-}
+export { HOST_ENVS, hostForEnv } from "./edge";
 
 export type DeclarationErrorCode =
   | "repo_spec_unparseable"
@@ -96,6 +82,8 @@ export class DeclarationError extends Error {
 }
 
 export function resolveWorkloadDeclaration(input: {
+  readonly workloadZone: WorkloadZoneBinding;
+  readonly nodeSlug: string;
   readonly repoSpecText: string;
   readonly manifests: readonly WorkloadManifestFile[];
   readonly nodeId: string;
@@ -105,6 +93,7 @@ export function resolveWorkloadDeclaration(input: {
   readonly builtImage?: string | undefined;
   /** `<image_repository>:sha-<sha>`: defers a manifest image of `.` to the sequencer (story.5137). */
   readonly pendingImage?: string | undefined;
+  readonly sourceRepository?: string | undefined;
 }): NodeWorkloadSpec {
   // NO_SOURCE_ECHO: parse the YAML without pretty errors, and never return the parser's or the
   // schema's message (either can quote repo-spec text).
@@ -155,7 +144,119 @@ export function resolveWorkloadDeclaration(input: {
       "workload_not_declared",
       `workload ${input.workload} is not declared by any .cogni/workloads/*.yaml manifest`
     );
-  const withKeys: NodeWorkloadSpec =
+  // Validate the complete Score/declaration bridge BEFORE the environment cascade.
+  for (const workload of workloads) {
+    if (
+      "http" in workload.expose &&
+      !hostOwnedBy(
+        input.workloadZone,
+        workload.expose.http.host,
+        "production",
+        input.nodeSlug,
+        isWorkerService(spec, workload.name) ? workload.name : undefined
+      )
+    )
+      throw new DeclarationError(
+        "workload_manifest_refused",
+        "declaration must name this node's permitted production-form workload host"
+      );
+    if (!workload.companions && !workload.health?.qualification) continue;
+    const services = extractNodeServices(spec);
+    const main = services.find((s) => s.visibility === "public");
+    if (
+      !main ||
+      (workload.serviceName !== "app" && workload.serviceName !== main.name) ||
+      main.port !== workload.port ||
+      !spec.deployment ||
+      !input.pendingImage ||
+      !input.sourceRepository
+    )
+      throw new DeclarationError(
+        "workload_manifest_refused",
+        "companion release requires matching public port and same-source build declarations"
+      );
+    const scoreNames = new Set([
+      main.name,
+      ...(workload.companions ?? []).map((c) => c.name),
+    ]);
+    if (
+      services.length !== scoreNames.size ||
+      services.some((s) => !scoreNames.has(s.name))
+    )
+      throw new DeclarationError(
+        "workload_manifest_refused",
+        "Score must cover the complete repo-spec service set"
+      );
+    for (const c of workload.companions ?? []) {
+      const service = services.find((s) => s.name === c.name);
+      if (
+        !service ||
+        service.visibility !== "private" ||
+        service.runtimeProfile ||
+        service.port !== c.port
+      )
+        throw new DeclarationError(
+          "workload_manifest_refused",
+          "companion must match a private unprofiled service and port"
+        );
+      const keys = workerSecretKeys(spec, c.name);
+      if (
+        keys.some(
+          (k) =>
+            APP_PROFILE_KEYS.has(k) ||
+            /AUTH_SECRET|DATABASE|DOLTGRES|POSTGRES|PGPASSWORD|DB_|WALLET|PRIVATE_KEY|LITELLM|OPENROUTER/.test(
+              k
+            )
+        )
+      )
+        throw new DeclarationError(
+          "secret_ref_refused",
+          "private companion cannot request app authority secrets"
+        );
+      if (
+        Object.keys(c.env).some(
+          (k) => keys.includes(k) || k in service.bindings
+        )
+      )
+        throw new DeclarationError(
+          "workload_manifest_refused",
+          "companion variables conflict with declared secret or binding"
+        );
+    }
+    for (const service of services) {
+      const secretKeys =
+        service.name === main.name
+          ? appSecretKeys(spec)
+          : workerSecretKeys(spec, service.name);
+      const runtimeKeys = runtimeOwnedEnvKeys(
+        service.name === main.name ? "app" : "worker",
+        secretKeys
+      );
+      for (const [key, target] of Object.entries(service.bindings)) {
+        const sibling = services.find((s) => s.name === target);
+        const consumer =
+          service.name === main.name
+            ? workload
+            : workload.companions?.find((c) => c.name === service.name);
+        if (
+          !sibling ||
+          sibling.visibility !== "private" ||
+          target === service.name ||
+          !consumer ||
+          key in consumer.env ||
+          runtimeKeys.has(key) ||
+          secretKeys.includes(key) ||
+          (service.name === main.name &&
+            workload.bindings.some((b) => b.env === key))
+        )
+          throw new DeclarationError(
+            "workload_manifest_refused",
+            "sibling binding must target a different private service without conflicting env"
+          );
+      }
+    }
+  }
+  let withKeys: NodeWorkloadSpec =
     declared.kind === "app"
       ? isWorkerService(spec, declared.name)
         ? {
@@ -165,6 +266,58 @@ export function resolveWorkloadDeclaration(input: {
           }
         : { ...declared, secretKeys: appSecretKeys(spec) }
       : declared;
+  if (declared.companions || declared.health?.qualification) {
+    const services = extractNodeServices(spec);
+    const main = services.find((s) => s.visibility === "public");
+    if (
+      !main ||
+      !spec.deployment ||
+      !input.pendingImage ||
+      !input.sourceRepository
+    )
+      throw new DeclarationError(
+        "workload_manifest_refused",
+        "missing artifact plan"
+      );
+    const selected = services.filter(
+      (s) => !s.envs || s.envs.some((e) => e === input.env)
+    );
+    const selectedNames = new Set(selected.map((s) => s.name));
+    const bindingEnv = (name: string) =>
+      Object.fromEntries(
+        Object.entries(services.find((s) => s.name === name)?.bindings ?? {})
+          .filter(([, target]) => selectedNames.has(target))
+          .map(([k, target]) => {
+            const c = declared.companions?.find((c) => c.name === target);
+            if (!c)
+              throw new DeclarationError(
+                "workload_manifest_refused",
+                "binding target missing from Score"
+              );
+            return [k, `http://${c.name}:${c.port}`];
+          })
+      );
+    const companions = (declared.companions ?? [])
+      .filter((c) => selectedNames.has(c.name))
+      .map((c) => ({
+        ...c,
+        env: { ...c.env, ...bindingEnv(c.name) },
+        secretKeys: workerSecretKeys(spec, c.name),
+      }));
+    const { companions: _all, runtimeProfile: _profile, ...rest } = withKeys;
+    withKeys = {
+      ...rest,
+      serviceName: main.name,
+      secretKeys: appSecretKeys(spec),
+      ...(companions.length ? { companions } : {}),
+      env: { ...rest.env, ...bindingEnv(main.name) },
+      artifactPlan: {
+        repository: input.sourceRepository.toLowerCase(),
+        imageRepository: input.pendingImage.replace(/:sha-[0-9a-f]{40}$/, ""),
+        services: spec.deployment.services,
+      },
+    };
+  }
   if (!("http" in withKeys.expose)) return withKeys;
   return {
     ...withKeys,

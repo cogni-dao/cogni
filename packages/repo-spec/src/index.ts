@@ -75,6 +75,13 @@ export {
   resolveNodeArtifactBundleForEnvironment,
 } from "./artifact-bundle.js";
 export {
+  buildNodeBundleTagRef,
+  NODE_BUNDLE_ARTIFACT_TYPE,
+  NODE_BUNDLE_PAYLOAD_FILE,
+  NODE_BUNDLE_PAYLOAD_MEDIA_TYPE,
+  verifyNodeBundleManifest,
+} from "./artifact-bundle-oci.js";
+export {
   COGNI_NODE_APP_V1_DEPLOYMENT,
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
   COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS,

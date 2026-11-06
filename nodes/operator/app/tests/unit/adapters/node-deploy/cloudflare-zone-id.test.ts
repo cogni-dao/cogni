@@ -3,70 +3,89 @@
 
 /**
  * Module: `@tests/unit/adapters/node-deploy/cloudflare-zone-id`
- * Purpose: Pin `resolveCloudflareZoneId` (story.5137): the edge zone id comes from the zone NAME and the
- *   token's own scope, and anything but exactly one matching zone is refused.
- * Side-effects: none (fetch is injected)
+ * Purpose: Preserve core story.5137's isolated DNS identity coverage through the sole native ID owner.
+ * Scope: Injected HTTP transport only; no Cloudflare calls.
+ * Invariants: The projected zone ID must name the configured zone; never substitute a by-name result.
+ * Side-effects: none
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { CloudflareDnsRecords } from "@/adapters/server/node-deploy/cloudflare-dns.adapter";
+import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 
-import { resolveCloudflareZoneId } from "@/adapters/server/node-deploy/cloudflare-dns.adapter";
+const binding = resolveWorkloadZoneBinding({
+  fleetOwner: "cogni-test-org",
+  zoneName: "cogni-testing.org",
+});
+const zoneId = "a".repeat(32);
+const record = {
+  type: "CNAME",
+  name: "spawny-boi-test.cogni-testing.org",
+  content: "ingress.provider.example",
+  proxied: true,
+} as const;
+const harness = (body: unknown, status = 200) => {
+  const fetchImpl = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(new Response(JSON.stringify(body), { status }));
+  return {
+    fetchImpl,
+    dns: new CloudflareDnsRecords({
+      binding,
+      zoneId,
+      apiToken: "test-only-fake",
+      fetchImpl,
+    }),
+  };
+};
 
-const reply = (status: number, body: unknown): typeof fetch =>
-  (async () =>
-    new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
-
-describe("resolveCloudflareZoneId", () => {
-  it("asks for the zone by name with the bearer token and returns its id", async () => {
-    let url = "";
-    let auth = "";
-    const fetchImpl = (async (input: string, init?: RequestInit) => {
-      url = input;
-      auth = new Headers(init?.headers).get("authorization") ?? "";
-      return new Response(
-        JSON.stringify({
-          success: true,
-          result: [{ id: "zone-test", name: "cogni-testing.org" }],
-        }),
-        { status: 200 }
-      );
-    }) as unknown as typeof fetch;
+describe("configured Cloudflare zone ID", () => {
+  it("reads the projected native ID with the scoped bearer and verifies the configured name", async () => {
+    const h = harness({
+      success: true,
+      result: { id: zoneId, name: binding.zoneName },
+    });
     await expect(
-      resolveCloudflareZoneId({
-        apiToken: "tok",
-        zoneName: "cogni-testing.org",
-        fetchImpl,
+      h.dns.assertZoneIdentity(binding.zoneName)
+    ).resolves.toBeUndefined();
+    expect(h.fetchImpl).toHaveBeenCalledExactlyOnceWith(
+      `https://api.cloudflare.com/client/v4/zones/${zoneId}`,
+      expect.objectContaining({
+        method: "GET",
+        headers: { authorization: "Bearer test-only-fake" },
+        signal: expect.any(AbortSignal),
       })
-    ).resolves.toBe("zone-test");
-    expect(url).toBe(
-      "https://api.cloudflare.com/client/v4/zones?name=cogni-testing.org"
     );
-    expect(auth).toBe("Bearer tok");
   });
 
-  it("refuses when the token sees no zone by that name", async () => {
+  it("refuses a native zone with another name without looking up or substituting another ID", async () => {
+    const h = harness({
+      success: true,
+      result: { id: zoneId, name: "cognidao.org" },
+    });
     await expect(
-      resolveCloudflareZoneId({
-        apiToken: "tok",
-        zoneName: "cogni-testing.org",
-        fetchImpl: reply(200, {
-          success: true,
-          result: [{ id: "zone-prod", name: "cognidao.org" }],
-        }),
-      })
-    ).rejects.toThrow(/token sees 0 zones/);
+      h.dns.assertZoneIdentity(binding.zoneName)
+    ).rejects.toMatchObject({ code: "zone_identity_mismatch" });
+    await expect(h.dns.create(record)).rejects.toMatchObject({
+      code: "zone_identity_unavailable",
+    });
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses an API error", async () => {
+  it("refuses a denied identity read before any DNS edit", async () => {
+    const h = harness(
+      {
+        success: false,
+        errors: [{ code: 10000, message: "Authentication error" }],
+      },
+      403
+    );
     await expect(
-      resolveCloudflareZoneId({
-        apiToken: "tok",
-        zoneName: "cogni-testing.org",
-        fetchImpl: reply(403, {
-          success: false,
-          errors: [{ code: 10000, message: "Authentication error" }],
-        }),
-      })
-    ).rejects.toThrow(/cloudflare GET \/zones -> 403/);
+      h.dns.assertZoneIdentity(binding.zoneName)
+    ).rejects.toMatchObject({ code: "zone_identity_unavailable" });
+    await expect(h.dns.create(record)).rejects.toMatchObject({
+      code: "zone_identity_unavailable",
+    });
+    expect(h.fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

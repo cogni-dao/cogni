@@ -66,6 +66,8 @@ export interface NodeAppEnvInput {
   readonly sourceSha: string;
   /** Public host of the app (no scheme). */
   readonly publicHost: string;
+  /** Trusted public operator issuer host for this workload lane. */
+  readonly operatorDomain: string;
   /** The container port. */
   readonly port: number;
   /**
@@ -134,6 +136,93 @@ export function injectableSecrets(
   return out;
 }
 
+// Field definitions own both emitted values and the admission namespace. Optional runtime
+// blocks still own their destinations when a different environment does not supply the block.
+type RuntimeIdentity = Pick<WorkerEnvInput, "env" | "sourceSha" | "port">;
+const COMMON_FIELDS = {
+  HOST: () => BIND_HOST,
+  PORT: (i: RuntimeIdentity) => String(i.port),
+  DEPLOY_ENVIRONMENT: (i: RuntimeIdentity) => i.env,
+  COGNI_REPO_SHA: (i: RuntimeIdentity) => i.sourceSha,
+};
+const APP_BASE_FIELDS = {
+  HOSTNAME: () => BIND_HOST,
+  APP_ENV: () => "production",
+};
+const SUBSTRATE_FIELDS = {
+  TEMPORAL_ADDRESS: (i: { host: string; env: string }) => `${i.host}:7233`,
+  TEMPORAL_NAMESPACE: (i: { host: string; env: string }) => `cogni-${i.env}`,
+  TEMPORAL_TASK_QUEUE: () => "scheduler-tasks",
+  REDIS_URL: (i: { host: string; env: string }) => `redis://${i.host}:6379`,
+  LITELLM_BASE_URL: (i: { host: string; env: string }) =>
+    `http://${i.host}:4000`,
+  SCHEDULER_WORKER_HEALTH_URL: (i: { host: string; env: string }) =>
+    `http://${i.host}:30900`,
+};
+const POOL_FIELDS = {
+  DB_POOL_MAX: (i: NodeAppPoolLimits) => String(i.app),
+  DB_SERVICE_POOL_MAX: (i: NodeAppPoolLimits) => String(i.service),
+  DB_READ_POOL_MAX: (i: NodeAppPoolLimits) => String(i.read),
+};
+const LOKI_FIELDS = {
+  LOKI_PUSH_URL: (i: NodeAppLokiPush) => i.url,
+  LOKI_PUSH_USER: (i: NodeAppLokiPush) => i.user,
+  LOKI_PUSH_PASSWORD: (i: NodeAppLokiPush) => i.password,
+  LOKI_PUSH_SOURCE: () => "lease",
+};
+const APP_IDENTITY_FIELDS = {
+  DOMAIN: (i: NodeAppEnvInput) => i.operatorDomain,
+  COGNI_NODE_ID: (i: NodeAppEnvInput) => i.nodeId,
+  NODE_NAME: (i: NodeAppEnvInput) => i.slug,
+  COGNI_REPO_PATH: () => "/app",
+  AUTH_TRUST_HOST: () => "true",
+  NEXTAUTH_URL: (i: NodeAppEnvInput) => `https://${i.publicHost}`,
+  APP_BASE_URL: (i: NodeAppEnvInput) => `https://${i.publicHost}`,
+};
+const RELEASE_FIELDS = { RELEASE_SHA: (sourceSha: string) => sourceSha };
+
+function fieldValues<T>(
+  fields: Readonly<Record<string, (input: T) => string>>,
+  input: T
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(fields).map(([key, value]) => [key, value(input)])
+  );
+}
+
+const appSecretDestination = (key: string): string =>
+  key === LITELLM_VIRTUAL_KEY ? LITELLM_MASTER_KEY : key;
+
+/** Sequencer-owned release identity has the same owner as the rest of the runtime namespace. */
+export function releaseIdentityEnv(sourceSha: string): Record<string, string> {
+  return fieldValues(RELEASE_FIELDS, sourceSha);
+}
+
+/** Reject only keys the consumer's runtime can overwrite; keep ordinary declared-env precedence. */
+export function runtimeOwnedEnvKeys(
+  profile: "app" | "worker",
+  secretKeys: readonly string[]
+): ReadonlySet<string> {
+  const fields =
+    profile === "app"
+      ? [
+          COMMON_FIELDS,
+          APP_BASE_FIELDS,
+          SUBSTRATE_FIELDS,
+          POOL_FIELDS,
+          LOKI_FIELDS,
+          APP_IDENTITY_FIELDS,
+          RELEASE_FIELDS,
+        ]
+      : [COMMON_FIELDS];
+  return new Set([
+    ...fields.flatMap(Object.keys),
+    ...(profile === "app"
+      ? nodeAppSecretKeys(secretKeys).map(appSecretDestination)
+      : secretKeys),
+  ]);
+}
+
 export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
   const keys = nodeAppSecretKeys(input.secretKeys, input.boundEnvNames);
   const refused = keys.filter((k) => !isOffClusterWorkloadSecretKey(k));
@@ -150,44 +239,29 @@ export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
   if (input.databasePoolLimits && input.databasePoolLimits.replicaCount !== 1)
     throw new Error("database pools require exactly one app replica");
 
-  const e: Record<string, string> = {};
-  e.HOST = BIND_HOST;
-  e.HOSTNAME = BIND_HOST;
-  e.PORT = String(input.port);
-  e.APP_ENV = "production";
-  e.DEPLOY_ENVIRONMENT = input.env;
-  e.COGNI_REPO_SHA = input.sourceSha;
-  const substrate = input.substrateHost;
-  if (substrate) {
-    e.TEMPORAL_ADDRESS = `${substrate}:7233`;
-    e.TEMPORAL_NAMESPACE = `cogni-${input.env}`;
-    e.TEMPORAL_TASK_QUEUE = "scheduler-tasks";
-    e.REDIS_URL = `redis://${substrate}:6379`;
-    e.LITELLM_BASE_URL = `http://${substrate}:4000`;
-    e.SCHEDULER_WORKER_HEALTH_URL = `http://${substrate}:30900`;
-  }
-  for (const [key, value] of Object.entries(injectable)) {
-    if (key === LITELLM_VIRTUAL_KEY) e[LITELLM_MASTER_KEY] = value;
-    else e[key] = value;
-  }
-  e.COGNI_NODE_ID = input.nodeId;
-  if (input.databasePoolLimits) {
-    e.DB_POOL_MAX = String(input.databasePoolLimits.app);
-    e.DB_SERVICE_POOL_MAX = String(input.databasePoolLimits.service);
-    e.DB_READ_POOL_MAX = String(input.databasePoolLimits.read);
-  }
-  if (input.lokiPush) {
-    e.LOKI_PUSH_URL = input.lokiPush.url;
-    e.LOKI_PUSH_USER = input.lokiPush.user;
-    e.LOKI_PUSH_PASSWORD = input.lokiPush.password;
-    e.LOKI_PUSH_SOURCE = "lease";
-  }
-  // buildNodeAppIdentityEnv(): deliberately wins over every key above.
-  e.NODE_NAME = input.slug;
-  e.COGNI_REPO_PATH = "/app";
-  e.AUTH_TRUST_HOST = "true";
-  e.NEXTAUTH_URL = `https://${input.publicHost}`;
-  e.APP_BASE_URL = `https://${input.publicHost}`;
+  const e = {
+    ...fieldValues(COMMON_FIELDS, input),
+    ...fieldValues(APP_BASE_FIELDS, input),
+  };
+  if (input.substrateHost)
+    Object.assign(
+      e,
+      fieldValues(SUBSTRATE_FIELDS, {
+        host: input.substrateHost,
+        env: input.env,
+      })
+    );
+  for (const [key, value] of Object.entries(injectable))
+    e[appSecretDestination(key)] = value;
+  // Platform identity and optional catalog/push outputs retain precedence over secrets.
+  if (input.databasePoolLimits)
+    Object.assign(e, fieldValues(POOL_FIELDS, input.databasePoolLimits));
+  if (input.lokiPush)
+    Object.assign(e, fieldValues(LOKI_FIELDS, input.lokiPush));
+  // The operator issuer (sign-in origin binding, #3029) is platform identity: it wins over every key above.
+  if (!input.operatorDomain)
+    throw new Error("operator issuer domain is required");
+  Object.assign(e, fieldValues(APP_IDENTITY_FIELDS, input));
   return e;
 }
 
@@ -224,10 +298,7 @@ export function workerEnv(input: WorkerEnvInput): Record<string, string> {
       `worker env refused: required secret keys missing or not injectable: ${missing.join(", ")}`
     );
   return {
-    HOST: BIND_HOST,
-    PORT: String(input.port),
-    DEPLOY_ENVIRONMENT: input.env,
-    COGNI_REPO_SHA: input.sourceSha,
+    ...fieldValues(COMMON_FIELDS, input),
     ...injectable,
   };
 }

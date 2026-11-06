@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import { ImageCatalogNodes } from "@/adapters/server";
 import { edgeHostRegexFor } from "@/features/node-deploy/edge";
 import { nodeCatalogPolicy } from "@/features/node-deploy/node-catalog-policy";
+import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 
 const POLY = "4b06359a-0000-4000-8000-0000000000aa";
 const INREPO = "11111111-1111-4111-8111-111111111111";
@@ -118,7 +119,13 @@ describe("ImageCatalogNodes", () => {
       await catalog.nodeDeploySlugs("candidate-a", "cogni-dao")
     ).not.toContain("beacon");
     // the guard built from it admits poly in production and refuses operator hosts
-    const re = edgeHostRegexFor(production);
+    const re = edgeHostRegexFor(
+      production,
+      resolveWorkloadZoneBinding({
+        fleetOwner: "cogni-dao",
+        zoneName: "cognidao.org",
+      })
+    );
     expect(re.test("poly.cognidao.org")).toBe(true);
     expect(re.test("beacon.cognidao.org")).toBe(true);
     expect(re.test("red.cognidao.org")).toBe(true);
