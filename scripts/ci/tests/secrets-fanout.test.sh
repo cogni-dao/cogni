@@ -258,3 +258,57 @@ assert "$miss" "derived ⊇ current NODE_BASELINE_KEYS (minus composed DSNs + th
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
+
+# Exercise the actual two worker writer fragments with real jq. Only transport
+# is replaced: assert bytes, the four-field boundary, SSH argv and failed apply
+# propagation. Native kubectl/managedFields qualification is a separate live gate.
+python3 - "$REPO_ROOT" <<'PY'
+import base64, json, os, pathlib, secrets, subprocess, sys, tempfile
+root = pathlib.Path(sys.argv[1])
+fields = ['DATABASE_URL', 'SCHEDULER_API_TOKEN', 'INTERNAL_OPS_TOKEN', 'COGNI_NODE_DBS']
+# Generate local canaries; adversarial text must remain one string, not new keys
+# or shell syntax. No credential bytes are fixed in the source fixture.
+values = {key: secrets.token_urlsafe(24) + "'\nEXTRA_FIELD=\u03bb" for key in fields}
+with tempfile.TemporaryDirectory(prefix='worker-projection-') as tmp:
+    capture = pathlib.Path(tmp) / 'request.json'
+    for source, start_marker, end_marker in [
+        ('scripts/ci/deploy-infra.sh', '  DATABASE_URL="${OPERATOR_DATABASE_SERVICE_URL:', '  log_info "  Applied scheduler-worker-secrets"'),
+        ('scripts/setup/provision-test-vm.sh', 'DATABASE_URL="${DATABASE_SERVICE_URL}"', 'log_info "  Created scheduler-worker-secrets"'),
+    ]:
+        source_text = (root / source).read_text()
+        start = source_text.index(start_marker)
+        fragment = source_text[start:source_text.index(end_marker, start)]
+        # Stubs keep all values in memory/stdin. Record args separately so a
+        # regression to --from-literal / credential-bearing SSH commands fails.
+        harness = '''set -euo pipefail
+kubectl() {
+  python3 -c 'import json,os,sys; json.dump({"args":sys.argv[1:],"manifest":json.load(sys.stdin)},open(os.environ["CAPTURE"],"w"))' "$@"
+  return "${APPLY_RC:-0}"
+}
+export -f kubectl
+ssh() {
+  [[ "$*" != *"$SCHEDULER_API_TOKEN"* && "$*" != *"$INTERNAL_OPS_TOKEN"* && "$*" != *"$DATABASE_SERVICE_URL"* ]] || return 99
+  shift
+  bash -c "$*"
+}
+'''
+        env = {**os.environ, **values, 'OPERATOR_DATABASE_SERVICE_URL': values['DATABASE_URL'],
+               'DATABASE_SERVICE_URL': values['DATABASE_URL'], 'K8S_NS': 'cogni-preview',
+               'K8S_NAMESPACE': 'cogni-preview', 'SSH_OPTS': '', 'VM_IP': 'fixture', 'CAPTURE': str(capture)}
+        for rc in [0, 17]:
+            result = subprocess.run(['bash', '-c', harness + fragment], env={**env, 'APPLY_RC': str(rc)}, capture_output=True, text=True)
+            assert result.returncode == rc, (source, rc, result.returncode)
+            request = json.loads(capture.read_text())
+            manifest = request['manifest']
+            decoded = {key: base64.b64decode(value).decode() for key, value in manifest['data'].items()}
+            assert decoded == values, source
+            assert manifest['metadata'] == {'name': 'scheduler-worker-secrets'}
+            assert manifest['kind'] == 'Secret' and manifest['type'] == 'Opaque'
+            assert request['args'] == ['-n', 'cogni-preview', 'apply', '--server-side', '--field-manager=cogni-worker-secrets', '-f', '-']
+            assert not result.stdout and not result.stderr
+        if source.endswith('deploy-infra.sh'):
+            capture.unlink()
+            result = subprocess.run(['bash', '-c', harness + fragment], env={**env, 'OPERATOR_DATABASE_SERVICE_URL': ''}, capture_output=True, text=True)
+            assert result.returncode and not capture.exists()
+print('PASS: worker projections preserve four fields, private stdin and apply failures')
+PY
