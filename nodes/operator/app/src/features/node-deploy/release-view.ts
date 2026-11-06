@@ -81,6 +81,7 @@ export function toAttemptView(a: AttemptRow): DeployAttemptView {
     leasedAt: iso(a.leasedAt),
     updatedAt: iso(a.updatedAt),
     steps: (a.steps ?? []).map((s) => ({ ...s })),
+    ...(a.transport ? { transport: a.transport } : {}),
   };
 }
 

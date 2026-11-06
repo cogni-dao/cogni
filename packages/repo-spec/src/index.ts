@@ -174,6 +174,7 @@ export {
   type ScoreWorkload,
   WORKLOAD_MANIFEST_DIR,
   WORKLOAD_MANIFEST_SUFFIX,
+  WORKLOAD_NAME_RE,
   type WorkloadDirectoryEntry,
   WorkloadManifestError,
   type WorkloadManifestFile,

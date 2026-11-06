@@ -132,6 +132,55 @@ export interface NodeMeshPort {
   listApiKeys(): Promise<readonly MeshApiKey[]>;
 }
 
+/**
+ * The attempt-key Secret name allow-list (hub node-service-delivery section 3), the same expression the
+ * admission policy allows a sequencer DELETE for. `features/node-deploy/mesh-plane.ts` derives names that
+ * match it; a unit test keeps the two equal.
+ */
+export const MESH_ATTEMPT_SECRET_NAME_RE =
+  /^nd-[0-9a-f]{8}-[a-z0-9-]+-mesh-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-a[0-9]+$/;
+
+/** What one attempt's create-once Secret holds: the key value and its provider id. */
+export interface StoredMeshKey {
+  readonly key: string;
+  readonly headscaleKeyId: HeadscaleKeyId;
+}
+
+/**
+ * The attempt-key store (task.5431, hub node-service-delivery section 3): a create-once Kubernetes Secret
+ * `nd-<nodeId8>-<workload>-mesh-<releaseId>-a<attempt>` in the env's `cogni-node-deploy-<env>`
+ * namespace, the merged state-secret precedent.
+ * Invariants:
+ *   - CREATE_ONCE: `createOnce` never overwrites; a racing writer's value is returned instead.
+ *   - NAME_IS_ADMISSIBLE: every name must match the admission policy's delete allow-list, so a state
+ *     password can never be named here (and so never deleted here).
+ *   - DELETE_IS_IDEMPOTENT: deleting an absent Secret succeeds.
+ *   - NO_VALUES_IN_LOGS.
+ */
+export interface MeshKeyStorePort {
+  get(name: string): Promise<StoredMeshKey | undefined>;
+  createOnce(name: string, value: StoredMeshKey): Promise<StoredMeshKey>;
+  delete(name: string): Promise<void>;
+}
+
+/** The `substrate-gw` enrollment request its env VM publishes over the verified DNS-only channel. */
+export interface PublishedSubstrateRequest {
+  readonly authId: string;
+  readonly machineKey: string;
+  readonly nodeKey: string;
+  /** Epoch ms of the publish. */
+  readonly publishedAt: number;
+}
+
+/**
+ * Reads the env VM's published `substrate-gw` request over HTTPS with public certificate and host-name
+ * verification (HR 11). `null` = nothing to approve (no file, or the device is already registered and
+ * publishes no auth id). A transport or parse failure throws.
+ */
+export interface SubstrateRequestSourcePort {
+  read(): Promise<PublishedSubstrateRequest | null>;
+}
+
 export type NodeMeshErrorCode =
   /** The socket is absent or refused the connection. */
   | "unavailable"

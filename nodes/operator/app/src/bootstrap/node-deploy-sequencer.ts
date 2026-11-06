@@ -49,6 +49,12 @@
  *     substrate hosts are not node hosts and stay where they are.
  *   - INTERIM_APP_PROVIDERS (task.5405): `NODE_DEPLOY_APP_PROVIDERS` (comma-separated akash accounts, max 16)
  *     is sent as `allowProviders` on every APP create; unset sends none.
+ *   - MESH_LANES_ONLY (task.5431): a lane whose `NODE_DEPLOY_SUBSTRATE_TRANSPORTS` value is `mesh` gets its
+ *     env tailnet: a `HeadscaleSocketAdapter` over `/var/run/headscale/<env>.sock` (the pod-local socket
+ *     task.5428 shares with this container only; no API key exists), one `MeshPlane`, the attempt-key
+ *     Secrets in the lane's `cogni-node-deploy-<env>` namespace, and the env VM's published `substrate-gw`
+ *     request read over verified HTTPS. Its mesh pass runs inside the reconcile loop, under the leader lock.
+ *     An egress lane builds none of it.
  * Side-effects: IO (Postgres, actuator HTTP, Cloudflare, Kubernetes API, provider ingress; health listener)
  * Links: @features/node-deploy/sequencer, infra/k8s/base/node-deploy-sequencer, task.5400
  * @internal
@@ -73,11 +79,16 @@ import {
   PostgresNodeDeployStore,
   resolveCloudflareZoneId,
 } from "@/adapters/server";
+import { HeadscaleSocketAdapter } from "@/adapters/server/node-deploy/headscale.adapter";
+import { KubernetesMeshKeys } from "@/adapters/server/node-deploy/mesh-keys.adapter";
+import { HttpsSubstrateRequestSource } from "@/adapters/server/node-deploy/substrate-request.adapter";
 import {
+  type EnvLane,
   EnvLaneConfigError,
   EnvLaneSequencers,
   resolveEnvLanes,
 } from "@/features/node-deploy/env-lanes";
+import { MeshPlane } from "@/features/node-deploy/mesh-plane";
 import { DEFAULT_SEQUENCER_CONFIG } from "@/features/node-deploy/sequencer";
 import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 import { composeNodeDeployLanes } from "./node-deploy-lanes";
@@ -86,6 +97,8 @@ const LISTEN_PORT = 8080;
 const CREDENTIAL_DIR = "/var/run/secrets/node-deploy-sequencer";
 const TICK_MS = 5_000;
 const RECONCILE_MS = 60_000;
+/** task.5428: each env Headscale's unix socket on the pod-local emptyDir (`unix_socket` in its config). */
+const HEADSCALE_SOCKET_DIR = "/var/run/headscale";
 
 // biome-ignore lint/style/noProcessEnv: dedicated process composition root validates its own minimal env
 const runtimeEnv = process.env;
@@ -154,6 +167,7 @@ try {
     secretsNamespace: runtimeEnv.NODE_DEPLOY_SECRETS_NAMESPACE,
     substrateHost: runtimeEnv.NODE_DEPLOY_SUBSTRATE_HOST,
     substrateHosts: runtimeEnv.NODE_DEPLOY_SUBSTRATE_HOSTS,
+    substrateTransports: runtimeEnv.NODE_DEPLOY_SUBSTRATE_TRANSPORTS,
   });
 } catch (error) {
   if (!(error instanceof EnvLaneConfigError)) throw error;
@@ -235,6 +249,31 @@ async function edgeDnsFor(binding: WorkloadZoneBinding) {
   });
 }
 
+/** MESH_LANES_ONLY: the env tailnet of one mesh lane; undefined for an egress lane. */
+function meshFor(lane: EnvLane) {
+  if (lane.substrateTransport !== "mesh" || !lane.meshControlUrl)
+    return undefined;
+  log.info(
+    {
+      environment: lane.environment,
+      controlUrl: lane.meshControlUrl,
+      socket: `${HEADSCALE_SOCKET_DIR}/${lane.environment}.sock`,
+    },
+    "node_deploy_sequencer_mesh_lane"
+  );
+  return {
+    plane: new MeshPlane(
+      new HeadscaleSocketAdapter({
+        socketPath: `${HEADSCALE_SOCKET_DIR}/${lane.environment}.sock`,
+      }),
+      lane.environment
+    ),
+    keys: new KubernetesMeshKeys(lane.secretsNamespace),
+    substrateRequests: new HttpsSubstrateRequestSource(lane.substrateHost),
+    controlUrl: lane.meshControlUrl,
+  };
+}
+
 // Resolve new-effect authority without disabling the existing paid-effect recovery owner.
 const composed = await composeNodeDeployLanes({
   fleetOwner,
@@ -242,39 +281,45 @@ const composed = await composeNodeDeployLanes({
   lanes,
   dnsRecordsFor: edgeDnsFor,
   nodeDeploySlugs: (env, owner) => catalog.nodeDeploySlugs(env, owner),
-  depsForLane: (lane) => ({
-    store,
-    payer,
-    probe,
-    images,
-    secrets: new KubernetesStatePasswords(
-      lane.secretsNamespace,
-      lane.environment
-    ),
-    runtime: {
-      secrets: new EsoNodeRuntimeSecrets({ namespace: lane.secretsNamespace }),
-      catalog,
-      substrateHost: lane.substrateHost,
-      operatorDomain: lane.operatorDomain,
-    },
-    ...(chain ? { chain } : {}),
-    clock: {
-      now: () => Date.now(),
-      sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
-    },
-    log,
-    config: {
-      ...DEFAULT_SEQUENCER_CONFIG,
-      namespace,
-      environment: lane.environment,
-      ...(appProviders.length > 0 ? { appProviders } : {}),
-      retainMs: num(
-        runtimeEnv.NODE_DEPLOY_RETAIN_MS,
-        DEFAULT_SEQUENCER_CONFIG.retainMs,
-        0
+  depsForLane: (lane) => {
+    const mesh = meshFor(lane);
+    return {
+      store,
+      payer,
+      probe,
+      images,
+      ...(mesh ? { mesh } : {}),
+      secrets: new KubernetesStatePasswords(
+        lane.secretsNamespace,
+        lane.environment
       ),
-    },
-  }),
+      runtime: {
+        secrets: new EsoNodeRuntimeSecrets({
+          namespace: lane.secretsNamespace,
+        }),
+        catalog,
+        substrateHost: lane.substrateHost,
+        operatorDomain: lane.operatorDomain,
+      },
+      ...(chain ? { chain } : {}),
+      clock: {
+        now: () => Date.now(),
+        sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+      },
+      log,
+      config: {
+        ...DEFAULT_SEQUENCER_CONFIG,
+        namespace,
+        environment: lane.environment,
+        ...(appProviders.length > 0 ? { appProviders } : {}),
+        retainMs: num(
+          runtimeEnv.NODE_DEPLOY_RETAIN_MS,
+          DEFAULT_SEQUENCER_CONFIG.retainMs,
+          0
+        ),
+      },
+    };
+  },
 });
 if (!composed.edgeConfigured) {
   log.warn(

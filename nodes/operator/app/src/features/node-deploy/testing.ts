@@ -35,6 +35,7 @@ import type {
   SequencerClock,
   SequencerLog,
   StorePort,
+  SubstrateTransport,
   WorkloadKey,
 } from "@/ports";
 import {
@@ -236,7 +237,8 @@ export class MemoryStore implements StorePort {
   }
   async insertAttempt(
     releaseId: string,
-    makeKey: (attempt: number) => string
+    makeKey: (attempt: number) => string,
+    init: { readonly transport?: SubstrateTransport } = {}
   ): Promise<AttemptRow> {
     if (this.releases.get(releaseId)?.admissionRefusal)
       throw new Error("release admission refused");
@@ -266,6 +268,7 @@ export class MemoryStore implements StorePort {
       leasedAt: undefined,
       updatedAt: now,
       steps: [],
+      ...(init.transport ? { transport: init.transport } : {}),
     };
     this.attempts.push(row);
     return row;
@@ -299,6 +302,7 @@ export class MemoryStore implements StorePort {
         ? { unhealthySince: patch.unhealthySince ?? undefined }
         : {}),
       ...(patch.leasedAt !== undefined ? { leasedAt: patch.leasedAt } : {}),
+      ...(patch.mesh !== undefined ? { mesh: patch.mesh } : {}),
       updatedAt:
         patch.phase !== undefined ? new Date(this.clock.now()) : cur.updatedAt,
     };

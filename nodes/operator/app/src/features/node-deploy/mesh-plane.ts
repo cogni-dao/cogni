@@ -536,6 +536,21 @@ export class MeshPlane {
     }
   }
 
+  /**
+   * Every device Headscale lists (task.5431 device check). A failed read closes minting like any other
+   * failed call, and the caller counts it as a failed read (HR 8: failed reads roll nothing).
+   */
+  async listDevices(): Promise<
+    | { readonly ok: true; readonly devices: readonly MeshDevice[] }
+    | { readonly ok: false; readonly reason: NodeMeshErrorReason }
+  > {
+    try {
+      return { ok: true, devices: await this.mesh.listNodes() };
+    } catch (error) {
+      return { ok: false, reason: this.fail(error) };
+    }
+  }
+
   /** HR 12: Headscale holds no API key. */
   async checkAdminSurface(): Promise<
     | { readonly ok: true }

@@ -48,13 +48,31 @@
  *   - ONE_EMIT_HELPER: every event (step, provider strike, alert) is written by `record`, which logs the
  *     Loki line AND appends the same step to the attempt's durable timeline; a failed append is logged
  *     and never fails a deploy decision.
+ *   - TRANSPORT_PER_ATTEMPT (task.5431, HR 18): each node-app attempt's transport is derived once, before
+ *     its row exists, by `attemptTransport` and written in the same insert; a lane switch never leaves a
+ *     node without a serving path.
+ *   - KEY_STORED_BEFORE_PAY (HR 5): a mesh attempt gets ONE reusable, ephemeral key after its row is
+ *     durable and the policy readback matches. Its Headscale key id is written to the row FIRST, then the
+ *     value goes into a create-once Secret, then the paid create. A lost mint response or a restart at
+ *     any point makes no second usable key and no second paid create; a row key id with no Secret is
+ *     expired before a fresh mint. While no key can be minted the attempt waits (`mesh_key_pending`),
+ *     unpaid, and is never observed or failed for it.
+ *   - MESH_PASS_UNDER_THE_LOCK (HR 4, 5, 6, 8): each reconcile pass, under the leader lock, first runs the
+ *     env mesh pass: reconcile the derived policy (fail closed), approve the published `substrate-gw`,
+ *     revoke every terminal attempt's key (expire, then delete its devices; a retiring blue only after it
+ *     retires), delete a revoked attempt's Secret one pass later, sweep unstored keys, then the device
+ *     check. A failed Headscale call stops every mesh write for that pass and resets the device window.
  * Side-effects: IO via injected ports
  * @internal
  */
 
 import type {
+  AttemptMesh,
   BuiltImageResolverPort,
   ChainTruthPort,
+  HeadscaleKeyId,
+  MeshDevice,
+  MeshKeyStorePort,
   NodeCatalogPort,
   NodeRuntimeSecretsPort,
   PayerPort,
@@ -62,7 +80,10 @@ import type {
   SecretsPort,
   SequencerClock,
   SequencerLog,
+  StoredMeshKey,
   StorePort,
+  SubstrateRequestSourcePort,
+  SubstrateTransport,
 } from "@/ports";
 import {
   type AttemptPatch,
@@ -73,6 +94,7 @@ import {
   buildCogniKey,
   buildIdentity,
   consecutiveFailures,
+  headscaleKeyId,
   IN_FLIGHT_PHASES,
   keyString,
   NodeRuntimeSecretsError,
@@ -89,6 +111,25 @@ import {
   hostOwnedBy,
   workerHostRefusal,
 } from "./edge";
+import {
+  attemptTransport,
+  type DeviceWatchEntry,
+  deviceRollsInFlight,
+  MAX_DEVICE_ROLLS_PER_ENV,
+  MESH_COMPANION_IMAGES,
+  MESH_DEVICE_ABSENT,
+  MESH_LIVE_PHASES,
+  MESH_SUBSTRATE_HOST,
+  MESH_TERMINAL_PHASES,
+  type MeshCompanionService,
+  meshCompanionServices,
+  meshDeviceName,
+  readAttemptDevices,
+  substrateGateway,
+  substratePortsOf,
+} from "./mesh-attempt";
+import { type MeshPlane, meshSecretName } from "./mesh-plane";
+import type { NodeSubstrateGrant } from "./mesh-policy";
 import {
   nodeAppEnv,
   nodeAppSecretKeys,
@@ -202,6 +243,21 @@ export interface NodeAppRuntimeDeps {
   readonly substrateHost?: string | undefined;
 }
 
+/**
+ * The env tailnet of ONE lane (task.5431). Present only when the lane's transport is `mesh`
+ * (`NODE_DEPLOY_SUBSTRATE_TRANSPORTS`); absent = every attempt of the lane uses egress.
+ */
+export interface SequencerMeshDeps {
+  /** The env Headscale's seed-and-approval loop over its pod-local socket (task.5429). */
+  readonly plane: MeshPlane;
+  /** Attempt-key Secrets in the lane's `cogni-node-deploy-<env>` namespace. */
+  readonly keys: MeshKeyStorePort;
+  /** The env VM's published `substrate-gw` request, read over verified HTTPS. */
+  readonly substrateRequests: SubstrateRequestSourcePort;
+  /** `https://mesh-<env>.<zone>`: the env Headscale's `server_url` (TLS on 443 only, HR 22). */
+  readonly controlUrl: string;
+}
+
 export interface SequencerDeps {
   readonly store: StorePort;
   readonly payer: PayerPort;
@@ -216,6 +272,7 @@ export interface SequencerDeps {
   readonly probe: ProbePort;
   readonly secrets: SecretsPort;
   readonly runtime?: NodeAppRuntimeDeps;
+  readonly mesh?: SequencerMeshDeps;
   readonly chain?: ChainTruthPort;
   /**
    * Resolves a pending release image (`<repo>:sha-<sha>`) to its digest (story.5137). Absent (dev harness):
@@ -268,6 +325,12 @@ const SERVED_PHASES: readonly AttemptPhase[] = [
 /** The actuator wire accepts at most 16 `allowProviders`. */
 const MAX_ALLOWED_PROVIDERS = 16;
 
+/** One desired workload of the env with every attempt (newest first). */
+interface MeshRow {
+  readonly key: WorkloadKey;
+  readonly attempts: readonly AttemptRow[];
+}
+
 class DependencyNotReady extends Error {}
 class InvalidArtifactSet extends Error {}
 
@@ -286,6 +349,8 @@ export class NodeDeploySequencer {
   private readonly lastGraceLogAt = new Map<string, number>();
   /** Last persisted step signature per attempt, so a poll loop writes one timeline row, not hundreds. */
   private readonly lastStep = new Map<string, string>();
+  /** HR 8 device window per live mesh attempt id: in memory, so a restart rolls nothing. */
+  private readonly deviceWatch = new Map<string, DeviceWatchEntry>();
 
   constructor(private readonly d: SequencerDeps) {}
 
@@ -305,8 +370,18 @@ export class NodeDeploySequencer {
     );
   }
 
-  /** One reconcile pass (design: every 60 s). */
+  /** One reconcile pass (design: every 60 s). The env mesh pass runs first (MESH_PASS_UNDER_THE_LOCK). */
   async reconcileAll(): Promise<void> {
+    if (this.d.mesh)
+      await this.meshPass().catch((error: unknown) =>
+        this.meshEvent(
+          "error",
+          "node_mesh_coordinator_health",
+          undefined,
+          undefined,
+          { outcome: "threw", reason: errText(error).slice(0, 300) }
+        )
+      );
     const desired = await this.d.store.listDesired(this.d.config.environment);
     await Promise.all(
       desired.map((row) =>
@@ -411,12 +486,13 @@ export class NodeDeploySequencer {
     }
 
     let deployable: ReleaseRow;
+    let nodeApp = false;
     try {
       // The image first: a pending image (`<repo>:sha-<sha>`) is resolved to a digest ONCE, pinned
       // write-once on the release, and only then can an attempt exist (ALWAYS_DEFER, story.5137).
       deployable = await this.pinImage(key, release);
       if (deployable.admissionRefusal) return "parked";
-      await this.resolveEnv(key, deployable);
+      nodeApp = (await this.resolveEnv(key, deployable)).nodeApp;
     } catch (error) {
       if (error instanceof InvalidArtifactSet) {
         // Admission failed: attribute the refusal to the existing release intent. An attempt
@@ -437,15 +513,18 @@ export class NodeDeploySequencer {
       throw error;
     }
 
-    const allocateAttempt = () =>
-      this.d.store.insertAttempt(release.id, (n) =>
-        buildCogniKey({
-          namespace: this.d.config.namespace,
-          nodeId: key.nodeId,
-          workload: key.workload,
-          releaseId: release.id,
-          attempt: n,
-        })
+    const allocateAttempt = (transport?: SubstrateTransport) =>
+      this.d.store.insertAttempt(
+        release.id,
+        (n) =>
+          buildCogniKey({
+            namespace: this.d.config.namespace,
+            nodeId: key.nodeId,
+            workload: key.workload,
+            releaseId: release.id,
+            attempt: n,
+          }),
+        transport ? { transport } : undefined
       );
     try {
       await this.assertNewAppHost(key, deployable);
@@ -469,7 +548,27 @@ export class NodeDeploySequencer {
     if (stop === "unconfirmed") return "close_pending";
     if (stop === "stopped") blue = undefined;
 
-    const attempt = await allocateAttempt();
+    // HR 18: `all` still shows the phases from before any stop-then-start, so a blue that was just
+    // stopped counts as serving and its replacement keeps the node's served transport.
+    const transport =
+      this.d.mesh && nodeApp && deployable.spec.kind === "app"
+        ? attemptTransport({
+            lane: "mesh",
+            blueRetained: blue !== undefined,
+            releaseId: release.id,
+            workloadAttempts: all,
+            nodeAttempts: await this.nodeAttempts(key),
+          })
+        : "egress";
+    if (transport === "mesh" && !this.d.mesh?.plane.mintAllowed) {
+      // No key can be minted (no matched policy readback or no sweep since the last failed call): no
+      // attempt starts and nothing is paid until the mesh pass opens minting (HR 4, HR 5).
+      await this.emit(key, release, undefined, "dependency", "waiting", {
+        reason: "mesh_not_ready",
+      });
+      return "waiting_dependency";
+    }
+    const attempt = await allocateAttempt(transport);
     await this.emit(key, release, attempt, "attempt_planned", "ok", {
       blue: blue?.externalName,
     });
@@ -869,15 +968,18 @@ export class NodeDeploySequencer {
         await this.failAttempt(key, release, a, a.error);
         return;
       }
+      // KEY_STORED_BEFORE_PAY: a mesh attempt still waiting for its key was never dispatched (the dispatch
+      // marker replaces this one durably before any paid call), so it goes straight back to `doCreate`.
+      const meshPending = a.error?.startsWith(MESH_KEY_PENDING) ?? false;
       // A dispatch marker survives loss before bindLease or the catch handler. Legacy
       // unmarked rows get the same grace: their previous runner may still be paying.
-      if (!freshAttempt && this.createMayStillBeInFlight(a)) {
+      if (!freshAttempt && !meshPending && this.createMayStillBeInFlight(a)) {
         await this.emitGrace(key, release, a, "create", "inflight_grace", {
           graceMs: this.d.config.inflightGraceMs,
         });
         recoveryPending = true;
       }
-      if (!freshAttempt && !recoveryPending) {
+      if (!freshAttempt && !recoveryPending && !meshPending) {
         try {
           const obs = await this.d.payer.observe({ cogniKey: a.cogniKey });
           if (obs.found && obs.resource) {
@@ -966,7 +1068,8 @@ export class NodeDeploySequencer {
    */
   private async resolveEnv(
     key: WorkloadKey,
-    release: ReleaseRow
+    release: ReleaseRow,
+    transport: SubstrateTransport = "egress"
   ): Promise<ResolvedRuntime> {
     const w = release.spec;
     const refusal = this.d.httpAdmissionRefusal;
@@ -976,7 +1079,7 @@ export class NodeDeploySequencer {
     let nodeApp = false;
     let companionEnvs: Record<string, Record<string, string>> = {};
     if (w.kind === "app") {
-      const node = await this.nodeAppRuntime(key, release);
+      const node = await this.nodeAppRuntime(key, release, transport);
       if (node) {
         Object.assign(env, node.env);
         requiredCountryCodes = node.requiredCountryCodes;
@@ -1018,7 +1121,8 @@ export class NodeDeploySequencer {
 
   private async nodeAppRuntime(
     key: WorkloadKey,
-    release: ReleaseRow
+    release: ReleaseRow,
+    transport: SubstrateTransport = "egress"
   ): Promise<
     | {
         env: Record<string, string>;
@@ -1112,7 +1216,9 @@ export class NodeDeploySequencer {
           publicHost,
           operatorDomain: rt.operatorDomain,
           port: w.port,
-          substrateHost: rt.substrateHost,
+          // A mesh attempt's app reaches its substrate through the `cogni-substrate` companion (HR 1).
+          substrateHost:
+            transport === "mesh" ? MESH_SUBSTRATE_HOST : rt.substrateHost,
           databasePoolLimits: policy.databasePoolLimits,
           secretKeys: w.secretKeys,
           secrets: bucket,
@@ -1325,11 +1431,37 @@ export class NodeDeploySequencer {
     let runtime: ResolvedRuntime;
     try {
       await this.assertNewAppHost(key, release);
-      runtime = await this.resolveEnv(key, release);
+      runtime = await this.resolveEnv(
+        key,
+        release,
+        attempt.transport ?? "egress"
+      );
     } catch (error) {
       return this.failAttempt(key, release, attempt, errText(error), {
         createEnded: true,
       });
+    }
+    let meshCompanions: MeshCompanionService[] | undefined;
+    if (attempt.transport === "mesh") {
+      const prepared = await this.prepareMeshAttempt(
+        key,
+        release,
+        attempt,
+        runtime
+      );
+      if (prepared.kind === "pending") return prepared.attempt;
+      if (prepared.kind === "failed")
+        return this.failAttempt(
+          key,
+          release,
+          prepared.attempt,
+          prepared.reason,
+          {
+            createEnded: true,
+          }
+        );
+      attempt = prepared.attempt;
+      meshCompanions = prepared.services;
     }
 
     const { providers: excludeProviders, remembered } = await this.exclusion(
@@ -1377,6 +1509,7 @@ export class NodeDeploySequencer {
           requiredCountryCodes,
           nodeApp: runtime.nodeApp,
           companionEnvs: runtime.companionEnvs,
+          meshCompanions,
         }),
         ...(excludeProviders.length > 0 ? { excludeProviders } : {}),
         ...(allowProviders.length > 0 ? { allowProviders } : {}),
@@ -2352,6 +2485,626 @@ export class NodeDeploySequencer {
   }
 
   // -------------------------------------------------------------------------------------------
+  // mesh: one key per attempt, the env pass, the device check (task.5431)
+  // -------------------------------------------------------------------------------------------
+
+  /** Every attempt of the node in this env, all workloads, newest first (HR 18 reads node history). */
+  private async nodeAttempts(key: WorkloadKey): Promise<AttemptRow[]> {
+    const desired = await this.d.store.listDesired(this.d.config.environment);
+    const lists = await Promise.all(
+      desired
+        .filter((d) => d.nodeId === key.nodeId)
+        .map((d) => this.d.store.attemptsFor(d))
+    );
+    return lists
+      .flat()
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  /** Every desired workload of the env with all its attempts (newest first). */
+  private async meshRows(): Promise<MeshRow[]> {
+    const desired = await this.d.store.listDesired(this.d.config.environment);
+    return Promise.all(
+      desired.map(async (d) => ({
+        key: { nodeId: d.nodeId, env: d.env, workload: d.workload },
+        attempts: await this.d.store.attemptsFor(d),
+      }))
+    );
+  }
+
+  /**
+   * The resolver output the policy is derived from (HR 3, HR 4): one grant per live mesh attempt, its
+   * recorded ports; and the key ids live attempts store (the sweep and the mint never expire them).
+   */
+  private meshView(rows: readonly MeshRow[]): {
+    grants: NodeSubstrateGrant[];
+    liveKeyIds: Set<HeadscaleKeyId>;
+  } {
+    const grants: NodeSubstrateGrant[] = [];
+    const liveKeyIds = new Set<HeadscaleKeyId>();
+    for (const { key, attempts } of rows)
+      for (const a of attempts) {
+        if (a.transport !== "mesh" || !a.mesh) continue;
+        if (!MESH_LIVE_PHASES.includes(a.phase)) continue;
+        grants.push({ nodeId: key.nodeId, ports: a.mesh.ports });
+        if (a.mesh.headscaleKeyId)
+          liveKeyIds.add(headscaleKeyId(a.mesh.headscaleKeyId));
+      }
+    return { grants, liveKeyIds };
+  }
+
+  /** CD3: the release's first mesh attempt fixes its companion digests; a first attempt takes today's. */
+  private async releaseCompanionImages(
+    key: WorkloadKey,
+    release: ReleaseRow
+  ): Promise<AttemptMesh["images"]> {
+    const pinned = (await this.d.store.attemptsFor(key))
+      .filter((a) => a.releaseId === release.id && a.mesh?.images)
+      .sort((a, b) => a.attempt - b.attempt)[0]?.mesh?.images;
+    return pinned ?? { ...MESH_COMPANION_IMAGES };
+  }
+
+  /**
+   * Everything a mesh attempt needs before its paid create: the derived ports (HR 3), the device name,
+   * the release's companion digests (CD3), and its ONE key, stored (HR 5). `pending` leaves the attempt
+   * `planned` and unpaid with a `mesh_key_pending` marker; the next tick resumes it here.
+   */
+  private async prepareMeshAttempt(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    runtime: ResolvedRuntime
+  ): Promise<
+    | {
+        readonly kind: "ready";
+        readonly attempt: AttemptRow;
+        readonly services: MeshCompanionService[];
+      }
+    | { readonly kind: "pending"; readonly attempt: AttemptRow }
+    | {
+        readonly kind: "failed";
+        readonly attempt: AttemptRow;
+        readonly reason: string;
+      }
+  > {
+    const mesh = this.d.mesh;
+    if (!mesh)
+      return {
+        kind: "failed",
+        attempt,
+        reason: "mesh_lane_unavailable: this lane no longer runs the mesh",
+      };
+    const { ports, refused } = substratePortsOf(runtime.env, [
+      MESH_SUBSTRATE_HOST,
+      this.d.runtime?.substrateHost,
+    ]);
+    if (refused.length > 0)
+      // The mesh grants registry ports only (REGISTRY_ONLY); such an env value cannot reach its target.
+      await this.meshEvent("warn", "node_mesh_port_not_granted", attempt, key, {
+        outcome: "refused",
+        keys: refused,
+        reason: refused.join(","),
+      });
+    if (ports.length === 0)
+      return {
+        kind: "failed",
+        attempt,
+        reason: "mesh_no_substrate_port: the env names no substrate port",
+      };
+    const slug =
+      (await this.d.runtime?.catalog.entryFor(key.nodeId))?.slug ??
+      key.nodeId.slice(0, 8);
+    const record: AttemptMesh = {
+      ...attempt.mesh,
+      ports,
+      deviceName: meshDeviceName({
+        slug,
+        workload: key.workload,
+        releaseId: release.id,
+        attempt: attempt.attempt,
+      }),
+      images:
+        attempt.mesh?.images ??
+        (await this.releaseCompanionImages(key, release)),
+    };
+    let a = await this.d.store.updateAttempt(attempt.id, {
+      error: `${MESH_KEY_PENDING}preparing`,
+      mesh: record,
+    });
+    const got = await this.ensureAttemptKey(key, release, a, mesh);
+    a = got.attempt;
+    if (!got.stored) {
+      const reason = got.pending ?? "unknown";
+      a = await this.d.store.updateAttempt(a.id, {
+        error: `${MESH_KEY_PENDING}${reason}`,
+      });
+      await this.meshEvent("warn", "node_mesh_key_pending", a, key, {
+        outcome: "pending",
+        reason,
+      });
+      return { kind: "pending", attempt: a };
+    }
+    try {
+      return {
+        kind: "ready",
+        attempt: a,
+        services: meshCompanionServices({
+          authKey: got.stored.key,
+          controlUrl: mesh.controlUrl,
+          deviceName: record.deviceName,
+          ports: record.ports,
+          images: record.images,
+        }),
+      };
+    } catch (error) {
+      return { kind: "failed", attempt: a, reason: errText(error) };
+    }
+  }
+
+  /**
+   * HR 5: the attempt's ONE usable key. A stored Secret is reused (a restart between store and create).
+   * A row key id with no Secret never reached a lease: it is expired first. Otherwise the policy is
+   * reconciled with this attempt's grant, one key is minted, its id is written to the row, and only then
+   * is the value stored create-once. Every failure is `pending`, never a retry inside the call.
+   */
+  private async ensureAttemptKey(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mesh: SequencerMeshDeps
+  ): Promise<{
+    readonly attempt: AttemptRow;
+    readonly stored?: StoredMeshKey;
+    readonly pending?: string;
+  }> {
+    const ref = {
+      nodeId: key.nodeId,
+      workload: key.workload,
+      releaseId: release.id,
+      attempt: attempt.attempt,
+    };
+    const secretName = meshSecretName(ref);
+    const now = this.d.clock.now();
+    let a = attempt;
+    const recordOf = (row: AttemptRow): AttemptMesh => {
+      if (!row.mesh) throw new Error("mesh attempt has no mesh record");
+      return row.mesh;
+    };
+    let stored: StoredMeshKey | undefined;
+    try {
+      stored = await mesh.keys.get(secretName);
+    } catch {
+      return { attempt: a, pending: "key_store_unavailable" };
+    }
+    if (stored) {
+      const rowKey = recordOf(a).headscaleKeyId;
+      if (rowKey !== stored.headscaleKeyId) {
+        a = await this.d.store.updateAttempt(a.id, {
+          mesh: { ...recordOf(a), headscaleKeyId: stored.headscaleKeyId },
+        });
+        // Not expected (the row is written first); the sweep also expires it.
+        if (rowKey) await mesh.plane.revokeAttempt(headscaleKeyId(rowKey), now);
+      }
+      return { attempt: a, stored };
+    }
+    const unstored = recordOf(a).headscaleKeyId;
+    if (unstored) {
+      const revoked = await mesh.plane.revokeAttempt(
+        headscaleKeyId(unstored),
+        now
+      );
+      if (revoked.outcome !== "revoked")
+        return {
+          attempt: a,
+          pending: `unstored_key_not_revoked:${revoked.reason}`,
+        };
+      const { headscaleKeyId: _expired, ...rest } = recordOf(a);
+      a = await this.d.store.updateAttempt(a.id, { mesh: rest });
+      await this.meshEvent("info", "node_mesh_key_revoked", a, key, {
+        outcome: "unstored",
+        headscaleKeyId: unstored,
+      });
+    }
+    const view = this.meshView(await this.meshRows());
+    const policy = await mesh.plane.reconcilePolicy(view.grants);
+    if (!policy.ready)
+      return { attempt: a, pending: `policy_${policy.outcome}` };
+    const minted = await mesh.plane.mintAttemptKey(ref, view.liveKeyIds, now);
+    if (minted.outcome !== "minted")
+      return { attempt: a, pending: `mint_${minted.reason}` };
+    a = await this.d.store.updateAttempt(a.id, {
+      mesh: { ...recordOf(a), headscaleKeyId: minted.headscaleKeyId },
+    });
+    let saved: StoredMeshKey;
+    try {
+      saved = await mesh.keys.createOnce(secretName, {
+        key: minted.key,
+        headscaleKeyId: minted.headscaleKeyId,
+      });
+    } catch {
+      // The row names the key and no Secret holds it: the next try expires it, then mints again.
+      return { attempt: a, pending: "key_store_unavailable" };
+    }
+    if (saved.headscaleKeyId !== minted.headscaleKeyId) {
+      a = await this.d.store.updateAttempt(a.id, {
+        mesh: { ...recordOf(a), headscaleKeyId: saved.headscaleKeyId },
+      });
+      await mesh.plane.revokeAttempt(minted.headscaleKeyId, now);
+    }
+    await this.meshEvent("info", "node_mesh_key_minted", a, key, {
+      outcome: "stored",
+      headscaleKeyId: saved.headscaleKeyId,
+      expiredOrphans: minted.expiredOrphans.length,
+    });
+    return { attempt: a, stored: saved };
+  }
+
+  /**
+   * MESH_PASS_UNDER_THE_LOCK: one pass of the env tailnet. Runs from `reconcileAll` (60 s, leader lock).
+   * Any failed Headscale call ends the pass: no further mesh write, and the device window resets.
+   */
+  async meshPass(): Promise<void> {
+    const mesh = this.d.mesh;
+    if (!mesh) return;
+    const startedAt = this.d.clock.now();
+    const rows = await this.meshRows();
+    const meshAttempts = rows.flatMap(({ key, attempts }) =>
+      attempts
+        .filter((a) => a.transport === "mesh" && a.mesh)
+        .map((attempt) => ({ key, attempt }))
+    );
+    const view = this.meshView(rows);
+    const down = async (stage: string, reason: string): Promise<void> => {
+      this.deviceWatch.clear();
+      await this.meshEvent(
+        "warn",
+        "node_mesh_coordinator_health",
+        undefined,
+        undefined,
+        { outcome: "failed", stage, reason }
+      );
+    };
+
+    // HR 4: fail closed. Deny-all, then the derivation, then a readback; nothing opens until it matches.
+    const policy = await mesh.plane.reconcilePolicy(view.grants);
+    if (policy.drift)
+      await this.meshEvent(
+        "warn",
+        "node_mesh_policy_drift",
+        undefined,
+        undefined,
+        { outcome: policy.outcome, wasAbsent: policy.wasAbsent }
+      );
+    if (!policy.ready) return down("policy", policy.reason ?? policy.outcome);
+    if (policy.outcome === "written")
+      await this.meshEvent("info", "node_mesh_policy", undefined, undefined, {
+        outcome: "written",
+        wasAbsent: policy.wasAbsent,
+        grants: view.grants.length,
+      });
+
+    // HR 12: Headscale holds no API key.
+    const admin = await mesh.plane.checkAdminSurface();
+    if (!admin.ok) {
+      if ("reason" in admin) return down("admin_surface", admin.reason);
+      await this.meshEvent(
+        "error",
+        "node_mesh_admin_surface",
+        undefined,
+        undefined,
+        { outcome: "api_keys_present", apiKeys: admin.apiKeys }
+      );
+    }
+
+    const listed = await mesh.plane.listDevices();
+    if (!listed.ok) return down("devices", listed.reason);
+
+    // HR 11: approve the env VM's published `substrate-gw` request, verified after the fact.
+    await this.approveGateway(mesh, listed.devices, startedAt);
+
+    // HR 6: a terminal attempt's key is expired, then its devices are deleted; read back. A retiring blue
+    // is live (it still serves) and is revoked only after it retires.
+    for (const { key, attempt } of meshAttempts) {
+      const m = attempt.mesh;
+      if (!m?.headscaleKeyId || m.revokedAt) continue;
+      if (!MESH_TERMINAL_PHASES.includes(attempt.phase)) continue;
+      const r = await mesh.plane.revokeAttempt(
+        headscaleKeyId(m.headscaleKeyId),
+        this.d.clock.now()
+      );
+      if (r.outcome !== "revoked") {
+        await this.meshEvent("warn", "node_mesh_revoke_failed", attempt, key, {
+          outcome: r.outcome,
+          reason: r.reason,
+          headscaleKeyId: m.headscaleKeyId,
+        });
+        if (r.outcome === "failed" && r.stage === "expire")
+          return down("revoke", r.reason);
+        continue;
+      }
+      const revoked = await this.d.store.updateAttempt(attempt.id, {
+        mesh: { ...m, revokedAt: new Date(this.d.clock.now()).toISOString() },
+      });
+      await this.meshEvent("info", "node_mesh_key_revoked", revoked, key, {
+        outcome: "revoked",
+        headscaleKeyId: m.headscaleKeyId,
+        devices: r.deletedDevices.length,
+        phase: attempt.phase,
+      });
+    }
+
+    // HR 5 cleanup bound: the Secret goes on the first pass AFTER the revoke was read back.
+    for (const { key, attempt } of meshAttempts) {
+      const m = attempt.mesh;
+      if (!m?.revokedAt || m.secretDeletedAt) continue;
+      if (Date.parse(m.revokedAt) >= startedAt) continue;
+      const name = meshSecretName({
+        nodeId: key.nodeId,
+        workload: key.workload,
+        releaseId: attempt.releaseId,
+        attempt: attempt.attempt,
+      });
+      try {
+        await mesh.keys.delete(name);
+      } catch (error) {
+        await this.meshEvent(
+          "warn",
+          "node_mesh_secret_delete_failed",
+          attempt,
+          key,
+          { outcome: "failed", reason: errText(error).slice(0, 200) }
+        );
+        continue;
+      }
+      const cleaned = await this.d.store.updateAttempt(attempt.id, {
+        mesh: {
+          ...m,
+          secretDeletedAt: new Date(this.d.clock.now()).toISOString(),
+        },
+      });
+      await this.meshEvent("info", "node_mesh_secret_deleted", cleaned, key, {
+        outcome: "deleted",
+      });
+    }
+
+    // HR 5: expire keys no live attempt stores (older than one pass) and delete their devices.
+    const sweep = await mesh.plane.sweep(view.liveKeyIds, this.d.clock.now());
+    if (
+      sweep.expiredKeys.length > 0 ||
+      sweep.deletedDevices.length > 0 ||
+      sweep.unkeyedNodeDevices.length > 0
+    )
+      await this.meshEvent("info", "node_mesh_sweep", undefined, undefined, {
+        outcome: sweep.ok ? "ok" : "failed",
+        expiredKeys: sweep.expiredKeys.length,
+        deletedDevices: sweep.deletedDevices.length,
+        unkeyedNodeDevices: sweep.unkeyedNodeDevices.length,
+      });
+    if (!sweep.ok) return down("sweep", sweep.reason ?? "other");
+
+    await this.checkDevices(listed.devices, meshAttempts, rows);
+    await this.meshEvent(
+      "info",
+      "node_mesh_coordinator_health",
+      undefined,
+      undefined,
+      {
+        outcome: "ok",
+        grants: view.grants.length,
+        liveKeys: view.liveKeyIds.size,
+      }
+    );
+  }
+
+  private async approveGateway(
+    mesh: SequencerMeshDeps,
+    devices: readonly MeshDevice[],
+    now: number
+  ): Promise<void> {
+    let request: Awaited<ReturnType<SubstrateRequestSourcePort["read"]>>;
+    try {
+      request = await mesh.substrateRequests.read();
+    } catch (error) {
+      await this.meshEvent(
+        "warn",
+        "node_mesh_substrate_request_unreadable",
+        undefined,
+        undefined,
+        { outcome: "unreadable", reason: errText(error).slice(0, 200) }
+      );
+      return;
+    }
+    if (!request) return;
+    const gateway = substrateGateway(devices);
+    // Already registered with this machine key: the publish is a few seconds behind; nothing to approve.
+    if (gateway && gateway.machineKey === request.machineKey) return;
+    const r = await mesh.plane.approveSubstrateGateway(request, now);
+    if (r.outcome === "approved")
+      await this.meshEvent(
+        "info",
+        "node_mesh_substrate_approved",
+        undefined,
+        undefined,
+        {
+          outcome: "approved",
+          headscaleDeviceId: r.headscaleDeviceId,
+          expiryDisabled: r.expiryDisabled,
+        }
+      );
+    else if (r.outcome === "mismatch")
+      await this.meshEvent(
+        "error",
+        "node_mesh_substrate_mismatch",
+        undefined,
+        undefined,
+        {
+          outcome: r.deleted ? "deleted" : "delete_failed",
+          headscaleDeviceId: r.headscaleDeviceId,
+          tagsExact: r.tagsExact,
+          machineKeyMatches: r.machineKeyMatches,
+          nodeKeyMatches: r.nodeKeyMatches,
+        }
+      );
+    else
+      await this.meshEvent(
+        "warn",
+        "node_mesh_substrate_refused",
+        undefined,
+        undefined,
+        { outcome: "refused", reason: r.reason }
+      );
+  }
+
+  /**
+   * HR 8 (CD7): only an `active` attempt (it passed proof; a booting attempt is governed by its proof
+   * gate). Every device that joined with its key counts. Absence counts only across consecutive
+   * successful reads with an online `substrate-gw` that is older than the count. At most
+   * `MAX_DEVICE_ROLLS_PER_ENV` device-driven rolls are in flight per env.
+   */
+  private async checkDevices(
+    devices: readonly MeshDevice[],
+    meshAttempts: readonly {
+      readonly key: WorkloadKey;
+      readonly attempt: AttemptRow;
+    }[],
+    rows: readonly MeshRow[]
+  ): Promise<void> {
+    const now = this.d.clock.now();
+    const live = meshAttempts.filter(
+      (x) => x.attempt.phase === "active" && x.attempt.mesh?.headscaleKeyId
+    );
+    for (const id of [...this.deviceWatch.keys()])
+      if (!live.some((x) => x.attempt.id === id)) this.deviceWatch.delete(id);
+    const gateway = substrateGateway(devices);
+    if (!gateway?.online) {
+      this.deviceWatch.clear();
+      await this.meshEvent(
+        "warn",
+        "node_mesh_gateway_offline",
+        undefined,
+        undefined,
+        { outcome: gateway ? "offline" : "absent" }
+      );
+      return;
+    }
+    const gatewayCreatedAt = gateway.createdAt
+      ? Date.parse(gateway.createdAt)
+      : undefined;
+    const rolls: {
+      key: WorkloadKey;
+      attempt: AttemptRow;
+      absentSince: number;
+    }[] = [];
+    for (const { key, attempt } of live) {
+      const before = this.deviceWatch.get(attempt.id);
+      const v = readAttemptDevices({
+        entry: before,
+        headscaleKeyId: attempt.mesh?.headscaleKeyId ?? "",
+        devices,
+        gatewayCreatedAt,
+        now,
+      });
+      this.deviceWatch.set(attempt.id, v.next);
+      if (v.next.absentSince !== undefined && before?.absentSince === undefined)
+        await this.meshEvent("warn", "node_mesh_device_absent", attempt, key, {
+          outcome: "absent",
+          devices: v.devices,
+        });
+      if (v.clone && this.throttle(`clone/${attempt.id}`))
+        await this.meshEvent("error", "node_mesh_device_clone", attempt, key, {
+          outcome: "clone",
+          online: v.online,
+        });
+      if (v.roll && v.next.absentSince !== undefined)
+        rolls.push({ key, attempt, absentSince: v.next.absentSince });
+    }
+    let budget =
+      MAX_DEVICE_ROLLS_PER_ENV -
+      deviceRollsInFlight(
+        rows.map((r) => r.attempts),
+        now
+      );
+    for (const r of rolls.sort((a, b) => a.absentSince - b.absentSince)) {
+      if (budget <= 0) {
+        await this.meshEvent(
+          "warn",
+          "node_mesh_device_roll_deferred",
+          r.attempt,
+          r.key,
+          { outcome: "cap", cap: MAX_DEVICE_ROLLS_PER_ENV }
+        );
+        continue;
+      }
+      if (await this.rollForDevice(r.key, r.attempt, now - r.absentSince))
+        budget--;
+    }
+  }
+
+  /** One device-driven roll: close the live lease (confirmed), mark it lost; `step` redeploys the release. */
+  private async rollForDevice(
+    key: WorkloadKey,
+    attempt: AttemptRow,
+    absentMs: number
+  ): Promise<boolean> {
+    const rolled = await this.exclusive(key, async () => {
+      const cur = (await this.d.store.attemptsFor(key)).find(
+        (a) => a.id === attempt.id
+      );
+      if (cur?.phase !== "active") return false;
+      const release = await this.d.store.getRelease(cur.releaseId);
+      if (!release) return false;
+      await this.meshEvent("error", "node_mesh_device_roll", cur, key, {
+        outcome: "rolling",
+        absentMs,
+        headscaleKeyId: cur.mesh?.headscaleKeyId,
+      });
+      if (!(await this.closeAndConfirm(cur))) {
+        await this.alert(key, release, cur, "close_unconfirmed", {
+          why: MESH_DEVICE_ABSENT,
+        });
+        return false;
+      }
+      await this.handleLost(key, release, cur, MESH_DEVICE_ABSENT);
+      this.deviceWatch.delete(cur.id);
+      return true;
+    });
+    return rolled ?? false;
+  }
+
+  /** True at most once per `ALERT_THROTTLE_MS` for one key. */
+  private throttle(k: string): boolean {
+    const now = this.d.clock.now();
+    const last = this.lastAlertAt.get(k);
+    if (last !== undefined && now - last < ALERT_THROTTLE_MS) return false;
+    this.lastAlertAt.set(k, now);
+    return true;
+  }
+
+  /** A `node_mesh_*` event through THE ONE EMIT HELPER (persisted on the attempt when there is one). */
+  private meshEvent(
+    level: "info" | "warn" | "error",
+    msg: string,
+    attempt: AttemptRow | undefined,
+    key: WorkloadKey | undefined,
+    fields: Record<string, unknown> & { readonly outcome: string }
+  ): Promise<void> {
+    return this.record(level, msg, attempt, {
+      component: "node-deploy-sequencer",
+      env: this.d.config.environment,
+      ...(key ? { nodeId: key.nodeId, workload: key.workload } : {}),
+      ...(attempt
+        ? {
+            releaseId: attempt.releaseId,
+            attempt: attempt.attempt,
+            dseq: attempt.externalName,
+          }
+        : {}),
+      step: msg.replace(/^node_/u, ""),
+      ...fields,
+    });
+  }
+
+  // -------------------------------------------------------------------------------------------
   // reconcile: detect a LOST lease and let `step` redeploy it
   // -------------------------------------------------------------------------------------------
 
@@ -2700,6 +3453,12 @@ export class NodeDeploySequencer {
 
 /** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
 const REFUSED_PREFIX = "create refused: ";
+
+/**
+ * KEY_STORED_BEFORE_PAY: a mesh attempt waiting for its key (`mesh_key_pending: <reason>`). Written only
+ * before the dispatch marker, so an attempt carrying it never reached a paid call.
+ */
+const MESH_KEY_PENDING = "mesh_key_pending: ";
 
 /** Max diagnostic text. Native decision evidence is bounded independently and comes first. */
 const ERROR_TEXT_MAX = 2000;

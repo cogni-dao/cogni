@@ -485,6 +485,20 @@ describe("pass 2: Cogni policy refuses before any paid create", () => {
       "invalid_name",
     ],
     [
+      "a workload name containing -mesh- (attempt-key Secret delete allow-list, task.5431)",
+      (d) => {
+        d.metadata.name = "x-mesh-y";
+      },
+      "invalid_name",
+    ],
+    [
+      "a dependency id containing -mesh- (it names a state password Secret)",
+      (d) => {
+        d.resources.db.id = "db-mesh-1";
+      },
+      "invalid_name",
+    ],
+    [
       "a data-bearing dependency with no id",
       (d) => {
         delete d.resources.db.id;

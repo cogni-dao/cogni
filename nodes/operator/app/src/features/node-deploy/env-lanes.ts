@@ -21,12 +21,17 @@
  *   - DEFAULT_IS_ONE_ENV: with no `NODE_DEPLOY_ENVS` the process serves exactly its DEPLOY_ENVIRONMENT
  *     with today's `NODE_DEPLOY_SECRETS_NAMESPACE` / `NODE_DEPLOY_SUBSTRATE_HOST`, byte for byte.
  *   - PER_ENV_FAULT_DOMAIN: a pass that throws in one env never stalls another env's pass.
+ *   - TRANSPORT_IS_A_LANE_PROPERTY (task.5431, hub node-service-delivery section 6):
+ *     `NODE_DEPLOY_SUBSTRATE_TRANSPORTS` (`env=mesh|egress,...`) sets each lane's substrate transport; an
+ *     unlisted env is `egress`. A `mesh` lane needs a valid operator domain root, because its control URL
+ *     is `https://mesh-<env>.<root>` (the env Headscale's `server_url`). Never a per-node setting.
  * Side-effects: none (the runner calls the sequencers it is handed)
  * Links: bootstrap/node-deploy-sequencer.ts, infra/k8s/base/node-deploy-sequencer/admission-policy.yaml,
  *   hub `node-service-delivery`
  * @public
  */
 
+import type { SubstrateTransport } from "@/ports";
 import { hostForEnv, isFlightEnv } from "@/shared/node-registry/deploy-hosts";
 
 /** The envs a node-deploy lane can exist in. */
@@ -47,6 +52,10 @@ export interface EnvLane {
   /** `vm_host_for_env` of this env's VM: where its shared substrate answers. */
   readonly substrateHost: string;
   readonly operatorDomain: string;
+  /** How this lane's node apps reach the substrate (`NODE_DEPLOY_SUBSTRATE_TRANSPORTS`). */
+  readonly substrateTransport: SubstrateTransport;
+  /** `https://mesh-<env>.<root>`; set only for a `mesh` lane. */
+  readonly meshControlUrl?: string | undefined;
 }
 
 export class EnvLaneConfigError extends Error {
@@ -57,7 +66,8 @@ export class EnvLaneConfigError extends Error {
       | "environment_duplicate"
       | "secrets_namespace_invalid"
       | "substrate_host_missing"
-      | "substrate_hosts_invalid",
+      | "substrate_hosts_invalid"
+      | "substrate_transports_invalid",
     message: string
   ) {
     super(message);
@@ -79,6 +89,8 @@ export interface EnvLaneInput {
   readonly substrateHost?: string | undefined;
   /** `NODE_DEPLOY_SUBSTRATE_HOSTS`: `env=host,env=host`; wins over the single-host var per env. */
   readonly substrateHosts?: string | undefined;
+  /** `NODE_DEPLOY_SUBSTRATE_TRANSPORTS`: `env=mesh|egress,...`; unlisted envs are `egress`. */
+  readonly substrateTransports?: string | undefined;
 }
 
 function isEnv(value: string): value is NodeDeployEnv {
@@ -106,6 +118,31 @@ export function parseSubstrateHosts(
   return out;
 }
 
+/** Parse `env=mesh|egress,...` (whitespace-tolerant); each env at most once. */
+export function parseSubstrateTransports(
+  raw: string | undefined
+): Map<string, SubstrateTransport> {
+  const out = new Map<string, SubstrateTransport>();
+  for (const part of (raw ?? "").split(",")) {
+    const entry = part.trim();
+    if (!entry) continue;
+    const eq = entry.indexOf("=");
+    const env = eq > 0 ? entry.slice(0, eq).trim() : "";
+    const transport = eq > 0 ? entry.slice(eq + 1).trim() : "";
+    if (
+      !isEnv(env) ||
+      (transport !== "mesh" && transport !== "egress") ||
+      out.has(env)
+    )
+      throw new EnvLaneConfigError(
+        "substrate_transports_invalid",
+        `NODE_DEPLOY_SUBSTRATE_TRANSPORTS entry "${entry}" must be <env>=mesh|egress with env in ${NODE_DEPLOY_ENVS.join("|")}, once each`
+      );
+    out.set(env, transport);
+  }
+  return out;
+}
+
 /** Resolve the per-env lanes the one process serves, or throw `EnvLaneConfigError` (boot refuses). */
 export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
   const root = input.operatorDomainRoot;
@@ -129,6 +166,21 @@ export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
     .map((e) => e.trim())
     .filter(Boolean);
   const hosts = parseSubstrateHosts(input.substrateHosts);
+  const transports = parseSubstrateTransports(input.substrateTransports);
+  const transportFor = (
+    env: string
+  ): Pick<EnvLane, "substrateTransport" | "meshControlUrl"> => {
+    if (transports.get(env) !== "mesh") return { substrateTransport: "egress" };
+    if (!validRoot || !root)
+      throw new EnvLaneConfigError(
+        "substrate_transports_invalid",
+        `${env}=mesh needs a valid NODE_DEPLOY_OPERATOR_DOMAIN_ROOT (control URL https://mesh-${env}.<root>)`
+      );
+    return {
+      substrateTransport: "mesh",
+      meshControlUrl: `https://mesh-${env}.${root}`,
+    };
+  };
   const hostFor = (env: string, own: boolean): string => {
     const host = hosts.get(env) ?? (own ? input.substrateHost : undefined);
     if (!host)
@@ -153,6 +205,7 @@ export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
         secretsNamespace: ns,
         substrateHost: hostFor(input.deployEnvironment, true),
         operatorDomain: issuerFor(input.deployEnvironment),
+        ...transportFor(input.deployEnvironment),
       },
     ];
   }
@@ -186,6 +239,7 @@ export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
       secretsNamespace,
       substrateHost: hostFor(env, own),
       operatorDomain: issuerFor(env),
+      ...transportFor(env),
     });
   }
   return lanes;
