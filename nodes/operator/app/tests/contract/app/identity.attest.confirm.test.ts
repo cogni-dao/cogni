@@ -7,7 +7,7 @@
  * Scope: Validates that signing requires an explicit confirmation of an
  *   already-authenticated GitHub account, and that switch/cancel never sign.
  * Invariants: CONFIRM_BEFORE_SIGN; the signed subject is the one the callback
- *   recorded, never an operator session; state is consumed on every terminal path.
+ *   recorded, never an operator session; terminal responses clear the browser cookie.
  * Side-effects: none (fully mocked)
  * Links: /api/auth/attest/confirm route, task.5024
  * @public
@@ -129,7 +129,7 @@ describe("/api/auth/attest/confirm contract tests", () => {
     expect(res.headers.get("location")).toBe(
       `${AUTHENTICATED.returnTo}#attestation=signed.jwt`
     );
-    // BROKER_STATE_IS_CONSUMED — one authorization cannot be confirmed twice.
+    // Terminal responses clear the browser cookie; nonce consumption is node-owned.
     expect(cookieStore.delete).toHaveBeenCalledWith(BROKER_STATE_COOKIE);
   });
 
@@ -148,8 +148,55 @@ describe("/api/auth/attest/confirm contract tests", () => {
   it("never signs when the action is missing entirely", async () => {
     await seed();
 
-    await POST(request());
+    const res = await POST(request());
 
+    expect(res.headers.get("location")).toContain("code=invalid_request");
+    expect(mockIssue).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "",
+    "unknown",
+    "confirm&action=confirm",
+    "confirm&action=cancel",
+  ])("rejects invalid URL-encoded actions %s", async (value) => {
+    await seed();
+    const res = await POST(
+      new NextRequest("https://cognidao.org/api/auth/attest/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `action=${value}`,
+      })
+    );
+    expect(res.headers.get("location")).toContain("code=invalid_request");
+    expect(mockIssue).not.toHaveBeenCalled();
+    expect(cookieStore.delete).toHaveBeenCalledWith(BROKER_STATE_COOKIE);
+  });
+
+  it("rejects a file action", async () => {
+    await seed();
+    const body = new FormData();
+    body.append("action", new File(["confirm"], "action.txt"));
+    const res = await POST(
+      new NextRequest("https://cognidao.org/api/auth/attest/confirm", {
+        method: "POST",
+        body,
+      })
+    );
+    expect(res.headers.get("location")).toContain("code=invalid_request");
+    expect(mockIssue).not.toHaveBeenCalled();
+  });
+
+  it("rejects unparsable forms", async () => {
+    await seed();
+    const res = await POST(
+      new NextRequest("https://cognidao.org/api/auth/attest/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "multipart/form-data" },
+        body: "bad",
+      })
+    );
+    expect(res.headers.get("location")).toContain("code=invalid_request");
     expect(mockIssue).not.toHaveBeenCalled();
   });
 

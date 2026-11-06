@@ -10,8 +10,8 @@
  *   the subject from anywhere else.
  * Invariants:
  *   - CONFIRM_BEFORE_SIGN: reachable only by an explicit POST from the confirm screen.
- *   - BROKER_STATE_IS_CONSUMED: the cookie is cleared on every terminal outcome, so one
- *     authorization cannot be confirmed twice.
+ *   - TERMINAL_COOKIE_CLEAR: terminal responses clear the browser cookie; the relying
+ *     node atomically consumes its nonce when binding.
  *   - SWITCH_RE_AUTHENTICATES: "use a different account" restarts the GitHub leg with a
  *     fresh state + PKCE pair rather than reusing the previous authentication.
  *   - SITS_WITH_NEXTAUTH: unauthenticated by design — its authority is the signed
@@ -60,19 +60,20 @@ export const runtime = "nodejs";
  * Broker observability. These are the tier-1 markers `/validate-candidate` queries;
  * without them the broker is invisible in Loki and the feature cannot be proven at a
  * SHA. Deliberately NEVER logged: the authorization code, the access token, the PKCE
- * verifier, and the broker cookie. `githubLogin` IS logged — proving WHICH account was
- * attested is the entire point of task.5024.
+ * verifier, and the broker cookie. Confirmation logs contain fixed categories and the
+ * signed request node identifier only.
  */
 function brokerLog(): ReturnType<typeof makeLogger> {
   return makeLogger({ nodeId: getNodeId(), service: "identity-broker" });
 }
 
-function failure(errorCode: string): NextResponse {
+function failure(errorCode: string, requestNodeId?: string): NextResponse {
   brokerLog().info(
     {
       event: EVENT_NAMES.IDENTITY_BROKER_REJECTED,
       leg: "confirm",
       errorCode,
+      ...(requestNodeId ? { requestNodeId } : {}),
     },
     "Identity broker confirmation rejected"
   );
@@ -96,8 +97,15 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const form = await request.formData().catch(() => null);
-  const action = form?.get("action");
+  const actions = form?.getAll("action") ?? [];
+  const action =
+    actions.length === 1 && typeof actions[0] === "string" ? actions[0] : null;
   const env = serverEnv();
+
+  if (action !== "confirm" && action !== "switch" && action !== "cancel") {
+    cookieStore.delete(BROKER_STATE_COOKIE);
+    return failure("invalid_request", brokerState.nodeId);
+  }
 
   if (action === "switch") {
     if (!isAttestableProvider(brokerState.provider)) {
@@ -149,7 +157,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   cookieStore.delete(BROKER_STATE_COOKIE);
 
   if (action !== "confirm") {
-    return failure("cancelled");
+    return failure("cancelled", brokerState.nodeId);
   }
 
   const parsed = IdentityAttestationRequestSchema.safeParse({
@@ -171,11 +179,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     brokerLog().info(
       {
         event: EVENT_NAMES.IDENTITY_BROKER_COMPLETE,
-        nodeId: brokerState.nodeId,
-        nodeSlug: brokerState.nodeSlug,
-        githubId: brokerState.github.id,
-        githubLogin: brokerState.github.login,
-        targetOrigin: brokerState.targetOrigin,
+        requestNodeId: brokerState.nodeId,
+        action: "confirm",
       },
       "Identity broker issued an attestation for a human-confirmed GitHub account"
     );
