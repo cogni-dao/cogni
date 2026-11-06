@@ -196,6 +196,8 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
 export interface NodeAppRuntimeDeps {
   readonly secrets: NodeRuntimeSecretsPort;
   readonly catalog: NodeCatalogPort;
+  /** Trusted public operator issuer host for this lane (`DOMAIN`, #3029). */
+  readonly operatorDomain: string;
   /** `vm_host_for_env` of the environment VM; absent omits the substrate env block. */
   readonly substrateHost?: string | undefined;
 }
@@ -205,7 +207,11 @@ export interface SequencerDeps {
   readonly payer: PayerPort;
   /** Undefined when no edge credentials are configured: http apps are then refused BEFORE paying. */
   readonly edge: EdgeRouter | undefined;
-  /** Invalid fresh DNS authority does not revoke paid-effect recovery ownership. */
+  /**
+   * Set when the lane's fleet binding (owner + workload zone) is missing or invalid. A fresh app then
+   * waits before any attempt or payment, and a proven green waits at cutover. It never revokes
+   * paid-effect recovery ownership (observe, adopt, close).
+   */
   readonly httpAdmissionRefusal?: "workload_zone_not_configured";
   readonly probe: ProbePort;
   readonly secrets: SecretsPort;
@@ -332,7 +338,18 @@ export class NodeDeploySequencer {
     await this.janitor(key);
     const all = await this.d.store.attemptsFor(key);
 
-    const inflight = all.find((a) => IN_FLIGHT_PHASES.includes(a.phase));
+    let inflight = all.find((a) => IN_FLIGHT_PHASES.includes(a.phase));
+    // Legacy planned creates may still be running in the actuator. Fence them before
+    // either supersession or normal recovery can observe and settle their receipt.
+    if (
+      inflight?.phase === "planned" &&
+      !inflight.externalName &&
+      !inflight.error
+    ) {
+      inflight = await this.d.store.updateAttempt(inflight.id, {
+        error: ambiguousMarker("network", this.d.clock.now()),
+      });
+    }
     const active = all.find((a) => a.phase === "active");
     if (desired.gameDayRequestedAt)
       await this.gameDayKill(key, release, active, inflight);
@@ -875,6 +892,18 @@ export class NodeDeploySequencer {
               }
             );
             a = await this.bindLease(key, release, a, obs.resource);
+          } else if (obs.found) {
+            // An effect exists under this key but names no resource yet: never re-create, never
+            // settle it as absent. observeUnavailable bounds the wait (orphan_suspect).
+            a = await this.observeUnavailable(
+              key,
+              release,
+              a,
+              "create",
+              "planned create unresolved",
+              new Error("existing effect has no resource")
+            );
+            recoveryPending = true;
           } else if (a.error?.startsWith("ambiguous")) {
             await this.failAttempt(
               key,
@@ -940,6 +969,8 @@ export class NodeDeploySequencer {
     release: ReleaseRow
   ): Promise<ResolvedRuntime> {
     const w = release.spec;
+    const refusal = this.d.httpAdmissionRefusal;
+    if (w.kind === "app" && refusal) throw new DependencyNotReady(refusal);
     const env: Record<string, string> = {};
     let requiredCountryCodes: readonly string[] = [];
     let nodeApp = false;
@@ -957,6 +988,10 @@ export class NodeDeploySequencer {
     if (w.kind === "state") {
       env.POSTGRES_PASSWORD = await this.d.secrets.ensureStatePassword(key);
     }
+    if (nodeApp && w.bindings.some((b) => b.env === "DOMAIN"))
+      throw new DependencyNotReady(
+        "DOMAIN is reserved for the operator issuer"
+      );
     const states = [...new Set(w.bindings.map((b) => b.workload))];
     for (const stateName of states) {
       const stateKey = { ...key, workload: stateName };
@@ -1075,6 +1110,7 @@ export class NodeDeploySequencer {
           nodeId: key.nodeId,
           sourceSha: release.sourceSha,
           publicHost,
+          operatorDomain: rt.operatorDomain,
           port: w.port,
           substrateHost: rt.substrateHost,
           databasePoolLimits: policy.databasePoolLimits,
@@ -1269,6 +1305,13 @@ export class NodeDeploySequencer {
     attempt: AttemptRow,
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
+    const refusal = this.d.httpAdmissionRefusal;
+    if (release.spec.kind === "app" && refusal) {
+      await this.emit(key, release, attempt, "dependency", "waiting", {
+        reason: refusal,
+      });
+      return attempt;
+    }
     const w = release.spec;
     if (release.admissionRefusal)
       return this.failAttempt(
@@ -1316,9 +1359,10 @@ export class NodeDeploySequencer {
         providers: allowProviders,
         reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
       });
-    // Durable before native IO: runner loss cannot make a paid call look never-paid.
+    // Durable before native IO: runner loss cannot make a paid call look never-paid. The actuator can
+    // outlive this sequencer process, so the marker opens the same in-flight grace as a transport failure.
     attempt = await this.d.store.updateAttempt(attempt.id, {
-      error: `ambiguous: dispatch@${this.d.clock.now()}`,
+      error: ambiguousMarker("network", this.d.clock.now()),
     });
     try {
       const resource = await this.d.payer.create({
@@ -1723,13 +1767,22 @@ export class NodeDeploySequencer {
     if (w.kind === "app" && host) {
       const edge = this.d.edge;
       const ingress = ingressHostOf(attempt.endpoints, host);
-      if (!edge || !ingress) {
+      const refusal = this.d.httpAdmissionRefusal;
+      if (!edge || refusal) {
+        await this.emit(key, release, attempt, "dependency", "waiting", {
+          reason: refusal ?? "edge_not_configured",
+        });
+        return;
+      }
+      if (!ingress) {
         await this.failAttempt(key, release, attempt, "edge_not_configured");
         return;
       }
       let touched = false;
+      let qualified = false;
       try {
         await this.qualify(release, attempt, "readback");
+        qualified = true;
         const rec = await edge.point(host, ingress);
         touched = true;
         await this.emit(key, release, attempt, "edge_moved", "ok", {
@@ -1754,13 +1807,15 @@ export class NodeDeploySequencer {
           firstAt,
         });
       } catch (error) {
-        if (!touched && error instanceof QualificationFailure)
+        // A readback failure keeps only its bounded stage/code; edge and public failures keep theirs.
+        const readback = qualified ? undefined : asQualificationFailure(error);
+        if (readback)
           await this.qualificationDiagnostic(
             key,
             release,
             attempt,
             "readback",
-            error
+            readback
           );
         // Restore the edge to blue when we moved it (a re-point, NOT a withdrawal), then close green.
         const blueIngress = blue
@@ -1784,7 +1839,7 @@ export class NodeDeploySequencer {
           key,
           release,
           attempt,
-          `cutover_failed: ${errText(error)}`
+          `cutover_failed: ${readback ? readback.message : errText(error)}`
         );
         return;
       }
@@ -1812,6 +1867,19 @@ export class NodeDeploySequencer {
 
   /** Persist before proven; read the current subject again before any edge mutation. */
   private async qualify(
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback"
+  ): Promise<AttemptRow> {
+    try {
+      return await this.qualifyBounded(release, attempt, mode);
+    } catch (error) {
+      // BOUNDED_DIAGNOSTIC: schema, jose, store and dependency errors leave only a stage and code.
+      throw asQualificationFailure(error);
+    }
+  }
+
+  private async qualifyBounded(
     release: ReleaseRow,
     attempt: AttemptRow,
     mode: "qualify" | "readback"
@@ -1954,6 +2022,12 @@ export class NodeDeploySequencer {
         status: result.status,
       });
     }
+    // A late result grants no authority: re-check the deadline right before the durable write.
+    if (expired() || this.d.clock.now() > deadline)
+      throw new QualificationFailure("deadline", "expired", {
+        ...sent,
+        status: result.status,
+      });
     const step = {
       step: mode === "qualify" ? "qualification" : "qualification_readback",
       outcome: "ok",

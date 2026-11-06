@@ -98,7 +98,7 @@ describe("actual sequencer lane composition without new DNS authority", () => {
       a.cogniKey,
       a.releaseId,
     ]);
-    const dnsRecordsFor = vi.fn(() => dns);
+    const dnsRecordsFor = vi.fn(async () => dns);
     const nodeDeploySlugs = vi.fn(async () => ["operator"]);
     const composed = await composeNodeDeployLanes({
       ...config,
@@ -158,9 +158,21 @@ describe("actual sequencer lane composition without new DNS authority", () => {
         externalName: state.dseq,
       })
     );
+    // A fresh app waits before any attempt row or payment exists (NO_HALF_ENV), naming the reason.
     expect(
-      store.attempts.filter((a) => a.releaseId === fresh.release.id)[0]?.error
-    ).toBe("workload_zone_not_configured");
+      store.attempts.filter((a) => a.releaseId === fresh.release.id)
+    ).toEqual([]);
+    expect(
+      log.lines.some(
+        (l) =>
+          l.fields.workload === "fresh" &&
+          l.fields.step === "dependency" &&
+          l.fields.outcome === "waiting" &&
+          String(l.fields.reason ?? l.fields.why ?? "").includes(
+            "workload_zone_not_configured"
+          )
+      )
+    ).toBe(true);
     // A retained state loss still reaches its owner and must never trigger replacement.
     payer.byDseq(state.dseq).state = "closed";
     await lanes.reconcileAll();

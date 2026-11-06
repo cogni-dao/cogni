@@ -66,6 +66,8 @@ export interface NodeAppEnvInput {
   readonly sourceSha: string;
   /** Public host of the app (no scheme). */
   readonly publicHost: string;
+  /** Trusted public operator issuer host for this workload lane. */
+  readonly operatorDomain: string;
   /** The container port. */
   readonly port: number;
   /**
@@ -169,6 +171,7 @@ const LOKI_FIELDS = {
   LOKI_PUSH_SOURCE: () => "lease",
 };
 const APP_IDENTITY_FIELDS = {
+  DOMAIN: (i: NodeAppEnvInput) => i.operatorDomain,
   COGNI_NODE_ID: (i: NodeAppEnvInput) => i.nodeId,
   NODE_NAME: (i: NodeAppEnvInput) => i.slug,
   COGNI_REPO_PATH: () => "/app",
@@ -255,6 +258,9 @@ export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
     Object.assign(e, fieldValues(POOL_FIELDS, input.databasePoolLimits));
   if (input.lokiPush)
     Object.assign(e, fieldValues(LOKI_FIELDS, input.lokiPush));
+  // The operator issuer (sign-in origin binding, #3029) is platform identity: it wins over every key above.
+  if (!input.operatorDomain)
+    throw new Error("operator issuer domain is required");
   Object.assign(e, fieldValues(APP_IDENTITY_FIELDS, input));
   return e;
 }

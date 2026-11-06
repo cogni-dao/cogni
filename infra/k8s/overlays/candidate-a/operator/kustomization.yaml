@@ -257,6 +257,8 @@ patches:
                 env:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
+                  - name: NODE_DEPLOY_OPERATOR_DOMAIN_ROOT
+                    value: cognidao.org
                   - name: NODE_DEPLOY_SECRETS_NAMESPACE
                     value: cogni-node-deploy-candidate-a
                   - name: AKASH_CHAIN_OWNER
@@ -283,6 +285,12 @@ patches:
                         name: node-app-config
                         key: NODE_DEPLOY_WORKLOAD_ZONE
                         optional: true
+                  # story.5137 — this TEST operator's node hosts live in the isolated test zone, not in
+                  # cognidao.org (hub test-fleet-parity-boundary; dns-ops skill). Its Cloudflare token
+                  # (OpenBao cogni/candidate-a/operator/CLOUDFLARE_API_TOKEN) is scoped to this zone only,
+                  # so the sequencer resolves the zone id BY NAME with that token. The operator endpoint
+                  # (test.cognidao.org) and the substrate host above stay in cognidao.org. Production sets
+                  # cognidao.org explicitly; preview has no local binding.
   - target:
       kind: ConfigMap
       name: node-app-config
@@ -358,11 +366,11 @@ patches:
         value: "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator-candidate-a"
       # Submodule pin-PR target: candidate-a uses the throwaway org mirror.
       - op: add
-        path: /data/NODE_SUBMODULE_PARENT_OWNER
-        value: "cogni-test-org"
-      - op: add
         path: /data/NODE_DEPLOY_WORKLOAD_ZONE
         value: "cogni-testing.org"
+      - op: add
+        path: /data/NODE_SUBMODULE_PARENT_OWNER
+        value: "cogni-test-org"
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_REPO
         value: "cogni-monorepo"

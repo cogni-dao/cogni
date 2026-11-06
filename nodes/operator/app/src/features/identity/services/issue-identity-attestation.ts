@@ -18,11 +18,7 @@ import type {
   IdentityAttestationRepositoryPort,
   IdentityAttestationSignerPort,
 } from "@/ports";
-import {
-  hostForEnv,
-  isFlightEnv,
-  rootDomain,
-} from "@/shared/node-registry/deploy-hosts";
+import { hostForEnv, isFlightEnv } from "@/shared/node-registry/deploy-hosts";
 
 export type AttestationPreconditionCode =
   | "invalid_target_origin"
@@ -52,7 +48,6 @@ export interface IdentityAttestationService {
    * after an authentication the caller can never use.
    */
   resolveNode(params: {
-    domain: string;
     request: IdentityAttestationRequest;
   }): Promise<ResolvedAttestationNode>;
   issue(params: {
@@ -63,7 +58,6 @@ export interface IdentityAttestationService {
      */
     github: IdentityAttestationGithubIdentity;
     issuer: string;
-    domain: string;
     request: IdentityAttestationRequest;
   }): Promise<IssuedAttestation>;
 }
@@ -73,9 +67,12 @@ export function createIdentityAttestationService(deps: {
   signer: IdentityAttestationSignerPort;
   clock: Clock;
   createJti: () => string;
+  fleetZoneBindings: readonly {
+    readonly fleetOwner: string;
+    readonly zoneName: string;
+  }[];
 }): IdentityAttestationService {
   async function resolveNode(params: {
-    domain: string;
     request: IdentityAttestationRequest;
   }): Promise<ResolvedAttestationNode> {
     const targetNode = await deps.repository.findNode(params.request.nodeId);
@@ -83,7 +80,14 @@ export function createIdentityAttestationService(deps: {
       throw new AttestationPreconditionError("unknown_node");
     }
 
-    const deployRootDomain = rootDomain(params.domain);
+    const matches = deps.fleetZoneBindings.filter(
+      (binding) => binding.fleetOwner === targetNode.repoOwner
+    );
+    if (matches.length !== 1)
+      throw new AttestationPreconditionError("invalid_target_origin");
+    const deployRootDomain = matches[0]?.zoneName;
+    if (!deployRootDomain)
+      throw new AttestationPreconditionError("invalid_target_origin");
     const registeredOrigins = targetNode.deployEnvs
       .filter(isFlightEnv)
       .map(
@@ -106,7 +110,6 @@ export function createIdentityAttestationService(deps: {
     resolveNode,
     async issue(params) {
       const targetNode = await resolveNode({
-        domain: params.domain,
         request: params.request,
       });
 

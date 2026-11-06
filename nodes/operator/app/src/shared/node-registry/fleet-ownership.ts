@@ -70,6 +70,27 @@ export function resolveWorkloadZoneBinding(input: {
   });
 }
 
+/** Resolve read-only identity bindings; absent local zone disables that binding. */
+export function resolveRegisteredFleetZones(input: {
+  registryOwner?: string | undefined;
+  registryZone?: string | undefined;
+  localOwner?: string | undefined;
+  localZone?: string | undefined;
+}): readonly WorkloadZoneBinding[] {
+  const registry = resolveWorkloadZoneBinding({
+    fleetOwner: input.registryOwner,
+    zoneName: input.registryZone,
+  });
+  if (input.localZone === undefined) return [registry];
+  const local = resolveWorkloadZoneBinding({
+    fleetOwner: input.localOwner,
+    zoneName: input.localZone,
+  });
+  if (local.fleetOwner !== registry.fleetOwner) return [registry, local];
+  if (local.zoneName !== registry.zoneName) throw new WorkloadZoneConfigError();
+  return [registry];
+}
+
 /** The GitHub org (lowercased) that owns the row's `source_repo`; undefined for an in-repo or bad row. */
 function sourceRepoOwner(row: unknown): string | undefined {
   const url =

@@ -1192,7 +1192,7 @@ describe("crash safety", () => {
     };
     await deployApp(h, SHA_1);
     expect(rowsAtCreate).toBe(1);
-    expect(dispatchAtCreate).toBe(`ambiguous: dispatch@${h.clock.now()}`);
+    expect(dispatchAtCreate).toBe(`ambiguous: network@${h.clock.now()}`);
   });
 
   it("a lost create response is resolved through observe(cogniKey), not re-created", async () => {

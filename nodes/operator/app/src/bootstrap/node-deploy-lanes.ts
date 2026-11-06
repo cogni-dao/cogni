@@ -5,7 +5,8 @@
  * Module: `@bootstrap/node-deploy-lanes`
  * Purpose: Compose the existing recovery lanes even when fresh workload DNS authority is unavailable.
  * Scope: Dependency wiring; native clients and process lifecycle remain in node-deploy-sequencer.
- * Invariants: One binding for all lanes; invalid config grants no fresh HTTP or DNS effects.
+ * Invariants: The ONE lane composition. One binding for all lanes; invalid config grants no fresh HTTP or
+ *   DNS effects (`httpAdmissionRefusal`), while paid-effect recovery keeps running.
  * Side-effects: Calls the supplied catalog reader and DNS factory only for a valid binding.
  * Links: node-deploy-sequencer.ts, hub effects-survive-runner-loss
  * @internal
@@ -28,9 +29,10 @@ export async function composeNodeDeployLanes(input: {
   readonly fleetOwner: string | undefined;
   readonly zoneName: string | undefined;
   readonly lanes: readonly EnvLane[];
+  /** The edge DNS client for a valid binding; undefined (or a failed zone lookup) leaves the edge unset. */
   readonly dnsRecordsFor: (
     binding: WorkloadZoneBinding
-  ) => DnsRecordsPort | undefined;
+  ) => Promise<DnsRecordsPort | undefined>;
   readonly nodeDeploySlugs: (
     environment: string,
     fleetOwner: string
@@ -49,7 +51,9 @@ export async function composeNodeDeployLanes(input: {
     authority = { ok: false, reason: error.code };
   }
   const resolved = authority;
-  const dns = resolved.ok ? input.dnsRecordsFor(resolved.binding) : undefined;
+  const dns = resolved.ok
+    ? await input.dnsRecordsFor(resolved.binding)
+    : undefined;
   const lanes = await Promise.all(
     input.lanes.map(async (lane) => {
       const deps = input.depsForLane(lane);

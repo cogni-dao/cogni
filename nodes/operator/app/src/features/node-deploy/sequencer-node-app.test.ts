@@ -18,7 +18,7 @@ import {
 } from "@cogni/repo-spec";
 import { buildTestRepoSpec } from "@cogni/repo-spec/testing";
 import { decodeJwt } from "jose";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import { DeployWorkloadsReadSchema } from "@/contracts/deploy.workloads.v1.contract";
 import type {
@@ -182,18 +182,29 @@ function harness(
   const catalog = new FakeCatalog();
   const images = new FakeImages();
   const log = new MemoryLog();
-  const newSequencer = (readStore = store) =>
+  const runtime = {
+    secrets: runtimeSecrets,
+    catalog,
+    substrateHost: SUBSTRATE,
+    operatorDomain: "operator.example",
+  };
+  const edge = new EdgeRouter(
+    dns,
+    workloadZone,
+    edgeHostRegexFor(slugs, workloadZone)
+  );
+  // `invalid` = a restart whose fleet binding is missing or malformed: no edge, no fresh app create.
+  const newSequencer = (readStore = store, invalid = false) =>
     new NodeDeploySequencer({
       store: readStore,
       payer,
-      edge: new EdgeRouter(
-        dns,
-        workloadZone,
-        edgeHostRegexFor(slugs, workloadZone)
-      ),
+      edge: invalid ? undefined : edge,
       probe,
       secrets,
-      runtime: { secrets: runtimeSecrets, catalog, substrateHost: SUBSTRATE },
+      runtime,
+      ...(invalid
+        ? { httpAdmissionRefusal: "workload_zone_not_configured" as const }
+        : {}),
       images,
       chain: new FakeChain(payer),
       clock,
@@ -207,7 +218,10 @@ function harness(
         ...cfg,
       } as SequencerConfig,
     });
-  const seq = newSequencer();
+  let seq = newSequencer();
+  const restart = (invalid: boolean) => {
+    seq = newSequencer(store, invalid);
+  };
   const key = (nodeId: string, workload: string): WorkloadKey => ({
     nodeId,
     env: ENV,
@@ -217,16 +231,20 @@ function harness(
     store,
     payer,
     runtimeSecrets,
+    runtime,
+    events,
     catalog,
     images,
     clock,
     log,
-    seq,
+    get seq() {
+      return seq;
+    },
     newSequencer,
+    restart,
     key,
     probe,
     dns,
-    events,
   };
 }
 
@@ -528,6 +546,7 @@ describe("node app runtime env (task.5405)", () => {
       nodeId: POLY_ID,
       sourceSha: SHA_1,
       publicHost: POLY_HOST,
+      operatorDomain: "operator.example",
       port: 8080,
       substrateHost: SUBSTRATE,
       secrets: PROFILE_BUCKET,
@@ -552,6 +571,320 @@ describe("node app runtime env (task.5405)", () => {
       slug: "poly",
     });
     expect(h.runtimeSecrets.reads.at(-1)?.keys).not.toContain("DATABASE_URL");
+  });
+
+  it("adopts an ambiguous paid effect even when the issuer becomes invalid", async () => {
+    const h = harness();
+    await stateUp(h, POLY_ID);
+    h.payer.loseResponseOn = (n) => n === 2;
+    h.payer.observeThrows = true;
+    await releaseApp(h, POLY_ID);
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    h.runtime.operatorDomain = "";
+    h.payer.observeThrows = false;
+    await h.seq.step(h.key(POLY_ID, "canary"));
+    const attempt = (await h.store.attemptsFor(h.key(POLY_ID, "canary")))[0];
+    expect(attempt?.externalName).toBe("1002");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    expect(appCreates(h)).toHaveLength(1);
+    expect(
+      h.events.filter((event) => event.startsWith("payer.delete:"))
+    ).toEqual([]);
+  });
+
+  it.each([
+    "ambiguous",
+    "unmarked",
+  ])("recovers a %s paid create across invalid bootstrap and cutover", async (marker) => {
+    const h = harness();
+    await stateUp(h, POLY_ID);
+    h.payer.loseResponseOn = (n) => n === 2;
+    h.payer.observeThrows = true;
+    await releaseApp(h, POLY_ID);
+    const key = h.key(POLY_ID, "canary");
+    const attempt = (await h.store.attemptsFor(key))[0];
+    if (!attempt) throw new Error("missing attempt");
+    if (marker === "unmarked")
+      await h.store.updateAttempt(attempt.id, { error: null });
+    h.restart(true);
+    h.payer.observeThrows = false;
+    await h.seq.step(key);
+    if (marker === "unmarked") {
+      await h.clock.sleep(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs + 1);
+      await h.seq.step(key);
+    }
+    const recovered = (await h.store.attemptsFor(key))[0];
+    expect(recovered?.externalName).toBe("1002");
+    expect(recovered?.phase).toBe("proven");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    expect(appCreates(h)).toHaveLength(1);
+    expect(h.events.filter((e) => e.startsWith("payer.delete:"))).toEqual([]);
+    h.restart(false);
+    await h.seq.step(key);
+    expect((await h.store.attemptsFor(key))[0]?.phase).toBe("active");
+    expect(appCreates(h)).toHaveLength(1);
+  });
+
+  it.each([
+    false,
+    true,
+  ])("fences a paused create across restart (legacy=%s)", async (legacy) => {
+    const h = harness({ inflightGraceMs: 1000 });
+    await stateUp(h, POLY_ID);
+    let releaseDispatch!: () => void;
+    let cursorWritten!: () => void;
+    const cursor = new Promise<void>((resolve) => {
+      cursorWritten = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const create = h.payer.create.bind(h.payer);
+    let dispatches = 0;
+    let settled = false;
+    h.payer.loseResponseOn = (n) => n === 2;
+    const observe = vi
+      .spyOn(h.payer, "observe")
+      .mockImplementation(async () => {
+        settled = true;
+        throw new Error("lost runner cannot observe");
+      });
+    vi.spyOn(h.payer, "create").mockImplementation(async (request) => {
+      if (request.spec.name !== "canary") return create(request);
+      dispatches++;
+      cursorWritten(); // actuator has committed its preparing receipt and allocation cursor
+      await gate;
+      return create(request);
+    });
+    const running = releaseApp(h, POLY_ID);
+    await cursor;
+    const key = h.key(POLY_ID, "canary");
+    const attempt = (await h.store.attemptsFor(key))[0];
+    if (!attempt) throw new Error("missing attempt");
+    if (legacy) await h.store.updateAttempt(attempt.id, { error: null });
+    h.restart(true);
+    await h.seq.step(key);
+    const fence = (await h.store.attemptsFor(key))[0]?.error;
+    expect(fence).toMatch(/^ambiguous: network@\d+$/);
+    h.restart(true);
+    await h.seq.step(key);
+    expect((await h.store.attemptsFor(key))[0]?.error).toBe(fence);
+    expect(observe).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+    expect(dispatches).toBe(1);
+    releaseDispatch();
+    await running;
+    observe.mockRestore();
+    await h.clock.sleep(1001);
+    await h.seq.step(key);
+    expect((await h.store.attemptsFor(key))[0]?.externalName).toBe("1002");
+    expect((await h.store.attemptsFor(key))[0]?.phase).toBe("proven");
+    expect(appCreates(h)).toHaveLength(1);
+    expect(h.events.filter((e) => e.startsWith("payer.delete:"))).toEqual([]);
+    h.restart(false);
+    await h.seq.step(key);
+    expect((await h.store.attemptsFor(key))[0]?.phase).toBe("active");
+    expect(dispatches).toBe(1);
+  });
+
+  it.each([
+    false,
+    true,
+  ])("fences a superseded paused create across restarts (legacy=%s)", async (legacy) => {
+    const h = harness({ inflightGraceMs: 1000 });
+    await stateUp(h, POLY_ID);
+    let releaseDispatch!: () => void;
+    let cursorWritten!: () => void;
+    let nativeFinished!: () => void;
+    const finished = new Promise<void>((resolve) => {
+      nativeFinished = resolve;
+    });
+    const cursor = new Promise<void>((resolve) => {
+      cursorWritten = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const create = h.payer.create.bind(h.payer);
+    let dispatches = 0;
+    h.payer.loseResponseOn = (n) => n === 2;
+    const observe = vi.spyOn(h.payer, "observe");
+    vi.spyOn(h.payer, "create").mockImplementation(async (request) => {
+      if (request.spec.name !== "canary") return create(request);
+      dispatches++;
+      cursorWritten();
+      if (dispatches === 1) {
+        await gate;
+        try {
+          await create(request);
+        } catch {
+          /* lost sequencer response */
+        }
+        nativeFinished();
+        return new Promise<never>(() => {});
+      }
+      return create(request);
+    });
+    void releaseApp(h, POLY_ID);
+    await cursor;
+    const key = h.key(POLY_ID, "canary");
+    const attempt = (await h.store.attemptsFor(key))[0];
+    if (!attempt) throw new Error("missing attempt");
+    if (legacy) await h.store.updateAttempt(attempt.id, { error: null });
+    const oldRelease = await h.store.getRelease(attempt.releaseId);
+    if (!oldRelease) throw new Error("missing release");
+    await h.store.recordRelease({
+      nodeId: POLY_ID,
+      env: ENV,
+      workload: "canary",
+      sourceSha: "9".repeat(40),
+      spec: oldRelease.spec,
+      createdBy: "test",
+    });
+    h.restart(true);
+    await h.seq.step(key);
+    const fence = (await h.store.attemptsFor(key))[0]?.error;
+    expect(fence).toMatch(/^ambiguous: network@\d+$/);
+    if (!legacy) expect(fence).toBe(attempt.error);
+    await h.clock.sleep(200);
+    h.restart(true);
+    await h.seq.step(key);
+    const fenced = (await h.store.attemptsFor(key))[0];
+    expect(fenced?.error).toBe(fence);
+    expect(fenced?.phase).toBe("planned");
+    expect(fenced?.cogniKey).toBe(attempt.cogniKey);
+    expect(observe).not.toHaveBeenCalled();
+    expect(h.events.filter((e) => e.startsWith("payer.delete:"))).toEqual([]);
+    expect(dispatches).toBe(1);
+    releaseDispatch();
+    await finished;
+    await h.clock.sleep(801);
+    await h.seq.step(key);
+    const closed = (await h.store.attemptsFor(key)).find(
+      (a) => a.id === attempt.id
+    );
+    expect(closed?.cogniKey).toBe(attempt.cogniKey);
+    expect(closed?.externalName).toBe("1002");
+    expect(closed?.phase).toBe("failed");
+    expect(h.payer.byDseq("1002").state).toBe("closed");
+    expect(h.log.steps()).toContain("orphan_lease:adopted_to_close");
+    expect(dispatches).toBe(1);
+    h.restart(false);
+    await h.seq.step(key);
+    expect(dispatches).toBe(2);
+    expect(h.payer.byDseq("1002").state).toBe("closed");
+  });
+
+  it.each([
+    "throws",
+    "missing resource",
+  ])("bounds resumed observation when it %s", async (failure) => {
+    const h = harness({ observeUnavailableMs: 1000 });
+    await stateUp(h, POLY_ID);
+    h.payer.loseResponseOn = (n) => n === 2;
+    h.payer.observeThrows = true;
+    await releaseApp(h, POLY_ID);
+    const key = h.key(POLY_ID, "canary");
+    const attempt = (await h.store.attemptsFor(key))[0];
+    if (!attempt) throw new Error("missing attempt");
+    await h.store.updateAttempt(attempt.id, {
+      error: null,
+      unhealthySince: null,
+    });
+    h.restart(true);
+    if (failure === "missing resource")
+      vi.spyOn(h.payer, "observe").mockResolvedValue({ found: true });
+    await h.seq.step(key);
+    expect((await h.store.attemptsFor(key))[0]?.phase).toBe("planned");
+    await h.clock.sleep(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs + 1);
+    await h.seq.step(key);
+    await h.clock.sleep(1000);
+    await h.seq.step(key);
+    const failed = (await h.store.attemptsFor(key))[0];
+    expect(failed?.phase).toBe("failed");
+    expect(failed?.error).toContain("orphan_suspect:");
+    expect(h.log.alerts()).toContain("orphan_suspect");
+    expect(
+      h.log.lines.find((line) => line.fields.outcome === "orphan_suspect")
+        ?.fields.cogniKey
+    ).toBe(attempt.cogniKey);
+    expect(appCreates(h)).toHaveLength(1);
+    expect(
+      h.events.filter((event) => event.startsWith("payer.delete:"))
+    ).toEqual([]);
+  });
+
+  it("does not create a fresh app with an invalid fleet binding", async () => {
+    const h = harness();
+    await stateUp(h, POLY_ID);
+    h.restart(true);
+    await releaseApp(h, POLY_ID);
+    expect(appCreates(h)).toHaveLength(0);
+    expect(await h.store.attemptsFor(h.key(POLY_ID, "canary"))).toEqual([]);
+    expect(h.log.steps()).toContain("dependency:waiting");
+  });
+
+  it("does not create a fresh app when issuer configuration is invalid", async () => {
+    const h = harness();
+    h.runtime.operatorDomain = "";
+    await h.store.recordRelease({
+      nodeId: POLY_ID,
+      env: ENV,
+      workload: "canary",
+      sourceSha: SHA_1,
+      spec: canaryApp({
+        secretKeys: DECLARED,
+        bindings: [],
+        expose: { http: { host: POLY_HOST } },
+      }),
+      createdBy: "test",
+    });
+    await h.seq.step(h.key(POLY_ID, "canary"));
+    expect(appCreates(h)).toHaveLength(0);
+  });
+
+  it("protects the issuer in the final paid payload from declared env and bucket values", async () => {
+    const h = harness();
+    h.runtimeSecrets.bucket.DOMAIN = "bucket-attacker.example";
+    await h.store.recordRelease({
+      nodeId: POLY_ID,
+      env: ENV,
+      workload: "canary",
+      sourceSha: SHA_1,
+      spec: canaryApp({
+        secretKeys: [...DECLARED, "DOMAIN"],
+        env: { DOMAIN: "declared-attacker.example" },
+        bindings: [],
+        expose: { http: { host: POLY_HOST } },
+      }),
+      createdBy: "test",
+    });
+    await h.seq.step(h.key(POLY_ID, "canary"));
+    expect(h.runtimeSecrets.reads.at(-1)?.keys).toContain("DOMAIN");
+    expect(appCreates(h)[0]?.spec.services[0]?.env?.DOMAIN).toBe(
+      "operator.example"
+    );
+  });
+
+  it("refuses a state binding targeting DOMAIN before paying", async () => {
+    const h = harness();
+    await h.store.recordRelease({
+      nodeId: POLY_ID,
+      env: ENV,
+      workload: "canary",
+      sourceSha: SHA_1,
+      spec: canaryApp({
+        secretKeys: DECLARED,
+        bindings: [{ env: "DOMAIN", workload: "canary-db" }],
+        expose: { http: { host: POLY_HOST } },
+      }),
+      createdBy: "test",
+    });
+    expect(await h.seq.step(h.key(POLY_ID, "canary"))).toBe(
+      "waiting_dependency"
+    );
+    expect(appCreates(h)).toHaveLength(0);
+    expect(JSON.stringify(h.log.lines)).toContain("DOMAIN is reserved");
   });
 
   it("a fleet-inherited key present in the bucket but not declared is NOT injected; a declared secret_ref is", async () => {
@@ -1268,6 +1601,8 @@ describe("private release companions", () => {
     ["qualify", 0, "transport", "DEPTH_ZERO_SELF_SIGNED_CERT"],
     ["readback", 503, "http", "status"],
     ["readback", 200, "validate", "evidence_json"],
+    // A plain Error thrown during readback (store, jose, schema, dependency): bounded, never its text.
+    ["readback", -1, "internal", "unexpected"],
   ] as const)("a %s answer %s fails green with one bounded diagnostic and keeps blue (bug.5568)", async (failMode, status, stage, code) => {
     const h = harness({ environment: "preview" });
     installBundle(h);
@@ -1290,6 +1625,8 @@ describe("private release companions", () => {
       const ok = await responder?.(input);
       if (!ok) throw new Error("missing probe");
       if (input.mode !== failMode) return ok;
+      if (status === -1)
+        throw new Error(`raw secret-body Bearer ${input.token}`);
       if (status === 0)
         return {
           status,
@@ -1326,16 +1663,22 @@ describe("private release companions", () => {
       mode: failMode,
       stage,
       code,
-      qualificationMs: 7,
       attemptId: green?.id,
       allocation: green?.externalName,
       ingress,
       host: ingress,
-      ...(status ? { httpStatus: status } : {}),
+      ...(status > 0 ? { httpStatus: status } : {}),
+      ...(status >= 0 ? { qualificationMs: 7 } : {}),
     });
     expect(
       green?.steps.find((s) => s.step === "qualification_diagnostic")?.reason
     ).toContain(`${failMode} qualification ${stage} ${code}`);
+    // The stored failure reason is the bounded message only.
+    expect(green?.error).toBe(
+      failMode === "qualify"
+        ? "qualification_failed"
+        : `cutover_failed: qualification ${stage} ${code}${status > 0 ? ` http=${status}` : ""}`
+    );
     const recorded = JSON.stringify([h.log.lines, h.store.attempts]);
     expect(recorded).not.toContain("secret-body");
     for (const s of sent) expect(recorded).not.toContain(s.token);
@@ -1415,7 +1758,11 @@ describe("private release companions", () => {
       ),
       probe: h.probe,
       secrets: new MemorySecrets(),
-      runtime: { catalog: h.catalog, secrets: h.runtimeSecrets },
+      runtime: {
+        catalog: h.catalog,
+        secrets: h.runtimeSecrets,
+        operatorDomain: "operator.example",
+      },
       images: h.images,
       clock: h.clock,
       log: h.log,
@@ -1657,6 +2004,7 @@ describe("same-source Score/declaration bridge", () => {
         slug: "poly",
         nodeId: POLY_ID,
         sourceSha: SHA_1,
+        operatorDomain: "operator.example",
         publicHost: "poly-preview.cognidao.org",
         port: w.port,
         substrateHost: SUBSTRATE,
@@ -2155,6 +2503,9 @@ describe("review repair digest and companion gates", () => {
     });
     h.images.checkImageManifests = async () => true;
     h.payer.observeThrows = false;
+    // The restart fence re-stamps an unmarked planned row (`ambiguous: network@now`): a paused native
+    // create gets a full grace window from the restart before any observation (#3029).
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs);
     await h.newSequencer().step(key);
     expect(h.store.attempts[0]).toMatchObject({
       id: planned.id,
@@ -2200,6 +2551,9 @@ describe("review repair digest and companion gates", () => {
     const key = h.key(OPERATOR_NODE_ID, "canary-db");
     h.clock.advance(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs);
     await h.newSequencer().step(key);
+    // The restart fence re-stamps an unmarked planned row (`ambiguous: network@now`): a paused native
+    // create gets a full grace window from the restart before any observation (#3029).
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs);
     await h.newSequencer().step(key);
     expect(h.store.attempts[0]).toMatchObject({
       id: planned.id,
@@ -2278,15 +2632,23 @@ describe("review repair digest and companion gates", () => {
     h.clock.advance(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs);
     const observes = h.payer.observeCalls;
     await h.seq.step({ ...h.key(POLY_ID, "canary"), env: "preview" });
+    // The restart fence re-stamps an unmarked planned row (`ambiguous: network@now`): a paused native
+    // create gets a full grace window from the restart before any observation (#3029).
+    expect(h.payer.observeCalls - observes).toBe(0);
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.inflightGraceMs);
     await h
       .newSequencer()
       .step({ ...h.key(POLY_ID, "canary"), env: "preview" });
+    // Native observation (and the orphan guard's confirming observe) precede any decision; an absent
+    // effect settles the original key without a create, and the unavailable image admits no new one.
     expect(h.payer.createRequests).toHaveLength(0);
     expect(h.store.attempts).toHaveLength(1);
     expect(h.store.attempts[0]?.id).toBe(planned.id);
-    expect(h.store.attempts[0]?.phase).toBe("planned");
+    expect(h.store.attempts[0]?.phase).toBe("failed");
     expect(h.payer.observeCalls - observes).toBe(2);
-    expect(h.store.attempts[0]?.error).toBeUndefined();
+    expect(h.store.attempts[0]?.error).toBe(
+      "ambiguous create resolved to nothing; next ordinal"
+    );
   });
 
   it.each([

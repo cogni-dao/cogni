@@ -211,6 +211,8 @@ patches:
                 env:
                   - name: DEPLOY_ENVIRONMENT
                     value: production
+                  - name: NODE_DEPLOY_OPERATOR_DOMAIN_ROOT
+                    value: cognidao.org
                   - name: NODE_DEPLOY_SECRETS_NAMESPACE
                     value: cogni-node-deploy-production
                   - name: AKASH_CHAIN_OWNER
@@ -422,11 +424,11 @@ patches:
         path: /data/NODE_TEMPLATE_OWNER
         value: "cogni-dao"
       - op: add
-        path: /data/NODE_SUBMODULE_PARENT_OWNER
-        value: "cogni-dao"
-      - op: add
         path: /data/NODE_DEPLOY_WORKLOAD_ZONE
         value: "cognidao.org"
+      - op: add
+        path: /data/NODE_SUBMODULE_PARENT_OWNER
+        value: "cogni-dao"
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_REPO
         value: "cogni"

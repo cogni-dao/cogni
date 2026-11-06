@@ -22,8 +22,12 @@
  */
 
 import { promises as dns } from "node:dns";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import {
+  type ClientRequest,
+  request as httpRequest,
+  type IncomingMessage,
+} from "node:http";
+import { request as httpsRequest, type RequestOptions } from "node:https";
 import { connect } from "node:net";
 
 import type { HttpResult, ProbePort } from "@/ports";
@@ -46,7 +50,18 @@ export interface HttpProbeOptions {
   readonly dns?: ProbeDns;
   readonly fetchImpl?: typeof fetch;
   readonly pinnedGet?: PinnedGet;
+  /**
+   * Test seam for the qualification POST (default: native `https.request` with normal certificate
+   * verification). Tests route it to a real local socket; production never sets it.
+   */
+  readonly qualificationRequest?: QualificationRequest;
 }
+
+/** The request primitive release qualification uses. */
+export type QualificationRequest = (
+  options: RequestOptions,
+  onResponse: (res: IncomingMessage) => void
+) => ClientRequest;
 
 const ZONE_TTL_MS = 10 * 60_000;
 /** After the authoritative path fails for a zone, go straight to DoH for this long. */
@@ -80,10 +95,9 @@ function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(t));
 }
 
-/** A qualification transport failure that carries only its normalized code. */
-function transportError(code: string): Error {
-  return Object.assign(new Error(code), { code });
-}
+/** A release qualification destination: a DNS name of 2+ labels; never an IP literal or single label. */
+const QUALIFICATION_HOST =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 
 /** The allowlisted shape of a transport failure code: Node/OpenSSL codes or our own names. */
 function transportCode(e: unknown): string {
@@ -121,6 +135,7 @@ export class HttpProbe implements ProbePort {
   private readonly dns: ProbeDns;
   private readonly fetchImpl: typeof fetch;
   private readonly get: PinnedGet;
+  private readonly qualificationRequest: QualificationRequest;
   private readonly zoneCache = new Map<
     string,
     { servers: string[]; until: number }
@@ -137,6 +152,9 @@ export class HttpProbe implements ProbePort {
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.get =
       opts.pinnedGet ?? ((ip, host, path) => this.pinnedGet(ip, host, path));
+    this.qualificationRequest =
+      opts.qualificationRequest ??
+      ((options, onResponse) => httpsRequest(options, onResponse));
   }
 
   hostRouted(
@@ -189,19 +207,36 @@ export class HttpProbe implements ProbePort {
   }): Promise<HttpResult> {
     const started = Date.now();
     return new Promise((resolve) => {
+      // A DNS name of two or more labels whose last label starts with a letter: never an IP literal
+      // or a single-label name, so the verified certificate always names a real ingress host.
       if (
-        !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(input.ingressHost) ||
+        !QUALIFICATION_HOST.test(input.ingressHost) ||
         !/^\/(?!\/)[A-Za-z0-9._~/-]*$/.test(input.path)
       ) {
         resolve({ status: 0, body: "", ms: 0, error: "invalid_destination" });
         return;
       }
+      // SETTLE_ONCE: every exit (body end, response error/abort/incomplete close, request error,
+      // request close, hard deadline) goes through one idempotent settle that also clears the timer.
+      // A peer that sends headers and then resets mid-body must not leave this promise pending.
+      let settled = false;
+      let hard: ReturnType<typeof setTimeout> | undefined;
+      const settle = (result: HttpResult) => {
+        if (settled) return;
+        settled = true;
+        if (hard) clearTimeout(hard);
+        resolve(result);
+      };
+      // BOUNDED_DIAGNOSTIC: only a normalized code leaves the adapter (for example
+      // DEPTH_ZERO_SELF_SIGNED_CERT, ECONNREFUSED, timeout); never a message, header or body.
+      const fail = (code: string) =>
+        settle({ status: 0, body: "", ms: Date.now() - started, error: code });
       const body = JSON.stringify({ mode: input.mode });
       // ONE_AUTHORITY (bug.5568): the observed static ingress is the DNS target, the TLS SNI and
       // verified certificate name, and the HTTP Host. A provider ingress may answer 421 when SNI and
       // Host disagree, so the canonical node host is never sent here. Native https never follows
       // redirects, so a bearer cannot leave this origin.
-      const req = httpsRequest(
+      const req = this.qualificationRequest(
         {
           hostname: input.ingressHost,
           servername: input.ingressHost,
@@ -218,39 +253,40 @@ export class HttpProbe implements ProbePort {
         },
         (res) => {
           let text = "";
+          const incomplete = () => {
+            if (!res.complete) fail("response_unavailable");
+          };
           res.setEncoding("utf8");
           res.on("data", (chunk: string) => {
             text += chunk;
-            if (Buffer.byteLength(text) > 16384)
-              req.destroy(transportError("response_too_large"));
+            if (Buffer.byteLength(text) > 16384) {
+              fail("response_too_large");
+              req.destroy();
+            }
           });
-          res.on("error", () =>
-            req.destroy(transportError("response_unavailable"))
-          );
-          res.on("end", () =>
-            resolve({
+          res.on("error", () => fail("response_unavailable"));
+          res.on("aborted", () => fail("response_unavailable"));
+          res.on("end", () => {
+            if (!res.complete) return fail("response_unavailable");
+            settle({
               status: res.statusCode ?? 0,
               body: text,
               ms: Date.now() - started,
-            })
-          );
+            });
+          });
+          res.on("close", incomplete);
         }
       );
-      const hard = setTimeout(
-        () => req.destroy(transportError("timeout")),
+      hard = setTimeout(
+        () => {
+          fail("timeout");
+          req.destroy();
+        },
         Math.min(20000, Math.max(1, input.timeoutMs))
       );
-      // BOUNDED_DIAGNOSTIC: only a normalized code leaves the adapter (for example
-      // DEPTH_ZERO_SELF_SIGNED_CERT, ECONNREFUSED, timeout); never a message, header or body.
-      req.on("error", (e) =>
-        resolve({
-          status: 0,
-          body: "",
-          ms: Date.now() - started,
-          error: transportCode(e),
-        })
-      );
-      req.on("close", () => clearTimeout(hard));
+      req.on("error", (e) => fail(transportCode(e)));
+      // Backstop: a request that closes before any other exit never leaves the caller waiting.
+      req.on("close", () => fail("transport_closed"));
       req.end(body);
     });
   }

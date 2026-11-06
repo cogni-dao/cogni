@@ -41,6 +41,12 @@
  *     unset owner admits no remote-source node, so the test operator never deploys canonical nodes.
  *   - IMAGE_PINNED_BEFORE_PAY (story.5137): every lane resolves a pending release image through the anonymous
  *     ghcr resolver and pins the digest write-once before any paid create.
+ *   - ONE_EDGE_ZONE (story.5137): `NODE_DEPLOY_FLEET_OWNER` + `NODE_DEPLOY_WORKLOAD_ZONE` resolve ONE fleet binding
+ *     (`resolveWorkloadZoneBinding`) in `composeNodeDeployLanes`, the one lane composition. The zone id is looked up
+ *     BY NAME with the zone-scoped token (`resolveCloudflareZoneId`), so it can never name a zone the token cannot
+ *     read, and the DNS adapter re-verifies that native id/name before every use. An invalid binding or a failed
+ *     lookup leaves the edge unconfigured: recovery continues, fresh http apps wait before paying. Operator and
+ *     substrate hosts are not node hosts and stay where they are.
  *   - INTERIM_APP_PROVIDERS (task.5405): `NODE_DEPLOY_APP_PROVIDERS` (comma-separated akash accounts, max 16)
  *     is sent as `allowProviders` on every APP create; unset sends none.
  * Side-effects: IO (Postgres, actuator HTTP, Cloudflare, Kubernetes API, provider ingress; health listener)
@@ -65,6 +71,7 @@ import {
   ImageCatalogNodes,
   KubernetesStatePasswords,
   PostgresNodeDeployStore,
+  resolveCloudflareZoneId,
 } from "@/adapters/server";
 import {
   EnvLaneConfigError,
@@ -72,6 +79,7 @@ import {
   resolveEnvLanes,
 } from "@/features/node-deploy/env-lanes";
 import { DEFAULT_SEQUENCER_CONFIG } from "@/features/node-deploy/sequencer";
+import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 import { composeNodeDeployLanes } from "./node-deploy-lanes";
 
 const LISTEN_PORT = 8080;
@@ -140,6 +148,7 @@ let lanes: ReturnType<typeof resolveEnvLanes>;
 try {
   lanes = resolveEnvLanes({
     deployEnvironment: environment,
+    operatorDomainRoot: runtimeEnv.NODE_DEPLOY_OPERATOR_DOMAIN_ROOT,
     podNamespace: namespace,
     environments: runtimeEnv.NODE_DEPLOY_ENVS,
     secretsNamespace: runtimeEnv.NODE_DEPLOY_SECRETS_NAMESPACE,
@@ -183,26 +192,55 @@ const chain = runtimeEnv.AKASH_CHAIN_OWNER
 // fleet (the test operator) can never claim a host for a canonical node. story.5137 CD4.
 const fleetOwner = runtimeEnv.NODE_DEPLOY_FLEET_OWNER?.trim() || undefined;
 const images = new GhcrBuiltImageResolver();
+
+/**
+ * ONE_EDGE_ZONE: the zone id comes from the bound zone's NAME and the zone-scoped token's own view
+ * (`GET /zones?name=`), never from a stored id that may name another zone (the test operator's stored
+ * CLOUDFLARE_ZONE_ID need not be cogni-testing.org). The adapter still re-verifies that id/name before use.
+ */
+async function edgeDnsFor(binding: WorkloadZoneBinding) {
+  if (!cfToken) return undefined;
+  let zoneId: string;
+  try {
+    zoneId = await resolveCloudflareZoneId({
+      apiToken: cfToken,
+      zoneName: binding.zoneName,
+    });
+  } catch (error) {
+    log.error(
+      {
+        environment,
+        edgeZone: binding.zoneName,
+        causeMessage:
+          error instanceof Error ? error.message.slice(0, 300) : "unknown",
+      },
+      "node_deploy_sequencer_edge_zone_unresolved"
+    );
+    return undefined;
+  }
+  if (cfZone && cfZone !== zoneId)
+    log.warn(
+      { environment, edgeZone: binding.zoneName, storedZoneId: cfZone, zoneId },
+      "node_deploy_sequencer_edge_zone_id_differs: using the id the token resolves for the edge zone"
+    );
+  return new CloudflareDnsRecords({
+    binding,
+    apiToken: cfToken,
+    zoneId,
+    // Re-read the projected token so rotation re-verifies identity; the zone id stays the resolved one.
+    readCredentials: async () => ({
+      apiToken: await readCredential("CLOUDFLARE_API_TOKEN"),
+      zoneId,
+    }),
+  });
+}
+
 // Resolve new-effect authority without disabling the existing paid-effect recovery owner.
 const composed = await composeNodeDeployLanes({
   fleetOwner,
   zoneName: runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE,
   lanes,
-  dnsRecordsFor: (binding) =>
-    cfToken && cfZone
-      ? new CloudflareDnsRecords({
-          binding,
-          apiToken: cfToken,
-          zoneId: cfZone,
-          readCredentials: async () => {
-            const [apiToken, zoneId] = await Promise.all([
-              readCredential("CLOUDFLARE_API_TOKEN"),
-              readCredential("CLOUDFLARE_ZONE_ID"),
-            ]);
-            return { apiToken, zoneId };
-          },
-        })
-      : undefined,
+  dnsRecordsFor: edgeDnsFor,
   nodeDeploySlugs: (env, owner) => catalog.nodeDeploySlugs(env, owner),
   depsForLane: (lane) => ({
     store,
@@ -217,6 +255,7 @@ const composed = await composeNodeDeployLanes({
       secrets: new EsoNodeRuntimeSecrets({ namespace: lane.secretsNamespace }),
       catalog,
       substrateHost: lane.substrateHost,
+      operatorDomain: lane.operatorDomain,
     },
     ...(chain ? { chain } : {}),
     clock: {
