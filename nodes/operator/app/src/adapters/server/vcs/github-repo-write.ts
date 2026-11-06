@@ -478,17 +478,37 @@ const CANDIDATE_OPENFGA_COLLATERAL_PATHS = new Set([
   "packages/authorization-core/tests/rbac-model.test.ts",
 ]);
 
+// task.5428 — the candidate-a env mesh plane. Its Argo Application lives in control-plane/candidate-a/
+// and reconciles these two trees from the reviewed deploy/candidate-a-control-plane ref, so they ride
+// the control-plane lane. Exact directory prefixes: a sibling overlay or base never qualifies.
+const CANDIDATE_MESH_PLANE_CONTROL_PLANE_PREFIXES = [
+  "infra/k8s/overlays/candidate-a/mesh-plane/",
+  "infra/k8s/base/mesh-env-plane/",
+] as const;
+
+// task.5428 — the mesh plane's VM-side files the existing Compose lane (deploy-infra.sh) already ships:
+// the DOCKER-USER/raw hardener it scp's and runs, and the read-only derivation lib render-caddyfile.sh
+// sources for the VM relay/publish edge site.
+const CANDIDATE_MESH_PLANE_COMPOSE_PATHS = new Set([
+  "infra/provision/cherry/harden-docker-public-ports.sh",
+  "scripts/ci/lib/mesh-plane.sh",
+]);
+
 function candidateInfraPathLane(
   path: string
 ): CandidateInfraLane | "collateral" | null {
   if (
     path.startsWith("infra/k8s/argocd/control-plane/candidate-a/") ||
     path === CANDIDATE_CONTROL_PLANE_SEED_PATH ||
-    path.startsWith("infra/crossplane/")
+    path.startsWith("infra/crossplane/") ||
+    CANDIDATE_MESH_PLANE_CONTROL_PLANE_PREFIXES.some((prefix) =>
+      path.startsWith(prefix)
+    )
   ) {
     return "control_plane";
   }
   if (
+    CANDIDATE_MESH_PLANE_COMPOSE_PATHS.has(path) ||
     path === "infra/openfga/rbac-model.json" ||
     path === "infra/images/litellm/cogni_callbacks.py" ||
     path.startsWith("infra/compose/edge/") ||

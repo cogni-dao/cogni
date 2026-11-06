@@ -8,8 +8,9 @@
  *   fleet is `cogni-test-org`. The route and the sequencer apply this SAME predicate, so the test operator can
  *   never record or deploy a canonical node such as toks5, even though the canonical catalog is baked into its
  *   image.
- * Scope: Pure string parsing of a parsed catalog row. No IO.
+ * Scope: Pure fleet/zone binding validation and catalog ownership parsing. No IO.
  * Invariants:
+ *   - EXPLICIT_ZONE: workload routing never falls back to auth DOMAIN or the substrate root.
  *   - SAME_FILTER_ROUTE_AND_SEQUENCER: `isFleetOwnedRow` is the one predicate; both call it.
  *   - OWNER_IS_THE_SOURCE_REPO_ORG: a remote-source row (`source_repo` set) is owned iff its repo's owner
  *     equals the fleet owner, compared case-insensitively. An unparseable `source_repo` is not owned.

@@ -5,9 +5,9 @@
  * Module: `@tests/ci-invariants/node-deploy-sequencer-admission`
  * Purpose: Keep the node-deploy sequencer from reading any OpenBao bucket that is not a node's own, because only a cluster-side admission policy stops it.
  * Scope: Reads the base policy and both overlay kustomizations as YAML (no kubectl needed, so CI always asserts it); does not evaluate CEL or contact a cluster.
- * Invariants: Policy ships fail-closed in base and overlays • Each binding selects exactly the env namespaces its sequencer serves • Extra env namespaces carry the base Role rules
+ * Invariants: Policies ship fail-closed in base and overlays, and the sequencer may delete only mesh attempt-key Secrets (task.5430) • Each binding selects exactly the env namespaces its sequencer serves • Extra env namespaces carry the base Role rules
  * Side-effects: IO (reads reviewed manifests)
- * Links: task.5405, story.5137, infra/k8s/base/node-deploy-sequencer/admission-policy.yaml
+ * Links: task.5405, story.5137, task.5430, infra/k8s/base/node-deploy-sequencer/admission-policy.yaml, infra/k8s/base/node-deploy-sequencer/attempt-secret-delete-policy.yaml
  * @internal
  */
 
@@ -75,8 +75,20 @@ function sequencerEnvEntry(kustomization: Kustomization, name: string) {
   return doc.spec.template.spec.containers[0]?.env.find((e) => e.name === name);
 }
 
+/** The effective value: a literal, or the overlay's ConfigMap data its `configMapKeyRef` names. */
 function sequencerEnv(kustomization: Kustomization, name: string) {
-  return sequencerEnvEntry(kustomization, name)?.value;
+  const entry = sequencerEnvEntry(kustomization, name);
+  if (entry?.value !== undefined) return entry.value;
+  const ref = entry?.valueFrom?.configMapKeyRef;
+  if (!ref) return undefined;
+  const configPatch = kustomization.patches?.find(
+    (p) => p.target?.kind === "ConfigMap" && p.target.name === ref.name
+  );
+  const operations = yaml.parse(configPatch?.patch ?? "[]") as {
+    path: string;
+    value?: string;
+  }[];
+  return operations.find((op) => op.path === `/data/${ref.key}`)?.value;
 }
 
 function expectFleetOwner(kustomization: Kustomization, owner: string) {
@@ -103,6 +115,18 @@ function expectFleetOwner(kustomization: Kustomization, owner: string) {
   ).toEqual([
     { op: "add", path: "/data/NODE_SUBMODULE_PARENT_OWNER", value: owner },
   ]);
+}
+
+function expectWorkloadZone(kustomization: Kustomization, zone: string) {
+  expect(sequencerEnv(kustomization, "NODE_DEPLOY_WORKLOAD_ZONE")).toBe(zone);
+  const patch = kustomization.patches?.find(
+    (p) => p.target?.kind === "ConfigMap" && p.target.name === "node-app-config"
+  );
+  const operations = yaml.parse(patch?.patch ?? "[]") as { path: string }[];
+  // Exactly one writer of the zone value: a duplicate add would hide a conflicting second value.
+  expect(
+    operations.filter((op) => op.path === "/data/NODE_DEPLOY_WORKLOAD_ZONE")
+  ).toHaveLength(1);
 }
 
 const base = yaml
@@ -272,6 +296,217 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
     expect(rbac.some((d) => d.kind === "ClusterRole")).toBe(false);
   });
 
+  describe("mesh attempt-Secret cleanup: delete is name-bounded to attempt keys (task.5430, HR5)", () => {
+    const deleteDocs = yaml
+      .parseAllDocuments(
+        read(
+          "infra/k8s/base/node-deploy-sequencer/attempt-secret-delete-policy.yaml"
+        )
+      )
+      .map(
+        (d) =>
+          d.toJS() as Doc & {
+            spec: { matchConditions?: { name: string; expression: string }[] };
+          }
+      );
+    const deletePolicy = deleteDocs.find(
+      (d) => d.kind === "ValidatingAdmissionPolicy"
+    );
+    const deleteBinding = deleteDocs.find(
+      (d) => d.kind === "ValidatingAdmissionPolicyBinding"
+    );
+    /** The approved design regex (node-service-delivery §3 Cleanup bound); release ids are UUIDs. */
+    const ATTEMPT_KEY_RE =
+      "^nd-[0-9a-f]{8}-[a-z0-9-]+-mesh-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-a[0-9]+$";
+    /** The single-quoted regex inside `<subject>.matches('...')` of one CEL expression. */
+    const celRegex = (expression: string | undefined, subject: string) => {
+      const prefix = `${subject}.matches('`;
+      const start = expression?.indexOf(prefix) ?? -1;
+      if (!expression || start < 0) throw new Error(`no ${subject}.matches`);
+      const from = start + prefix.length;
+      return expression.slice(from, expression.indexOf("')", from));
+    };
+    const nameRule = deletePolicy?.spec.validations?.find((v) =>
+      v.expression.includes("request.name.matches(")
+    )?.expression;
+    const userRule = deletePolicy?.spec.matchConditions?.find(
+      (c) => c.name === "sequencer-service-account"
+    )?.expression;
+    const uuid = "0f8e2c1a-1b2c-4d3e-8f9a-0123456789ab";
+
+    type RbacDoc = {
+      kind: string;
+      metadata: { name: string; namespace?: string };
+      rules?: { apiGroups: string[]; resources: string[]; verbs: string[] }[];
+    };
+    const baseRbac = yaml
+      .parseAllDocuments(read("infra/k8s/base/node-deploy-sequencer/rbac.yaml"))
+      .map((d) => d.toJS() as RbacDoc);
+    const envRbac = yaml
+      .parseAllDocuments(
+        read("infra/k8s/base/node-deploy-env-namespaces/rbac.yaml")
+      )
+      .map((d) => d.toJS() as RbacDoc);
+
+    it("the sequencer Role grants delete on secrets only (never on externalsecrets, never deletecollection), in Roles only", () => {
+      const role = baseRbac.find((d) => d.kind === "Role");
+      expect(role?.rules).toEqual([
+        {
+          apiGroups: [""],
+          resources: ["secrets"],
+          verbs: ["get", "create", "delete"],
+        },
+        {
+          apiGroups: ["external-secrets.io"],
+          resources: ["externalsecrets"],
+          verbs: ["get", "create", "patch", "update"],
+        },
+      ]);
+      for (const doc of [...baseRbac, ...envRbac]) {
+        expect(doc.kind).not.toMatch(/^Cluster/);
+        for (const rule of doc.rules ?? []) {
+          expect(rule.verbs).not.toContain("deletecollection");
+          expect(rule.verbs).not.toContain("*");
+          if (rule.verbs.includes("delete"))
+            expect(rule.resources).toEqual(["secrets"]);
+        }
+      }
+    });
+
+    it.each([
+      "candidate-a",
+      "production",
+    ])("%s: the base Role (with delete) lands in the dedicated cogni-node-deploy-<env> namespace, never the wallet namespace", (env) => {
+      const kustomization = yaml.parse(
+        read(`infra/k8s/overlays/${env}/operator/kustomization.yaml`)
+      ) as Kustomization & {
+        replacements?: {
+          source: { fieldPath: string };
+          targets: {
+            select: { kind: string; name: string };
+            fieldPaths: string[];
+          }[];
+        }[];
+      };
+      const placement = kustomization.replacements?.find((r) =>
+        r.targets.some(
+          (t) =>
+            t.select.kind === "Role" &&
+            t.select.name === "node-deploy-sequencer" &&
+            t.fieldPaths.includes("metadata.namespace")
+        )
+      );
+      expect(placement?.source.fieldPath).toContain(
+        "NODE_DEPLOY_SECRETS_NAMESPACE"
+      );
+      expect(sequencerEnv(kustomization, "NODE_DEPLOY_SECRETS_NAMESPACE")).toBe(
+        `cogni-node-deploy-${env}`
+      );
+      // the extra env Roles carry the same delete, each in its own dedicated namespace
+      for (const role of envRbac.filter((d) => d.kind === "Role"))
+        expect(role.metadata.namespace).toMatch(/^cogni-node-deploy-[a-z-]+$/);
+    });
+
+    it("ships a fail-closed Deny policy for Secret DELETE, bound with no namespace narrowing, and Argo delivers it", () => {
+      expect(deletePolicy?.apiVersion).toBe("admissionregistration.k8s.io/v1");
+      expect(deletePolicy?.spec.failurePolicy).toBe("Fail");
+      expect(deletePolicy?.spec.matchConstraints?.resourceRules).toEqual([
+        {
+          apiGroups: [""],
+          apiVersions: ["*"],
+          operations: ["DELETE"],
+          resources: ["secrets"],
+        },
+      ]);
+      expect(deleteBinding?.spec.policyName).toBe(deletePolicy?.metadata.name);
+      expect(deleteBinding?.spec.validationActions).toEqual(["Deny"]);
+      // unset matchResources = every request the policy matches, in every namespace
+      expect(deleteBinding?.spec.matchResources).toBeUndefined();
+      const kust = yaml.parse(
+        read("infra/k8s/base/node-deploy-sequencer/kustomization.yaml")
+      ) as Kustomization;
+      expect(kust.resources).toContain("attempt-secret-delete-policy.yaml");
+      for (const env of ["candidate-a", "production"]) {
+        const overlay = yaml.parse(
+          read(`infra/k8s/overlays/${env}/operator/kustomization.yaml`)
+        ) as Kustomization;
+        expect(overlay.resources).toContain(
+          "../../../base/node-deploy-sequencer"
+        );
+        // no overlay patch may narrow or soften the delete policy
+        expect(
+          overlay.patches?.some((p) =>
+            p.target?.name?.startsWith("node-deploy-sequencer-secret-delete")
+          ) ?? false
+        ).toBe(false);
+      }
+      // DELETE carries no `object` (null); the rule reads the request name, never object.*
+      expect(cel(deletePolicy as Doc)).not.toContain("object.");
+      expect(
+        deletePolicy?.spec.validations?.map((v) => v.expression)
+      ).toContain("request.namespace.startsWith('cogni-node-deploy-')");
+    });
+
+    it("the name rule is exactly the anchored design regex", () => {
+      expect(celRegex(nameRule, "request.name")).toBe(ATTEMPT_KEY_RE);
+      expect(ATTEMPT_KEY_RE.startsWith("^")).toBe(true);
+      expect(ATTEMPT_KEY_RE.endsWith("$")).toBe(true);
+    });
+
+    const attemptKey = new RegExp(celRegex(nameRule, "request.name"));
+
+    it.each([
+      `nd-1234abcd-db-mesh-${uuid}-a1`,
+      `nd-1234abcd-app-mesh-${uuid}-a12`,
+      // a workload whose own name contains -mesh- still gets its attempt keys cleaned
+      `nd-1234abcd-x-mesh-y-mesh-${uuid}-a3`,
+    ])("admits the attempt key %s", (name) => {
+      expect(attemptKey.test(name)).toBe(true);
+    });
+
+    it.each([
+      "nd-1234abcd-db", // a state password
+      "nd-1234abcd-x-mesh-y", // the state password of a workload literally named x-mesh-y
+      "nd-1234abcd-x-mesh-y-a1",
+      `nd-1234abcd-db-mesh-${uuid}`, // no attempt suffix
+      `nd-1234abcd-db-mesh-${uuid}-a`, // attempt without digits
+      `nd-1234abcd-db-mesh-${uuid}-a1-x`, // trailing text (end anchor)
+      `x-nd-1234abcd-db-mesh-${uuid}-a1`, // leading text (start anchor)
+      `nd-1234abcd-db-mesh-${uuid.toUpperCase()}-a1`,
+      `nd-1234abc-db-mesh-${uuid}-a1`, // 7-hex node prefix
+      `nd-1234abcd-mesh-${uuid}-a1`, // no workload segment
+      "nd-poly-env", // an ESO-rendered env Secret
+      "operator-env-secrets",
+    ])("refuses deleting %s", (name) => {
+      expect(attemptKey.test(name)).toBe(false);
+    });
+
+    it("applies to the sequencer ServiceAccount of every overlay and to no other principal", () => {
+      const subject = new RegExp(
+        celRegex(userRule, "request.userInfo.username")
+      );
+      const sa = yaml.parse(
+        read("infra/k8s/base/node-deploy-sequencer/service-account.yaml")
+      ) as { metadata: { name: string } };
+      for (const env of ["candidate-a", "production"]) {
+        const overlay = yaml.parse(
+          read(`infra/k8s/overlays/${env}/operator/kustomization.yaml`)
+        ) as Kustomization & { namespace: string };
+        const username = `system:serviceaccount:${overlay.namespace}:${overlay.namePrefix ?? ""}${sa.metadata.name}`;
+        expect(subject.test(username), username).toBe(true);
+      }
+      for (const other of [
+        "system:serviceaccount:kube-system:generic-garbage-collector",
+        "system:serviceaccount:kube-system:namespace-controller",
+        "system:serviceaccount:external-secrets:external-secrets",
+        "system:serviceaccount:cogni-production:operator-akash-tx-actuator",
+        "system:serviceaccount:cogni-production:operator-node-deploy-sequencer-x",
+        "system:admin",
+      ])
+        expect(subject.test(other), other).toBe(false);
+    });
+  });
+
   describe("one front door: the production sequencer serves every env its cluster controls (story.5137)", () => {
     const production = yaml.parse(
       read("infra/k8s/overlays/production/operator/kustomization.yaml")
@@ -395,8 +630,33 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       expect(kust.namePrefix).toBeUndefined();
     });
 
+    it.each([
+      "candidate-a",
+      "production",
+    ])("missing new plain config cannot stop %s paid recovery before process startup", (env) => {
+      const overlay = yaml.parse(
+        read(`infra/k8s/overlays/${env}/operator/kustomization.yaml`)
+      ) as Kustomization;
+      const patch = overlay.patches?.find(
+        (p) =>
+          p.target?.kind === "Deployment" &&
+          p.target.name === "node-deploy-sequencer"
+      );
+      const deployment = yaml.parse(patch?.patch ?? "") as DeploymentPatch;
+      const entries = deployment.spec.template.spec.containers[0]?.env ?? [];
+      for (const name of [
+        "NODE_DEPLOY_FLEET_OWNER",
+        "NODE_DEPLOY_WORKLOAD_ZONE",
+      ]) {
+        const entry = entries.find((e) => e.name === name);
+        expect(entry?.valueFrom?.configMapKeyRef.optional).toBe(true);
+        expect(entry?.valueFrom?.configMapKeyRef.name).toBe("node-app-config");
+      }
+    });
+
     it("the sequencer is told its fleet org, so it never claims another fleet's nodes", () => {
       expectFleetOwner(production, "cogni-dao");
+      expectWorkloadZone(production, "cognidao.org");
     });
 
     it("the candidate-a overlay serves only itself, and its fleet is cogni-test-org (the test operator claims no canonical node)", () => {
@@ -406,6 +666,7 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       expect(sequencerEnv(candidate, "NODE_DEPLOY_ENVS")).toBeUndefined();
       // story.5137 test lane: the test sequencer's edge guard admits only test-org nodes, never cogni-dao.
       expectFleetOwner(candidate, "cogni-test-org");
+      expectWorkloadZone(candidate, "cogni-testing.org");
     });
   });
 });

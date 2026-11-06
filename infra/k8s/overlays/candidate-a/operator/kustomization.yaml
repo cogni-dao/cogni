@@ -45,6 +45,11 @@ resources:
 
 namePrefix: operator-
 
+# task.5428 — the mesh coordinators (one Headscale container + PVC + socket volume + client NodePort
+# per tailnet) ride beside their one writer: this TEST operator's sequencer serves its own candidate-a lanes (test-org fixture nodes) on its own tailnet, with no production identity (test-fleet parity).
+components:
+  - ../../../base/node-deploy-mesh/tailnets/test-candidate-a
+
 # Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
 # name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
@@ -289,8 +294,14 @@ patches:
                   # cognidao.org (hub test-fleet-parity-boundary; dns-ops skill). Its Cloudflare token
                   # (OpenBao cogni/candidate-a/operator/CLOUDFLARE_API_TOKEN) is scoped to this zone only,
                   # so the sequencer resolves the zone id BY NAME with that token. The operator endpoint
-                  # (test.cognidao.org) and the substrate host above stay in cognidao.org. Production and
-                  # production sets cognidao.org explicitly; preview has no local binding.
+                  # (test.cognidao.org) and the substrate host above stay in cognidao.org. Production sets
+                  # cognidao.org explicitly; preview has no local binding.
+                  # task.5428 — the test tailnet's DNS-only hosts live in this test zone, so THIS sequencer
+                  # (the only holder of the test-zone token) is their one writer: a CNAME to the candidate-a
+                  # VM alias, proxied=false, read back every 10 minutes (features/node-deploy/mesh-dns.ts).
+                  # Pinned equal to scripts/ci/lib/mesh-plane.sh by node-deploy-mesh-coordinators.spec.ts.
+                  - name: NODE_DEPLOY_MESH_DNS_RECORDS
+                    value: mesh-test-candidate-a=cogni-candidate-a.vm.cognidao.org,derp-test-candidate-a=cogni-candidate-a.vm.cognidao.org
   - target:
       kind: ConfigMap
       name: node-app-config

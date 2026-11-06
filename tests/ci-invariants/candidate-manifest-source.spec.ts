@@ -769,7 +769,12 @@ describe("candidate-a manifest source", () => {
       expect(source).not.toContain("node-template");
     }
     expect(materialize).not.toContain("node-template");
-    expect(materialize).toContain('bao_get_field "$inherit_from" "$k" owner');
+    expect(
+      materialize.match(/v="\$\(inherited_key_value "\$k"\)"/g)
+    ).toHaveLength(2);
+    expect(materialize).toContain(
+      'file="${CACHE_DIR}/__owners__/${env}/${svc}/${key}"'
+    );
     const guard = readFileSync(
       path.join(REPO_ROOT, "scripts/ci/lib/maintenance-fence.py"),
       "utf8"

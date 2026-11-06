@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derekg1729
-- **Last reviewed:** 2026-10-26
+- **Last reviewed:** 2026-11-04
 - **Status:** stable
 
 ## Purpose
@@ -64,6 +64,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - AkashTxDatabaseCellRecoveryInput + AkashTxAllocationPolicy (reference-only cold recovery; operation-native price/requested deposit; funding qualification fails closed)
 - AkashTxActuatorPort + AkashTxConsolePort (optional private readManagedDefinition returns observed SDL/manifest identity, never readable secret proof) + AkashTxManagedDeploymentDefinition + AkashTxAllocationLedgerPort + AkashTxWorkloadIdentity + AkashTxError (private Akash transaction boundary: one bounded attempt per call, durable retained-storage delete refusal, key-idempotent, fail-closed on an unresolved allocation — task.5095; every mutating call states an explicit `AkashTxWorkloadIdentity` that is durable in the receipt before the provider is contacted, and a key bound to another node is an `identity_conflict` — task.5103)
 - AkashTxMigrationStep + AkashTxMigrationPhase + AkashTxMigrationPort (MIGRATION_IS_NOT_A_PAYMENT_PRECONDITION: no mutating call carries a migration and no migration state can refuse one. The per-digest migration is a RELEASE step attached to `observe` — the unpaid tick — whose phase is REPORTED on the observation. bug.5116 ordering, bug.5140 enforcement, **severed by task.5135** after node toks5 sat leaseless and unalarmed because its migration never ran)
+- NodeMeshPort + NodeMeshError + `headscaleKeyId`/`headscaleDeviceId`/`headscaleUser` provider-id brands (task.5429: one env's Headscale over its pod-local socket; no API-key call exists, a missing policy is `null`, errors carry a closed code/reason and never a payload)
 - ComputeCostEvidencePort + ComputeCostStorePort (receipt-linked provider-native cost evidence; `node_id` is the sole infrastructure-cost grouping key and no payer/DAO/user identity is inferred — task.5071)
 - Types (ChargeReceiptParams, LlmCaller, BillingAccount, CreditLedgerEntry, etc.)
 
@@ -85,6 +86,8 @@ Biome `noRestrictedImports` enforces this in `biome/app.json`.
 
 Note: src/ports/** is separate from src/contracts/**.
 Ports = internal dependencies; contracts = edge IO (HTTP/MCP).
+
+- Node-deploy DNS records include typed `DnsZoneIdentityError` and bounded native zone identity validation before new paid use; the DNS port still has no delete.
 
 ## Responsibilities
 

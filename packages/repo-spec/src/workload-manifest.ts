@@ -20,8 +20,7 @@
  *     source sha, which the caller passes as `builtImage` (a digest) or as `pendingImage`
  *     (`<repo>:sha-<sha>`, the app is then `imagePending` and the sequencer pins the digest, story.5137).
  *   - EXCLUSIVE_REQUIRED: `cogni.dev/exclusive` must be present and `"false"`; `"true"` is refused
- *     until the single-leader fence ships (CD6). Only `exclusive`, `version-path` and
- *     `ephemeral-storage` exist under `cogni.dev/`.
+ *     until the single-leader fence ships (CD6). Qualification uses the bounded path/timeout annotations.
  *   - NO_LITERAL_SECRETS: one scanner covers variables, command and args; it never echoes the value.
  *   - OPERATOR_OWNS_URLS: a dependency output is used only as a whole `variables` value,
  *     `${resources.<key>.url}`; a manifest never builds a URL from parts.
@@ -81,7 +80,7 @@ export type WorkloadManifestIssueCode =
   | "readiness_probe_required"
   | "route_invalid"
   | "invalid_quantity"
-  | "sidecars_unsupported"
+  | "container_count_invalid"
   | "lowered_spec_invalid";
 
 export interface WorkloadManifestIssue {
@@ -170,6 +169,14 @@ export interface ScoreWorkload {
 // ---------------------------------------------------------------------------
 
 const NAME_RE = /^[a-z][a-z0-9-]{0,62}$/;
+/**
+ * A WORKLOAD name (and a data dependency id, which names a state workload): a DNS label that never
+ * contains `-mesh-` (task.5431). The operator's attempt-key Secrets are `nd-<id8>-<workload>-mesh-<release>-a<n>`
+ * and the sequencer may DELETE only names of that shape; a state password is `nd-<id8>-<workload>`, so a
+ * workload named `x-mesh-y` could otherwise collide with that delete allow-list. The operator's deploy
+ * contract (`deploy.workloads.v1.contract.ts`) refuses the same names; a test keeps the two in step.
+ */
+export const WORKLOAD_NAME_RE = /^(?!.*-mesh-)[a-z][a-z0-9-]{0,62}$/;
 const ENV_KEY_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const DIGEST_IMAGE_RE =
   /^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$/;
@@ -186,6 +193,8 @@ const ANNOTATION = {
   exclusive: "cogni.dev/exclusive",
   versionPath: "cogni.dev/version-path",
   ephemeralStorage: "cogni.dev/ephemeral-storage",
+  qualificationPath: "cogni.dev/qualification-path",
+  qualificationTimeout: "cogni.dev/qualification-timeout-ms",
 } as const;
 const ALLOWED_COGNI_ANNOTATIONS = new Set<string>(Object.values(ANNOTATION));
 const DEFAULT_VERSION_PATH = "/version";
@@ -413,11 +422,12 @@ function checkPolicy(m: ScoreWorkload): WorkloadManifestIssue[] {
   const resources = m.resources ?? {};
 
   // -- metadata --------------------------------------------------------------
-  if (!NAME_RE.test(m.metadata.name))
+  if (!WORKLOAD_NAME_RE.test(m.metadata.name))
     add({
       code: "invalid_name",
       path: "metadata.name",
-      message: "metadata.name must match ^[a-z][a-z0-9-]{0,62}$",
+      message:
+        "metadata.name must match ^[a-z][a-z0-9-]{0,62}$ and must not contain -mesh-",
     });
   for (const key of Object.keys(m.metadata))
     if (key !== "name" && key !== "annotations")
@@ -498,11 +508,12 @@ function checkPolicy(m: ScoreWorkload): WorkloadManifestIssue[] {
           path: `${path}.class`,
           message: `postgres class must be one of: ${classes?.join(", ")} (shared ships later)`,
         });
-      if (r.id !== undefined && !NAME_RE.test(r.id))
+      if (r.id !== undefined && !WORKLOAD_NAME_RE.test(r.id))
         add({
           code: "invalid_name",
           path: `${path}.id`,
-          message: "a dependency id must match ^[a-z][a-z0-9-]{0,62}$",
+          message:
+            "a dependency id must match ^[a-z][a-z0-9-]{0,62}$ and must not contain -mesh-",
         });
       if (r.id !== undefined && r.id === m.metadata.name)
         add({
@@ -530,15 +541,20 @@ function checkPolicy(m: ScoreWorkload): WorkloadManifestIssue[] {
 
   // -- containers ------------------------------------------------------------
   const containers = Object.entries(m.containers);
-  if (containers.length !== 1)
+  if (containers.length < 1 || containers.length > 8)
     add({
-      code: "sidecars_unsupported",
+      code: "container_count_invalid",
       path: "containers",
-      message:
-        "exactly one container is supported in this version; sidecars have no mapping yet",
+      message: "a workload supports 1–8 containers",
     });
   for (const [name, c] of containers) {
     const base = `containers.${name}`;
+    if (!NAME_RE.test(name))
+      add({
+        code: "invalid_name",
+        path: base,
+        message: "container name must be a DNS label",
+      });
     for (const key of Object.keys(c))
       if (!ALLOWED_CONTAINER_FIELDS.has(key)) add(unmapped(`${base}.${key}`));
 
@@ -692,15 +708,37 @@ function checkPolicy(m: ScoreWorkload): WorkloadManifestIssue[] {
         message: `the edge serves a route on port ${ROUTE_SERVICE_PORT}`,
       });
     const target = servicePort.targetPort ?? servicePort.port;
-    for (const [name, c] of containers) {
-      const probePort = c.readinessProbe?.httpGet?.port;
-      if (probePort !== undefined && probePort !== target)
-        add({
-          code: "probe_port_mismatch",
-          path: `containers.${name}.readinessProbe.httpGet.port`,
-          message: `the readiness probe port (${probePort}) must equal the route's targetPort (${target})`,
-        });
-    }
+    const entries = containers.filter(
+      ([, c]) => c.readinessProbe?.httpGet?.port === target
+    );
+    if (entries.length !== 1)
+      add({
+        code: "probe_port_mismatch",
+        path: "containers",
+        message:
+          "exactly one readiness port must match the public route target",
+      });
+  }
+  const qp = annotations[ANNOTATION.qualificationPath];
+  const qt = annotations[ANNOTATION.qualificationTimeout];
+  if (qp !== undefined || qt !== undefined || containers.length > 1) {
+    if (
+      !qp ||
+      !HEALTH_PATH_RE.test(qp) ||
+      qp.startsWith("//") ||
+      qp.split("/").some((p) => p === "." || p === "..")
+    )
+      add({
+        code: "invalid_annotation",
+        path: ANNOTATION.qualificationPath,
+        message: "qualification requires a local absolute path",
+      });
+    if (!qt || !/^[1-9][0-9]*$/.test(qt) || Number(qt) > 20000)
+      add({
+        code: "invalid_annotation",
+        path: ANNOTATION.qualificationTimeout,
+        message: "qualification timeout must be 1..20000 ms",
+      });
   }
   return issues;
 }
@@ -794,9 +832,14 @@ function lowerValidated(
   options: LowerWorkloadOptions
 ): NodeWorkloadSpec[] {
   const resources = Object.entries(m.resources ?? {});
-  const [containerEntry] = Object.entries(m.containers);
+  const publicPort = Object.values(m.service?.ports ?? {})[0];
+  const containerEntry = Object.entries(m.containers).find(
+    ([, c]) =>
+      c.readinessProbe?.httpGet?.port ===
+      (publicPort?.targetPort ?? publicPort?.port)
+  );
   if (!containerEntry)
-    throw new Error("unreachable: pass 2 requires one container");
+    throw new Error("unreachable: pass 2 requires a unique public entry");
   const [containerName, c] = containerEntry;
   const annotations = m.metadata.annotations ?? {};
 
@@ -869,13 +912,78 @@ function lowerValidated(
     health: {
       version: annotations[ANNOTATION.versionPath] ?? DEFAULT_VERSION_PATH,
       ready: c.readinessProbe?.httpGet?.path,
+      ...(annotations[ANNOTATION.qualificationPath]
+        ? {
+            qualification: {
+              path: annotations[ANNOTATION.qualificationPath],
+              timeoutMs: Number(annotations[ANNOTATION.qualificationTimeout]),
+            },
+          }
+        : {}),
     },
   };
+
+  // Lower every private container from Score, without allowing repo-spec runtime overrides.
+  const companions = Object.entries(m.containers)
+    .filter(([n]) => n !== containerName)
+    .map(([name, c]) => {
+      const limits = c.resources?.limits ?? {};
+      const requests = c.resources?.requests ?? {};
+      const command = [...(c.command ?? []), ...(c.args ?? [])];
+      if (
+        Object.values(c.variables ?? {}).some((v) =>
+          WHOLE_RESOURCE_PLACEHOLDER_RE.test(v)
+        )
+      )
+        throw new WorkloadManifestError([
+          {
+            code: "unsupported_placeholder",
+            path: `containers.${name}.variables`,
+            message:
+              "private companions cannot consume retained state bindings",
+          },
+        ]);
+      let image = c.image;
+      let imagePending = false;
+      if (image === BUILT_IMAGE_REF) {
+        image = options.builtImage ?? options.pendingImage ?? "";
+        imagePending = !options.builtImage && !!options.pendingImage;
+        if (!image)
+          throw new WorkloadManifestError([
+            {
+              code: "built_image_unresolved",
+              path: `containers.${name}.image`,
+              message: "node-built companion needs the same-source bundle",
+            },
+          ]);
+      }
+      return {
+        name,
+        image,
+        ...(imagePending ? { imagePending: true as const } : {}),
+        ...(command.length ? { command } : {}),
+        port: c.readinessProbe?.httpGet?.port,
+        ready: c.readinessProbe?.httpGet?.path,
+        cpu: quantityToCpu((limits.cpu ?? requests.cpu) as string),
+        memoryMi: quantityToMi((limits.memory ?? requests.memory) as string),
+        storageMi:
+          storage === undefined ? DEFAULT_STORAGE_MI : quantityToMi(storage),
+        env: { ...c.variables },
+      };
+    });
+  const completeApp =
+    companions.length || annotations[ANNOTATION.qualificationPath]
+      ? {
+          ...app,
+          serviceName: containerName,
+          ...(companions.length ? { companions } : {}),
+        }
+      : app;
 
   // Re-parse through the deploy-spec schema: it is the last gate, and it fixes the key order, so the
   // lowered spec serializes byte-identically to a spec parsed from the old repo-spec block.
   const out: NodeWorkloadSpec[] = [];
-  for (const spec of [...states, app]) {
+  for (const spec of [...states, completeApp]) {
     const parsed = nodeWorkloadSpecSchema.safeParse(spec);
     if (!parsed.success)
       throw new WorkloadManifestError(

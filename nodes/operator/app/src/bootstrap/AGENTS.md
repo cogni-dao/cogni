@@ -82,6 +82,8 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
 - `http/` - Route wrappers and rate limiting
 - `jobs/` - Job modules (advisory lock + container wiring for CLI-invoked tasks)
 
+- `composeNodeDeployLanes` (`node-deploy-lanes.ts`) wires the same recovery lanes with one explicit workload-zone binding. Missing/invalid zone or owner refuses fresh HTTP/DNS effects without stopping paid observation, cleanup or state reconciliation. Native clients, leadership and process lifecycle stay in `node-deploy-sequencer.ts`.
+
 ## Responsibilities
 
 - This directory **does**:

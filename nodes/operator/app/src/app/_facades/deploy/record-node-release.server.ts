@@ -58,6 +58,10 @@ import {
 import type { ResolvedNodeSource } from "@/ports";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
+import {
+  resolveWorkloadZoneBinding,
+  WorkloadZoneConfigError,
+} from "@/shared/node-registry/fleet-ownership";
 
 /**
  * G4 canary-only exception: the one production state workload admitted before backups exist. It
@@ -102,6 +106,17 @@ export async function recordNodeRelease(
   const repo = envConfig.NODE_SUBMODULE_PARENT_REPO;
   if (!owner || !repo)
     return refused(503, { error: "deploy_target_not_configured" });
+  let workloadZone: ReturnType<typeof resolveWorkloadZoneBinding>;
+  try {
+    workloadZone = resolveWorkloadZoneBinding({
+      fleetOwner: owner,
+      zoneName: envConfig.NODE_DEPLOY_WORKLOAD_ZONE,
+    });
+  } catch (error) {
+    if (error instanceof WorkloadZoneConfigError)
+      return refused(503, { error: error.code });
+    throw error;
+  }
 
   let source: ResolvedNodeSource;
   let read: WorkloadDeclarationsRead;
@@ -111,6 +126,8 @@ export async function recordNodeRelease(
       parentOwner: owner,
       parentRepo: repo,
     });
+    if (source.owner.toLowerCase() !== workloadZone.fleetOwner)
+      return refused(409, { error: "node_not_in_fleet" });
     read = await readWorkloadDeclarations(createDeclarationReader(envConfig), {
       owner: source.owner,
       repo: source.repo,
@@ -150,12 +167,15 @@ export async function recordNodeRelease(
   let spec: ReturnType<typeof resolveWorkloadDeclaration>;
   try {
     spec = resolveWorkloadDeclaration({
+      workloadZone,
+      nodeSlug: node.slug,
       repoSpecText: read.repoSpecText,
       manifests: read.manifests,
       nodeId: node.id,
       env,
       workload,
       pendingImage,
+      sourceRepository: `${source.owner}/${source.repo}`,
     });
   } catch (error) {
     if (error instanceof DeclarationError)

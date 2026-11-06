@@ -8,12 +8,13 @@
  *   superseded|failed`), the park reason, the lead-time timestamps and the attempt timelines. A node
  *   developer reads deploy progress, success and failure from this view — never by polling `/version`.
  *   task.5400 / story.5127 (CEO: "a PARKED release is invisible").
- * Scope: Pure. No IO, no clock, no policy: it only READS what the sequencer already wrote. It decides
+ * Scope: Pure projections plus port-backed workload reads; no clock or mutation policy. It decides
  *   nothing the sequencer decides; where the two must agree (the park threshold, the in-flight
  *   phases, `consecutiveFailures`) it reuses the sequencer's own definitions.
  * Invariants:
- *   - DERIVED_NOT_STORED: `releaseState` is computed on every read from attempt phases; there is no
+ *   - DERIVED_NOT_STORED: `releaseState` reads terminal admission refusal plus attempt phases; there is no
  *     state column to drift from the sequencer's truth.
+ *     `admissionRefusal` exposes the terminal verdict independently of recovery or serving phase.
  *   - STATE_TABLE (the release the workload's desired row points at — `current`):
  *       active       an attempt of the release is in phase `active` (it serves).
  *       deploying    an attempt is mid-flight (`planned|created|proving|proven`), OR any attempt of the
@@ -32,7 +33,7 @@
  *   - LEAD_TIME: `leadTimeMs = activatedAt - recordedAt` (intent recorded -> first activation); null
  *     until the release first activates.
  *   - TOLERANT_OF_OLD_ROWS: an attempt that predates the timeline reads as an empty `steps[]`.
- * Side-effects: none
+ * Side-effects: IO (read-only store through the injected port)
  * Links: contracts/deploy.workloads.v1.contract.ts, features/node-deploy/sequencer.ts, task.5400
  * @public
  */
@@ -42,6 +43,7 @@ import type {
   DeployReleaseDetail,
   DeployReleaseState,
   DeployReleaseTimeline,
+  DeployWorkloadsRead,
   DeployWorkloadView,
 } from "@/contracts/deploy.workloads.v1.contract";
 import {
@@ -50,6 +52,7 @@ import {
   type DesiredRow,
   IN_FLIGHT_PHASES,
   type ReleaseRow,
+  type StorePort,
 } from "@/ports";
 import { DEFAULT_SEQUENCER_CONFIG } from "./sequencer";
 
@@ -78,6 +81,7 @@ export function toAttemptView(a: AttemptRow): DeployAttemptView {
     leasedAt: iso(a.leasedAt),
     updatedAt: iso(a.updatedAt),
     steps: (a.steps ?? []).map((s) => ({ ...s })),
+    ...(a.transport ? { transport: a.transport } : {}),
   };
 }
 
@@ -88,7 +92,10 @@ export function toAttemptView(a: AttemptRow): DeployAttemptView {
  * release's own attempts are selected here, the whole set is needed for the `closing` rule.
  */
 export function deriveReleaseTimeline(input: {
-  readonly release: Pick<ReleaseRow, "id" | "sourceSha"> & {
+  readonly release: Pick<
+    ReleaseRow,
+    "id" | "sourceSha" | "admissionRefusal"
+  > & {
     readonly createdAt?: Date | undefined;
   };
   readonly currentReleaseId: string | undefined;
@@ -131,6 +138,10 @@ export function deriveReleaseTimeline(input: {
   const base = {
     releaseId: input.release.id,
     sourceSha: input.release.sourceSha,
+    // Keep terminal admission visible even while recovery is deploying/closing, or a legacy
+    // serving attempt still owns traffic. Attempts remain the independent recovery projection.
+    admissionRefusal: input.release.admissionRefusal ?? null,
+    admissionRefusedAt: input.release.admissionRefusal?.at ?? null,
     current,
     /** True when an attempt of THIS release backs the workload's live lease (any release). */
     serving: servingAttempt !== undefined,
@@ -155,6 +166,8 @@ export function deriveReleaseTimeline(input: {
   const failures = consecutiveFailures(ofRelease);
   if (!parkedByStep && all.some((a) => a.phase === "closing"))
     return done("deploying");
+  if (input.release.admissionRefusal)
+    return done("parked", input.release.admissionRefusal.reason);
   // PARK_IS_THE_SEQUENCER'S_VERDICT (task.5409): only the sequencer's own `release_parked` step parks a
   // release. At the limit it may still grant one last-resort stop-then-start, so a count alone is `failed`.
   if (parkedByStep) {
@@ -186,6 +199,7 @@ export function buildWorkloadView(input: {
           id: desired.releaseId,
           sourceSha: release.sourceSha,
           createdAt: release.createdAt,
+          admissionRefusal: release.admissionRefusal,
         },
         currentReleaseId: desired.releaseId,
         attemptsNewestFirst,
@@ -200,6 +214,8 @@ export function buildWorkloadView(input: {
       sourceSha: release?.sourceSha,
       releaseState: t?.releaseState ?? "failed",
       parkedReason: t?.parkedReason ?? null,
+      admissionRefusal: t?.admissionRefusal ?? null,
+      admissionRefusedAt: t?.admissionRefusedAt ?? null,
       recordedAt: t?.recordedAt ?? null,
       startedAt: t?.startedAt ?? null,
       activatedAt: t?.activatedAt ?? null,
@@ -242,4 +258,32 @@ export function buildReleaseDetail(input: {
       .reverse()
       .map(toAttemptView),
   };
+}
+
+/** Read the same durable workload projection for the node deploy-state surface. */
+export async function readNodeDeployWorkloads(
+  store: StorePort,
+  nodeId: string,
+  environments: readonly DeployWorkloadsRead["env"][]
+): Promise<DeployWorkloadsRead[]> {
+  return Promise.all(
+    environments.map(async (env) => {
+      const desired = (await store.listDesired(env)).filter(
+        (row) => row.nodeId === nodeId
+      );
+      return {
+        nodeId,
+        env,
+        workloads: await Promise.all(
+          desired.map(async (row) =>
+            buildWorkloadView({
+              desired: row,
+              release: await store.getRelease(row.releaseId),
+              attemptsNewestFirst: await store.attemptsFor(row),
+            })
+          )
+        ),
+      };
+    })
+  );
 }

@@ -17,6 +17,14 @@
  */
 
 export interface BuiltImageResolverPort {
+  /** Check every immutable selected manifest before allocating an attempt. No tag replacement. */
+  checkImageManifests?(images: readonly string[]): Promise<boolean>;
+  /** Read the existing CI publication by accepted digest when supplied; never assemble image tags. */
+  resolveArtifactBundle?(input: {
+    readonly imageRepository: string;
+    readonly sourceSha: string;
+    readonly acceptedDigest?: string;
+  }): Promise<{ readonly digestRef: string; readonly bundle: unknown } | null>;
   /**
    * Resolve `${imageRepository}:sha-${sourceSha}` to `${imageRepository}@sha256:<digest>`.
    * Returns null when the image does not exist (or is not publicly readable).
@@ -31,7 +39,10 @@ export interface BuiltImageResolverPort {
 
 /** The registry failed (network, 5xx, malformed answer). The caller maps it to a retryable 502. */
 export class BuiltImageRegistryError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly invalid = false
+  ) {
     super(message);
     this.name = "BuiltImageRegistryError";
   }

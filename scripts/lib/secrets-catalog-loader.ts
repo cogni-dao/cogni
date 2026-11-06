@@ -68,6 +68,18 @@ function deriveCogniNodeEndpoints(): string {
 // ── Schema ──────────────────────────────────────────────────────────────────
 
 const TierSchema = z.enum(["A1", "A2", "B", "D", "E", "F", "G"]);
+const SecretEnvironmentSchema = z.enum([
+  "candidate-a",
+  "preview",
+  "production",
+]);
+const InheritEnvironmentByLaneSchema = z
+  .object({
+    "candidate-a": z.enum(["lane", "control"]).optional(),
+    preview: z.enum(["lane", "control"]).optional(),
+    production: z.enum(["lane", "control"]).optional(),
+  })
+  .strict();
 
 // Capability classes a secret can be gated to (design.secrets-catalog-per-node
 // §Amendment v2). An operator-domain entry uses `appliesTo:` instead of a
@@ -189,6 +201,8 @@ const CatalogEntrySchema = z
     // byte-match one owner (SCHEDULER_API_TOKEN ← scheduler-worker). See
     // scripts/ci/secret-materialize.sh inherit_shared_value + bug.5021.
     inheritFrom: z.string().optional(),
+    // Staged producer binding: omitted lanes retain their current control owner.
+    inheritEnvironmentByLane: InheritEnvironmentByLaneSchema.optional(),
     // Explicit fan-out destinations (supersedes the old `coConsumed` boolean).
     // The pod emitter (print-pod-keys.ts) includes a key iff `pod` ∈ consumedBy.
     // `tier` stays the source/authority; `consumedBy` is where it's consumed.
@@ -220,7 +234,13 @@ const CatalogEntrySchema = z
   .refine((e) => !(e.service !== undefined && e.appliesTo !== undefined), {
     message:
       "entry declares both service: and appliesTo: — they are mutually exclusive (service = one node; appliesTo = capability fan-out)",
-  });
+  })
+  .refine(
+    (e) => e.inheritEnvironmentByLane === undefined || Boolean(e.inheritFrom),
+    {
+      message: "inheritEnvironmentByLane requires inheritFrom",
+    }
+  );
 
 type CatalogEntry = z.infer<typeof CatalogEntrySchema>;
 
@@ -261,6 +281,10 @@ export interface SecretRouting {
    *  `cogni/<env>/<inheritFrom>/<KEY>` (canonical-custody lane) instead of the
    *  blind ancestor scan. Set when the value must byte-match one owner. */
   inheritFrom?: string;
+  /** Select a lane-owned producer without changing the other lanes' owner. */
+  inheritEnvironmentByLane?: Partial<
+    Record<"candidate-a" | "preview" | "production", "lane" | "control">
+  >;
   /** Explicit consumption destinations. `pod` ∈ consumedBy ⟹ the key fans out
    *  to node-app pods (the print-pod-keys universe). Absent ⟹ defaulted from
    *  tier+path by the emitter. */
@@ -379,11 +403,29 @@ export function loadSecretsCatalog(opts: LoadOptions): LoadResult {
     if (entry.appliesTo !== undefined) r.appliesTo = entry.appliesTo;
     if (entry.shared !== undefined) r.shared = entry.shared;
     if (entry.inheritFrom !== undefined) r.inheritFrom = entry.inheritFrom;
+    if (entry.inheritEnvironmentByLane !== undefined)
+      r.inheritEnvironmentByLane = entry.inheritEnvironmentByLane;
     if (entry.consumedBy !== undefined) r.consumedBy = entry.consumedBy;
     routing[entry.name] = r;
   }
 
   return { secrets, routing };
+}
+
+/** Resolve byte authority once; custody/writer identity do not change. */
+export function inheritedSecretOwner(
+  routing: SecretRouting,
+  laneInput: string,
+  controlInput: string
+): { environment: string; service: string } | null {
+  const lane = SecretEnvironmentSchema.parse(laneInput);
+  const control = SecretEnvironmentSchema.parse(controlInput);
+  if (!routing.inheritFrom) return null;
+  const selector = routing.inheritEnvironmentByLane?.[lane] ?? "control";
+  return {
+    environment: selector === "lane" ? lane : control,
+    service: routing.inheritFrom,
+  };
 }
 
 /**

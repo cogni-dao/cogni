@@ -41,14 +41,24 @@
  *     unset owner admits no remote-source node, so the test operator never deploys canonical nodes.
  *   - IMAGE_PINNED_BEFORE_PAY (story.5137): every lane resolves a pending release image through the anonymous
  *     ghcr resolver and pins the digest write-once before any paid create.
- *   - ONE_EDGE_ZONE (story.5137): `NODE_DEPLOY_WORKLOAD_ZONE` names the DNS zone node hosts live in. Unset = the
- *     previous edge behavior remains for recovery, while fresh node app creates are refused. Set (the isolated test
- *     operator: `cogni-testing.org`) = the edge guard and ownership check use that zone, and the zone id is
- *     looked up BY NAME with the scoped token, so the id can never name a zone the token cannot write. A failed
- *     lookup leaves the edge unconfigured (http apps refused before paying). Operator and substrate hosts are
- *     not node hosts and stay where they are.
+ *   - ONE_EDGE_ZONE (story.5137): `NODE_DEPLOY_FLEET_OWNER` + `NODE_DEPLOY_WORKLOAD_ZONE` resolve ONE fleet binding
+ *     (`resolveWorkloadZoneBinding`) in `composeNodeDeployLanes`, the one lane composition. The zone id is looked up
+ *     BY NAME with the zone-scoped token (`resolveCloudflareZoneId`), so it can never name a zone the token cannot
+ *     read, and the DNS adapter re-verifies that native id/name before every use. An invalid binding or a failed
+ *     lookup leaves the edge unconfigured: recovery continues, fresh http apps wait before paying. Operator and
+ *     substrate hosts are not node hosts and stay where they are.
  *   - INTERIM_APP_PROVIDERS (task.5405): `NODE_DEPLOY_APP_PROVIDERS` (comma-separated akash accounts, max 16)
  *     is sent as `allowProviders` on every APP create; unset sends none.
+ *   - MESH_LANES_ONLY (task.5431): a lane whose `NODE_DEPLOY_SUBSTRATE_TRANSPORTS` value is `mesh` gets its
+ *     env tailnet: a `HeadscaleSocketAdapter` over `/var/run/headscale/<env>/headscale.sock` (the pod-local socket
+ *     task.5428 shares with this container only; no API key exists), one `MeshPlane`, the attempt-key
+ *     Secrets in the lane's `cogni-node-deploy-<env>` namespace, and the env VM's published `substrate-gw`
+ *     request read over verified HTTPS. Its mesh pass runs inside the reconcile loop, under the leader lock.
+ *     An egress lane builds none of it.
+ *   - MESH_DNS_IN_ZONE (task.5428): `NODE_DEPLOY_MESH_DNS_RECORDS` (`mesh-<t>=<vm alias>,derp-<t>=<vm alias>`)
+ *     names the DNS-only mesh hosts this process alone can write: the test tailnet's hosts in the test zone,
+ *     whose token only the test operator holds. The leader writes them through the SAME bound-zone client the
+ *     edge uses, every 10 minutes, and logs one `node_deploy_sequencer_mesh_dns` line per record per pass.
  * Side-effects: IO (Postgres, actuator HTTP, Cloudflare, Kubernetes API, provider ingress; health listener)
  * Links: @features/node-deploy/sequencer, infra/k8s/base/node-deploy-sequencer, task.5400
  * @internal
@@ -68,31 +78,43 @@ import {
   EsoNodeRuntimeSecrets,
   GhcrBuiltImageResolver,
   HttpProbe,
+  HttpsSubstrateRequestSource,
   ImageCatalogNodes,
+  KubernetesMeshKeys,
   KubernetesStatePasswords,
   PostgresNodeDeployStore,
   resolveCloudflareZoneId,
 } from "@/adapters/server";
+// By path, not the barrel: the Headscale gRPC client stays out of `@/adapters/server`, which the Next app imports.
+import { HeadscaleSocketAdapter } from "@/adapters/server/node-deploy/headscale.adapter";
 import {
-  DEFAULT_EDGE_ZONE,
-  EdgeRouter,
-  edgeHostRegexFor,
-} from "@/features/node-deploy/edge";
-import {
+  type EnvLane,
   EnvLaneConfigError,
   EnvLaneSequencers,
   resolveEnvLanes,
 } from "@/features/node-deploy/env-lanes";
 import {
-  DEFAULT_SEQUENCER_CONFIG,
-  NodeDeploySequencer,
-} from "@/features/node-deploy/sequencer";
-import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
+  ensureMeshDnsRecords,
+  MeshDnsConfigError,
+  type MeshDnsRecord,
+  parseMeshDnsRecords,
+} from "@/features/node-deploy/mesh-dns";
+import { MeshPlane } from "@/features/node-deploy/mesh-plane";
+import { DEFAULT_SEQUENCER_CONFIG } from "@/features/node-deploy/sequencer";
+import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
+import { composeNodeDeployLanes } from "./node-deploy-lanes";
 
 const LISTEN_PORT = 8080;
 const CREDENTIAL_DIR = "/var/run/secrets/node-deploy-sequencer";
 const TICK_MS = 5_000;
 const RECONCILE_MS = 60_000;
+/**
+ * task.5428: each tailnet Headscale's unix socket, `/var/run/headscale/<tailnet>/headscale.sock`, on a
+ * pod-local volume shared by that Headscale container and this one only (`unix_socket` in its config).
+ */
+const headscaleSocketFor = (tailnet: string): string =>
+  `/var/run/headscale/${tailnet}/headscale.sock`;
+const MESH_DNS_MS = 600_000;
 
 // biome-ignore lint/style/noProcessEnv: dedicated process composition root validates its own minimal env
 const runtimeEnv = process.env;
@@ -161,6 +183,8 @@ try {
     secretsNamespace: runtimeEnv.NODE_DEPLOY_SECRETS_NAMESPACE,
     substrateHost: runtimeEnv.NODE_DEPLOY_SUBSTRATE_HOST,
     substrateHosts: runtimeEnv.NODE_DEPLOY_SUBSTRATE_HOSTS,
+    substrateTransports: runtimeEnv.NODE_DEPLOY_SUBSTRATE_TRANSPORTS,
+    meshZone: runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE,
   });
 } catch (error) {
   if (!(error instanceof EnvLaneConfigError)) throw error;
@@ -194,130 +218,207 @@ const probe = new HttpProbe();
 const chain = runtimeEnv.AKASH_CHAIN_OWNER
   ? new AkashChainTruth({ owner: runtimeEnv.AKASH_CHAIN_OWNER })
   : undefined;
-// Preserve existing edge recovery; fresh node apps require a valid explicit fleet zone.
+// The org that owns this fleet's nodes' source repos (the canonical fleet is `cogni-dao`). The SAME filter the
+// route applies (`isFleetOwnedRow`): unset admits no remote-source node, so a sequencer that was never told its
+// fleet (the test operator) can never claim a host for a canonical node. story.5137 CD4.
 const fleetOwner = runtimeEnv.NODE_DEPLOY_FLEET_OWNER?.trim() || undefined;
-let edgeZoneSetting: string | undefined;
-let validFleetZone = false;
-try {
-  edgeZoneSetting = resolveWorkloadZoneBinding({
-    fleetOwner,
-    zoneName: runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE,
-  }).zoneName;
-  validFleetZone = true;
-} catch {
-  log.warn(
-    "node_deploy_sequencer_fleet_zone_invalid: fresh node app creates refused"
-  );
-}
-const edgeZone = edgeZoneSetting ?? DEFAULT_EDGE_ZONE;
-let edgeZoneId: string | undefined = cfZone || undefined;
-if (edgeZoneSetting && cfToken) {
-  edgeZoneId = await resolveCloudflareZoneId({
-    apiToken: cfToken,
-    zoneName: edgeZoneSetting,
-  }).catch((error: unknown) => {
+const images = new GhcrBuiltImageResolver();
+
+/**
+ * ONE_EDGE_ZONE: the zone id comes from the bound zone's NAME and the zone-scoped token's own view
+ * (`GET /zones?name=`), never from a stored id that may name another zone (the test operator's stored
+ * CLOUDFLARE_ZONE_ID need not be cogni-testing.org). The adapter still re-verifies that id/name before use.
+ */
+async function edgeDnsFor(binding: WorkloadZoneBinding) {
+  if (!cfToken) return undefined;
+  let zoneId: string;
+  try {
+    zoneId = await resolveCloudflareZoneId({
+      apiToken: cfToken,
+      zoneName: binding.zoneName,
+    });
+  } catch (error) {
     log.error(
       {
         environment,
-        edgeZone,
+        edgeZone: binding.zoneName,
         causeMessage:
           error instanceof Error ? error.message.slice(0, 300) : "unknown",
       },
       "node_deploy_sequencer_edge_zone_unresolved"
     );
     return undefined;
-  });
-  if (edgeZoneId && cfZone && cfZone !== edgeZoneId)
+  }
+  if (cfZone && cfZone !== zoneId)
     log.warn(
-      { environment, edgeZone, storedZoneId: cfZone, edgeZoneId },
+      { environment, edgeZone: binding.zoneName, storedZoneId: cfZone, zoneId },
       "node_deploy_sequencer_edge_zone_id_differs: using the id the token resolves for the edge zone"
     );
+  return new CloudflareDnsRecords({
+    binding,
+    apiToken: cfToken,
+    zoneId,
+    // Re-read the projected token so rotation re-verifies identity; the zone id stays the resolved one.
+    readCredentials: async () => ({
+      apiToken: await readCredential("CLOUDFLARE_API_TOKEN"),
+      zoneId,
+    }),
+  });
 }
-const dnsRecords =
-  cfToken && edgeZoneId
-    ? new CloudflareDnsRecords({ apiToken: cfToken, zoneId: edgeZoneId })
-    : undefined;
-if (!dnsRecords) {
+
+/**
+ * The tailnet of one lane. A mesh lane mints; an egress lane drains (task.5431 B5): it keeps revoking
+ * keys and deleting Secrets of mesh attempts left from a switch-back, and does nothing while none are
+ * left (no Headscale call), so a lane with no coordinator stays quiet.
+ */
+function meshFor(lane: EnvLane) {
+  const mode = lane.substrateTransport === "mesh" ? "mint" : "drain";
+  const tailnet = lane.meshTailnet;
+  log.info(
+    {
+      environment: lane.environment,
+      tailnet,
+      mode,
+      controlUrl: lane.meshControlUrl,
+      socket: headscaleSocketFor(tailnet),
+    },
+    "node_deploy_sequencer_mesh_lane"
+  );
+  return {
+    mode,
+    plane: new MeshPlane(
+      new HeadscaleSocketAdapter({ socketPath: headscaleSocketFor(tailnet) }),
+      tailnet
+    ),
+    keys: new KubernetesMeshKeys(lane.secretsNamespace),
+    substrateRequests: new HttpsSubstrateRequestSource(
+      lane.substrateHost,
+      tailnet
+    ),
+    controlUrl: lane.meshControlUrl ?? "",
+  } as const;
+}
+
+// Resolve new-effect authority without disabling the existing paid-effect recovery owner.
+const composed = await composeNodeDeployLanes({
+  fleetOwner,
+  zoneName: runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE,
+  lanes,
+  dnsRecordsFor: edgeDnsFor,
+  nodeDeploySlugs: (env, owner) => catalog.nodeDeploySlugs(env, owner),
+  depsForLane: (lane) => {
+    const mesh = meshFor(lane);
+    return {
+      store,
+      payer,
+      probe,
+      images,
+      mesh,
+      secrets: new KubernetesStatePasswords(
+        lane.secretsNamespace,
+        lane.environment
+      ),
+      runtime: {
+        secrets: new EsoNodeRuntimeSecrets({
+          namespace: lane.secretsNamespace,
+        }),
+        catalog,
+        substrateHost: lane.substrateHost,
+        operatorDomain: lane.operatorDomain,
+      },
+      ...(chain ? { chain } : {}),
+      clock: {
+        now: () => Date.now(),
+        sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+      },
+      log,
+      config: {
+        ...DEFAULT_SEQUENCER_CONFIG,
+        namespace,
+        environment: lane.environment,
+        ...(appProviders.length > 0 ? { appProviders } : {}),
+        retainMs: num(
+          runtimeEnv.NODE_DEPLOY_RETAIN_MS,
+          DEFAULT_SEQUENCER_CONFIG.retainMs,
+          0
+        ),
+      },
+    };
+  },
+});
+if (!composed.edgeConfigured) {
   log.warn(
-    { environment, namespace },
-    "node_deploy_sequencer_edge_unconfigured: http apps will be refused before paying"
+    {
+      environment,
+      namespace,
+      reason: composed.authority.ok
+        ? "edge_not_configured"
+        : composed.authority.reason,
+    },
+    "node_deploy_sequencer_edge_unconfigured: recovery continues; fresh http apps refused before paying"
   );
 }
+const laneSequencers = composed.lanes;
 
-// The org that owns this fleet's nodes' source repos (the canonical fleet is `cogni-dao`). The SAME filter the
-// route applies (`isFleetOwnedRow`): unset admits no remote-source node, so a sequencer that was never told its
-// fleet (the test operator) can never claim a host for a canonical node. story.5137 CD4.
-const images = new GhcrBuiltImageResolver();
+// task.5428 MESH_DNS_IN_ZONE: the declared DNS-only mesh hosts, written with the bound zone's own client.
+let meshDnsRecords: readonly MeshDnsRecord[];
+try {
+  meshDnsRecords = parseMeshDnsRecords(runtimeEnv.NODE_DEPLOY_MESH_DNS_RECORDS);
+} catch (error) {
+  if (!(error instanceof MeshDnsConfigError)) throw error;
+  log.fatal(
+    { reason: "MeshDnsConfigInvalid", causeMessage: error.message },
+    "node_deploy_sequencer_mesh_dns_invalid"
+  );
+  throw error;
+}
+const meshDnsBinding = composed.authority.ok
+  ? composed.authority.binding
+  : undefined;
+const meshDns =
+  meshDnsRecords.length > 0 && meshDnsBinding
+    ? await edgeDnsFor(meshDnsBinding)
+    : undefined;
 
-const laneSequencers = await Promise.all(
-  lanes.map(async (lane) => {
-    const edgeHostRegex = edgeHostRegexFor(
-      await catalog.nodeDeploySlugs(lane.environment, fleetOwner),
-      edgeZone
-    );
-    log.info(
-      {
-        environment: lane.environment,
-        secretsNamespace: lane.secretsNamespace,
-        substrateHost: lane.substrateHost,
-        fleetOwner,
-        edgeZone,
-        edgeHostRegex: String(edgeHostRegex),
-      },
-      "node_deploy_sequencer_edge_hosts"
-    );
-    return {
-      environment: lane.environment,
-      sequencer: new NodeDeploySequencer({
-        store,
-        payer,
-        edge: dnsRecords
-          ? new EdgeRouter(dnsRecords, edgeHostRegex)
-          : undefined,
-        probe,
-        images,
-        secrets: new KubernetesStatePasswords(
-          lane.secretsNamespace,
-          lane.environment
-        ),
-        runtime: {
-          secrets: new EsoNodeRuntimeSecrets({
-            namespace: lane.secretsNamespace,
-          }),
-          catalog,
-          substrateHost: lane.substrateHost,
-          operatorDomain: lane.operatorDomain,
-          fleetBinding: validFleetZone
-            ? { valid: true }
-            : {
-                valid: false,
-                reason:
-                  "NODE_DEPLOY_FLEET_OWNER or NODE_DEPLOY_WORKLOAD_ZONE is missing or invalid",
-              },
-          edgeZone,
+async function writeMeshDns(): Promise<void> {
+  if (meshDnsRecords.length === 0) return;
+  const zone = meshDnsBinding?.zoneName;
+  if (!meshDns || !meshDnsBinding) {
+    for (const r of meshDnsRecords)
+      log.error(
+        {
+          environment,
+          host: `${r.label}.${zone ?? "?"}`,
+          target: r.target,
+          outcome: "unconfigured",
         },
-        ...(chain ? { chain } : {}),
-        clock: {
-          now: () => Date.now(),
-          sleep: (ms) =>
-            new Promise<void>((resolve) => setTimeout(resolve, ms)),
+        "node_deploy_sequencer_mesh_dns"
+      );
+    return;
+  }
+  try {
+    for (const r of await ensureMeshDnsRecords(
+      meshDns,
+      meshDnsBinding,
+      meshDnsRecords
+    ))
+      log.info({ environment, ...r }, "node_deploy_sequencer_mesh_dns");
+  } catch (error) {
+    const causeMessage =
+      error instanceof Error ? error.message.slice(0, 300) : "unknown";
+    for (const r of meshDnsRecords)
+      log.error(
+        {
+          environment,
+          host: `${r.label}.${zone}`,
+          target: r.target,
+          outcome: "failed",
+          causeMessage,
         },
-        log,
-        config: {
-          ...DEFAULT_SEQUENCER_CONFIG,
-          namespace,
-          environment: lane.environment,
-          ...(appProviders.length > 0 ? { appProviders } : {}),
-          retainMs: num(
-            runtimeEnv.NODE_DEPLOY_RETAIN_MS,
-            DEFAULT_SEQUENCER_CONFIG.retainMs,
-            0
-          ),
-        },
-      }),
-    };
-  })
-);
+        "node_deploy_sequencer_mesh_dns"
+      );
+  }
+}
 
 /** A failure that repeats every pass is logged once per 10 minutes per (loop, env, message). */
 const loopErrorAt = new Map<string, number>();
@@ -443,6 +544,10 @@ loop("tick", TICK_MS, async () => {
 loop("reconcile", RECONCILE_MS, async () => {
   await assertLeader();
   await sequencer.reconcileAll();
+});
+loop("mesh-dns", MESH_DNS_MS, async () => {
+  await assertLeader();
+  await writeMeshDns();
 });
 
 function shutdown(signal: string): void {

@@ -7,3 +7,4 @@ resources:
   - service-account.yaml
   - rbac.yaml
   - admission-policy.yaml
+  - attempt-secret-delete-policy.yaml

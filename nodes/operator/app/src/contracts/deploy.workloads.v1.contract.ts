@@ -26,12 +26,24 @@ export const DeployWorkloadEnvSchema = z.enum([
   "production",
 ]);
 
+/**
+ * A workload name: a DNS label that never contains `-mesh-` (task.5431). The sequencer's attempt-key
+ * Secrets `nd-<id8>-<workload>-mesh-<release>-a<n>` are the only Secrets it may delete; refusing `-mesh-`
+ * keeps every state password `nd-<id8>-<workload>` outside that allow-list. Same rule as repo-spec
+ * `WORKLOAD_NAME_RE`; `tests/contract/deploy-workload-name.contract.test.ts` keeps the two in step.
+ */
+export const DEPLOY_WORKLOAD_NAME_RE = /^(?!.*-mesh-)[a-z][a-z0-9-]{0,62}$/;
+export const DeployWorkloadNameSchema = z
+  .string()
+  .regex(
+    DEPLOY_WORKLOAD_NAME_RE,
+    "workload must be a DNS-safe name that does not contain -mesh-"
+  );
+
 export const DeployWorkloadInputSchema = z.strictObject({
   nodeId: z.string().min(1).describe("Node UUID or unique slug"),
   env: DeployWorkloadEnvSchema,
-  workload: z
-    .string()
-    .regex(/^[a-z][a-z0-9-]{0,62}$/, "workload must be a DNS-safe name"),
+  workload: DeployWorkloadNameSchema,
   sourceSha: z.string().regex(/^[0-9a-f]{40}$/, "expected a full 40-hex sha"),
 });
 
@@ -39,18 +51,13 @@ export const DeployWorkloadInputSchema = z.strictObject({
 export const DeployWorkloadGameDayInputSchema = z.strictObject({
   nodeId: z.string().min(1).describe("Node UUID or unique slug"),
   env: DeployWorkloadEnvSchema,
-  workload: z
-    .string()
-    .regex(/^[a-z][a-z0-9-]{0,62}$/, "workload must be a DNS-safe name"),
+  workload: DeployWorkloadNameSchema,
 });
 
 export const DeployWorkloadQuerySchema = z.strictObject({
   nodeId: z.string().min(1),
   env: DeployWorkloadEnvSchema,
-  workload: z
-    .string()
-    .regex(/^[a-z][a-z0-9-]{0,62}$/)
-    .optional(),
+  workload: DeployWorkloadNameSchema.optional(),
 });
 
 export const DeployWorkloadRecordedSchema = z.object({
@@ -124,6 +131,14 @@ export const DeployAttemptViewSchema = z.object({
   updatedAt: z.string().nullable(),
   /** Oldest first, newest 100 kept; empty for attempts that predate the timeline. */
   steps: z.array(DeployAttemptStepSchema),
+  /** How the attempt reaches the shared substrate (task.5431, HR 18); absent on older attempts. */
+  transport: z.enum(["egress", "mesh"]).optional(),
+});
+
+/** Admission is independent of outstanding paid-effect recovery and serving state. */
+const AdmissionRefusalSchema = z.object({
+  reason: z.string(),
+  at: z.string().datetime(),
 });
 
 /** Release state + lead-time timestamps (ISO-8601). `leadTimeMs = activatedAt - recordedAt`. */
@@ -136,6 +151,10 @@ export const DeployReleaseTimelineSchema = z.object({
   serving: z.boolean(),
   releaseState: DeployReleaseStateSchema,
   parkedReason: z.string().nullable(),
+  /** Terminal verdict, including while an older paid effect is still being recovered. */
+  admissionRefusal: AdmissionRefusalSchema.nullable().optional(),
+  /** Terminal admission refusal time; absent on older responses. */
+  admissionRefusedAt: z.string().datetime().nullable().optional(),
   recordedAt: z.string().nullable(),
   startedAt: z.string().nullable(),
   activatedAt: z.string().nullable(),
@@ -151,6 +170,9 @@ export const DeployWorkloadViewSchema = z.object({
     sourceSha: z.string().optional(),
     releaseState: DeployReleaseStateSchema,
     parkedReason: z.string().nullable(),
+    admissionRefusal: AdmissionRefusalSchema.nullable().optional(),
+    /** Terminal admission refusal time; absent on older responses. */
+    admissionRefusedAt: z.string().datetime().nullable().optional(),
     recordedAt: z.string().nullable(),
     startedAt: z.string().nullable(),
     activatedAt: z.string().nullable(),

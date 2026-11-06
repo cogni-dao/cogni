@@ -58,6 +58,13 @@ export const keyString = (k: WorkloadKey): string =>
 export interface ReleaseRow extends WorkloadKey {
   readonly id: string;
   readonly sourceSha: string;
+  /** Store-owned terminal admission verdict, separate from the immutable workload spec. */
+  readonly admissionRefusal?:
+    | {
+        readonly reason: string;
+        readonly at: string;
+      }
+    | undefined;
   /**
    * The spec to deploy. While `spec.imagePending` is true its image is the tag node CI publishes at
    * `sourceSha` and NO create may be sent; once the digest is pinned the store returns the spec with that
@@ -128,6 +135,42 @@ export interface AttemptRow {
   readonly updatedAt: Date;
   /** Oldest first, at most `MAX_ATTEMPT_STEPS`. Empty for attempts that predate the timeline. */
   readonly steps: readonly AttemptStep[];
+  /**
+   * HR 18 (task.5431): how this attempt reaches the env's shared substrate. Written once at insert,
+   * never changed. Undefined = an attempt that predates the field (egress).
+   */
+  readonly transport?: SubstrateTransport | undefined;
+  /** Mesh lifecycle of a `mesh` attempt. Never holds a key value. */
+  readonly mesh?: AttemptMesh | undefined;
+}
+
+/** `egress` = source-IP admission (catalog `compute_egress_cidrs`); `mesh` = the env tailnet. */
+export type SubstrateTransport = "egress" | "mesh";
+
+/**
+ * The durable mesh record of one `mesh` attempt (task.5431, hub node-service-delivery section 3). The key
+ * VALUE is never here: it lives only in the attempt's create-once Secret. `headscaleKeyId` is a provider
+ * id (PROVIDER_IDS_ARE_NAMESPACED), written BEFORE that Secret so the sweep never expires a stored key.
+ */
+export interface AttemptMesh {
+  /** The substrate ports the attempt's env points at: its companion listeners and its policy grant. */
+  readonly ports: readonly number[];
+  /** `<slug>-<workload>-<release id prefix>-a<attempt>`. */
+  readonly deviceName: string;
+  /** Companion digests, pinned once per release (CD3): every attempt of a release uses the same two. */
+  readonly images: { readonly mesh: string; readonly substrate: string };
+  readonly headscaleKeyId?: string | undefined;
+  /**
+   * HR 23: the coordinator epoch the key was minted in (the creation time of the tailnet's owner object)
+   * and the key's own creation time. An id from another epoch, or whose listed key has another creation
+   * time, names nothing of ours: it never revokes, protects or counts anything.
+   */
+  readonly headscaleEpoch?: string | undefined;
+  readonly headscaleKeyCreatedAt?: string | undefined;
+  /** ISO instant the revoke was read back (key expired, devices gone). */
+  readonly revokedAt?: string | undefined;
+  /** ISO instant the attempt's Secret was deleted (one pass after the revoke readback). */
+  readonly secretDeletedAt?: string | undefined;
 }
 
 export interface AttemptPatch {
@@ -138,6 +181,8 @@ export interface AttemptPatch {
   error?: string | null;
   unhealthySince?: Date | null;
   leasedAt?: Date;
+  /** Replaces the whole mesh record. */
+  mesh?: AttemptMesh;
 }
 
 /**
@@ -325,6 +370,7 @@ export interface DnsRecord {
   readonly proxied: boolean;
 }
 
+/** The blue/green edge's record: always proxied (edge PROXIED_REQUIRED). */
 export interface DnsRecordInput {
   readonly type: "CNAME";
   readonly name: string;
@@ -332,12 +378,37 @@ export interface DnsRecordInput {
   readonly proxied: true;
 }
 
+/**
+ * A DNS-only mesh record (task.5428, `features/node-deploy/mesh-dns`): Headscale and DERP do not work
+ * behind the Cloudflare proxy, so these are never proxied. A separate type keeps the edge's literal.
+ */
+export interface DnsOnlyRecordInput {
+  readonly type: "CNAME";
+  readonly name: string;
+  readonly content: string;
+  readonly proxied: false;
+}
+
 /** Cloudflare zone records. Deliberately NO delete (NO_DNS_DELETE). */
 export interface DnsRecordsPort {
+  /** Bound native zone ID must name this zone. Read access proves no edit permission. */
+  assertZoneIdentity(zoneName: string): Promise<void>;
   findByName(name: string): Promise<readonly DnsRecord[]>;
-  create(input: DnsRecordInput): Promise<DnsRecord>;
-  update(id: string, input: DnsRecordInput): Promise<DnsRecord>;
+  create(input: DnsRecordInput | DnsOnlyRecordInput): Promise<DnsRecord>;
+  update(
+    id: string,
+    input: DnsRecordInput | DnsOnlyRecordInput
+  ): Promise<DnsRecord>;
   read(id: string): Promise<DnsRecord>;
+}
+
+export class DnsZoneIdentityError extends Error {
+  constructor(
+    readonly code: "zone_identity_unavailable" | "zone_identity_mismatch"
+  ) {
+    super(code);
+    this.name = "DnsZoneIdentityError";
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -354,6 +425,18 @@ export interface HttpResult {
 }
 
 export interface ProbePort {
+  /**
+   * POST over verified HTTPS to the observed static ingress. That one name is the DNS target, the TLS
+   * SNI and certificate name, and the HTTP Host (a provider may answer 421 when SNI and Host differ).
+   * No redirects. On a transport failure `status` is 0 and `error` is a normalized code, never a message.
+   */
+  qualification?(input: {
+    readonly ingressHost: string;
+    readonly path: string;
+    readonly token: string;
+    readonly mode: "qualify" | "readback";
+    readonly timeoutMs: number;
+  }): Promise<HttpResult>;
   /** GET `http://<ingressHost><path>` presenting `Host: <hostHeader>` (the provider's host routing). */
   hostRouted(
     ingressHost: string,
@@ -365,6 +448,11 @@ export interface ProbePort {
    * nameservers (no local resolver, no public resolver's negative cache), real Host + SNI.
    */
   publicRead(host: string, path: string): Promise<HttpResult>;
+  /**
+   * The A records of `host` through the probe's recursive resolver (task.5431: the lane VM host, read once
+   * per mesh pass). Absent on probes that cannot resolve; a failure throws.
+   */
+  resolveAddresses?(host: string): Promise<readonly string[]>;
   /** Postgres SSLRequest handshake against a forwarded tcp port. */
   tcpTls(host: string, port: number): Promise<boolean>;
 }
@@ -394,6 +482,20 @@ export interface StorePort {
    * release deploys one image. Returns the release with its spec normalized (`withResolvedImage`).
    */
   pinResolvedImage(releaseId: string, image: string): Promise<ReleaseRow>;
+  /** Atomically append a write-once refusal to existing release JSON. Never allocate an attempt.
+   * A lost acknowledgement is unknown: callers must read the release before proceeding.
+   */
+  refuseAdmission(
+    releaseId: string,
+    refusal: NonNullable<ReleaseRow["admissionRefusal"]>
+  ): Promise<ReleaseRow>;
+  /** Accepted source-wide OCI identity, independent of target environment. */
+  acceptedBundle(release: ReleaseRow): Promise<string | undefined>;
+  /** Atomically seal spec + primary digest under the source lock; undefined means another bundle won. */
+  pinResolvedBundle(
+    releaseId: string,
+    spec: NodeWorkloadSpec
+  ): Promise<ReleaseRow | undefined>;
   /** Write the immutable release AND point desired at it (state `running`) in one transaction. */
   recordRelease(
     input: RecordReleaseInput
@@ -406,12 +508,15 @@ export interface StorePort {
    */
   insertAttempt(
     releaseId: string,
-    makeKey: (attempt: number) => string
+    makeKey: (attempt: number) => string,
+    /** Written in the same insert: the attempt's transport (HR 18) is never a second write. */
+    init?: { readonly transport?: SubstrateTransport }
   ): Promise<AttemptRow>;
   updateAttempt(id: string, patch: AttemptPatch): Promise<AttemptRow>;
   /**
    * Append one step to the attempt's timeline (atomic; keeps the newest `MAX_ATTEMPT_STEPS`).
-   * Observability only: it never changes `phase`, and a failure here must never fail a deploy.
+   * Never changes phase. Ordinary events are best-effort observability; qualification reservation
+   * and evidence require this write to succeed and be read back before proof or cutover.
    */
   appendAttemptStep(attemptId: string, step: AttemptStep): Promise<void>;
 }

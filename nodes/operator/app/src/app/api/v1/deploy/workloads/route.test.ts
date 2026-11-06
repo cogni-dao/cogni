@@ -35,9 +35,13 @@ const OPERATOR_REPO_SPEC = readFileSync(
 );
 // toks5's own repo-spec names toks5, not the operator.
 const REPO_SPEC = OPERATOR_REPO_SPEC.replaceAll(NODE_ID, TOKS5_ID);
-const CANARY = readFileSync(
+const OPERATOR_CANARY = readFileSync(
   path.join(ROOT, ".cogni/workloads/canary.yaml"),
   "utf8"
+);
+const CANARY = OPERATOR_CANARY.replaceAll(
+  "node-deploy-canary.cognidao.org",
+  "toks5.cognidao.org"
 );
 // The same manifest, but its image is "the image node CI built at this sha".
 const CANARY_BUILT = CANARY.replace(/^ {4}image: .*$/m, '    image: "."');
@@ -46,6 +50,9 @@ const TOKS5_ROW = {
   compute_api: { "candidate-a": "node-deploy" },
 };
 
+const zoneConfig = vi.hoisted(() => ({
+  value: "cognidao.org" as string | undefined,
+}));
 const gate = vi.fn();
 const envNotServed = vi.fn();
 const nodeNotOnDeployVerb = vi.fn();
@@ -80,10 +87,11 @@ vi.mock("./_lib/lane", () => ({
 }));
 vi.mock("@/shared/env", () => ({
   serverEnv: () => ({
-    // The candidate's test parent: it holds NO canonical node catalog rows.
-    NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
-    NODE_SUBMODULE_PARENT_REPO: "cogni-monorepo",
-    DEPLOY_ENVIRONMENT: "candidate-a",
+    // Canonical control fleet serves canonical nodes in every environment.
+    NODE_SUBMODULE_PARENT_OWNER: "cogni-dao",
+    NODE_SUBMODULE_PARENT_REPO: "cogni",
+    NODE_DEPLOY_WORKLOAD_ZONE: zoneConfig.value,
+    DEPLOY_ENVIRONMENT: "production",
   }),
 }));
 vi.mock("@/shared/config", () => ({ getNodeId: () => NODE_ID }));
@@ -134,6 +142,7 @@ const recorded = () => recordRelease.mock.calls[0]?.[0];
 describe("POST /api/v1/deploy/workloads: one front door, a node deploys from its own repo", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    zoneConfig.value = "cognidao.org";
     gate.mockResolvedValue({
       ok: true,
       node: { id: TOKS5_ID, slug: "toks5" },
@@ -148,7 +157,21 @@ describe("POST /api/v1/deploy/workloads: one front door, a node deploys from its
     repoServes(CANARY_BUILT);
   });
 
-  it("resolves a canonical node from the image catalog on a candidate-a config (test-org parent), reads its repo at the sha, and records the PENDING image (ALWAYS_DEFER)", async () => {
+  it.each([
+    undefined,
+    "https://invalid/zone",
+  ])("refuses new intent before source reads or store writes with %s zone", async (zone) => {
+    zoneConfig.value = zone;
+    const res = await post();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({
+      error: "workload_zone_not_configured",
+    });
+    expect(fetchFileText).not.toHaveBeenCalled();
+    expect(recordRelease).not.toHaveBeenCalled();
+  });
+
+  it("resolves a canonical node from the image catalog for its candidate-a lane, reads its repo at the sha, and records the PENDING image (ALWAYS_DEFER)", async () => {
     const response = await post();
     expect(response.status).toBe(200);
     for (const call of fetchFileText.mock.calls)
@@ -236,12 +259,12 @@ describe("POST /api/v1/deploy/workloads: one front door, a node deploys from its
       issues: [{ code: "built_image_unresolved" }],
     });
     expect(fetchFileText.mock.calls[0]?.[0]).toMatchObject({
-      owner: "cogni-test-org",
-      repo: "cogni-monorepo",
+      owner: "cogni-dao",
+      repo: "cogni",
     });
     expect(recordRelease).not.toHaveBeenCalled();
 
-    repoServes(CANARY, OPERATOR_REPO_SPEC);
+    repoServes(OPERATOR_CANARY, OPERATOR_REPO_SPEC);
     expect((await post()).status).toBe(200);
   });
 

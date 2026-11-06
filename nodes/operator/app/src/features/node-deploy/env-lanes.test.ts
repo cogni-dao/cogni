@@ -12,14 +12,13 @@
 
 import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
-
 import type { NodeCatalogPort, NodeRuntimeSecretsPort } from "@/ports";
-
 import { EdgeRouter, edgeHostRegexFor } from "./edge";
 import {
   EnvLaneConfigError,
   EnvLaneSequencers,
   parseSubstrateHosts,
+  parseSubstrateTransports,
   resolveEnvLanes,
   secretsNamespaceFor,
 } from "./env-lanes";
@@ -39,6 +38,7 @@ import {
   MemorySecrets,
   MemoryStore,
   SHA_1,
+  WORKLOAD_ZONE,
 } from "./testing";
 
 const TOKS5_ID = "4b06359a-0000-4000-8000-0000000000bb";
@@ -58,6 +58,7 @@ const base = {
 };
 const MULTI = {
   ...base,
+  meshZone: "cognidao.org",
   environments: "candidate-a,preview,production",
   substrateHosts: Object.entries(HOSTS)
     .map(([env, host]) => `${env}=${host}`)
@@ -72,6 +73,8 @@ describe("resolveEnvLanes", () => {
         secretsNamespace: "cogni-node-deploy-production",
         substrateHost: HOSTS.production,
         operatorDomain: "cognidao.org",
+        substrateTransport: "egress",
+        meshTailnet: "production",
       },
     ]);
   });
@@ -86,8 +89,65 @@ describe("resolveEnvLanes", () => {
           env === "production"
             ? "cognidao.org"
             : `${env === "candidate-a" ? "test" : "preview"}.cognidao.org`,
+        substrateTransport: "egress",
+        meshTailnet: env,
       }))
     );
+  });
+
+  it("sets the substrate transport per lane, never per node; unlisted envs stay egress (task.5431)", () => {
+    const lanes = resolveEnvLanes({
+      ...MULTI,
+      substrateTransports: " candidate-a=mesh , production=egress ",
+    });
+    expect(
+      lanes.map((l) => [l.environment, l.substrateTransport, l.meshControlUrl])
+    ).toEqual([
+      ["candidate-a", "mesh", "https://mesh-candidate-a.cognidao.org"],
+      ["preview", "egress", undefined],
+      ["production", "egress", undefined],
+    ]);
+    expect([...parseSubstrateTransports("preview=mesh")]).toEqual([
+      ["preview", { transport: "mesh", tailnet: "preview" }],
+    ]);
+    // An isolated fleet names its own tailnet: socket, control URL and VM publish path follow it. Its
+    // control host lives in its own bound zone (task.5428: the test operator's tailnet is in the test zone).
+    expect(
+      resolveEnvLanes({
+        ...MULTI,
+        meshZone: "cogni-testing.org",
+        substrateTransports: "candidate-a=mesh:test-candidate-a",
+      })[0]
+    ).toMatchObject({
+      substrateTransport: "mesh",
+      meshTailnet: "test-candidate-a",
+      meshControlUrl: "https://mesh-test-candidate-a.cogni-testing.org",
+    });
+    for (const bad of [
+      "candidate-a=wireguard",
+      "staging=mesh",
+      "preview",
+      "preview=egress:other",
+      "preview=mesh:Bad_Name",
+      "preview=mesh:a:b",
+    ])
+      expect(() =>
+        resolveEnvLanes({ ...MULTI, substrateTransports: bad })
+      ).toThrow(EnvLaneConfigError);
+    expect(() =>
+      resolveEnvLanes({
+        ...MULTI,
+        substrateTransports: "preview=mesh,preview=egress",
+      })
+    ).toThrow(/once each/);
+    // A mesh lane needs the zone its control URL is derived from.
+    expect(() =>
+      resolveEnvLanes({
+        ...MULTI,
+        meshZone: undefined,
+        substrateTransports: "preview=mesh",
+      })
+    ).toThrow(/NODE_DEPLOY_WORKLOAD_ZONE/);
   });
 
   it("refuses to boot on every config that would cross envs or run a node app with a half env", () => {
@@ -178,7 +238,11 @@ function lane(
   const sequencer = new NodeDeploySequencer({
     store: shared.store,
     payer: shared.payer,
-    edge: new EdgeRouter(dns, edgeHostRegexFor(edgeSlugs)),
+    edge: new EdgeRouter(
+      dns,
+      WORKLOAD_ZONE,
+      edgeHostRegexFor(edgeSlugs, WORKLOAD_ZONE)
+    ),
     probe: new FakeProbe(shared.payer, dns, shared.events),
     secrets: new MemorySecrets(),
     runtime: {

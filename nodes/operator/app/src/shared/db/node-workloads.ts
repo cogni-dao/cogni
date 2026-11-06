@@ -165,6 +165,28 @@ export const nodeWorkloadAttempts = pgTable(
           at: string;
         }[]
       >(),
+    /**
+     * HR 18 (task.5431): how THIS attempt reaches the env's shared substrate, `egress` (source-IP
+     * admission) or `mesh` (operator companions on the env tailnet). Decided once, before the paid create,
+     * by `attemptTransport`; never changed. NULL = an attempt that predates the column (egress).
+     */
+    transport: text("transport"),
+    /**
+     * Mesh lifecycle of a `mesh` attempt (task.5431): the derived substrate ports, the device name, the
+     * companion digests pinned for the release (CD3), the Headscale key id (`headscaleKeyId`, a provider
+     * id, never a Cogni identity) and the revoke / Secret-delete instants. NEVER holds the key value: that
+     * lives only in the attempt's create-once Secret.
+     */
+    mesh: jsonb("mesh").$type<{
+      ports: readonly number[];
+      deviceName: string;
+      images: { mesh: string; substrate: string };
+      headscaleKeyId?: string | undefined;
+      headscaleEpoch?: string | undefined;
+      headscaleKeyCreatedAt?: string | undefined;
+      revokedAt?: string | undefined;
+      secretDeletedAt?: string | undefined;
+    }>(),
   },
   (table) => [
     unique("node_workload_attempts_cogni_key_uniq").on(table.cogniKey),

@@ -31,6 +31,25 @@
  *     and is NOT also passed under its own name (byte-identical to the composition). The fleet master
  *     key is on the denylist and can never arrive through the bucket.
  *   - NO_NODE_NAMES: nothing here names a node.
+ *   - ONE_SUBSTRATE_BINDING (task.5432, CD2): the substrate block and the Doltgres endpoint come from
+ *     `nodeAppSubstrateBinding`, the same output the sequencer gives the mesh grant and the companion
+ *     listeners. Ports come only from `substrate-ports.ts`; this file spells no port.
+ *   - MESH_ENV (task.5432): on a `mesh` attempt the substrate block (Temporal, Redis, the AI gateway and
+ *     the scheduler-worker health URL) names `cogni-substrate` with registry ports, and every injected
+ *     port is in the attempt's grant. The key set equals the egress key set: no mesh identifier or
+ *     credential reaches the app.
+ *   - DOLTGRES_ON_THE_VM (task.5432 review B2): on a `mesh` attempt a bucket `DOLTGRES_URL` is rebound to
+ *     `cogni-substrate` and the registry Doltgres port ONLY when its host is the lane's substrate (env VM)
+ *     host: its name or one of `substrateAddresses` (bindings.ts SHARED_VM_MATCH). Any other host, or a
+ *     DSN that cannot be parsed, is refused before the paid create: its credential is never redirected.
+ *   - SHARED_POSTGRES_ONLY (task.5432): on a `mesh` attempt a bucket `DATABASE_URL`, `DATABASE_SERVICE_URL`
+ *     or `DATABASE_MIGRATION_URL` is rebound to the binding's host and the registry Postgres port ONLY
+ *     when its host is the lane's substrate (env VM) host. A dedicated cell (such as Poly production's)
+ *     is left untouched. Postgres is granted only when such a rebind happens. All present keys must agree
+ *     (node-database-contract): some on the VM and some not is refused. An unparseable DSN, or one whose
+ *     query sets `host`, `hostaddr` or `port`, is refused. The bucket names the VM by address today, so a
+ *     mesh attempt needs `substrateAddresses`: with none, Doltgres is refused and nothing is paid.
+ *   - EGRESS_UNCHANGED: an absent transport is `egress`, byte for byte the composition env above.
  * Side-effects: none
  * Links: infra/crossplane/xcomputeworkload/composition.yaml, packages/repo-spec/src/node-app-deployment.ts,
  *   shared/secrets/node-secrets-reserved.data.ts, task.5405
@@ -40,6 +59,17 @@
 import { resolveRuntimeProfileSecretRefs } from "@cogni/repo-spec";
 
 import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
+
+import {
+  DsnShapeError,
+  isSubstrateVmHost,
+  parsePostgresDsn,
+  rebindDsnEndpoint,
+  resolveSubstrateBinding,
+  type SubstrateBinding,
+  type SubstrateTransport,
+} from "./bindings";
+import { SUBSTRATE_PORTS, type SubstrateType } from "./substrate-ports";
 
 /** Database pool maxes from the node's catalog `database.<env>.runtimePoolLimits` (public policy). */
 export interface NodeAppPoolLimits {
@@ -75,6 +105,14 @@ export interface NodeAppEnvInput {
    * omits the whole substrate block, exactly like the composition's absent `runtime.substrateHost`.
    */
   readonly substrateHost?: string | undefined;
+  /**
+   * How THIS attempt reaches the shared services (the sequencer decides per attempt, hard requirement 18).
+   * Absent = `egress` (today's env, byte for byte). `mesh` binds them through the `cogni-substrate`
+   * companion and needs no `substrateHost`.
+   */
+  readonly transport?: SubstrateTransport | undefined;
+  /** The resolved addresses of `substrateHost` (read once per pass by the sequencer). See SHARED_POSTGRES_ONLY. */
+  readonly substrateAddresses?: readonly string[] | undefined;
   readonly databasePoolLimits?: NodeAppPoolLimits | undefined;
   readonly lokiPush?: NodeAppLokiPush | undefined;
   /**
@@ -136,6 +174,208 @@ export function injectableSecrets(
   return out;
 }
 
+// Field definitions own both emitted values and the admission namespace. Optional runtime
+// blocks still own their destinations when a different environment does not supply the block.
+type RuntimeIdentity = Pick<WorkerEnvInput, "env" | "sourceSha" | "port">;
+const COMMON_FIELDS = {
+  HOST: () => BIND_HOST,
+  PORT: (i: RuntimeIdentity) => String(i.port),
+  DEPLOY_ENVIRONMENT: (i: RuntimeIdentity) => i.env,
+  COGNI_REPO_SHA: (i: RuntimeIdentity) => i.sourceSha,
+};
+const APP_BASE_FIELDS = {
+  HOSTNAME: () => BIND_HOST,
+  APP_ENV: () => "production",
+};
+type SubstrateFieldInput = { host: string; env: string };
+const SUBSTRATE_FIELDS = {
+  TEMPORAL_ADDRESS: (i: SubstrateFieldInput) =>
+    `${i.host}:${SUBSTRATE_PORTS.temporal}`,
+  TEMPORAL_NAMESPACE: (i: SubstrateFieldInput) => `cogni-${i.env}`,
+  TEMPORAL_TASK_QUEUE: () => "scheduler-tasks",
+  REDIS_URL: (i: SubstrateFieldInput) =>
+    `redis://${i.host}:${SUBSTRATE_PORTS.redis}`,
+  LITELLM_BASE_URL: (i: SubstrateFieldInput) =>
+    `http://${i.host}:${SUBSTRATE_PORTS["ai-gateway"]}`,
+  SCHEDULER_WORKER_HEALTH_URL: (i: SubstrateFieldInput) =>
+    `http://${i.host}:${SUBSTRATE_PORTS["scheduler-worker-health"]}`,
+};
+const DOLTGRES_URL = "DOLTGRES_URL";
+/** Postgres DSN keys that may name the shared env VM Postgres. */
+const SHARED_POSTGRES_DSN_KEYS = [
+  "DATABASE_URL",
+  "DATABASE_SERVICE_URL",
+  "DATABASE_MIGRATION_URL",
+] as const;
+const POOL_FIELDS = {
+  DB_POOL_MAX: (i: NodeAppPoolLimits) => String(i.app),
+  DB_SERVICE_POOL_MAX: (i: NodeAppPoolLimits) => String(i.service),
+  DB_READ_POOL_MAX: (i: NodeAppPoolLimits) => String(i.read),
+};
+const LOKI_FIELDS = {
+  LOKI_PUSH_URL: (i: NodeAppLokiPush) => i.url,
+  LOKI_PUSH_USER: (i: NodeAppLokiPush) => i.user,
+  LOKI_PUSH_PASSWORD: (i: NodeAppLokiPush) => i.password,
+  LOKI_PUSH_SOURCE: () => "lease",
+};
+const APP_IDENTITY_FIELDS = {
+  DOMAIN: (i: NodeAppEnvInput) => i.operatorDomain,
+  COGNI_NODE_ID: (i: NodeAppEnvInput) => i.nodeId,
+  NODE_NAME: (i: NodeAppEnvInput) => i.slug,
+  COGNI_REPO_PATH: () => "/app",
+  AUTH_TRUST_HOST: () => "true",
+  NEXTAUTH_URL: (i: NodeAppEnvInput) => `https://${i.publicHost}`,
+  APP_BASE_URL: (i: NodeAppEnvInput) => `https://${i.publicHost}`,
+};
+const RELEASE_FIELDS = { RELEASE_SHA: (sourceSha: string) => sourceSha };
+
+function fieldValues<T>(
+  fields: Readonly<Record<string, (input: T) => string>>,
+  input: T
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(fields).map(([key, value]) => [key, value(input)])
+  );
+}
+
+const appSecretDestination = (key: string): string =>
+  key === LITELLM_VIRTUAL_KEY ? LITELLM_MASTER_KEY : key;
+
+/** Sequencer-owned release identity has the same owner as the rest of the runtime namespace. */
+export function releaseIdentityEnv(sourceSha: string): Record<string, string> {
+  return fieldValues(RELEASE_FIELDS, sourceSha);
+}
+
+/** Reject only keys the consumer's runtime can overwrite; keep ordinary declared-env precedence. */
+export function runtimeOwnedEnvKeys(
+  profile: "app" | "worker",
+  secretKeys: readonly string[]
+): ReadonlySet<string> {
+  const fields =
+    profile === "app"
+      ? [
+          COMMON_FIELDS,
+          APP_BASE_FIELDS,
+          SUBSTRATE_FIELDS,
+          POOL_FIELDS,
+          LOKI_FIELDS,
+          APP_IDENTITY_FIELDS,
+          RELEASE_FIELDS,
+        ]
+      : [COMMON_FIELDS];
+  return new Set([
+    ...fields.flatMap(Object.keys),
+    ...(profile === "app"
+      ? nodeAppSecretKeys(secretKeys).map(appSecretDestination)
+      : secretKeys),
+  ]);
+}
+
+/** The shared services the node app's substrate block names. */
+const NODE_APP_SUBSTRATE_TYPES: readonly SubstrateType[] = [
+  "temporal",
+  "redis",
+  "ai-gateway",
+  "scheduler-worker-health",
+];
+
+export interface NodeAppSubstrateBindingInput {
+  readonly transport?: SubstrateTransport | undefined;
+  /** The env VM alias (`NODE_DEPLOY_SUBSTRATE_HOST[S]`). Used by `egress` only. */
+  readonly substrateHost?: string | undefined;
+  /**
+   * The resolved IPv4/IPv6 addresses of `substrateHost`. A bucket Postgres DSN that names one of them is
+   * on the shared VM. Absent or empty: only the name matches, so nothing is rebound (fail safe).
+   */
+  readonly substrateAddresses?: readonly string[] | undefined;
+  readonly secretKeys?: readonly string[] | undefined;
+  readonly boundEnvNames?: readonly string[] | undefined;
+  /** The bucket values. Read only to find which DSNs name the lane VM; never copied into the binding. */
+  readonly secrets?: Readonly<Record<string, string>> | undefined;
+}
+
+/** What a mesh attempt rebinds from the bucket. Empty for egress. */
+interface MeshRebinds {
+  readonly doltgres: boolean;
+  readonly postgres: readonly string[];
+}
+
+const refuse = (why: string): never => {
+  throw new Error(`node app env refused: ${why}`);
+};
+
+/** Is this bucket DSN on the lane VM? Refuses (throws) an unparseable or endpoint-overriding DSN. */
+function onLaneVm(
+  key: string,
+  dsn: string,
+  input: NodeAppSubstrateBindingInput
+): boolean {
+  let host: string;
+  try {
+    host = parsePostgresDsn(dsn).host;
+  } catch (error) {
+    if (error instanceof DsnShapeError)
+      return refuse(`${key}: ${error.message}`);
+    throw error;
+  }
+  return isSubstrateVmHost(host, input.substrateHost, input.substrateAddresses);
+}
+
+/**
+ * DOLTGRES_ON_THE_VM + SHARED_POSTGRES_ONLY: decide which bucket DSNs a mesh attempt rebinds, or refuse.
+ * The one decision both the grant (`nodeAppSubstrateBinding`) and the env (`nodeAppEnv`) read.
+ */
+function meshRebinds(input: NodeAppSubstrateBindingInput): MeshRebinds {
+  if ((input.transport ?? "egress") !== "mesh")
+    return { doltgres: false, postgres: [] };
+  const keys = nodeAppSecretKeys(input.secretKeys, input.boundEnvNames);
+  const injectable = injectableSecrets(keys, input.secrets ?? {});
+  const doltgres = injectable[DOLTGRES_URL];
+  if (doltgres !== undefined && !onLaneVm(DOLTGRES_URL, doltgres, input))
+    refuse(
+      "DOLTGRES_URL is not on the lane VM (name or substrateAddresses); its credential is not redirected"
+    );
+  const present = SHARED_POSTGRES_DSN_KEYS.filter(
+    (k) => injectable[k] !== undefined
+  );
+  const onVm = present.filter((k) =>
+    onLaneVm(k, injectable[k] as string, input)
+  );
+  if (onVm.length > 0 && onVm.length < present.length)
+    refuse(
+      `Postgres DSNs disagree on the endpoint: ${onVm.join(", ")} on the lane VM, ${present
+        .filter((k) => !onVm.includes(k))
+        .join(", ")} elsewhere`
+    );
+  return { doltgres: doltgres !== undefined, postgres: onVm };
+}
+
+/**
+ * THE substrate binding of one node app attempt (task.5432, CD2). The sequencer passes the SAME input it
+ * gives `nodeAppEnv`, INCLUDING `secrets` and `substrateAddresses`; `ports` is the attempt's mesh grant
+ * (`NodeSubstrateGrant.ports`) and the `cogni-substrate` listener set, and `nodeAppEnv` derives its
+ * substrate env from this same output. On mesh, Doltgres and Postgres are granted only when their bucket
+ * DSN is rebound (it names the lane VM); a refusal throws here too, before anything is paid.
+ */
+export function nodeAppSubstrateBinding(
+  input: NodeAppSubstrateBindingInput
+): SubstrateBinding | undefined {
+  const transport = input.transport ?? "egress";
+  const keys = nodeAppSecretKeys(input.secretKeys, input.boundEnvNames);
+  const rebinds = meshRebinds(input);
+  const doltgres =
+    transport === "mesh" ? rebinds.doltgres : keys.includes(DOLTGRES_URL);
+  return resolveSubstrateBinding({
+    transport,
+    vmHost: input.substrateHost,
+    types: [
+      ...NODE_APP_SUBSTRATE_TYPES,
+      ...(doltgres ? (["doltgres"] as const) : []),
+      ...(rebinds.postgres.length > 0 ? (["postgres"] as const) : []),
+    ],
+  });
+}
+
 export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
   const keys = nodeAppSecretKeys(input.secretKeys, input.boundEnvNames);
   const refused = keys.filter((k) => !isOffClusterWorkloadSecretKey(k));
@@ -152,47 +392,45 @@ export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
   if (input.databasePoolLimits && input.databasePoolLimits.replicaCount !== 1)
     throw new Error("database pools require exactly one app replica");
 
-  const e: Record<string, string> = {};
-  e.HOST = BIND_HOST;
-  e.HOSTNAME = BIND_HOST;
-  e.PORT = String(input.port);
-  e.APP_ENV = "production";
-  e.DEPLOY_ENVIRONMENT = input.env;
-  e.COGNI_REPO_SHA = input.sourceSha;
-  const substrate = input.substrateHost;
-  if (substrate) {
-    e.TEMPORAL_ADDRESS = `${substrate}:7233`;
-    e.TEMPORAL_NAMESPACE = `cogni-${input.env}`;
-    e.TEMPORAL_TASK_QUEUE = "scheduler-tasks";
-    e.REDIS_URL = `redis://${substrate}:6379`;
-    e.LITELLM_BASE_URL = `http://${substrate}:4000`;
-    e.SCHEDULER_WORKER_HEALTH_URL = `http://${substrate}:30900`;
+  const e = {
+    ...fieldValues(COMMON_FIELDS, input),
+    ...fieldValues(APP_BASE_FIELDS, input),
+  };
+  const binding = nodeAppSubstrateBinding(input);
+  if (binding)
+    Object.assign(
+      e,
+      fieldValues(SUBSTRATE_FIELDS, { host: binding.host, env: input.env })
+    );
+  for (const [key, value] of Object.entries(injectable))
+    e[appSecretDestination(key)] = value;
+  // DOLTGRES_ON_THE_VM + SHARED_POSTGRES_ONLY: the bucket keeps the credential; the binding owns the
+  // endpoint of a DSN on the lane VM. A dedicated cell keeps its endpoint.
+  if (binding?.transport === "mesh") {
+    const rebinds = meshRebinds(input);
+    const doltgres = injectable[DOLTGRES_URL];
+    if (rebinds.doltgres && doltgres !== undefined)
+      e[DOLTGRES_URL] = rebindDsnEndpoint(
+        doltgres,
+        binding.host,
+        SUBSTRATE_PORTS.doltgres
+      );
+    for (const key of rebinds.postgres)
+      e[key] = rebindDsnEndpoint(
+        injectable[key] as string,
+        binding.host,
+        SUBSTRATE_PORTS.postgres
+      );
   }
-  for (const [key, value] of Object.entries(injectable)) {
-    if (key === LITELLM_VIRTUAL_KEY) e[LITELLM_MASTER_KEY] = value;
-    else e[key] = value;
-  }
-  e.COGNI_NODE_ID = input.nodeId;
-  if (input.databasePoolLimits) {
-    e.DB_POOL_MAX = String(input.databasePoolLimits.app);
-    e.DB_SERVICE_POOL_MAX = String(input.databasePoolLimits.service);
-    e.DB_READ_POOL_MAX = String(input.databasePoolLimits.read);
-  }
-  if (input.lokiPush) {
-    e.LOKI_PUSH_URL = input.lokiPush.url;
-    e.LOKI_PUSH_USER = input.lokiPush.user;
-    e.LOKI_PUSH_PASSWORD = input.lokiPush.password;
-    e.LOKI_PUSH_SOURCE = "lease";
-  }
-  // buildNodeAppIdentityEnv(): deliberately wins over every key above.
+  // Platform identity and optional catalog/push outputs retain precedence over secrets.
+  if (input.databasePoolLimits)
+    Object.assign(e, fieldValues(POOL_FIELDS, input.databasePoolLimits));
+  if (input.lokiPush)
+    Object.assign(e, fieldValues(LOKI_FIELDS, input.lokiPush));
+  // The operator issuer (sign-in origin binding, #3029) is platform identity: it wins over every key above.
   if (!input.operatorDomain)
     throw new Error("operator issuer domain is required");
-  e.DOMAIN = input.operatorDomain;
-  e.NODE_NAME = input.slug;
-  e.COGNI_REPO_PATH = "/app";
-  e.AUTH_TRUST_HOST = "true";
-  e.NEXTAUTH_URL = `https://${input.publicHost}`;
-  e.APP_BASE_URL = `https://${input.publicHost}`;
+  Object.assign(e, fieldValues(APP_IDENTITY_FIELDS, input));
   return e;
 }
 
@@ -229,10 +467,7 @@ export function workerEnv(input: WorkerEnvInput): Record<string, string> {
       `worker env refused: required secret keys missing or not injectable: ${missing.join(", ")}`
     );
   return {
-    HOST: BIND_HOST,
-    PORT: String(input.port),
-    DEPLOY_ENVIRONMENT: input.env,
-    COGNI_REPO_SHA: input.sourceSha,
+    ...fieldValues(COMMON_FIELDS, input),
     ...injectable,
   };
 }

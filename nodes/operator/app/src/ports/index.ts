@@ -313,6 +313,7 @@ export type { ModelProviderResolverPort } from "./model-provider-resolver.port";
 export type { NodeAddressPort } from "./node-address.port";
 export { NodeAddressError } from "./node-address.port";
 export type {
+  AttemptMesh,
   AttemptPatch,
   AttemptPhase,
   AttemptRow,
@@ -320,6 +321,7 @@ export type {
   ChainTruthPort,
   DesiredRow,
   DesiredState,
+  DnsOnlyRecordInput,
   DnsRecord,
   DnsRecordInput,
   DnsRecordsPort,
@@ -337,12 +339,14 @@ export type {
   SequencerClock,
   SequencerLog,
   StorePort,
+  SubstrateTransport,
   WorkloadKey,
 } from "./node-deploy.port";
 export {
   buildCogniKey,
   buildIdentity,
   consecutiveFailures,
+  DnsZoneIdentityError,
   IN_FLIGHT_PHASES,
   keyString,
   MAX_ATTEMPT_STEPS,
@@ -365,6 +369,33 @@ export type {
   RungStatus,
   ServingResult,
 } from "./node-flight.port";
+export type {
+  CreatePreAuthKeyInput,
+  HeadscaleDeviceId,
+  HeadscaleKeyId,
+  HeadscaleUser,
+  MeshApiKey,
+  MeshDevice,
+  MeshKeyStorePort,
+  MeshPolicy,
+  MeshPreAuthKey,
+  MeshUser,
+  MintedPreAuthKey,
+  NodeMeshErrorCode,
+  NodeMeshErrorReason,
+  NodeMeshPort,
+  PublishedSubstrateRequest,
+  StoredMeshKey,
+  SubstrateRequestSourcePort,
+} from "./node-mesh.port";
+export {
+  headscaleDeviceId,
+  headscaleKeyId,
+  headscaleUser,
+  isNodeMeshError,
+  MESH_ATTEMPT_SECRET_NAME_RE,
+  NodeMeshError,
+} from "./node-mesh.port";
 export type {
   NodeMigrationReportRecord,
   NodeMigrationReportStorePort,

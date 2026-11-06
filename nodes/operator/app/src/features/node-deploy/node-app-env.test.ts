@@ -1,18 +1,28 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
+import { readdirSync, readFileSync } from "node:fs";
 import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
-
 import { OFF_CLUSTER_WORKLOAD_DENIED_KEYS } from "@/shared/secrets/node-secrets-reserved.data";
 
+import {
+  isSubstrateVmHost,
+  MESH_SUBSTRATE_HOST,
+  normalizeHost,
+  rebindDsnEndpoint,
+  resolveSubstrateBinding,
+} from "./bindings";
 import { resolveEnvLanes } from "./env-lanes";
-
+import { deriveMeshPolicy, meshOwner } from "./mesh-policy";
 import {
   injectableSecrets,
   nodeAppEnv,
   nodeAppSecretKeys,
+  nodeAppSubstrateBinding,
+  runtimeOwnedEnvKeys,
 } from "./node-app-env";
+import { SUBSTRATE_PORT_SET, SUBSTRATE_PORTS } from "./substrate-ports";
 
 const SHA = "a".repeat(40);
 const NODE_ID = "4b06359a-0000-4000-8000-000000000001";
@@ -350,5 +360,402 @@ describe("nodeAppEnv declared keys (DECLARED_KEYS_ONLY)", () => {
     expect(nodeAppSecretKeys(undefined, ["DATABASE_URL"])).not.toContain(
       "DATABASE_MIGRATION_URL"
     );
+  });
+});
+
+/**
+ * task.5432 (design: node-service-delivery, connectivity decision). A mesh attempt binds the shared
+ * services through the `cogni-substrate` companion. Hard requirements: 1 (no VM host in the env), 3 (no
+ * injected port without a grant), 13 (no mesh identifier), 14 (no secret in the binding).
+ */
+describe("mesh transport (task.5432)", () => {
+  const VM_HOST = "cogni-candidate-a.vm.cognidao.org";
+  const VM_IP = "203.0.113.7";
+  const CELL = "poly-cell.provider.example";
+  const DOLTGRES_BUCKET = `postgresql://postgres:s3cr%2Ft@${VM_IP}:5435/knowledge_poly?sslmode=disable`;
+  const pg = (host: string, role: string) =>
+    `postgresql://${role}:pw%21@${host}:5432/cogni_poly?sslmode=disable`;
+  const postgresOn = (host: string): Record<string, string> => ({
+    DATABASE_URL: pg(host, "app_poly"),
+    DATABASE_SERVICE_URL: pg(host, "service_poly"),
+    DATABASE_MIGRATION_URL: pg(host, "migration_poly"),
+  });
+  const lane = {
+    ...base,
+    env: "candidate-a",
+    substrateHost: VM_HOST,
+    substrateAddresses: [VM_IP],
+  } as const;
+  /** Doltgres on the VM (by address, as the materializer writes it); Postgres on a dedicated cell. */
+  const bucket = (): Record<string, string> => ({
+    ...profileBucket(),
+    DOLTGRES_URL: DOLTGRES_BUCKET,
+    ...postgresOn(CELL),
+  });
+  const egress = () => nodeAppEnv({ ...lane, secrets: bucket() });
+  const meshInput = (secrets: Record<string, string> = bucket()) => ({
+    ...lane,
+    transport: "mesh" as const,
+    secrets,
+  });
+  const mesh = (secrets?: Record<string, string>) =>
+    nodeAppEnv(meshInput(secrets));
+
+  it("an absent transport is egress, byte for byte", () => {
+    expect(
+      nodeAppEnv({ ...lane, transport: "egress", secrets: bucket() })
+    ).toEqual(egress());
+    expect(egress().DOLTGRES_URL).toBe(DOLTGRES_BUCKET);
+    expect(egress().DATABASE_URL).toBe(pg(CELL, "app_poly"));
+    expect(egress().SCHEDULER_WORKER_HEALTH_URL).toBe(
+      `http://${VM_HOST}:30900`
+    );
+  });
+
+  it("names cogni-substrate with registry ports, including the deep-health URL (review B1)", () => {
+    expect(mesh()).toMatchObject({
+      TEMPORAL_ADDRESS: "cogni-substrate:7233",
+      TEMPORAL_NAMESPACE: "cogni-candidate-a",
+      TEMPORAL_TASK_QUEUE: "scheduler-tasks",
+      REDIS_URL: "redis://cogni-substrate:6379",
+      LITELLM_BASE_URL: "http://cogni-substrate:4000",
+      SCHEDULER_WORKER_HEALTH_URL: "http://cogni-substrate:30900",
+    });
+  });
+
+  it("B1: the deep-health port is a registry row, in the mesh grant, and the mesh policy grants it", () => {
+    expect(SUBSTRATE_PORTS["scheduler-worker-health"]).toBe(30900);
+    expect(SUBSTRATE_PORT_SET.has(30900)).toBe(true);
+    const binding = nodeAppSubstrateBinding(meshInput());
+    expect(binding?.types).toContain("scheduler-worker-health");
+    expect(binding?.ports).toContain(30900);
+    const policy = deriveMeshPolicy({
+      owner: meshOwner("candidate-a"),
+      grants: [{ nodeId: NODE_ID, ports: binding?.ports ?? [] }],
+    });
+    expect(policy.acls[0]?.dst[0]).toContain("30900");
+  });
+
+  it("rebuilds DOLTGRES_URL from the binding and keeps only the bucket credential, database and query", () => {
+    expect(mesh().DOLTGRES_URL).toBe(
+      "postgresql://postgres:s3cr%2Ft@cogni-substrate:5435/knowledge_poly?sslmode=disable"
+    );
+  });
+
+  it("HR1: the mesh env names no VM host or VM address", () => {
+    const values = Object.values(mesh()).join("\n");
+    expect(values).not.toContain(VM_HOST);
+    expect(values).not.toContain(VM_IP);
+    expect(values).not.toMatch(/\.vm\./);
+  });
+
+  it("HR3: every port the mesh env injects is in the attempt's grant, and the grant is registry-only", () => {
+    const binding = nodeAppSubstrateBinding(meshInput());
+    expect(binding).toEqual({
+      transport: "mesh",
+      host: MESH_SUBSTRATE_HOST,
+      types: [
+        "doltgres",
+        "redis",
+        "ai-gateway",
+        "temporal",
+        "scheduler-worker-health",
+      ],
+      ports: [4000, 5435, 6379, 7233, 30900],
+    });
+    for (const p of binding?.ports ?? [])
+      expect(SUBSTRATE_PORT_SET.has(p)).toBe(true);
+    const injected = Object.values(mesh()).flatMap((v) =>
+      [...v.matchAll(/cogni-substrate:(\d+)/g)].map((m) => Number(m[1]))
+    );
+    expect(new Set(injected)).toEqual(new Set(binding?.ports));
+  });
+
+  it("HR13/HR14: the mesh env has exactly the egress key set, so no mesh id or credential reaches the app", () => {
+    expect(Object.keys(mesh()).sort()).toEqual(Object.keys(egress()).sort());
+    expect(Object.values(mesh()).join("\n")).not.toMatch(/tag:|tskey|mesh-/i);
+    expect(runtimeOwnedEnvKeys("app", [])).toContain(
+      "SCHEDULER_WORKER_HEALTH_URL"
+    );
+  });
+
+  it("HR14: the binding the sequencer hands the mesh grant holds no secret value", () => {
+    const text = JSON.stringify(
+      nodeAppSubstrateBinding(meshInput(withVmPostgres()))
+    );
+    for (const v of Object.values(withVmPostgres()))
+      expect(text).not.toContain(v);
+    expect(text).not.toContain("s3cr");
+    expect(text).not.toContain("pw%21");
+  });
+
+  function withVmPostgres(host = VM_IP): Record<string, string> {
+    return { ...bucket(), ...postgresOn(host) };
+  }
+
+  describe("DOLTGRES_ON_THE_VM (review B2)", () => {
+    it("rebinds a Doltgres DSN that names the lane host name", () => {
+      const env = mesh({
+        ...bucket(),
+        DOLTGRES_URL: `postgresql://postgres:x@${VM_HOST}:5435/knowledge_poly`,
+      });
+      expect(env.DOLTGRES_URL).toBe(
+        "postgresql://postgres:x@cogni-substrate:5435/knowledge_poly"
+      );
+    });
+
+    it("refuses a Doltgres DSN on another host before the paid create, in both the grant and the env", () => {
+      const secrets = {
+        ...bucket(),
+        DOLTGRES_URL:
+          "postgresql://postgres:x@doltgres.elsewhere.example:5435/knowledge_poly",
+      };
+      expect(() => mesh(secrets)).toThrow(/DOLTGRES_URL is not on the lane VM/);
+      expect(() => nodeAppSubstrateBinding(meshInput(secrets))).toThrow(
+        /DOLTGRES_URL is not on the lane VM/
+      );
+    });
+
+    it("refuses a VM-address Doltgres DSN when no addresses are supplied (fail safe, nothing paid)", () => {
+      for (const substrateAddresses of [undefined, []])
+        expect(() =>
+          nodeAppEnv({ ...meshInput(), substrateAddresses })
+        ).toThrow(/DOLTGRES_URL is not on the lane VM/);
+    });
+
+    it("refuses an unparseable or endpoint-overriding Doltgres DSN and never echoes its value", () => {
+      for (const bad of [
+        "v-DOLTGRES_URL",
+        "mysql://u:p@h:3306/db",
+        `postgresql://${VM_IP}:5435/knowledge_poly`,
+        `postgresql://u:p@${VM_IP}:5435`,
+        `postgresql://u:p@${VM_IP},other:5435/knowledge_poly`,
+        `postgresql://u:secretpw@${VM_IP}:5435/knowledge_poly?host=10.0.0.9`,
+      ]) {
+        let message = "";
+        try {
+          mesh({ ...bucket(), DOLTGRES_URL: bad });
+        } catch (error) {
+          message = (error as Error).message;
+        }
+        expect(message, bad).toMatch(/^node app env refused: DOLTGRES_URL: /);
+        expect(message).not.toContain("secretpw");
+      }
+    });
+
+    it("a DOLTGRES_URL supplied by a state binding is neither required nor rebound, and leaves the grant", () => {
+      const b = bucket();
+      delete b.DOLTGRES_URL;
+      const input = { ...meshInput(b), boundEnvNames: ["DOLTGRES_URL"] };
+      expect(nodeAppEnv(input)).not.toHaveProperty("DOLTGRES_URL");
+      expect(nodeAppSubstrateBinding(input)?.ports).toEqual([
+        4000, 6379, 7233, 30900,
+      ]);
+    });
+  });
+
+  describe("SHARED_POSTGRES_ONLY", () => {
+    it("a dedicated-cell Postgres DSN is untouched and Postgres is not granted", () => {
+      const env = mesh();
+      expect(env.DATABASE_URL).toBe(pg(CELL, "app_poly"));
+      expect(env.DATABASE_SERVICE_URL).toBe(pg(CELL, "service_poly"));
+      expect(env.DATABASE_MIGRATION_URL).toBe(pg(CELL, "migration_poly"));
+      const binding = nodeAppSubstrateBinding(meshInput());
+      expect(binding?.types).not.toContain("postgres");
+      expect(binding?.ports).not.toContain(5432);
+    });
+
+    it("shared-VM Postgres DSNs (by name, any case) rebind to cogni-substrate and the grant gains Postgres", () => {
+      const secrets = withVmPostgres(VM_HOST.toUpperCase());
+      const env = mesh(secrets);
+      for (const [key, role] of [
+        ["DATABASE_URL", "app_poly"],
+        ["DATABASE_SERVICE_URL", "service_poly"],
+        ["DATABASE_MIGRATION_URL", "migration_poly"],
+      ] as const)
+        expect(env[key]).toBe(pg("cogni-substrate", role));
+      expect(Object.values(env).join("\n")).not.toContain(VM_HOST);
+      expect(nodeAppSubstrateBinding(meshInput(secrets))?.ports).toEqual([
+        4000, 5432, 5435, 6379, 7233, 30900,
+      ]);
+    });
+
+    it("a DSN naming one of the lane host's resolved addresses rebinds and grants Postgres", () => {
+      const input = {
+        ...meshInput(withVmPostgres(VM_IP)),
+        substrateAddresses: ["198.51.100.9", VM_IP],
+      };
+      const env = nodeAppEnv(input);
+      expect(env.DATABASE_URL).toBe(pg("cogni-substrate", "app_poly"));
+      expect(Object.values(env).join("\n")).not.toContain(VM_IP);
+      expect(nodeAppSubstrateBinding(input)?.ports).toContain(5432);
+    });
+
+    it("IPv6 addresses compare in normalized form", () => {
+      const v6 = "[2001:DB8:0:0::7]";
+      const input = {
+        ...meshInput({
+          ...withVmPostgres(v6),
+          DOLTGRES_URL: `postgresql://postgres:x@${v6}:5435/knowledge_poly`,
+        }),
+        substrateAddresses: ["2001:db8::7"],
+      };
+      expect(nodeAppEnv(input).DATABASE_URL).toBe(
+        pg("cogni-substrate", "app_poly")
+      );
+      expect(nodeAppSubstrateBinding(input)?.ports).toContain(5432);
+      expect(normalizeHost("[2001:0db8:0000::0007]")).toBe("2001:db8::7");
+      expect(normalizeHost("010.0.0.1")).toBeUndefined();
+      expect(normalizeHost("not:an:ip:::x")).toBeUndefined();
+    });
+
+    it("no addresses: a VM-address Postgres DSN is not rebound (the Doltgres refusal then stops the attempt)", () => {
+      const input = {
+        ...meshInput({
+          ...withVmPostgres(VM_IP),
+          DOLTGRES_URL: `postgresql://postgres:x@${VM_HOST}:5435/knowledge_poly`,
+        }),
+        substrateAddresses: [],
+      };
+      expect(nodeAppEnv(input).DATABASE_URL).toBe(pg(VM_IP, "app_poly"));
+      expect(nodeAppSubstrateBinding(input)?.ports).not.toContain(5432);
+    });
+
+    it("a host matching neither the name nor an address is never rebound", () => {
+      expect(isSubstrateVmHost(CELL, VM_HOST, [VM_IP, "2001:db8::7"])).toBe(
+        false
+      );
+      expect(isSubstrateVmHost("203.0.113.70", VM_HOST, [VM_IP])).toBe(false);
+    });
+
+    it("refuses a partial split: some Postgres DSNs on the VM, some not (node-database-contract)", () => {
+      const secrets = {
+        ...bucket(),
+        DATABASE_MIGRATION_URL: pg(VM_IP, "migration_poly"),
+      };
+      expect(() => mesh(secrets)).toThrow(
+        /Postgres DSNs disagree on the endpoint: DATABASE_MIGRATION_URL on the lane VM, DATABASE_URL, DATABASE_SERVICE_URL elsewhere/
+      );
+      expect(() => nodeAppSubstrateBinding(meshInput(secrets))).toThrow(
+        /disagree/
+      );
+    });
+
+    it("refuses an unparseable or endpoint-overriding Postgres DSN, like Doltgres", () => {
+      for (const bad of [
+        "v-DATABASE_URL",
+        `postgresql://app_poly:pw@${CELL}:5432/cogni_poly?sslmode=require&hostaddr=10.0.0.9`,
+        `postgresql://app_poly:pw@${CELL}:5432/cogni_poly?PORT=6543`,
+      ])
+        expect(() => mesh({ ...bucket(), DATABASE_URL: bad }), bad).toThrow(
+          /^node app env refused: DATABASE_URL: /
+        );
+    });
+
+    it("egress leaves every DSN untouched and never refuses", () => {
+      const env = nodeAppEnv({
+        ...lane,
+        secrets: { ...withVmPostgres(VM_IP), DOLTGRES_URL: "v-DOLTGRES_URL" },
+      });
+      expect(env.DATABASE_URL).toBe(pg(VM_IP, "app_poly"));
+      expect(env.DOLTGRES_URL).toBe("v-DOLTGRES_URL");
+    });
+  });
+});
+
+describe("substrate binding primitives (task.5432)", () => {
+  it("egress with no VM host is no binding (composition parity); mesh always binds", () => {
+    expect(
+      resolveSubstrateBinding({ transport: "egress", types: ["redis"] })
+    ).toBeUndefined();
+    expect(
+      resolveSubstrateBinding({
+        transport: "egress",
+        vmHost: "vm.example",
+        types: ["redis", "temporal", "redis"],
+      })
+    ).toEqual({
+      transport: "egress",
+      host: "vm.example",
+      types: ["redis", "temporal"],
+      ports: [6379, 7233],
+    });
+  });
+
+  it("refuses a type that is not a registry row and an unknown transport", () => {
+    expect(() =>
+      resolveSubstrateBinding({
+        transport: "mesh",
+        types: ["ssh" as never],
+      })
+    ).toThrow(/not a registry type/);
+    expect(() =>
+      resolveSubstrateBinding({ transport: "wireguard" as never, types: [] })
+    ).toThrow(/unknown transport/);
+  });
+
+  it("rebindDsnEndpoint replaces only host and port, and refuses endpoint overrides and multi-host", () => {
+    expect(
+      rebindDsnEndpoint(
+        "postgres://app_x:p%40ss@[2001:db8::1]:5432/cogni_x?sslmode=disable&a=b",
+        "cogni-substrate",
+        SUBSTRATE_PORTS.doltgres
+      )
+    ).toBe(
+      "postgres://app_x:p%40ss@cogni-substrate:5435/cogni_x?sslmode=disable&a=b"
+    );
+    expect(
+      rebindDsnEndpoint(
+        "postgresql://u:p@vm/knowledge",
+        "cogni-substrate",
+        5435
+      )
+    ).toBe("postgresql://u:p@cogni-substrate:5435/knowledge");
+    expect(() =>
+      rebindDsnEndpoint("postgresql://u:p@vm/db?host=x", "h", 5435)
+    ).toThrow(/overrides the endpoint/);
+    expect(() =>
+      rebindDsnEndpoint("postgresql://u:p@a,b/db", "h", 5435)
+    ).toThrow(/single-host/);
+    expect(() =>
+      rebindDsnEndpoint("postgresql://u:p@vm/db", "a b", 5435)
+    ).toThrow(/plain name/);
+    expect(() =>
+      rebindDsnEndpoint("postgresql://u:p@vm/db", "h", 70000)
+    ).toThrow(/out of range/);
+  });
+});
+
+/** Strip block and line comments; `https://` inside strings survives (`//` preceded by `:`). */
+const stripComments = (text: string): string =>
+  text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+const codeOf = (file: string): string =>
+  stripComments(readFileSync(new URL(file, import.meta.url), "utf8"));
+
+describe("CD2 one port table (task.5431 temporary exit, closed by task.5432)", () => {
+  it("node-app-env.ts holds no port literal: every port comes from substrate-ports.ts", () => {
+    const code = codeOf("./node-app-env.ts");
+    expect(code).not.toMatch(/(?<![\w.])\d{4,5}(?![\w])/);
+    expect(code).not.toMatch(/:\d{2,5}\b/);
+  });
+
+  it("no node-deploy source outside substrate-ports.ts spells a substrate port", () => {
+    const dir = new URL(".", import.meta.url);
+    const sources = readdirSync(dir).filter(
+      (f) =>
+        f.endsWith(".ts") &&
+        !f.endsWith(".test.ts") &&
+        f !== "substrate-ports.ts"
+    );
+    expect(sources).toContain("node-app-env.ts");
+    for (const file of sources) {
+      const code = codeOf(`./${file}`);
+      for (const p of Object.values(SUBSTRATE_PORTS)) {
+        // `host:<port>` in a string, or a bare numeric literal (not part of a UUID or a longer token).
+        expect(code, `${file} spells ${p}`).not.toMatch(
+          new RegExp(`:${p}(?!\\d)|(?<![\\w.\\-])${p}(?![\\w.\\-])`)
+        );
+      }
+    }
   });
 });

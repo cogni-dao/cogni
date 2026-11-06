@@ -178,6 +178,7 @@ export CATALOG_DIR
 # shellcheck source=lib/lane-db-residency.sh
 . "$SCRIPT_DIR/lib/lane-db-residency.sh"
 RELIABILITY_CONTROLLER="$(reliability_controller_for_env "$DEPLOY_ENVIRONMENT")" || fail "reliability controller ownership unresolved"
+
 COGNI_LANE_DB_HOST="$(lane_db_dsn_host "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$SECRETS_CONTROL_ENV" "$VM_IP")" \
   || fail "could not resolve which Postgres host ${DEPLOY_ENVIRONMENT}/${TARGET_NODE}'s database lives on (bug.5299) — refusing to compose a DSN against a guessed host"
 export COGNI_LANE_DB_HOST
@@ -289,12 +290,7 @@ bao_get_field() {
   local svc="$1" key="$2" authority="${3:-target}" f
   case "$authority" in
     target) f="${CACHE_DIR}/${svc}/${key}" ;;
-    owner)
-      if [[ "$SECRETS_CONTROL_ENV" == "$DEPLOY_ENVIRONMENT" ]]; then
-        f="${CACHE_DIR}/${svc}/${key}"
-      else
-        f="${CACHE_DIR}/__owner__/${svc}/${key}"
-      fi ;;
+    owner) f="${CACHE_DIR}/__owners__/${SECRETS_CONTROL_ENV}/${svc}/${key}" ;;
     *) fail "unknown secret bank authority" ;;
   esac
   # Missing is missing in THIS authority. Never retry under a greater owner.
@@ -404,7 +400,7 @@ inherit_shared_value() {
   [[ -n "${!k:-}" ]] && return 0
   from="$(_cat_field "$k" '.inheritFrom')"
   [[ -n "$from" && "$from" != "null" ]] || return 0
-  v="$(bao_get_field "$from" "$k" owner)"
+  v="$(inherited_key_value "$k")"
   [[ -n "$v" ]] && export "${k}=${v}"
   return 0
 }
@@ -412,19 +408,25 @@ inherit_shared_value() {
 # Target and explicit owner reads have distinct authority, even for operator.
 # The shared superuser is explicitly read from operator; all other inherited
 # sources come solely from existing catalog inheritFrom declarations.
+INHERITED_OWNERS_JSON="$(pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/print-secret-inheritance.ts" \
+  "$APP_SOURCE_DIR" "$DEPLOY_ENVIRONMENT" "$SECRETS_CONTROL_ENV")" \
+  || fail "catalog inheritance resolution failed"
+inherited_key_value() {
+  local key="$1" ref env svc file
+  ref="$(jq -er --arg key "$key" '.[$key] | [.environment,.service] | @tsv' <<<"$INHERITED_OWNERS_JSON")" \
+    || fail "declared inherited owner missing for ${key}"
+  IFS=$'\t' read -r env svc <<<"$ref"
+  file="${CACHE_DIR}/__owners__/${env}/${svc}/${key}"
+  [[ -f "$file" ]] && cat "$file" || true
+}
 prefetch_path "$TARGET_NODE"
-mapfile -t declared_owners < <(
-  { printf '%s\n' operator
-    yq -N '.secrets[] | .inheritFrom // ""' "${CATALOG_FILES[@]}"
-  } | sed '/^$/d' | LC_ALL=C sort -u
-)
-for svc in "${declared_owners[@]}"; do
-  if [[ "$SECRETS_CONTROL_ENV" == "$DEPLOY_ENVIRONMENT" ]]; then
-    [[ "$svc" == "$TARGET_NODE" ]] || prefetch_path "$svc"
-  else
-    prefetch_path "$svc" "$SECRETS_CONTROL_ENV" "__owner__/$svc"
-  fi
-done
+# Keep the control operator for DB/LiteLLM reads. Every inherited key uses its
+# exact typed reference, cached by BOTH environment and service.
+while IFS=$'\t' read -r owner_env svc; do
+  prefetch_path "$svc" "$owner_env" "__owners__/${owner_env}/${svc}"
+done < <(jq -r --arg control "$SECRETS_CONTROL_ENV" \
+  '[.[], {environment:$control,service:"operator"}] | unique_by([.environment,.service])[] | [.environment,.service] | @tsv' \
+  <<<"$INHERITED_OWNERS_JSON")
 
 # Same canonical writer loads applied cell custody before composing any runtime URL.
 source "$SCRIPT_DIR/lib/materialize-database-cell-kits.sh"
@@ -563,20 +565,20 @@ for k in "${NODE_BASELINE_KEYS[@]}"; do
     continue
   fi
   # inheritFrom keys: a single canonical owner holds the authoritative value
-  # (SCHEDULER_API_TOKEN ← operator, the exact token the worker SENDS).
+  # (SCHEDULER_API_TOKEN selects its actual sender's lane owner).
   # The node MUST byte-match it, so — like composed DSNs — we overwrite-on-drift
   # instead of preserve-existing. A freshly-formed node that inherited a
   # divergent ancestor self-heals on the next materialize, killing the
   # worker→node 401 (bug.5021). No-op when already equal (no pod churn).
   inherit_from="$(_cat_field "$k" '.inheritFrom')"
   if [[ -n "$inherit_from" && "$inherit_from" != "null" ]]; then
-    v="$(bao_get_field "$inherit_from" "$k" owner)"
+    v="$(inherited_key_value "$k")"
     if [[ -z "$v" ]]; then
       # Optional, wholly unconfigured integrations stay disabled. A required
       # input or an existing target copy needs affirmative owner authority;
       # neither a stale target nor a runner env value can replace that read.
       if [[ "$(_cat_field "$k" '.required')" == true || -n "$(bao_get_field "$TARGET_NODE" "$k")" ]]; then
-        fail "declared owner ${inherit_from}/${k} is absent in ${SECRETS_CONTROL_ENV}; refusing target fallback"
+        fail "declared owner ${inherit_from}/${k} is absent at its resolved environment; refusing target/control fallback"
       fi
       continue
     fi

@@ -1,0 +1,27 @@
+// Vendored verbatim from https://github.com/juanfont/headscale at tag v0.29.7
+// (commit c9cf210b8bc84d13177e18b91f555788a44b47b6), path proto/headscale/v1/policy.proto.
+// Upstream license: BSD-3-Clause. Do not edit below this header; re-vendor from a new tag.
+// task.5429: the operator's Headscale client descriptor is drift-pinned to these files.
+syntax = "proto3";
+package headscale.v1;
+option go_package = "github.com/juanfont/headscale/gen/go/v1";
+
+import "google/protobuf/timestamp.proto";
+
+message SetPolicyRequest { string policy = 1; }
+
+message SetPolicyResponse {
+  string policy = 1;
+  google.protobuf.Timestamp updated_at = 2;
+}
+
+message GetPolicyRequest {}
+
+message GetPolicyResponse {
+  string policy = 1;
+  google.protobuf.Timestamp updated_at = 2;
+}
+
+message CheckPolicyRequest { string policy = 1; }
+
+message CheckPolicyResponse {}

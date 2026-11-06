@@ -20,6 +20,7 @@ import type {
   AttemptStep,
   ChainTruthPort,
   DesiredRow,
+  DnsOnlyRecordInput,
   DnsRecord,
   DnsRecordInput,
   DnsRecordsPort,
@@ -35,14 +36,24 @@ import type {
   SequencerClock,
   SequencerLog,
   StorePort,
+  SubstrateTransport,
   WorkloadKey,
 } from "@/ports";
 import {
+  DnsZoneIdentityError,
   keyString,
   MAX_ATTEMPT_STEPS,
   PayerError,
   withResolvedImage,
 } from "@/ports";
+import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
+
+import { SUBSTRATE_PORTS } from "./substrate-ports";
+
+export const WORKLOAD_ZONE = resolveWorkloadZoneBinding({
+  fleetOwner: "cogni-dao",
+  zoneName: "cognidao.org",
+});
 
 export const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 export const ENV = "production";
@@ -132,7 +143,7 @@ export class MemoryStore implements StorePort {
   ): Promise<ReleaseRow> {
     const cur = this.releases.get(releaseId);
     if (!cur) throw new Error(`release ${releaseId} not found`);
-    if (cur.resolvedImage !== undefined) return cur;
+    if (cur.admissionRefusal || cur.resolvedImage !== undefined) return cur;
     const next: ReleaseRow = {
       ...cur,
       spec: withResolvedImage(cur.spec, image),
@@ -140,6 +151,49 @@ export class MemoryStore implements StorePort {
     };
     this.releases.set(releaseId, next);
     return next;
+  }
+  async refuseAdmission(
+    releaseId: string,
+    refusal: NonNullable<ReleaseRow["admissionRefusal"]>
+  ): Promise<ReleaseRow> {
+    const cur = this.releases.get(releaseId);
+    if (!cur) throw new Error("release missing");
+    if (cur.admissionRefusal) return cur;
+    const refused = { ...cur, admissionRefusal: { ...refusal } };
+    this.releases.set(releaseId, refused);
+    return refused;
+  }
+  async acceptedBundle(release: ReleaseRow): Promise<string | undefined> {
+    return [...this.releases.values()].find(
+      (r) =>
+        r.nodeId === release.nodeId &&
+        r.sourceSha === release.sourceSha &&
+        r.spec.artifactPlan?.repository ===
+          release.spec.artifactPlan?.repository &&
+        r.resolvedImage &&
+        r.spec.artifactPlan?.bundleDigest
+    )?.spec.artifactPlan?.bundleDigest;
+  }
+  async pinResolvedBundle(
+    releaseId: string,
+    spec: NodeWorkloadSpec
+  ): Promise<ReleaseRow | undefined> {
+    const cur = this.releases.get(releaseId);
+    if (!cur) throw new Error("release missing");
+    const accepted = [...this.releases.values()].find(
+      (r) =>
+        r.nodeId === cur.nodeId &&
+        r.sourceSha === cur.sourceSha &&
+        r.spec.artifactPlan?.repository === cur.spec.artifactPlan?.repository &&
+        r.resolvedImage &&
+        r.spec.artifactPlan?.bundleDigest
+    )?.spec.artifactPlan?.bundleDigest;
+    if (accepted && accepted !== spec.artifactPlan?.bundleDigest)
+      return undefined;
+    if (cur.admissionRefusal || cur.resolvedImage) return cur;
+    const sealed = { ...cur, spec, resolvedImage: spec.image };
+    this.releases.set(releaseId, sealed);
+    return sealed;
   }
   async recordRelease(
     input: RecordReleaseInput
@@ -184,8 +238,11 @@ export class MemoryStore implements StorePort {
   }
   async insertAttempt(
     releaseId: string,
-    makeKey: (attempt: number) => string
+    makeKey: (attempt: number) => string,
+    init: { readonly transport?: SubstrateTransport } = {}
   ): Promise<AttemptRow> {
+    if (this.releases.get(releaseId)?.admissionRefusal)
+      throw new Error("release admission refused");
     const n =
       Math.max(
         0,
@@ -212,11 +269,12 @@ export class MemoryStore implements StorePort {
       leasedAt: undefined,
       updatedAt: now,
       steps: [],
+      ...(init.transport ? { transport: init.transport } : {}),
     };
     this.attempts.push(row);
     return row;
   }
-  /** Make `appendAttemptStep` throw (the timeline is observability, never policy). */
+  /** Fail timeline writes, including the required qualification receipt. */
   failStepAppends = false;
   async appendAttemptStep(attemptId: string, step: AttemptStep): Promise<void> {
     if (this.failStepAppends) throw new Error("step store down");
@@ -245,6 +303,7 @@ export class MemoryStore implements StorePort {
         ? { unhealthySince: patch.unhealthySince ?? undefined }
         : {}),
       ...(patch.leasedAt !== undefined ? { leasedAt: patch.leasedAt } : {}),
+      ...(patch.mesh !== undefined ? { mesh: patch.mesh } : {}),
       updatedAt:
         patch.phase !== undefined ? new Date(this.clock.now()) : cur.updatedAt,
     };
@@ -394,6 +453,17 @@ export class FakeChain implements ChainTruthPort {
 }
 
 export class FakeDns implements DnsRecordsPort {
+  zoneName = "cognidao.org";
+  zoneUnavailable = false;
+  identityReads = 0;
+  async assertZoneIdentity(zoneName: string): Promise<void> {
+    this.identityReads++;
+    this.events.push("dns.zone_identity");
+    if (this.zoneUnavailable)
+      throw new DnsZoneIdentityError("zone_identity_unavailable");
+    if (zoneName !== this.zoneName)
+      throw new DnsZoneIdentityError("zone_identity_mismatch");
+  }
   readonly records = new Map<string, DnsRecord>();
   readonly ops: string[] = [];
   /** Tamper with the next readback (simulates Cloudflare disagreeing with the write). */
@@ -408,12 +478,15 @@ export class FakeDns implements DnsRecordsPort {
   async findByName(name: string): Promise<readonly DnsRecord[]> {
     return [...this.records.values()].filter((r) => r.name === name);
   }
-  async create(input: DnsRecordInput): Promise<DnsRecord> {
+  async create(input: DnsRecordInput | DnsOnlyRecordInput): Promise<DnsRecord> {
     this.ops.push(`create:${input.name}->${input.content}`);
     this.events.push("dns.create");
     return this.seed({ ...input });
   }
-  async update(id: string, input: DnsRecordInput): Promise<DnsRecord> {
+  async update(
+    id: string,
+    input: DnsRecordInput | DnsOnlyRecordInput
+  ): Promise<DnsRecord> {
     this.ops.push(`update:${input.name}->${input.content}`);
     this.events.push("dns.update");
     const r = { ...input, id };
@@ -429,6 +502,7 @@ export class FakeDns implements DnsRecordsPort {
 }
 
 export class FakeProbe implements ProbePort {
+  qualification?: NonNullable<ProbePort["qualification"]>;
   /** public reads served by the CURRENT edge target; the first N after a move still hit the old one. */
   publicStaleReads = 0;
   private staleLeft = 0;
@@ -507,7 +581,7 @@ export function canaryDb(
     kind: "state",
     image: `postgres:16@${DIGEST}`,
     command: ["bash", "-c", "echo db"],
-    port: 5432,
+    port: SUBSTRATE_PORTS.postgres,
     expose: { tcp: { global: true } },
     cpu: 0.5,
     memoryMi: 512,

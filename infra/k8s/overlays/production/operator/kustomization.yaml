@@ -47,6 +47,13 @@ resources:
 
 namePrefix: operator-
 
+# task.5428 — the mesh coordinators (one Headscale container + PVC + socket volume + client NodePort
+# per tailnet) ride beside their one writer: this sequencer serves the canonical candidate-a, preview and production lanes (NODE_DEPLOY_ENVS below).
+components:
+  - ../../../base/node-deploy-mesh/tailnets/candidate-a
+  - ../../../base/node-deploy-mesh/tailnets/preview
+  - ../../../base/node-deploy-mesh/tailnets/production
+
 # Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
 # name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.

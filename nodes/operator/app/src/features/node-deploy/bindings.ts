@@ -15,9 +15,23 @@
  *     state lease, so the start wrapper migrates the node's own database (task.5408).
  *   - ONE_TCP_ENDPOINT: a state lease must expose exactly one forwarded tcp endpoint; zero or several
  *     is a refusal, never a guess.
+ *   - ONE_SUBSTRATE_BINDING (task.5432, CD2): `resolveSubstrateBinding` is the one output that names the
+ *     host and ports a consumer reaches the env's shared services on. The env injection and the mesh grant
+ *     (`NodeSubstrateGrant.ports`, the companion listeners) both read it; nobody derives them again.
+ *   - MESH_HOST_IS_THE_COMPANION: on the `mesh` transport the host is `cogni-substrate`, the private
+ *     companion in the same lease. No VM host and no mesh identifier or credential is in the output.
+ *   - CREDENTIAL_FROM_THE_BUCKET_ENDPOINT_FROM_THE_BINDING: `rebindDsnEndpoint` keeps the bucket DSN's own
+ *     user, password, database and query byte for byte and replaces only host and port. It never borrows
+ *     another database's DSN and never changes `sslmode` (no TLS claim).
  * Side-effects: none
  * @internal
  */
+
+import {
+  portsForTypes,
+  SUBSTRATE_PORTS,
+  type SubstrateType,
+} from "./substrate-ports";
 
 export interface StateBindingInput {
   readonly name: string;
@@ -82,4 +96,176 @@ export function resolveBinding(
         ]
       : [{ env: b.env, value: url, host, port }]
   );
+}
+
+/**
+ * How an attempt reaches the env's shared services (design: node-service-delivery, connectivity decision).
+ * `egress`: the env VM host, admitted by the provider's egress address (today). `mesh`: the private
+ * `cogni-substrate` companion, admitted by device identity. The sequencer chooses it per attempt.
+ */
+export type SubstrateTransport = "egress" | "mesh";
+
+/** The private companion's service name in a mesh lease: the one host a mesh attempt's env names. */
+export const MESH_SUBSTRATE_HOST = "cogni-substrate";
+
+/** The one binding of a consumer to the env's shared services. Carries no secret and no mesh identifier. */
+export interface SubstrateBinding {
+  readonly transport: SubstrateTransport;
+  /** `egress`: the env VM alias. `mesh`: `cogni-substrate`. */
+  readonly host: string;
+  /** The shared services the consumer reaches on `host`, in registry order. */
+  readonly types: readonly SubstrateType[];
+  /** `portsForTypes(types)`: the mesh grant and the companion listeners. */
+  readonly ports: readonly number[];
+}
+
+export interface SubstrateBindingInput {
+  readonly transport: SubstrateTransport;
+  /** The env VM alias. Required for `egress`; ignored for `mesh`. */
+  readonly vmHost?: string | undefined;
+  /** The shared services the consumer uses. */
+  readonly types: readonly SubstrateType[];
+}
+
+const REGISTRY_ORDER = Object.keys(SUBSTRATE_PORTS) as SubstrateType[];
+
+/**
+ * Resolve a consumer's substrate binding. `undefined` = no binding: an egress attempt with no VM host
+ * (composition parity: the whole substrate block is omitted). A mesh attempt always binds.
+ */
+export function resolveSubstrateBinding(
+  input: SubstrateBindingInput
+): SubstrateBinding | undefined {
+  const wanted = new Set(input.types);
+  for (const t of wanted)
+    if (!Object.hasOwn(SUBSTRATE_PORTS, t))
+      throw new Error(`substrate binding: not a registry type: ${String(t)}`);
+  const types = REGISTRY_ORDER.filter((t) => wanted.has(t));
+  if (input.transport === "mesh")
+    return {
+      transport: "mesh",
+      host: MESH_SUBSTRATE_HOST,
+      types,
+      ports: portsForTypes(types),
+    };
+  if (input.transport !== "egress")
+    throw new Error(
+      `substrate binding: unknown transport: ${String(input.transport)}`
+    );
+  if (!input.vmHost) return undefined;
+  return {
+    transport: "egress",
+    host: input.vmHost,
+    types,
+    ports: portsForTypes(types),
+  };
+}
+
+/**
+ * `postgres[ql]://<userinfo>@<host>[:port]/<database>[?query][#fragment]`. Userinfo is required. One host
+ * only: a comma multi-host list is not matched.
+ */
+const POSTGRES_DSN =
+  /^(postgres(?:ql)?:\/\/[^@/?#\s]+@)(\[[0-9a-fA-F:.]+\]|[^/?#:@,[\]\s]+)(?::\d{1,5})?(\/[^/?#\s]+(?:[?#][^\s]*)?)$/;
+
+/** Query keys that override the URL endpoint in libpq and pg-connection-string. */
+const ENDPOINT_OVERRIDE_KEYS = new Set(["host", "hostaddr", "port"]);
+
+/** A DSN that cannot be classified or rebound safely. The message never carries the DSN value. */
+export class DsnShapeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DsnShapeError";
+  }
+}
+
+/**
+ * Parse a single-host Postgres-wire DSN. Throws `DsnShapeError` on any other shape, and when its query
+ * sets `host`, `hostaddr` or `port` (the URL host would then not be the host it dials). The result holds
+ * the lowercased host only, never a credential.
+ */
+export function parsePostgresDsn(dsn: string): {
+  readonly host: string;
+  readonly match: RegExpExecArray;
+} {
+  const m = POSTGRES_DSN.exec(dsn);
+  if (!m)
+    throw new DsnShapeError(
+      "not a single-host postgres DSN with a credential and a database"
+    );
+  const query = (m[3] as string).split("#")[0]?.split("?")[1] ?? "";
+  for (const pair of query.split("&")) {
+    const raw = pair.split("=")[0] ?? "";
+    let key: string;
+    try {
+      key = decodeURIComponent(raw).trim().toLowerCase();
+    } catch {
+      throw new DsnShapeError("DSN query key is not decodable");
+    }
+    if (ENDPOINT_OVERRIDE_KEYS.has(key))
+      throw new DsnShapeError(`DSN query overrides the endpoint (${key}=)`);
+  }
+  return { host: (m[2] as string).toLowerCase(), match: m };
+}
+
+const IPV4 =
+  /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+
+/**
+ * One comparable form of a host: lowercase; IPv6 without brackets in its canonical compressed form (WHATWG
+ * URL serializer); IPv4 only in strict dotted-quad form (no leading zeros). `undefined` for an invalid
+ * address, which then matches nothing.
+ */
+export function normalizeHost(host: string): string | undefined {
+  const h = host.trim().toLowerCase();
+  if (h.length === 0) return undefined;
+  const bare = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+  if (bare.includes(":")) {
+    try {
+      return new URL(`http://[${bare}]/`).hostname.slice(1, -1);
+    } catch {
+      return undefined;
+    }
+  }
+  if (/^[\d.]+$/.test(bare)) return IPV4.test(bare) ? bare : undefined;
+  return bare;
+}
+
+/**
+ * SHARED_VM_MATCH (task.5432): `host` is the lane's substrate (env VM) host when it equals the lane host
+ * NAME or one of that name's resolved ADDRESSES, compared in normalized form. With no addresses only the
+ * name matches (fail safe: no rebind). A host that matches neither, such as a dedicated cell, never does.
+ */
+export function isSubstrateVmHost(
+  host: string,
+  vmHost: string | undefined,
+  vmAddresses: readonly string[] = []
+): boolean {
+  const h = normalizeHost(host);
+  if (h === undefined) return false;
+  return [vmHost, ...vmAddresses].some(
+    (c) => c !== undefined && normalizeHost(c) === h
+  );
+}
+
+/**
+ * Replace ONLY the endpoint of a Postgres-wire DSN. The credential, database and query stay byte for
+ * byte (the bucket keeps the credential; the binding owns the endpoint). Throws on any other shape.
+ */
+export function rebindDsnEndpoint(
+  dsn: string,
+  host: string,
+  port: number
+): string {
+  if (!Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error(`dsn rebind: port out of range: ${port}`);
+  if (!/^[a-z0-9][a-z0-9.-]*$/.test(host))
+    throw new Error(`dsn rebind: host is not a plain name: ${host}`);
+  let m: RegExpExecArray;
+  try {
+    m = parsePostgresDsn(dsn).match;
+  } catch (error) {
+    throw new DsnShapeError(`dsn rebind: ${(error as Error).message}`);
+  }
+  return `${m[1]}${host}:${port}${m[3]}`;
 }

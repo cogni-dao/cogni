@@ -11,10 +11,13 @@
  *   in local dev and over the private actuator in production.
  * Invariants:
  *   - ATTEMPT_ROW_BEFORE_CREATE: the attempt row (phase `planned`) is durable BEFORE the paid create.
+ *     A dispatch marker is durable before native IO; resumed keys are observed before admission waits.
  *   - KEY_IS_NEVER_REUSED: every create takes the next attempt ordinal; a failed attempt's key is dead.
  *     An ambiguous create is RESOLVED through `observe(cogniKey)`, never blindly repeated.
  *   - PARK_AFTER_3: after 3 consecutive failed attempts of one release no further paid create happens
  *     until a new release arrives. No clock resets that count.
+ *   - TERMINAL_ADMISSION: refusal fences every resumed phase before proof/cutover. Old paid effects
+ *     keep observation/adoption and confirmed stateless cleanup; retained state keeps custody.
  *   - PROVE_BEFORE_CUTOVER: the edge never moves until the green lease serves the exact sha
  *     (`/version.buildSha`) and `/readyz` 200 through its provider ingress with the public Host header,
  *     within `proofMs` of lease creation; otherwise the NEW lease is closed and blue keeps serving.
@@ -45,13 +48,31 @@
  *   - ONE_EMIT_HELPER: every event (step, provider strike, alert) is written by `record`, which logs the
  *     Loki line AND appends the same step to the attempt's durable timeline; a failed append is logged
  *     and never fails a deploy decision.
+ *   - TRANSPORT_PER_ATTEMPT (task.5431, HR 18): each node-app attempt's transport is derived once, before
+ *     its row exists, by `attemptTransport` and written in the same insert; a lane switch never leaves a
+ *     node without a serving path.
+ *   - KEY_STORED_BEFORE_PAY (HR 5): a mesh attempt gets ONE reusable, ephemeral key after its row is
+ *     durable and the policy readback matches. Its Headscale key id is written to the row FIRST, then the
+ *     value goes into a create-once Secret, then the paid create. A lost mint response or a restart at
+ *     any point makes no second usable key and no second paid create; a row key id with no Secret is
+ *     expired before a fresh mint. While no key can be minted the attempt waits (`mesh_key_pending`),
+ *     unpaid, and is never observed or failed for it.
+ *   - MESH_PASS_UNDER_THE_LOCK (HR 4, 5, 6, 8): each reconcile pass, under the leader lock, first runs the
+ *     env mesh pass: reconcile the derived policy (fail closed), approve the published `substrate-gw`,
+ *     revoke every terminal attempt's key (expire, then delete its devices; a retiring blue only after it
+ *     retires), delete a revoked attempt's Secret one pass later, sweep unstored keys, then the device
+ *     check. A failed Headscale call stops every mesh write for that pass and resets the device window.
  * Side-effects: IO via injected ports
  * @internal
  */
 
 import type {
+  AttemptMesh,
   BuiltImageResolverPort,
   ChainTruthPort,
+  HeadscaleKeyId,
+  MeshDevice,
+  MeshKeyStorePort,
   NodeCatalogPort,
   NodeRuntimeSecretsPort,
   PayerPort,
@@ -59,7 +80,10 @@ import type {
   SecretsPort,
   SequencerClock,
   SequencerLog,
+  StoredMeshKey,
   StorePort,
+  SubstrateRequestSourcePort,
+  SubstrateTransport,
 } from "@/ports";
 import {
   type AttemptPatch,
@@ -70,6 +94,7 @@ import {
   buildCogniKey,
   buildIdentity,
   consecutiveFailures,
+  headscaleKeyId,
   IN_FLIGHT_PHASES,
   keyString,
   NodeRuntimeSecretsError,
@@ -77,10 +102,52 @@ import {
   type ReleaseRow,
   type WorkloadKey,
 } from "@/ports";
+import { isFleetOwnedRow } from "@/shared/node-registry/fleet-ownership";
+import { selectReleaseBundle } from "./artifact-selection";
 import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
-import { type EdgeRouter, hostOwnedBy, workerHostRefusal } from "./edge";
-import { nodeAppEnv, nodeAppSecretKeys, workerEnv } from "./node-app-env";
+import {
+  type EdgeRouter,
+  HOST_ENVS,
+  hostOwnedBy,
+  workerHostRefusal,
+} from "./edge";
+import {
+  attemptTransport,
+  type DeviceWatchEntry,
+  deviceRollsInFlight,
+  MAX_DEVICE_ROLLS_PER_ENV,
+  MESH_COMPANION_IMAGES,
+  MESH_DEVICE_ABSENT,
+  MESH_LIVE_PHASES,
+  MESH_TERMINAL_PHASES,
+  type MeshCompanionService,
+  meshCompanionServices,
+  meshDeviceName,
+  readAttemptDevices,
+  substrateGateway,
+} from "./mesh-attempt";
+import {
+  type MeshPlane,
+  meshSecretName,
+  SUBSTRATE_NODE_KEY_ALERT_MS,
+} from "./mesh-plane";
+import type { NodeSubstrateGrant } from "./mesh-policy";
+import {
+  nodeAppEnv,
+  nodeAppSecretKeys,
+  nodeAppSubstrateBinding,
+  releaseIdentityEnv,
+  workerEnv,
+} from "./node-app-env";
 import { nodeCatalogPolicy } from "./node-catalog-policy";
+import {
+  asQualificationFailure,
+  checkQualification,
+  QualificationFailure,
+  qualificationChallenge,
+  savedQualification,
+  validationCode,
+} from "./qualification";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
 
 export interface SequencerConfig {
@@ -173,14 +240,31 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
 export interface NodeAppRuntimeDeps {
   readonly secrets: NodeRuntimeSecretsPort;
   readonly catalog: NodeCatalogPort;
+  /** Trusted public operator issuer host for this lane (`DOMAIN`, #3029). */
   readonly operatorDomain: string;
-  readonly fleetBinding?:
-    | { readonly valid: true }
-    | { readonly valid: false; readonly reason: string };
   /** `vm_host_for_env` of the environment VM; absent omits the substrate env block. */
   readonly substrateHost?: string | undefined;
-  /** The DNS zone this lane's node hosts live in (ONE_EDGE_ZONE); absent = `cognidao.org`. */
-  readonly edgeZone?: string | undefined;
+}
+
+/**
+ * The env tailnet of ONE lane (task.5431). Present only when the lane's transport is `mesh`
+ * (`NODE_DEPLOY_SUBSTRATE_TRANSPORTS`); absent = every attempt of the lane uses egress.
+ */
+export interface SequencerMeshDeps {
+  /**
+   * `mint`: the lane's transport is mesh. `drain` (the lane was switched back to egress): the pass still
+   * reconciles the policy, approves the gateway, revokes and sweeps, and deletes Secrets until no mesh
+   * attempt is left to clean; it never mints and never rolls (HR 6 for a lane switch-back).
+   */
+  readonly mode: "mint" | "drain";
+  /** The env Headscale's seed-and-approval loop over its pod-local socket (task.5429). */
+  readonly plane: MeshPlane;
+  /** Attempt-key Secrets in the lane's `cogni-node-deploy-<env>` namespace. */
+  readonly keys: MeshKeyStorePort;
+  /** The env VM's published `substrate-gw` request, read over verified HTTPS. */
+  readonly substrateRequests: SubstrateRequestSourcePort;
+  /** `https://mesh-<tailnet>.<zone>`: the tailnet Headscale's `server_url` (TLS on 443 only, HR 22). */
+  readonly controlUrl: string;
 }
 
 export interface SequencerDeps {
@@ -188,9 +272,16 @@ export interface SequencerDeps {
   readonly payer: PayerPort;
   /** Undefined when no edge credentials are configured: http apps are then refused BEFORE paying. */
   readonly edge: EdgeRouter | undefined;
+  /**
+   * Set when the lane's fleet binding (owner + workload zone) is missing or invalid. A fresh app then
+   * waits before any attempt or payment, and a proven green waits at cutover. It never revokes
+   * paid-effect recovery ownership (observe, adopt, close).
+   */
+  readonly httpAdmissionRefusal?: "workload_zone_not_configured";
   readonly probe: ProbePort;
   readonly secrets: SecretsPort;
   readonly runtime?: NodeAppRuntimeDeps;
+  readonly mesh?: SequencerMeshDeps;
   readonly chain?: ChainTruthPort;
   /**
    * Resolves a pending release image (`<repo>:sha-<sha>`) to its digest (story.5137). Absent (dev harness):
@@ -243,14 +334,24 @@ const SERVED_PHASES: readonly AttemptPhase[] = [
 /** The actuator wire accepts at most 16 `allowProviders`. */
 const MAX_ALLOWED_PROVIDERS = 16;
 
+/** One desired workload of the env with every attempt (newest first). */
+interface MeshRow {
+  readonly key: WorkloadKey;
+  readonly attempts: readonly AttemptRow[];
+}
+
 class DependencyNotReady extends Error {}
+class InvalidArtifactSet extends Error {}
 
 interface ResolvedRuntime {
   readonly env: Record<string, string>;
+  readonly companionEnvs?: Record<string, Record<string, string>>;
   /** Catalog `required_placement_countries[<env>]`; empty = unconstrained. */
   readonly requiredCountryCodes: readonly string[];
   /** True when the env is a non-operator node app's full runtime env (`nodeAppEnv`). */
   readonly nodeApp: boolean;
+  /** A node app's substrate binding ports (`nodeAppSubstrateBinding`): its mesh grant and listeners. */
+  readonly substratePorts?: readonly number[];
 }
 
 export class NodeDeploySequencer {
@@ -259,6 +360,12 @@ export class NodeDeploySequencer {
   private readonly lastGraceLogAt = new Map<string, number>();
   /** Last persisted step signature per attempt, so a poll loop writes one timeline row, not hundreds. */
   private readonly lastStep = new Map<string, string>();
+  /** HR 8 device window per live mesh attempt id: in memory, so a restart rolls nothing. */
+  private readonly deviceWatch = new Map<string, DeviceWatchEntry>();
+  /** MESH_WRITES_SERIALIZED: the tail of this lane's Headscale write queue. */
+  private meshLock: Promise<void> = Promise.resolve();
+  /** The lane VM host's resolved addresses, read once per mesh pass (task.5432 SHARED_POSTGRES_ONLY). */
+  private vmAddresses: readonly string[] | undefined;
 
   constructor(private readonly d: SequencerDeps) {}
 
@@ -278,8 +385,19 @@ export class NodeDeploySequencer {
     );
   }
 
-  /** One reconcile pass (design: every 60 s). */
+  /** One reconcile pass (design: every 60 s). The env mesh pass runs first (MESH_PASS_UNDER_THE_LOCK). */
   async reconcileAll(): Promise<void> {
+    if (this.d.mesh)
+      await this.meshPass().catch((error: unknown) => {
+        this.deviceWatch.clear(); // a skipped pass breaks the consecutive-read window
+        return this.meshEvent(
+          "error",
+          "node_mesh_coordinator_health",
+          undefined,
+          undefined,
+          { outcome: "threw", reason: errText(error).slice(0, 300) }
+        );
+      });
     const desired = await this.d.store.listDesired(this.d.config.environment);
     await Promise.all(
       desired.map((row) =>
@@ -342,6 +460,9 @@ export class NodeDeploySequencer {
     }
 
     if (active && active.releaseId === release.id) return "converged";
+    // Existing paid attempts above retain recovery authority, never activation authority after
+    // terminal refusal. Every tick/restart reads the authoritative release.
+    if (release.admissionRefusal) return "parked";
 
     if (release.spec.kind === "state") {
       const everLive = all.some((a) =>
@@ -359,12 +480,15 @@ export class NodeDeploySequencer {
     }
 
     const ofRelease = all.filter((a) => a.releaseId === release.id);
+    if (ofRelease.some((a) => a.error?.startsWith("artifact_bundle_invalid")))
+      return "parked";
     const failures = consecutiveFailures(ofRelease);
     // LAST_RESORT_STOP (task.5409): when the release's last refusal shows blue's provider as the only bidder
     // screening could pass, the park limit grants exactly ONE stop-then-start attempt. Parking first would
     // leave the node on blue forever (blue never moves, green never places). After that attempt, blue is
     // retired, so the predicate is false and a further failure parks as usual.
     const lastResort =
+      !release.spec.health?.qualification &&
       failures === this.d.config.maxFailedAttempts &&
       (await this.stopThenStartVerdict(key, release, ofRelease, active)) ===
         "eligible";
@@ -378,12 +502,24 @@ export class NodeDeploySequencer {
     }
 
     let deployable: ReleaseRow;
+    let nodeApp = false;
     try {
       // The image first: a pending image (`<repo>:sha-<sha>`) is resolved to a digest ONCE, pinned
       // write-once on the release, and only then can an attempt exist (ALWAYS_DEFER, story.5137).
       deployable = await this.pinImage(key, release);
-      await this.resolveEnv(key, deployable);
+      if (deployable.admissionRefusal) return "parked";
+      nodeApp = (await this.resolveEnv(key, deployable)).nodeApp;
     } catch (error) {
+      if (error instanceof InvalidArtifactSet) {
+        // Admission failed: attribute the refusal to the existing release intent. An attempt
+        // identity is allocated only after the entire selected artifact set is admitted.
+        await this.persistAdmissionRefusal(release, error);
+        await this.alert(key, release, undefined, "release_parked", {
+          reason: "artifact_bundle_invalid",
+          detail: error.message,
+        });
+        return "parked";
+      }
       if (error instanceof DependencyNotReady) {
         await this.emit(key, release, undefined, "dependency", "waiting", {
           reason: error.message,
@@ -393,27 +529,94 @@ export class NodeDeploySequencer {
       throw error;
     }
 
+    const allocateAttempt = (transport?: SubstrateTransport) =>
+      this.d.store.insertAttempt(
+        release.id,
+        (n) =>
+          buildCogniKey({
+            namespace: this.d.config.namespace,
+            nodeId: key.nodeId,
+            workload: key.workload,
+            releaseId: release.id,
+            attempt: n,
+          }),
+        transport ? { transport } : undefined
+      );
+    try {
+      await this.assertNewAppHost(key, deployable);
+    } catch (error) {
+      const refused = await allocateAttempt();
+      await this.emit(key, release, refused, "attempt_planned", "ok", {
+        blue: active?.externalName,
+      });
+      await this.failAttempt(key, deployable, refused, errText(error), {
+        createEnded: true,
+      });
+      return "driven";
+    }
+    let blue = active;
     // STOP_THEN_START (task.5409): blue's provider was the only bidder that could pass screening, so a
     // green beside blue can never be placed. Close blue first (accepted downtime), then create.
-    let blue = active;
-    const stop = await this.stopThenStart(key, release, ofRelease, active);
+    // A useful-work capability requires blue to survive failed or unknown qualification.
+    const verdict = release.spec.health?.qualification
+      ? "none"
+      : await this.stopThenStartVerdict(key, release, ofRelease, active);
+    const willStop = verdict === "eligible";
+
+    // HR 18, decided BEFORE any stop (CD6): `all` shows the pre-stop phases, so a blue about to be
+    // stopped counts as serving and its replacement keeps the node's served transport.
+    const transport =
+      this.d.mesh?.mode === "mint" && nodeApp && deployable.spec.kind === "app"
+        ? attemptTransport({
+            lane: "mesh",
+            blueRetained: active !== undefined && !willStop,
+            releaseId: release.id,
+            workloadAttempts: all,
+            nodeAttempts: await this.nodeAttempts(key),
+          })
+        : "egress";
+    if (transport === "mesh" && !this.d.mesh?.plane.mintAllowed) {
+      // No key can be minted (no matched policy readback or no sweep since the last failed call): blue
+      // keeps serving, no attempt starts and nothing is paid until the mesh pass opens minting (HR 4, 5).
+      await this.emit(key, release, undefined, "dependency", "waiting", {
+        reason: "mesh_not_ready",
+      });
+      return "waiting_dependency";
+    }
+
+    // `not_admitted` also goes through stopThenStart: it alerts and keeps blue.
+    const stop =
+      verdict === "none"
+        ? "none"
+        : await this.stopThenStart(key, release, ofRelease, active);
     if (stop === "unconfirmed") return "close_pending";
     if (stop === "stopped") blue = undefined;
-
-    const attempt = await this.d.store.insertAttempt(release.id, (n) =>
-      buildCogniKey({
-        namespace: this.d.config.namespace,
-        nodeId: key.nodeId,
-        workload: key.workload,
-        releaseId: release.id,
-        attempt: n,
-      })
-    );
+    const attempt = await allocateAttempt(transport);
     await this.emit(key, release, attempt, "attempt_planned", "ok", {
       blue: blue?.externalName,
     });
-    await this.drive(key, deployable, attempt, blue);
+    await this.drive(key, deployable, attempt, blue, true);
     return "driven";
+  }
+
+  private async persistAdmissionRefusal(
+    release: ReleaseRow,
+    error: InvalidArtifactSet
+  ): Promise<void> {
+    try {
+      const refused = await this.d.store.refuseAdmission(release.id, {
+        reason: `artifact_bundle_invalid: ${error.message}`.slice(0, 600),
+        at: new Date(this.d.clock.now()).toISOString(),
+      });
+      if (refused.admissionRefusal) return;
+    } catch {
+      // A lost write response grants no authority. Only durable readback confirms the verdict.
+    }
+    const readback = await this.d.store.getRelease(release.id);
+    if (!readback?.admissionRefusal)
+      throw new Error(
+        "admission refusal outcome unknown; awaiting durable readback"
+      );
   }
 
   /**
@@ -554,6 +757,75 @@ export class NodeDeploySequencer {
     release: ReleaseRow
   ): Promise<ReleaseRow> {
     const w = release.spec;
+    if ((w.companions?.length || w.health?.qualification) && !w.artifactPlan)
+      throw new InvalidArtifactSet(
+        "qualified service set has no frozen artifact plan"
+      );
+    if (w.artifactPlan) {
+      if (w.artifactPlan.bundleDigest && release.resolvedImage) {
+        await this.checkSelectedImages(release.spec);
+        return release;
+      }
+      if (!this.d.images?.resolveArtifactBundle)
+        throw new DependencyNotReady("no bundle resolver configured");
+      const acceptedDigest = await this.d.store.acceptedBundle(release);
+      try {
+        const publication = await this.d.images.resolveArtifactBundle({
+          imageRepository: w.artifactPlan.imageRepository,
+          sourceSha: release.sourceSha,
+          ...(acceptedDigest ? { acceptedDigest } : {}),
+        });
+        if (!publication)
+          throw new DependencyNotReady(
+            "complete CI bundle is not published yet"
+          );
+        let spec: ReleaseRow["spec"];
+        try {
+          spec = selectReleaseBundle(release, publication);
+        } catch {
+          throw new InvalidArtifactSet(
+            "bundle identity or service coverage refused"
+          );
+        }
+        await this.checkSelectedImages(spec);
+        let sealed: ReleaseRow | undefined;
+        try {
+          sealed = await this.d.store.pinResolvedBundle(release.id, spec);
+        } catch {
+          // A lost COMMIT reply is unknown, not permission to resolve tags or create another set.
+          try {
+            sealed = await this.d.store.getRelease(release.id);
+          } catch {
+            /* next tick reads durable intent */
+          }
+          if (
+            !sealed?.resolvedImage ||
+            !sealed.spec.artifactPlan?.bundleDigest ||
+            !sealed.spec.artifactPlan.selectedImages
+          )
+            throw new DependencyNotReady(
+              "bundle seal outcome unknown; awaiting durable readback"
+            );
+        }
+        if (!sealed)
+          throw new DependencyNotReady(
+            "another environment accepted a bundle; retry its digest"
+          );
+        // CAS can return a concurrently accepted winner. Check the actual set we will create.
+        if (
+          JSON.stringify(sealed.spec.artifactPlan?.selectedImages) !==
+          JSON.stringify(spec.artifactPlan?.selectedImages)
+        )
+          await this.checkSelectedImages(sealed.spec);
+        return sealed;
+      } catch (e) {
+        if (e instanceof BuiltImageRegistryError) {
+          if (e.invalid) throw new InvalidArtifactSet(e.message);
+          throw new DependencyNotReady("bundle registry unavailable");
+        }
+        throw e;
+      }
+    }
     if (!w.imagePending) return release;
     const m = /^(.+):sha-([0-9a-f]{40})$/u.exec(w.image);
     if (!m?.[1] || !m[2])
@@ -583,6 +855,26 @@ export class NodeDeploySequencer {
       throw new DependencyNotReady(`image ${w.image} is not published yet`);
     }
     return this.d.store.pinResolvedImage(release.id, digest);
+  }
+
+  private async checkSelectedImages(spec: ReleaseRow["spec"]): Promise<void> {
+    const images = spec.artifactPlan?.selectedImages;
+    if (!images || !this.d.images?.checkImageManifests)
+      throw new DependencyNotReady(
+        "selected image manifest reader unavailable"
+      );
+    try {
+      if (!(await this.d.images.checkImageManifests(Object.values(images))))
+        throw new DependencyNotReady(
+          "selected image digest is not published or readable"
+        );
+    } catch (e) {
+      if (e instanceof BuiltImageRegistryError) {
+        if (e.invalid) throw new InvalidArtifactSet(e.message);
+        throw new DependencyNotReady("selected image registry unavailable");
+      }
+      throw e;
+    }
   }
 
   /**
@@ -643,9 +935,146 @@ export class NodeDeploySequencer {
     key: WorkloadKey,
     release: ReleaseRow,
     start: AttemptRow,
-    blue: AttemptRow | undefined
+    blue: AttemptRow | undefined,
+    freshAttempt = false
   ): Promise<void> {
+    if (release.admissionRefusal) {
+      if (!freshAttempt && this.createMayStillBeInFlight(start)) return;
+      if (release.spec.kind === "app") {
+        // The existing orphan guard observes, adopts and confirms closure under the original key.
+        // It also preserves the grace window while a paid create may still be running.
+        await this.failAttempt(
+          key,
+          release,
+          start,
+          release.admissionRefusal.reason
+        );
+      } else {
+        // Retained state cannot be destroyed by an admission verdict. Keep observation/custody,
+        // but grant neither proof nor activation. No new create or replacement is authorized.
+        if (this.createMayStillBeInFlight(start)) return;
+        try {
+          const obs = await this.d.payer.observe({
+            cogniKey: start.cogniKey,
+            ...(start.externalName ? { externalName: start.externalName } : {}),
+          });
+          if (obs.found && obs.resource && !start.externalName)
+            await this.bindLease(key, release, start, obs.resource);
+        } catch (error) {
+          await this.emit(
+            key,
+            release,
+            start,
+            "admission_refused",
+            "observe_unavailable",
+            {
+              error: errText(error),
+            }
+          );
+        }
+        await this.alert(
+          key,
+          release,
+          start,
+          "admission_refused_state_retained",
+          {
+            reason: release.admissionRefusal.reason,
+          }
+        );
+      }
+      return;
+    }
     let a = start;
+    let recoveryPending = false;
+    if (a.phase === "planned") {
+      if (a.error?.startsWith(REFUSED_PREFIX)) {
+        await this.failAttempt(key, release, a, a.error);
+        return;
+      }
+      // KEY_STORED_BEFORE_PAY: a mesh attempt still waiting for its key was never dispatched (the dispatch
+      // marker replaces this one durably before any paid call), so it goes straight back to `doCreate`.
+      const meshPending = a.error?.startsWith(MESH_KEY_PENDING) ?? false;
+      // A dispatch marker survives loss before bindLease or the catch handler. Legacy
+      // unmarked rows get the same grace: their previous runner may still be paying.
+      if (!freshAttempt && !meshPending && this.createMayStillBeInFlight(a)) {
+        await this.emitGrace(key, release, a, "create", "inflight_grace", {
+          graceMs: this.d.config.inflightGraceMs,
+        });
+        recoveryPending = true;
+      }
+      if (!freshAttempt && !recoveryPending && !meshPending) {
+        try {
+          const obs = await this.d.payer.observe({ cogniKey: a.cogniKey });
+          if (obs.found && obs.resource) {
+            await this.emit(
+              key,
+              release,
+              a,
+              "create",
+              "adopted_after_ambiguity",
+              {
+                dseq: obs.resource.externalName,
+              }
+            );
+            a = await this.bindLease(key, release, a, obs.resource);
+          } else if (obs.found) {
+            // An effect exists under this key but names no resource yet: never re-create, never
+            // settle it as absent. observeUnavailable bounds the wait (orphan_suspect).
+            a = await this.observeUnavailable(
+              key,
+              release,
+              a,
+              "create",
+              "planned create unresolved",
+              new Error("existing effect has no resource")
+            );
+            recoveryPending = true;
+          } else if (a.error?.startsWith("ambiguous")) {
+            await this.failAttempt(
+              key,
+              release,
+              a,
+              "ambiguous create resolved to nothing; next ordinal"
+            );
+            return;
+          }
+        } catch (error) {
+          a = await this.observeUnavailable(
+            key,
+            release,
+            a,
+            "create",
+            "planned create unresolved",
+            error
+          );
+          recoveryPending = true;
+        }
+      }
+    }
+    // New admission cannot suppress native recovery. Missing publication holds the
+    // owned allocation without qualification, traffic or another attempt.
+    if (release.spec.artifactPlan) {
+      try {
+        await this.checkSelectedImages(release.spec);
+      } catch (error) {
+        if (error instanceof DependencyNotReady) {
+          await this.emit(key, release, a, "dependency", "waiting", {
+            reason: error.message,
+          });
+          return;
+        }
+        if (error instanceof InvalidArtifactSet) {
+          await this.persistAdmissionRefusal(release, error);
+          const refused = await this.d.store.getRelease(release.id);
+          if (!refused?.admissionRefusal)
+            throw new Error("admission refusal readback missing");
+          await this.drive(key, refused, a, blue, freshAttempt);
+          return;
+        }
+        throw error;
+      }
+    }
+    if (recoveryPending) return;
     if (a.phase === "planned") a = await this.doCreate(key, release, a, blue);
     if (a.phase === "created") a = await this.awaitLease(key, release, a, blue);
     if (a.phase === "proving") a = await this.prove(key, release, a);
@@ -662,23 +1091,27 @@ export class NodeDeploySequencer {
    */
   private async resolveEnv(
     key: WorkloadKey,
-    release: ReleaseRow
+    release: ReleaseRow,
+    transport: SubstrateTransport = "egress"
   ): Promise<ResolvedRuntime> {
     const w = release.spec;
-    const binding = this.d.runtime?.fleetBinding;
-    if (w.kind === "app" && binding && !binding.valid)
-      throw new DependencyNotReady(binding.reason);
+    const refusal = this.d.httpAdmissionRefusal;
+    if (w.kind === "app" && refusal) throw new DependencyNotReady(refusal);
     const env: Record<string, string> = {};
     let requiredCountryCodes: readonly string[] = [];
     let nodeApp = false;
+    let companionEnvs: Record<string, Record<string, string>> = {};
+    let substratePorts: readonly number[] = [];
     if (w.kind === "app") {
-      const node = await this.nodeAppRuntime(key, release);
+      const node = await this.nodeAppRuntime(key, release, transport);
       if (node) {
         Object.assign(env, node.env);
         requiredCountryCodes = node.requiredCountryCodes;
         nodeApp = node.nodeApp;
+        companionEnvs = node.companionEnvs ?? {};
+        substratePorts = node.substratePorts ?? [];
       }
-      env.RELEASE_SHA = release.sourceSha;
+      Object.assign(env, releaseIdentityEnv(release.sourceSha));
     }
     if (w.kind === "state") {
       env.POSTGRES_PASSWORD = await this.d.secrets.ensureStatePassword(key);
@@ -708,22 +1141,37 @@ export class NodeDeploySequencer {
       }))
         env[b.env] = b.value;
     }
-    return { env, requiredCountryCodes, nodeApp };
+    return {
+      env,
+      requiredCountryCodes,
+      nodeApp,
+      companionEnvs,
+      substratePorts,
+    };
   }
 
   private async nodeAppRuntime(
     key: WorkloadKey,
-    release: ReleaseRow
+    release: ReleaseRow,
+    transport: SubstrateTransport = "egress"
   ): Promise<
     | {
         env: Record<string, string>;
         requiredCountryCodes: string[];
         nodeApp: boolean;
+        companionEnvs?: Record<string, Record<string, string>>;
+        substratePorts?: readonly number[];
       }
     | undefined
   > {
     const rt = this.d.runtime;
-    if (!rt) return undefined;
+    if (!rt) {
+      if (release.spec.companions?.length)
+        throw new DependencyNotReady(
+          "private companions require scoped runtime secrets"
+        );
+      return undefined;
+    }
     const w = release.spec;
     const entry = await rt.catalog.entryFor(key.nodeId);
     if (!entry)
@@ -777,11 +1225,12 @@ export class NodeDeploySequencer {
     const boundEnvNames = w.bindings.map((b) => b.env);
     let bucket: Readonly<Record<string, string>>;
     try {
-      bucket = await rt.secrets.read(
-        key.env,
-        entry.slug,
-        nodeAppSecretKeys(w.secretKeys, boundEnvNames)
-      );
+      bucket = await rt.secrets.read(key.env, entry.slug, [
+        ...new Set([
+          ...nodeAppSecretKeys(w.secretKeys, boundEnvNames),
+          ...(w.companions ?? []).flatMap((c) => c.secretKeys ?? []),
+        ]),
+      ]);
     } catch (error) {
       if (error instanceof NodeRuntimeSecretsError)
         throw new DependencyNotReady(
@@ -789,6 +1238,17 @@ export class NodeDeploySequencer {
         );
       throw error;
     }
+    // ONE derivation (CD2, task.5432): the SAME input gives the env and the substrate binding, so the mesh
+    // grant and the `cogni-substrate` listeners are exactly the ports the env reaches (HR 3).
+    const substrate = {
+      transport,
+      substrateHost: rt.substrateHost,
+      substrateAddresses:
+        transport === "mesh" ? await this.substrateAddresses() : [],
+      secretKeys: w.secretKeys,
+      secrets: bucket,
+      boundEnvNames,
+    };
     try {
       return {
         env: nodeAppEnv({
@@ -799,14 +1259,24 @@ export class NodeDeploySequencer {
           publicHost,
           operatorDomain: rt.operatorDomain,
           port: w.port,
-          substrateHost: rt.substrateHost,
           databasePoolLimits: policy.databasePoolLimits,
-          secretKeys: w.secretKeys,
-          secrets: bucket,
-          boundEnvNames,
+          ...substrate,
         }),
+        substratePorts: nodeAppSubstrateBinding(substrate)?.ports ?? [],
         requiredCountryCodes: [...policy.requiredCountryCodes],
         nodeApp: true,
+        companionEnvs: Object.fromEntries(
+          (w.companions ?? []).map((c) => [
+            c.name,
+            workerEnv({
+              env: key.env,
+              sourceSha: release.sourceSha,
+              port: c.port,
+              secretKeys: c.secretKeys ?? [],
+              secrets: bucket,
+            }),
+          ])
+        ),
       };
     } catch (error) {
       throw new DependencyNotReady(errText(error));
@@ -922,135 +1392,115 @@ export class NodeDeploySequencer {
     return out;
   }
 
+  /** New effects use current fleet authority; recorded hosts are never retargeted. */
+  private async assertNewAppHost(
+    key: WorkloadKey,
+    release: ReleaseRow
+  ): Promise<void> {
+    const w = release.spec;
+    const host = publicHostOf(w);
+    if (!host) return;
+    const edge = this.d.edge;
+    if (!edge)
+      throw new Error(this.d.httpAdmissionRefusal ?? "edge_not_configured");
+    try {
+      edge.assertHost(host);
+      if (this.d.runtime) {
+        const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
+        const worker = w.runtimeProfile === "worker" ? w.name : undefined;
+        if (
+          !owner ||
+          !isFleetOwnedRow(owner.row, edge.binding.fleetOwner) ||
+          !hostOwnedBy(edge.binding, host, key.env, owner.slug, worker)
+        )
+          throw new Error(
+            `${host} is not the host node ${owner?.slug ?? key.nodeId} may claim in ${key.env}`
+          );
+        const catalogSlugs = await this.d.runtime.catalog.slugs();
+        const refusal =
+          worker === undefined
+            ? undefined
+            : workerHostRefusal({
+                binding: edge.binding,
+                host,
+                env: key.env,
+                slug: owner.slug,
+                workload: worker,
+                catalogSlugs,
+              });
+        if (refusal) throw new Error(refusal);
+        for (const other of catalogSlugs) {
+          if (other === owner.slug) continue;
+          for (const env of HOST_ENVS)
+            if (hostOwnedBy(edge.binding, host, env, other))
+              throw new Error(`${host} belongs to node ${other}`);
+        }
+      }
+    } catch (error) {
+      throw new Error(`edge_host_refused: ${errText(error)}`);
+    }
+    await edge.assertZoneIdentity();
+    // Reuse the existing by-name read: protected or ambiguous native records refuse before payment.
+    await edge.current(host);
+  }
+
   private async doCreate(
     key: WorkloadKey,
     release: ReleaseRow,
     attempt: AttemptRow,
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
-    // A refused create (provider_rejected, ...) already ended this key's life: it is never replayed under
-    // the same nd: key (the actuator would answer `akash_tx_create_replayed` forever). Fail the attempt;
-    // the next attempt gets a new ordinal. If failAttempt had to defer (observe down) we land here again.
-    if (attempt.error?.startsWith(REFUSED_PREFIX))
-      return this.failAttempt(key, release, attempt, attempt.error);
-
-    // Resume path: a previous call left this create unresolved. Resolve, never blindly re-create.
-    if (this.createMayStillBeInFlight(attempt)) {
-      await this.emitGrace(key, release, attempt, "create", "inflight_grace", {
-        graceMs: this.d.config.inflightGraceMs,
-      });
-      return attempt;
-    }
-    if (attempt.error?.startsWith("ambiguous")) {
-      try {
-        const obs = await this.d.payer.observe({ cogniKey: attempt.cogniKey });
-        if (obs.found && obs.resource) {
-          await this.emit(
-            key,
-            release,
-            attempt,
-            "create",
-            "adopted_after_ambiguity",
-            {
-              dseq: obs.resource.externalName,
-            }
-          );
-          return this.bindLease(key, release, attempt, obs.resource);
-        }
-        if (obs.found)
-          return this.observeUnavailable(
-            key,
-            release,
-            attempt,
-            "create",
-            "planned create unresolved",
-            new Error("existing effect has no resource")
-          );
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          "ambiguous create resolved to nothing; next ordinal"
-        );
-      } catch (error) {
-        return this.observeUnavailable(
-          key,
-          release,
-          attempt,
-          "create",
-          "ambiguous create unresolved",
-          error
-        );
-      }
-    }
-
-    const binding = this.d.runtime?.fleetBinding;
-    if (release.spec.kind === "app" && binding && !binding.valid) {
+    const refusal = this.d.httpAdmissionRefusal;
+    if (release.spec.kind === "app" && refusal) {
       await this.emit(key, release, attempt, "dependency", "waiting", {
-        reason: binding.reason,
+        reason: refusal,
       });
       return attempt;
     }
     const w = release.spec;
-    if (publicHostOf(w) && !this.d.edge) {
-      // Refuse BEFORE paying: a lease no edge can ever route to is wasted spend.
-      return this.failAttempt(key, release, attempt, "edge_not_configured");
-    }
-    const declaredHost = publicHostOf(w);
-    if (declaredHost && this.d.edge) {
-      // The edge guard would refuse this host at cutover; refuse it NOW, before a paid create, with
-      // an explicit reason. Three of these park the release, still with zero creates.
-      try {
-        this.d.edge.assertHost(declaredHost);
-      } catch (error) {
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `edge_host_refused: ${errText(error)}`
-        );
-      }
-    }
-    if (declaredHost && this.d.runtime) {
-      // HOST_IS_THE_NODES_OWN: a node may claim only its own host, so node A can never take node B's.
-      const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
-      // Only an operator-lowered repo-spec sibling (a worker) may use `<slug>-<workload>`.
-      const worker = w.runtimeProfile === "worker" ? w.name : undefined;
-      const zone = this.d.runtime.edgeZone;
-      if (
-        !owner ||
-        !hostOwnedBy(declaredHost, key.env, owner.slug, worker, zone)
-      )
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `edge_host_refused: ${declaredHost} is not the host node ${owner?.slug ?? key.nodeId} may claim in ${key.env}`
-        );
-      const refusal =
-        worker !== undefined && declaredHost !== undefined
-          ? workerHostRefusal({
-              host: declaredHost,
-              env: key.env,
-              slug: owner.slug,
-              workload: worker,
-              catalogSlugs: await this.d.runtime.catalog.slugs(),
-              zone,
-            })
-          : undefined;
-      if (refusal)
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `edge_host_refused: ${refusal}`
-        );
-    }
+    if (release.admissionRefusal)
+      return this.failAttempt(
+        key,
+        release,
+        attempt,
+        release.admissionRefusal.reason,
+        { createEnded: true }
+      );
+
     let runtime: ResolvedRuntime;
     try {
-      runtime = await this.resolveEnv(key, release);
+      await this.assertNewAppHost(key, release);
+      runtime = await this.resolveEnv(
+        key,
+        release,
+        attempt.transport ?? "egress"
+      );
     } catch (error) {
-      return this.failAttempt(key, release, attempt, errText(error));
+      return this.failAttempt(key, release, attempt, errText(error), {
+        createEnded: true,
+      });
+    }
+    let meshCompanions: MeshCompanionService[] | undefined;
+    if (attempt.transport === "mesh") {
+      const prepared = await this.prepareMeshAttempt(
+        key,
+        release,
+        attempt,
+        runtime
+      );
+      if (prepared.kind === "pending") return prepared.attempt;
+      if (prepared.kind === "failed")
+        return this.failAttempt(
+          key,
+          release,
+          prepared.attempt,
+          prepared.reason,
+          {
+            createEnded: true,
+          }
+        );
+      attempt = prepared.attempt;
+      meshCompanions = prepared.services;
     }
 
     const { providers: excludeProviders, remembered } = await this.exclusion(
@@ -1080,7 +1530,8 @@ export class NodeDeploySequencer {
         providers: allowProviders,
         reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
       });
-    // Persist before dispatch: the actuator can outlive this sequencer process.
+    // Durable before native IO: runner loss cannot make a paid call look never-paid. The actuator can
+    // outlive this sequencer process, so the marker opens the same in-flight grace as a transport failure.
     attempt = await this.d.store.updateAttempt(attempt.id, {
       error: ambiguousMarker("network", this.d.clock.now()),
     });
@@ -1096,6 +1547,8 @@ export class NodeDeploySequencer {
         spec: toPayerSpec(w, runtime.env, {
           requiredCountryCodes,
           nodeApp: runtime.nodeApp,
+          companionEnvs: runtime.companionEnvs,
+          meshCompanions,
         }),
         ...(excludeProviders.length > 0 ? { excludeProviders } : {}),
         ...(allowProviders.length > 0 ? { allowProviders } : {}),
@@ -1110,12 +1563,14 @@ export class NodeDeploySequencer {
             this.d.clock.now() - attempt.createdAt.getTime() <
             this.d.config.leaseReadyMs
           ) {
-            attempt = await this.d.store.updateAttempt(attempt.id, {
-              error: "wallet_busy",
-            });
             await this.emit(key, release, attempt, "create", "wallet_busy");
-            return attempt;
+            return this.d.store.updateAttempt(attempt.id, {
+              error: "unpaid: wallet_busy",
+            });
           }
+          attempt = await this.d.store.updateAttempt(attempt.id, {
+            error: "unpaid: wallet_busy",
+          });
           return this.failAttempt(key, release, attempt, "wallet_busy_timeout");
         }
         if (error.ambiguous) {
@@ -1128,7 +1583,12 @@ export class NodeDeploySequencer {
             code: error.code,
           });
           // Resolve now; on a failed read the marker makes the next tick resolve first.
-          return this.doCreate(key, release, marked, blue);
+          await this.drive(key, release, marked, blue);
+          return (
+            (await this.d.store.attemptsFor(key)).find(
+              (a) => a.id === marked.id
+            ) ?? marked
+          );
         }
         return this.refuseCreate(
           key,
@@ -1158,7 +1618,7 @@ export class NodeDeploySequencer {
     text: string,
     definitive = false
   ): Promise<AttemptRow> {
-    // The full bid roster must survive: blueWasOnlyScreenedBidder parses it (task.5409).
+    // The native bounded excluded-bidder summary precedes diagnostic text and survives this cap.
     const error = `${REFUSED_PREFIX}${text}`.slice(0, ERROR_TEXT_MAX);
     const refused = await this.d.store.updateAttempt(attempt.id, { error });
     return this.failAttempt(key, release, refused, refused.error ?? "", {
@@ -1220,13 +1680,16 @@ export class NodeDeploySequencer {
   }
 
   /**
-   * A transport-level create failure inside the grace window: the actuator may still be working. The
-   * window starts at the failure (`ambiguous: network@<epoch ms>`); a legacy marker without a stamp
-   * falls back to the attempt's creation time.
+   * A dispatched or unmarked legacy create may still be working. The window starts at dispatch or
+   * transport failure; an unstamped marker or legacy planned row uses its creation time.
    */
   private createMayStillBeInFlight(attempt: AttemptRow): boolean {
     if (attempt.externalName) return false;
-    const failedAt = networkFailureAt(attempt);
+    const failedAt =
+      networkFailureAt(attempt) ??
+      (attempt.phase === "planned" && !attempt.error
+        ? attempt.createdAt.getTime()
+        : undefined);
     return (
       failedAt !== undefined &&
       this.d.clock.now() - failedAt < this.d.config.inflightGraceMs
@@ -1378,6 +1841,23 @@ export class NodeDeploySequencer {
               health.ready
             );
             if (r.status === 200) {
+              try {
+                attempt = await this.qualify(release, attempt, "qualify");
+              } catch (error) {
+                await this.qualificationDiagnostic(
+                  key,
+                  release,
+                  attempt,
+                  "qualify",
+                  error
+                );
+                return this.failAttempt(
+                  key,
+                  release,
+                  attempt,
+                  "qualification_failed"
+                );
+              }
               const next = await this.d.store.updateAttempt(attempt.id, {
                 phase: "proven",
               });
@@ -1459,11 +1939,10 @@ export class NodeDeploySequencer {
     if (w.kind === "app" && host) {
       const edge = this.d.edge;
       const ingress = ingressHostOf(attempt.endpoints, host);
-      const binding = this.d.runtime?.fleetBinding;
-      if (!edge || (binding && !binding.valid)) {
+      const refusal = this.d.httpAdmissionRefusal;
+      if (!edge || refusal) {
         await this.emit(key, release, attempt, "dependency", "waiting", {
-          reason:
-            binding && !binding.valid ? binding.reason : "edge_not_configured",
+          reason: refusal ?? "edge_not_configured",
         });
         return;
       }
@@ -1472,7 +1951,10 @@ export class NodeDeploySequencer {
         return;
       }
       let touched = false;
+      let qualified = false;
       try {
+        await this.qualify(release, attempt, "readback");
+        qualified = true;
         const rec = await edge.point(host, ingress);
         touched = true;
         await this.emit(key, release, attempt, "edge_moved", "ok", {
@@ -1497,6 +1979,16 @@ export class NodeDeploySequencer {
           firstAt,
         });
       } catch (error) {
+        // A readback failure keeps only its bounded stage/code; edge and public failures keep theirs.
+        const readback = qualified ? undefined : asQualificationFailure(error);
+        if (readback)
+          await this.qualificationDiagnostic(
+            key,
+            release,
+            attempt,
+            "readback",
+            readback
+          );
         // Restore the edge to blue when we moved it (a re-point, NOT a withdrawal), then close green.
         const blueIngress = blue
           ? ingressHostOf(blue.endpoints, host)
@@ -1519,7 +2011,7 @@ export class NodeDeploySequencer {
           key,
           release,
           attempt,
-          `cutover_failed: ${errText(error)}`
+          `cutover_failed: ${readback ? readback.message : errText(error)}`
         );
         return;
       }
@@ -1542,6 +2034,243 @@ export class NodeDeploySequencer {
         dseq: retiring.externalName,
         retainMs: this.d.config.retainMs,
       });
+    }
+  }
+
+  /** Persist before proven; read the current subject again before any edge mutation. */
+  private async qualify(
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback"
+  ): Promise<AttemptRow> {
+    try {
+      return await this.qualifyBounded(release, attempt, mode);
+    } catch (error) {
+      // BOUNDED_DIAGNOSTIC: schema, jose, store and dependency errors leave only a stage and code.
+      throw asQualificationFailure(error);
+    }
+  }
+
+  private async qualifyBounded(
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback"
+  ): Promise<AttemptRow> {
+    const capability = release.spec.health?.qualification;
+    if (!capability)
+      return this.qualifyWithin(release, attempt, mode, () => false);
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        expired = true;
+        reject(new QualificationFailure("deadline", "expired"));
+      }, capability.timeoutMs);
+    });
+    try {
+      return await Promise.race([
+        this.qualifyWithin(release, attempt, mode, () => expired),
+        deadline,
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async qualifyWithin(
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback",
+    expired: () => boolean
+  ): Promise<AttemptRow> {
+    const capability = release.spec.health?.qualification;
+    if (!capability) {
+      if (release.spec.companions?.length)
+        throw new QualificationFailure("precondition", "capability_missing");
+      return attempt;
+    }
+    const startedAt = this.d.clock.now();
+    const deadline = startedAt + capability.timeoutMs;
+    const ingress = ingressHostOf(
+      attempt.endpoints,
+      publicHostOf(release.spec)
+    );
+    const host = publicHostOf(release.spec);
+    const post = this.d.probe.qualification?.bind(this.d.probe);
+    if (!ingress || !host || !post)
+      throw new QualificationFailure("precondition", "transport_missing");
+    const current = (await this.d.store.attemptsFor(release)).find(
+      (a) => a.id === attempt.id
+    );
+    if (!current || current.externalName !== attempt.externalName)
+      throw new QualificationFailure("precondition", "attempt_changed");
+    const prior = savedQualification(current);
+    if (mode === "qualify" && prior)
+      return this.qualifyWithin(release, current, "readback", expired);
+    if (mode === "readback" && !prior)
+      throw new QualificationFailure("precondition", "evidence_missing");
+    if (
+      mode === "qualify" &&
+      current.steps.some((s) => s.step === "qualification_started")
+    )
+      throw new QualificationFailure("reserve", "already_reserved");
+    const runtime = await this.nodeAppRuntime(release, release);
+    const authSecret = runtime?.env.AUTH_SECRET;
+    if (!authSecret)
+      throw new QualificationFailure("precondition", "auth_unavailable");
+    if (expired() || this.d.clock.now() >= deadline)
+      throw new QualificationFailure("deadline", "expired");
+    const challenge = await qualificationChallenge({
+      release,
+      attempt: current,
+      authSecret,
+      now: this.d.clock.now(),
+      mode,
+      ...(prior ? { prior } : {}),
+    });
+    if (mode === "qualify") {
+      // This is a required durable write, not best-effort telemetry. A lost write response never dispatches.
+      try {
+        await this.emit(
+          release,
+          release,
+          current,
+          "qualification_started",
+          "reserved",
+          {},
+          true
+        );
+      } catch {
+        throw new QualificationFailure("reserve", "write_failed");
+      }
+      const reserved = (await this.d.store.attemptsFor(release)).find(
+        (a) => a.id === current.id
+      );
+      if (!reserved?.steps.some((s) => s.step === "qualification_started"))
+        throw new QualificationFailure("reserve", "not_persisted");
+    }
+    const remaining = deadline - this.d.clock.now();
+    if (expired() || remaining <= 0)
+      throw new QualificationFailure("deadline", "expired");
+    // ONE_AUTHORITY (bug.5568): the static ingress is Host and SNI; the port takes no other host.
+    const result = await post({
+      ingressHost: ingress,
+      path: capability.path,
+      token: challenge.token,
+      mode,
+      timeoutMs: remaining,
+    });
+    const sent = { ms: result.ms };
+    if (result.status === 0)
+      throw new QualificationFailure(
+        "transport",
+        result.error ?? "transport_failed",
+        sent
+      );
+    if (result.status < 200 || result.status >= 300)
+      throw new QualificationFailure("http", "status", {
+        ...sent,
+        status: result.status,
+      });
+    if (expired() || this.d.clock.now() > deadline)
+      throw new QualificationFailure("deadline", "expired", {
+        ...sent,
+        status: result.status,
+      });
+    let evidence: ReturnType<typeof checkQualification>;
+    try {
+      evidence = checkQualification({
+        body: result.body,
+        release,
+        attempt: current,
+        nonce: challenge.nonce,
+        startedAt,
+        now: this.d.clock.now(),
+        ...(prior ? { prior } : {}),
+      });
+    } catch (error) {
+      throw new QualificationFailure("validate", validationCode(error), {
+        ...sent,
+        status: result.status,
+      });
+    }
+    // A late result grants no authority: re-check the deadline right before the durable write.
+    if (expired() || this.d.clock.now() > deadline)
+      throw new QualificationFailure("deadline", "expired", {
+        ...sent,
+        status: result.status,
+      });
+    const step = {
+      step: mode === "qualify" ? "qualification" : "qualification_readback",
+      outcome: "ok",
+      reason: JSON.stringify(evidence),
+      at: new Date(this.d.clock.now()).toISOString(),
+    };
+    try {
+      await this.emit(
+        release,
+        release,
+        current,
+        step.step,
+        step.outcome,
+        { reason: step.reason },
+        true
+      );
+    } catch {
+      throw new QualificationFailure("persist", "write_failed");
+    }
+    const saved = (await this.d.store.attemptsFor(release)).find(
+      (a) => a.id === current.id
+    );
+    if (
+      !saved ||
+      saved.externalName !== current.externalName ||
+      JSON.stringify(saved.endpoints) !== JSON.stringify(current.endpoints) ||
+      !saved.steps.some((s) => s.step === step.step && s.reason === step.reason)
+    )
+      throw new QualificationFailure("persist", "not_persisted");
+    return saved;
+  }
+
+  /**
+   * BOUNDED_DIAGNOSTIC (bug.5568): one correlated event for a failed qualification or readback. It
+   * carries mode, stage, allowlisted code, HTTP status, elapsed time, attempt, allocation and the
+   * ingress used as Host and SNI. Never the bearer, headers, body or a raw error. Best-effort: it does
+   * not change the failure and cleanup decision that follows.
+   */
+  private async qualificationDiagnostic(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mode: "qualify" | "readback",
+    error: unknown
+  ): Promise<void> {
+    const f = asQualificationFailure(error);
+    const ingress = ingressHostOf(
+      attempt.endpoints,
+      publicHostOf(release.spec)
+    );
+    try {
+      await this.emit(
+        key,
+        release,
+        attempt,
+        "qualification_diagnostic",
+        f.stage,
+        {
+          reason: `${mode} ${f.message}`,
+          mode,
+          stage: f.stage,
+          code: f.code,
+          ...(f.status === undefined ? {} : { httpStatus: f.status }),
+          ...(f.ms === undefined ? {} : { qualificationMs: f.ms }),
+          attemptId: attempt.id,
+          allocation: attempt.externalName,
+          ...(ingress ? { ingress, host: ingress } : {}),
+        }
+      );
+    } catch {
+      // Telemetry never changes the verdict.
     }
   }
 
@@ -1795,6 +2524,800 @@ export class NodeDeploySequencer {
   }
 
   // -------------------------------------------------------------------------------------------
+  // mesh: one key per attempt, the env pass, the device check (task.5431)
+  // -------------------------------------------------------------------------------------------
+
+  /** Every attempt of the node in this env, all workloads, newest first (HR 18 reads node history). */
+  private async nodeAttempts(key: WorkloadKey): Promise<AttemptRow[]> {
+    const desired = await this.d.store.listDesired(this.d.config.environment);
+    const lists = await Promise.all(
+      desired
+        .filter((d) => d.nodeId === key.nodeId)
+        .map((d) => this.d.store.attemptsFor(d))
+    );
+    return lists
+      .flat()
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  /**
+   * The lane VM host's addresses through the probe's DNS path, read once per mesh pass and on first use.
+   * A failed or absent lookup is `[]`: only the host NAME then matches, so no DSN is rebound (fail safe).
+   */
+  private async substrateAddresses(
+    refresh = false
+  ): Promise<readonly string[]> {
+    if (this.vmAddresses && !refresh) return this.vmAddresses;
+    const host = this.d.runtime?.substrateHost;
+    const resolve = this.d.probe.resolveAddresses?.bind(this.d.probe);
+    let addresses: readonly string[] = [];
+    if (host && resolve)
+      try {
+        addresses = await resolve(host);
+      } catch {
+        addresses = [];
+      }
+    this.vmAddresses = addresses;
+    return addresses;
+  }
+
+  /** A drain lane has work while any mesh attempt is live or still holds a Secret. */
+  private async meshLeftToDrain(): Promise<boolean> {
+    return (await this.meshRows()).some(({ attempts }) =>
+      attempts.some(
+        (a) =>
+          a.transport === "mesh" &&
+          !!a.mesh &&
+          (MESH_LIVE_PHASES.includes(a.phase) ||
+            (!!a.mesh.headscaleKeyId && !a.mesh.secretDeletedAt))
+      )
+    );
+  }
+
+  /** Every desired workload of the env with all its attempts (newest first). */
+  private async meshRows(): Promise<MeshRow[]> {
+    const desired = await this.d.store.listDesired(this.d.config.environment);
+    return Promise.all(
+      desired.map(async (d) => ({
+        key: { nodeId: d.nodeId, env: d.env, workload: d.workload },
+        attempts: await this.d.store.attemptsFor(d),
+      }))
+    );
+  }
+
+  /**
+   * The resolver output the policy is derived from (HR 3, HR 4): one grant per live mesh attempt, its
+   * recorded ports; and the key ids live attempts store (the sweep and the mint never expire them).
+   */
+  private meshView(rows: readonly MeshRow[]): {
+    grants: NodeSubstrateGrant[];
+    liveKeyIds: Set<HeadscaleKeyId>;
+  } {
+    const grants: NodeSubstrateGrant[] = [];
+    const liveKeyIds = new Set<HeadscaleKeyId>();
+    for (const { key, attempts } of rows)
+      for (const a of attempts) {
+        if (a.transport !== "mesh" || !a.mesh) continue;
+        if (!MESH_LIVE_PHASES.includes(a.phase)) continue;
+        grants.push({ nodeId: key.nodeId, ports: a.mesh.ports });
+        // HR 23: only a key of the current coordinator epoch protects an id from the sweep.
+        if (a.mesh.headscaleKeyId && this.keyIsCurrent(a.mesh))
+          liveKeyIds.add(headscaleKeyId(a.mesh.headscaleKeyId));
+      }
+    return { grants, liveKeyIds };
+  }
+
+  /**
+   * HR 23 (COORDINATOR_EPOCH): a stored key id names a key only in the Headscale database generation it
+   * was minted in. After a wipe the ids restart, so an older-epoch id is void: it never revokes, never
+   * protects a key from the sweep and never counts a device.
+   */
+  private keyIsCurrent(m: AttemptMesh): boolean {
+    const epoch = this.d.mesh?.plane.epoch;
+    return (
+      !!m.headscaleKeyId && !!m.headscaleEpoch && m.headscaleEpoch === epoch
+    );
+  }
+
+  private generationOf(m: AttemptMesh) {
+    return {
+      epoch: m.headscaleEpoch ?? "",
+      keyCreatedAt: m.headscaleKeyCreatedAt ?? null,
+    };
+  }
+
+  /** MESH_WRITES_SERIALIZED (CD4): one Headscale writer per lane; the tick's mint and the pass queue here. */
+  private withMeshLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.meshLock.then(fn, fn);
+    this.meshLock = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  /** Clear a void or lost key from the row (and its Secret, which no lease ever used). */
+  private withoutKey(m: AttemptMesh): AttemptMesh {
+    const {
+      headscaleKeyId: _id,
+      headscaleEpoch: _epoch,
+      headscaleKeyCreatedAt: _created,
+      ...rest
+    } = m;
+    return rest;
+  }
+
+  /** CD3: the release's first mesh attempt fixes its companion digests; a first attempt takes today's. */
+  private async releaseCompanionImages(
+    key: WorkloadKey,
+    release: ReleaseRow
+  ): Promise<AttemptMesh["images"]> {
+    const pinned = (await this.d.store.attemptsFor(key))
+      .filter((a) => a.releaseId === release.id && a.mesh?.images)
+      .sort((a, b) => a.attempt - b.attempt)[0]?.mesh?.images;
+    return pinned ?? { ...MESH_COMPANION_IMAGES };
+  }
+
+  /**
+   * Everything a mesh attempt needs before its paid create: the derived ports (HR 3), the device name,
+   * the release's companion digests (CD3), and its ONE key, stored (HR 5). `pending` leaves the attempt
+   * `planned` and unpaid with a `mesh_key_pending` marker; the next tick resumes it here.
+   */
+  private async prepareMeshAttempt(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    runtime: ResolvedRuntime
+  ): Promise<
+    | {
+        readonly kind: "ready";
+        readonly attempt: AttemptRow;
+        readonly services: MeshCompanionService[];
+      }
+    | { readonly kind: "pending"; readonly attempt: AttemptRow }
+    | {
+        readonly kind: "failed";
+        readonly attempt: AttemptRow;
+        readonly reason: string;
+      }
+  > {
+    const mesh = this.d.mesh;
+    if (!mesh || mesh.mode !== "mint")
+      return {
+        kind: "failed",
+        attempt,
+        reason: "mesh_lane_unavailable: this lane no longer runs the mesh",
+      };
+    // HR 3: the binding's ports (`nodeAppSubstrateBinding`) are the grant AND the listeners.
+    const ports = [...(runtime.substratePorts ?? [])];
+    if (ports.length === 0)
+      return {
+        kind: "failed",
+        attempt,
+        reason: "mesh_no_substrate_port: the env names no substrate port",
+      };
+    const slug =
+      (await this.d.runtime?.catalog.entryFor(key.nodeId))?.slug ??
+      key.nodeId.slice(0, 8);
+    const record: AttemptMesh = {
+      ...attempt.mesh,
+      ports,
+      deviceName: meshDeviceName({
+        slug,
+        workload: key.workload,
+        releaseId: release.id,
+        attempt: attempt.attempt,
+      }),
+      images:
+        attempt.mesh?.images ??
+        (await this.releaseCompanionImages(key, release)),
+    };
+    let a = await this.d.store.updateAttempt(attempt.id, {
+      error: `${MESH_KEY_PENDING}preparing`,
+      mesh: record,
+    });
+    const got = await this.withMeshLock(() =>
+      this.ensureAttemptKey(key, release, a, mesh)
+    );
+    a = got.attempt;
+    if (!got.stored) {
+      const reason = got.pending ?? "unknown";
+      a = await this.d.store.updateAttempt(a.id, {
+        error: `${MESH_KEY_PENDING}${reason}`,
+      });
+      await this.meshEvent("warn", "node_mesh_key_pending", a, key, {
+        outcome: "pending",
+        reason,
+      });
+      return { kind: "pending", attempt: a };
+    }
+    try {
+      return {
+        kind: "ready",
+        attempt: a,
+        services: meshCompanionServices({
+          authKey: got.stored.key,
+          controlUrl: mesh.controlUrl,
+          deviceName: record.deviceName,
+          ports: record.ports,
+          images: record.images,
+        }),
+      };
+    } catch (error) {
+      return { kind: "failed", attempt: a, reason: errText(error) };
+    }
+  }
+
+  /**
+   * HR 5: the attempt's ONE usable key. A stored Secret is reused (a restart between store and create).
+   * A row key id with no Secret never reached a lease: it is expired first. Otherwise the policy is
+   * reconciled with this attempt's grant, one key is minted, its id is written to the row, and only then
+   * is the value stored create-once. Every failure is `pending`, never a retry inside the call.
+   */
+  private async ensureAttemptKey(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    mesh: SequencerMeshDeps
+  ): Promise<{
+    readonly attempt: AttemptRow;
+    readonly stored?: StoredMeshKey;
+    readonly pending?: string;
+  }> {
+    const ref = {
+      nodeId: key.nodeId,
+      workload: key.workload,
+      releaseId: release.id,
+      attempt: attempt.attempt,
+    };
+    const secretName = meshSecretName(ref);
+    const now = this.d.clock.now();
+    let a = attempt;
+    const recordOf = (row: AttemptRow): AttemptMesh => {
+      if (!row.mesh) throw new Error("mesh attempt has no mesh record");
+      return row.mesh;
+    };
+    // Reconcile first: it reads the coordinator epoch (HR 23) and opens the mint (HR 4).
+    const view = this.meshView(await this.meshRows());
+    const policy = await mesh.plane.reconcilePolicy(view.grants);
+    if (!policy.ready)
+      return { attempt: a, pending: `policy_${policy.outcome}` };
+    let stored: StoredMeshKey | undefined;
+    try {
+      stored = await mesh.keys.get(secretName);
+    } catch {
+      return { attempt: a, pending: "key_store_unavailable" };
+    }
+    const row = recordOf(a);
+    if (
+      stored &&
+      row.headscaleKeyId === stored.headscaleKeyId &&
+      this.keyIsCurrent(row)
+    )
+      return { attempt: a, stored };
+    if (stored) {
+      // The stored key is of an older epoch (a wipe between store and create) or does not match the row:
+      // it never reached a lease (KEY_STORED_BEFORE_PAY). Delete it so the create-once name is free.
+      try {
+        await mesh.keys.delete(secretName);
+      } catch {
+        return { attempt: a, pending: "key_store_unavailable" };
+      }
+      await this.meshEvent("info", "node_mesh_key_void", a, key, {
+        outcome: "stored_key_void",
+        headscaleKeyId: stored.headscaleKeyId,
+      });
+    }
+    if (row.headscaleKeyId) {
+      // A row key id with no usable Secret never reached a lease: expire it if it is ours, then forget it.
+      if (this.keyIsCurrent(row)) {
+        const revoked = await mesh.plane.revokeAttempt(
+          headscaleKeyId(row.headscaleKeyId),
+          now,
+          this.generationOf(row)
+        );
+        if (revoked.outcome !== "revoked" && revoked.outcome !== "void")
+          return {
+            attempt: a,
+            pending: `unstored_key_not_revoked:${revoked.reason}`,
+          };
+      }
+      a = await this.d.store.updateAttempt(a.id, {
+        mesh: this.withoutKey(row),
+      });
+      await this.meshEvent("info", "node_mesh_key_revoked", a, key, {
+        outcome: "unstored",
+        headscaleKeyId: row.headscaleKeyId,
+      });
+    }
+    const live = this.meshView(await this.meshRows()).liveKeyIds;
+    const minted = await mesh.plane.mintAttemptKey(ref, live, now);
+    if (minted.outcome !== "minted")
+      return { attempt: a, pending: `mint_${minted.reason}` };
+    a = await this.d.store.updateAttempt(a.id, {
+      mesh: {
+        ...recordOf(a),
+        headscaleKeyId: minted.headscaleKeyId,
+        headscaleEpoch: minted.epoch,
+        ...(minted.keyCreatedAt
+          ? { headscaleKeyCreatedAt: minted.keyCreatedAt }
+          : {}),
+      },
+    });
+    let saved: StoredMeshKey;
+    try {
+      saved = await mesh.keys.createOnce(secretName, {
+        key: minted.key,
+        headscaleKeyId: minted.headscaleKeyId,
+      });
+    } catch {
+      // The row names the key and no Secret holds it: the next try expires it, then mints again.
+      return { attempt: a, pending: "key_store_unavailable" };
+    }
+    if (saved.headscaleKeyId !== minted.headscaleKeyId) {
+      // Not expected (one runner per workload): the winner's key has no generation on this row. Void
+      // ours and wait; the next try deletes the foreign Secret and mints again.
+      await mesh.plane.revokeAttempt(minted.headscaleKeyId, now);
+      return { attempt: a, pending: "key_store_conflict" };
+    }
+    await this.meshEvent("info", "node_mesh_key_minted", a, key, {
+      outcome: "stored",
+      headscaleKeyId: saved.headscaleKeyId,
+      expiredOrphans: minted.expiredOrphans.length,
+    });
+    return { attempt: a, stored: saved };
+  }
+
+  /**
+   * MESH_PASS_UNDER_THE_LOCK: one pass of the env tailnet. Runs from `reconcileAll` (60 s, leader lock).
+   * Any failed Headscale call ends the pass: no further mesh write, and the device window resets.
+   */
+  async meshPass(): Promise<void> {
+    await this.withMeshLock(() => this.meshPassLocked());
+  }
+
+  private async meshPassLocked(): Promise<void> {
+    const mesh = this.d.mesh;
+    if (!mesh) return;
+    const startedAt = this.d.clock.now();
+    if (mesh.mode === "drain" && !(await this.meshLeftToDrain())) return;
+    await this.substrateAddresses(true);
+    const rows = await this.meshRows();
+    const meshAttempts = rows.flatMap(({ key, attempts }) =>
+      attempts
+        .filter((a) => a.transport === "mesh" && a.mesh)
+        .map((attempt) => ({ key, attempt }))
+    );
+    const view = this.meshView(rows);
+    const down = async (stage: string, reason: string): Promise<void> => {
+      this.deviceWatch.clear();
+      await this.meshEvent(
+        "warn",
+        "node_mesh_coordinator_health",
+        undefined,
+        undefined,
+        { outcome: "failed", stage, reason }
+      );
+    };
+
+    // HR 4: fail closed. Deny-all, then the derivation, then a readback; nothing opens until it matches.
+    const policy = await mesh.plane.reconcilePolicy(view.grants);
+    if (policy.drift)
+      await this.meshEvent(
+        "warn",
+        "node_mesh_policy_drift",
+        undefined,
+        undefined,
+        { outcome: policy.outcome, wasAbsent: policy.wasAbsent }
+      );
+    if (!policy.ready) return down("policy", policy.reason ?? policy.outcome);
+    if (policy.outcome === "written")
+      await this.meshEvent("info", "node_mesh_policy", undefined, undefined, {
+        outcome: "written",
+        wasAbsent: policy.wasAbsent,
+        grants: view.grants.length,
+      });
+
+    // HR 12: Headscale holds no API key.
+    const admin = await mesh.plane.checkAdminSurface();
+    if (!admin.ok) {
+      if ("reason" in admin) return down("admin_surface", admin.reason);
+      await this.meshEvent(
+        "error",
+        "node_mesh_admin_surface",
+        undefined,
+        undefined,
+        { outcome: "api_keys_present", apiKeys: admin.apiKeys }
+      );
+    }
+
+    const listed = await mesh.plane.listDevices();
+    if (!listed.ok) return down("devices", listed.reason);
+
+    // HR 11: approve the env VM's published `substrate-gw` request, verified after the fact.
+    await this.approveGateway(mesh, listed.devices, startedAt);
+
+    // HR 6: a terminal attempt's key is expired, then its devices are deleted; read back. A retiring blue
+    // is live (it still serves) and is revoked only after it retires.
+    for (const { key, attempt } of meshAttempts) {
+      const m = attempt.mesh;
+      if (!m?.headscaleKeyId || m.revokedAt) continue;
+      if (!MESH_TERMINAL_PHASES.includes(attempt.phase)) continue;
+      // HR 23: an older-epoch id names nothing of ours; it is void and no Headscale call is made.
+      const r = this.keyIsCurrent(m)
+        ? await mesh.plane.revokeAttempt(
+            headscaleKeyId(m.headscaleKeyId),
+            this.d.clock.now(),
+            this.generationOf(m)
+          )
+        : ({ outcome: "void" } as const);
+      if (r.outcome === "void") {
+        const voided = await this.d.store.updateAttempt(attempt.id, {
+          mesh: { ...m, revokedAt: new Date(this.d.clock.now()).toISOString() },
+        });
+        await this.meshEvent("info", "node_mesh_key_void", voided, key, {
+          outcome: "older_epoch",
+          headscaleKeyId: m.headscaleKeyId,
+          phase: attempt.phase,
+        });
+        continue;
+      }
+      if (r.outcome !== "revoked") {
+        await this.meshEvent("warn", "node_mesh_revoke_failed", attempt, key, {
+          outcome: r.outcome,
+          reason: r.reason,
+          headscaleKeyId: m.headscaleKeyId,
+        });
+        if (r.outcome === "failed" && r.stage === "expire")
+          return down("revoke", r.reason);
+        continue;
+      }
+      const revoked = await this.d.store.updateAttempt(attempt.id, {
+        mesh: { ...m, revokedAt: new Date(this.d.clock.now()).toISOString() },
+      });
+      await this.meshEvent("info", "node_mesh_key_revoked", revoked, key, {
+        outcome: "revoked",
+        headscaleKeyId: m.headscaleKeyId,
+        devices: r.deletedDevices.length,
+        phase: attempt.phase,
+      });
+    }
+
+    // HR 5 cleanup bound: the Secret goes on the first pass AFTER the revoke was read back.
+    for (const { key, attempt } of meshAttempts) {
+      const m = attempt.mesh;
+      if (!m?.revokedAt || m.secretDeletedAt) continue;
+      if (Date.parse(m.revokedAt) >= startedAt) continue;
+      const name = meshSecretName({
+        nodeId: key.nodeId,
+        workload: key.workload,
+        releaseId: attempt.releaseId,
+        attempt: attempt.attempt,
+      });
+      try {
+        await mesh.keys.delete(name);
+      } catch (error) {
+        await this.meshEvent(
+          "warn",
+          "node_mesh_secret_delete_failed",
+          attempt,
+          key,
+          { outcome: "failed", reason: errText(error).slice(0, 200) }
+        );
+        continue;
+      }
+      const cleaned = await this.d.store.updateAttempt(attempt.id, {
+        mesh: {
+          ...m,
+          secretDeletedAt: new Date(this.d.clock.now()).toISOString(),
+        },
+      });
+      await this.meshEvent("info", "node_mesh_secret_deleted", cleaned, key, {
+        outcome: "deleted",
+      });
+    }
+
+    // HR 5: expire keys no live attempt stores (older than one pass) and delete their devices. The live
+    // set is read again here, so a key minted earlier in this pass is never swept.
+    const sweep = await mesh.plane.sweep(
+      this.meshView(await this.meshRows()).liveKeyIds,
+      this.d.clock.now()
+    );
+    if (
+      sweep.expiredKeys.length > 0 ||
+      sweep.deletedDevices.length > 0 ||
+      sweep.unkeyedNodeDevices.length > 0
+    )
+      await this.meshEvent("info", "node_mesh_sweep", undefined, undefined, {
+        outcome: sweep.ok ? "ok" : "failed",
+        expiredKeys: sweep.expiredKeys.length,
+        deletedDevices: sweep.deletedDevices.length,
+        unkeyedNodeDevices: sweep.unkeyedNodeDevices.length,
+      });
+    if (!sweep.ok) return down("sweep", sweep.reason ?? "other");
+
+    // A drain lane never rolls: a roll is a new attempt, and this lane no longer runs the mesh.
+    if (mesh.mode === "mint")
+      await this.checkDevices(listed.devices, meshAttempts, rows);
+    await this.meshEvent(
+      "info",
+      "node_mesh_coordinator_health",
+      undefined,
+      undefined,
+      {
+        outcome: "ok",
+        grants: view.grants.length,
+        liveKeys: view.liveKeyIds.size,
+      }
+    );
+  }
+
+  /**
+   * HR 11 over the verified channel, both stages. Stage 1 approves a fresh published `authId` whose
+   * registered device has tags exactly `[tag:substrate]` and the published machine key. Stage 2 runs on
+   * every pass: the published node key must equal the gateway's, and a gateway approved before its node
+   * key was published must show it within the bound; otherwise it is deleted (`node_mesh_substrate_mismatch`).
+   */
+  private async approveGateway(
+    mesh: SequencerMeshDeps,
+    devices: readonly MeshDevice[],
+    now: number
+  ): Promise<void> {
+    let request: Awaited<ReturnType<SubstrateRequestSourcePort["read"]>>;
+    try {
+      request = await mesh.substrateRequests.read();
+    } catch (error) {
+      await this.meshEvent(
+        "warn",
+        "node_mesh_substrate_request_unreadable",
+        undefined,
+        undefined,
+        { outcome: "unreadable", reason: errText(error).slice(0, 200) }
+      );
+      // An unreadable channel confirms nothing; the bound still runs.
+      request = null;
+    }
+    const gateway = substrateGateway(devices);
+    // Stage 1. Already registered with this machine key: the publish lags a few seconds; nothing to do.
+    if (
+      request?.authId &&
+      !(gateway && gateway.machineKey === request.machineKey)
+    ) {
+      const r = await mesh.plane.approveSubstrateGateway(request, now);
+      if (r.outcome === "approved")
+        await this.meshEvent(
+          "info",
+          "node_mesh_substrate_approved",
+          undefined,
+          undefined,
+          {
+            outcome: "approved",
+            headscaleDeviceId: r.headscaleDeviceId,
+            expiryDisabled: r.expiryDisabled,
+            nodeKeyVerified: r.nodeKeyVerified,
+          }
+        );
+      else if (r.outcome === "mismatch")
+        await this.meshEvent(
+          "error",
+          "node_mesh_substrate_mismatch",
+          undefined,
+          undefined,
+          {
+            outcome: r.deleted ? "deleted" : "delete_failed",
+            stage: "approve",
+            headscaleDeviceId: r.headscaleDeviceId,
+            tagsExact: r.tagsExact,
+            machineKeyMatches: r.machineKeyMatches,
+            nodeKeyMatches: r.nodeKeyMatches,
+          }
+        );
+      else
+        await this.meshEvent(
+          "warn",
+          "node_mesh_substrate_refused",
+          undefined,
+          undefined,
+          { outcome: "refused", reason: r.reason }
+        );
+      return; // stage 2 runs on the next re-read, against the device list it lists then
+    }
+    // Stage 2.
+    const check = await mesh.plane.verifySubstrateNodeKey(
+      request,
+      devices,
+      now
+    );
+    if (check.outcome === "verified")
+      await this.meshEvent(
+        "info",
+        "node_mesh_substrate_node_key_verified",
+        undefined,
+        undefined,
+        { outcome: "verified", headscaleDeviceId: check.headscaleDeviceId }
+      );
+    else if (
+      check.outcome === "unknown" &&
+      check.sinceMs >= SUBSTRATE_NODE_KEY_ALERT_MS &&
+      this.throttle(`node_key_unknown/${check.headscaleDeviceId}`)
+    )
+      // Design B19: silence is UNKNOWN, never a delete. It alerts so a person looks at the publisher.
+      await this.meshEvent(
+        "error",
+        "node_mesh_substrate_node_key_unknown",
+        undefined,
+        undefined,
+        {
+          outcome: "unknown",
+          headscaleDeviceId: check.headscaleDeviceId,
+          sinceMs: check.sinceMs,
+        }
+      );
+    else if (check.outcome === "mismatch")
+      await this.meshEvent(
+        "error",
+        "node_mesh_substrate_mismatch",
+        undefined,
+        undefined,
+        {
+          outcome: check.deleted ? "deleted" : "delete_failed",
+          stage: "node_key",
+          reason: check.reason,
+          headscaleDeviceId: check.headscaleDeviceId,
+        }
+      );
+  }
+
+  /**
+   * HR 8 (CD7): only an `active` attempt (it passed proof; a booting attempt is governed by its proof
+   * gate). Every device that joined with its key counts. Absence counts only across consecutive
+   * successful reads with an online `substrate-gw` that is older than the count. At most
+   * `MAX_DEVICE_ROLLS_PER_ENV` device-driven rolls are in flight per env.
+   */
+  private async checkDevices(
+    devices: readonly MeshDevice[],
+    meshAttempts: readonly {
+      readonly key: WorkloadKey;
+      readonly attempt: AttemptRow;
+    }[],
+    rows: readonly MeshRow[]
+  ): Promise<void> {
+    const now = this.d.clock.now();
+    const live = meshAttempts.filter((x) => x.attempt.phase === "active");
+    for (const id of [...this.deviceWatch.keys()])
+      if (!live.some((x) => x.attempt.id === id)) this.deviceWatch.delete(id);
+    const gateway = substrateGateway(devices);
+    if (!gateway?.online) {
+      this.deviceWatch.clear();
+      await this.meshEvent(
+        "warn",
+        "node_mesh_gateway_offline",
+        undefined,
+        undefined,
+        { outcome: gateway ? "offline" : "absent" }
+      );
+      return;
+    }
+    const gatewayCreatedAt = gateway.createdAt
+      ? Date.parse(gateway.createdAt)
+      : undefined;
+    const rolls: {
+      key: WorkloadKey;
+      attempt: AttemptRow;
+      absentSince: number;
+    }[] = [];
+    for (const { key, attempt } of live) {
+      const before = this.deviceWatch.get(attempt.id);
+      const m = attempt.mesh as AttemptMesh;
+      const v = readAttemptDevices({
+        entry: before,
+        // HR 23: devices match by key id only within the key's epoch; an older-epoch key matches none.
+        headscaleKeyId: this.keyIsCurrent(m) ? (m.headscaleKeyId ?? "") : "",
+        devices,
+        gatewayCreatedAt,
+        now,
+      });
+      this.deviceWatch.set(attempt.id, v.next);
+      if (v.next.absentSince !== undefined && before?.absentSince === undefined)
+        await this.meshEvent("warn", "node_mesh_device_absent", attempt, key, {
+          outcome: "absent",
+          devices: v.devices,
+        });
+      if (v.clone && this.throttle(`clone/${attempt.id}`))
+        await this.meshEvent("error", "node_mesh_device_clone", attempt, key, {
+          outcome: "clone",
+          online: v.online,
+        });
+      if (v.roll && v.next.absentSince !== undefined)
+        rolls.push({ key, attempt, absentSince: v.next.absentSince });
+    }
+    let budget =
+      MAX_DEVICE_ROLLS_PER_ENV -
+      deviceRollsInFlight(
+        rows.map((r) => r.attempts),
+        now
+      );
+    for (const r of rolls.sort((a, b) => a.absentSince - b.absentSince)) {
+      if (budget <= 0) {
+        await this.meshEvent(
+          "warn",
+          "node_mesh_device_roll_deferred",
+          r.attempt,
+          r.key,
+          { outcome: "cap", cap: MAX_DEVICE_ROLLS_PER_ENV }
+        );
+        continue;
+      }
+      if (await this.rollForDevice(r.key, r.attempt, now - r.absentSince))
+        budget--;
+    }
+  }
+
+  /** One device-driven roll: close the live lease (confirmed), mark it lost; `step` redeploys the release. */
+  private async rollForDevice(
+    key: WorkloadKey,
+    attempt: AttemptRow,
+    absentMs: number
+  ): Promise<boolean> {
+    const rolled = await this.exclusive(key, async () => {
+      const cur = (await this.d.store.attemptsFor(key)).find(
+        (a) => a.id === attempt.id
+      );
+      if (cur?.phase !== "active") return false;
+      const release = await this.d.store.getRelease(cur.releaseId);
+      if (!release) return false;
+      await this.meshEvent("error", "node_mesh_device_roll", cur, key, {
+        outcome: "rolling",
+        absentMs,
+        headscaleKeyId: cur.mesh?.headscaleKeyId,
+      });
+      if (!(await this.closeAndConfirm(cur))) {
+        await this.alert(key, release, cur, "close_unconfirmed", {
+          why: MESH_DEVICE_ABSENT,
+        });
+        return false;
+      }
+      await this.handleLost(key, release, cur, MESH_DEVICE_ABSENT);
+      this.deviceWatch.delete(cur.id);
+      return true;
+    });
+    return rolled ?? false;
+  }
+
+  /** True at most once per `ALERT_THROTTLE_MS` for one key. */
+  private throttle(k: string): boolean {
+    const now = this.d.clock.now();
+    const last = this.lastAlertAt.get(k);
+    if (last !== undefined && now - last < ALERT_THROTTLE_MS) return false;
+    this.lastAlertAt.set(k, now);
+    return true;
+  }
+
+  /** A `node_mesh_*` event through THE ONE EMIT HELPER (persisted on the attempt when there is one). */
+  private meshEvent(
+    level: "info" | "warn" | "error",
+    msg: string,
+    attempt: AttemptRow | undefined,
+    key: WorkloadKey | undefined,
+    fields: Record<string, unknown> & { readonly outcome: string }
+  ): Promise<void> {
+    return this.record(level, msg, attempt, {
+      component: "node-deploy-sequencer",
+      env: this.d.config.environment,
+      ...(key ? { nodeId: key.nodeId, workload: key.workload } : {}),
+      ...(attempt
+        ? {
+            releaseId: attempt.releaseId,
+            attempt: attempt.attempt,
+            dseq: attempt.externalName,
+          }
+        : {}),
+      step: msg.replace(/^node_/u, ""),
+      ...fields,
+    });
+  }
+
+  // -------------------------------------------------------------------------------------------
   // reconcile: detect a LOST lease and let `step` redeploy it
   // -------------------------------------------------------------------------------------------
 
@@ -1969,14 +3492,16 @@ export class NodeDeploySequencer {
    * the Loki event and the persisted step cannot drift (task.5400 observability).
    *
    * Persistence is observability only: a failed append is logged `node_deploy_step_persist_failed` and
-   * NEVER fails or delays the deploy decision that emitted the step. Consecutive identical steps of one
+   * NEVER fails or delays the deploy decision that emitted the step. Qualification receipts use
+   * requiredPersistence: their complete bounded subject is saved and a failed write refuses proof. Consecutive identical steps of one
    * attempt (a poll loop) collapse into one persisted row; the log line is still written every time.
    */
   private async record(
     level: "info" | "warn" | "error",
     msg: string,
     attempt: AttemptRow | undefined,
-    fields: Record<string, unknown>
+    fields: Record<string, unknown>,
+    requiredPersistence = false
   ): Promise<void> {
     const now = this.d.clock.now();
     // `elapsedMs` = time since the attempt row was created: the step-latency series Grafana unwraps.
@@ -1989,7 +3514,9 @@ export class NodeDeploySequencer {
       msg
     );
     if (!attempt) return;
-    const reason = reasonOf(fields);
+    const reason = requiredPersistence
+      ? textOf(fields.reason)
+      : reasonOf(fields);
     const dseq = textOf(fields.dseq);
     const provider = textOf(fields.provider) ?? attempt.provider;
     const step: AttemptStep = {
@@ -2023,6 +3550,7 @@ export class NodeDeploySequencer {
         },
         "node_deploy_step_persist_failed"
       );
+      if (requiredPersistence) throw error;
     }
   }
 
@@ -2032,21 +3560,28 @@ export class NodeDeploySequencer {
     attempt: AttemptRow | undefined,
     step: string,
     outcome: string,
-    extra: Record<string, unknown> = {}
+    extra: Record<string, unknown> = {},
+    requiredPersistence = false
   ): Promise<void> {
-    return this.record("info", "node_deploy_step", attempt, {
-      component: "node-deploy-sequencer",
-      nodeId: key.nodeId,
-      env: key.env,
-      workload: key.workload,
-      releaseId: release?.id,
-      attempt: attempt?.attempt,
-      dseq: attempt?.externalName,
-      step,
-      outcome,
-      sourceSha: release?.sourceSha,
-      ...extra,
-    });
+    return this.record(
+      "info",
+      "node_deploy_step",
+      attempt,
+      {
+        component: "node-deploy-sequencer",
+        nodeId: key.nodeId,
+        env: key.env,
+        workload: key.workload,
+        releaseId: release?.id,
+        attempt: attempt?.attempt,
+        dseq: attempt?.externalName,
+        step,
+        outcome,
+        sourceSha: release?.sourceSha,
+        ...extra,
+      },
+      requiredPersistence
+    );
   }
 
   /**
@@ -2132,12 +3667,19 @@ export class NodeDeploySequencer {
 /** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
 const REFUSED_PREFIX = "create refused: ";
 
-/** Max persisted refusal/failure text. Large enough for a full bid roster (~10 bidders); the column is `text`. */
+/**
+ * KEY_STORED_BEFORE_PAY: a mesh attempt waiting for its key (`mesh_key_pending: <reason>`). Written only
+ * before the dispatch marker, so an attempt carrying it never reached a paid call.
+ */
+const MESH_KEY_PENDING = "mesh_key_pending: ";
+
+/** Max diagnostic text. Native decision evidence is bounded independently and comes first. */
 const ERROR_TEXT_MAX = 2000;
 
 /**
  * True when a persisted create refusal shows blue's provider as the only bidder screening could pass
- * (task.5409). Keys on the actuator's NO_ELIGIBLE_BIDS text (`akash-compute.adapter.ts`
+ * (task.5409). The native bounded excluded-bidder summary carries full provider identities before
+ * diagnostic text. Legacy fallback keys on the actuator's NO_ELIGIBLE_BIDS text (`akash-compute.adapter.ts`
  * `awaitScreenedBid`: "none passed provider screening [refused: ...] [bids: ...]") and its exclusion
  * verdict `already_tried` (`akash-provider-screen.ts` `rejectionFor`: an excluded provider's bid). When
  * `onlyBlueExcluded`, the caller's exclude list was exactly {blue}, so any `already_tried` bid is blue's;
@@ -2150,6 +3692,24 @@ function blueWasOnlyScreenedBidder(
 ): boolean {
   if (!error?.startsWith(REFUSED_PREFIX)) return false;
   if (!error.includes("none passed provider screening")) return false;
+  if (error.includes("[excluded-bidders-v1:")) {
+    const encoded = /\[excluded-bidders-v1:(\[[^\]]*\])\]/u.exec(error)?.[1];
+    if (!encoded) return false;
+    try {
+      const providers: unknown = JSON.parse(encoded);
+      return (
+        Array.isArray(providers) &&
+        providers.length <= 16 &&
+        providers.every(
+          (p: unknown) =>
+            typeof p === "string" && /^akash1[0-9a-z]{38}$/u.test(p)
+        ) &&
+        providers.includes(blueProvider)
+      );
+    } catch {
+      return false;
+    }
+  }
   const tried = /already_tried=(\d+)/u.exec(error);
   if (!tried?.[1] || Number(tried[1]) < 1) return false;
   if (onlyBlueExcluded) return true;
@@ -2157,9 +3717,8 @@ function blueWasOnlyScreenedBidder(
     blueProvider.length > 17
       ? `${blueProvider.slice(0, 9)}…${blueProvider.slice(-4)}`
       : blueProvider;
-  // No closing `]`: persisted error text is capped (ERROR_TEXT_MAX), so a very long roster may still be cut off.
-  // A cut-off last entry simply fails to match (safe: no stop).
-  const roster = /\[bids: ([^\]]*)/u.exec(error)?.[1] ?? "";
+  // Legacy fallback needs a complete roster; clipped diagnostics cannot authorize a stop.
+  const roster = /\[bids: ([^\]]*)\]/u.exec(error)?.[1] ?? "";
   return roster
     .split(", ")
     .some((r) => r.startsWith(`${addr} `) && r.endsWith(" already_tried"));
@@ -2175,9 +3734,11 @@ function ambiguousMarker(code: string, now: number): string {
     : `ambiguous: ${code}`;
 }
 
-/** When the transport-level create failure happened (stamp, else legacy fallback to createdAt). */
+/** When a create entered native IO or failed in transit (stamp, else legacy createdAt). */
 function networkFailureAt(attempt: AttemptRow): number | undefined {
-  const m = /^ambiguous: network(?:@(\d+))?$/u.exec(attempt.error ?? "");
+  const m = /^ambiguous: (?:network|dispatch)(?:@(\d+))?$/u.exec(
+    attempt.error ?? ""
+  );
   if (!m) return undefined;
   return m[1] ? Number(m[1]) : attempt.createdAt.getTime();
 }

@@ -110,6 +110,23 @@ chmod +x "$SHIM"
 
 export CF_STORE="$TMPROOT/store.json"
 export CF_CURL="$SHIM"
+# task.5428 — a public-DNS (DoH) stub for the mesh hosts another writer owns (the test tailnet's, written
+# by the candidate-a operator sequencer). By default both resolve to the candidate-a VM alias.
+DOH_STUB="$TMPROOT/doh-stub.sh"
+cat >"$DOH_STUB" <<'SH'
+#!/usr/bin/env bash
+url="${*: -1}"; name="${url#*name=}"; name="${name%%&*}"
+target="$(awk -v n="$name" '$1 == n {print $2}' "$DOH_ANSWERS" 2>/dev/null)"
+if [ -n "$target" ]; then
+  printf '{"Status":0,"Answer":[{"name":"%s.","type":5,"data":"%s."}]}\n' "$name" "$target"
+else
+  printf '{"Status":3}\n'
+fi
+SH
+chmod +x "$DOH_STUB"
+export DOH_CURL="$DOH_STUB" DOH_ANSWERS="$TMPROOT/doh-answers"
+printf '%s %s\n' mesh-test-candidate-a.cogni-testing.org cogni-candidate-a.vm.cognidao.org \
+  derp-test-candidate-a.cogni-testing.org cogni-candidate-a.vm.cognidao.org >"$DOH_ANSWERS"
 export CLOUDFLARE_API_TOKEN="test-token"
 export CLOUDFLARE_ZONE_ID="zone123"
 export FORK_DOMAIN_ROOT="cognidao.org"
@@ -354,11 +371,86 @@ import json, os
 json.dump({"records": [
     {"id": "apex", "name": "test.cognidao.org", "content": "84.32.9.111",
      "proxied": False, "type": "A"},
+    {"id": "vmca", "name": "cogni-candidate-a.vm.cognidao.org", "content": "5.6.7.8",
+     "proxied": False, "type": "A"},
 ], "next_id": 9}, open(os.environ["CF_STORE"], "w"))'
-COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org \
+COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
   bash scripts/ci/reconcile-node-dns.sh production >/dev/null 2>&1
 assert_eq "$(cf_a_record_content test-token zone123 akashnode-test.cognidao.org)" "84.32.9.111" \
   "an env with NO placement override still reconciles (K3S_IS_DEFAULT)"
+
+# task.5428 — mesh hosts from the tailnet table (scripts/ci/lib/mesh-plane.sh), ALWAYS DNS-only, written
+# only by the coordinator env's run, only in that run's zone; --check gates content + proxy state.
+for host in mesh-candidate-a mesh-preview mesh-production; do
+  assert_eq "$(cf_a_record_content test-token zone123 "${host}.cognidao.org")" "84.32.9.111" \
+    "production writes ${host} to its edge VM"
+  assert_eq "$(cf_a_record_proxied test-token zone123 "${host}.cognidao.org")" "false" \
+    "${host} is DNS-only"
+done
+assert_eq "$(cf_a_record_content test-token zone123 derp-candidate-a.cognidao.org)" "5.6.7.8" \
+  "production places the canonical candidate-a relay host on the candidate-a VM (its alias record)"
+assert_eq "$(cf_a_record_proxied test-token zone123 derp-candidate-a.cognidao.org)" "false" \
+  "derp-candidate-a is DNS-only"
+assert_eq "$(grep -c 'cogni-testing.org' "$CF_STORE" || true)" "0" \
+  "the production run writes nothing in the test-fleet zone"
+if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
+  bash scripts/ci/reconcile-node-dns.sh production --check >/dev/null 2>&1; then
+  printf 'OK   --check is green with DNS-only mesh hosts\n'; pass=$((pass + 1))
+else
+  printf 'FAIL --check must pass once mesh hosts exist\n'; fail=$((fail + 1))
+fi
+CF_STORE="$CF_STORE" python3 -c '
+import json, os
+s = json.load(open(os.environ["CF_STORE"]))
+for r in s["records"]:
+    if r["name"] == "mesh-preview.cognidao.org":
+        r["proxied"] = True
+json.dump(s, open(os.environ["CF_STORE"], "w"))'
+if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
+  bash scripts/ci/reconcile-node-dns.sh production --check >/dev/null 2>&1; then
+  printf 'FAIL --check must fail when a mesh host is proxied\n'; fail=$((fail + 1))
+else
+  printf 'OK   --check fails a proxied mesh host\n'; pass=$((pass + 1))
+fi
+# candidate-a holding the production-zone token writes no test-fleet host and no canonical host.
+CF_STORE="$CF_STORE" python3 -c '
+import json, os
+json.dump({"records": [
+    {"id": "apex", "name": "test.cognidao.org", "content": "84.32.9.111", "proxied": False, "type": "A"},
+], "next_id": 9}, open(os.environ["CF_STORE"], "w"))'
+COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
+  bash scripts/ci/reconcile-node-dns.sh candidate-a >/dev/null 2>&1
+assert_eq "$(grep -c 'mesh-\|derp-' "$CF_STORE" || true)" "0" \
+  "candidate-a with the production-zone token writes no mesh host (canonical: production's; test: test zone's)"
+assert_eq "$(grep -c 'cogni-testing.org' "$CF_STORE" || true)" "0" \
+  "no CI run writes the test-fleet zone (its writer is the candidate-a operator sequencer)"
+# --check reads the test tailnet's hosts from public DNS (a DoH stub here): absent = no writer = FAIL.
+: >"$DOH_ANSWERS"
+if out="$(COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
+  bash scripts/ci/reconcile-node-dns.sh candidate-a --check 2>&1)"; then
+  printf 'FAIL --check must fail while the test tailnet hosts have no working writer\n'; fail=$((fail + 1))
+else
+  grep -q 'MISSING  mesh-test-candidate-a.cogni-testing.org' <<<"$out" \
+    && grep -q 'MISSING  derp-test-candidate-a.cogni-testing.org' <<<"$out" \
+    && { printf 'OK   --check fails when the test tailnet hosts are absent\n'; pass=$((pass + 1)); } \
+    || { printf 'FAIL --check failed for the wrong reason\n%s\n' "$out"; fail=$((fail + 1)); }
+fi
+printf '%s %s\n' mesh-test-candidate-a.cogni-testing.org elsewhere.example.org \
+  derp-test-candidate-a.cogni-testing.org cogni-candidate-a.vm.cognidao.org >"$DOH_ANSWERS"
+if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
+  bash scripts/ci/reconcile-node-dns.sh candidate-a --check >/dev/null 2>&1; then
+  printf 'FAIL --check must fail when a test tailnet host points elsewhere\n'; fail=$((fail + 1))
+else
+  printf 'OK   --check fails a test tailnet host that points elsewhere\n'; pass=$((pass + 1))
+fi
+printf '%s %s\n' mesh-test-candidate-a.cogni-testing.org cogni-candidate-a.vm.cognidao.org \
+  derp-test-candidate-a.cogni-testing.org cogni-candidate-a.vm.cognidao.org >"$DOH_ANSWERS"
+if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
+  bash scripts/ci/reconcile-node-dns.sh candidate-a --check >/dev/null 2>&1; then
+  printf 'OK   --check is green once the sequencer-written CNAMEs resolve to the VM alias\n'; pass=$((pass + 1))
+else
+  printf 'FAIL --check must pass once the test tailnet CNAMEs resolve\n'; fail=$((fail + 1))
+fi
 
 # ── Lib: the existence probe is type-aware, so a CNAME is never "absent" ──────
 # Pre-fix the probe pinned ?type=A, read a live CNAME as absent, and POSTed an A
