@@ -31,7 +31,8 @@ const parse = <T>(relative: string): T => yaml.parse(read(relative)) as T;
 const parseAll = <T>(relative: string): T[] =>
   yaml.parseAllDocuments(read(relative)).map((d) => d.toJS() as T);
 
-const ZONE = "cognidao.org";
+// The VM alias records live in the production zone (vm_host_for_env).
+const VM_ZONE = "cognidao.org";
 const BASE = "infra/k8s/base/mesh-env-plane";
 const FIELDS = [
   "tailnet",
@@ -45,6 +46,7 @@ const FIELDS = [
   "stun_port",
   "wireguard_port",
   "derp_region",
+  "zone",
 ] as const;
 type Row = Record<(typeof FIELDS)[number], string>;
 const TABLE: Row[] = (
@@ -172,9 +174,9 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     );
     expect(env).toEqual({
       MESH_TAILNET: name,
-      MESH_CONTROL_HOST: `${r.control_label}.${ZONE}`,
-      MESH_RELAY_HOST: `${r.relay_label}.${ZONE}`,
-      MESH_VM_HOST: `cogni-${r.vm_env}.vm.${ZONE}`,
+      MESH_CONTROL_HOST: `${r.control_label}.${r.zone}`,
+      MESH_RELAY_HOST: `${r.relay_label}.${r.zone}`,
+      MESH_VM_HOST: `cogni-${r.vm_env}.vm.${VM_ZONE}`,
       MESH_STUN_PORT: r.stun_port,
       MESH_WIREGUARD_PORT: r.wireguard_port,
       SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS: "14400",
@@ -198,8 +200,8 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
       const fwd = find(docs, "Service", `substrate-fwd${sfx}`)?.spec.clusterIP;
       const gw = find(docs, "Deployment", `substrate-gw${sfx}`);
       expect(gw?.spec.template.spec.hostAliases).toEqual([
-        { ip: ctl, hostnames: [`${r.control_label}.${ZONE}`] },
-        { ip: fwd, hostnames: [`${r.relay_label}.${ZONE}`, "substrate-fwd"] },
+        { ip: ctl, hostnames: [`${r.control_label}.${r.zone}`] },
+        { ip: fwd, hostnames: [`${r.relay_label}.${r.zone}`, "substrate-fwd"] },
       ]);
       expect(
         find(docs, "Service", `derper${sfx}`)?.spec.ports?.[0]?.nodePort
@@ -409,6 +411,26 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         }
       }
     }
+    // Right-sized to measured footprints (task.5428): one instance requests at most 108Mi, so all
+    // instances on one VM stay under that VM's 7-day minimum MemAvailable (candidate-a: 271 MiB).
+    const mib = (v: unknown): number => {
+      const m = /^(\d+)Mi$/.exec(String(v));
+      if (!m) throw new Error(`memory request not in Mi: ${String(v)}`);
+      return Number(m[1]);
+    };
+    const perInstance = workloads
+      .flatMap((w) => w.spec.template.spec.containers)
+      .reduce(
+        (sum, c) =>
+          sum +
+          mib(
+            (c.resources?.requests as { memory?: string } | undefined)?.memory
+          ),
+        0
+      );
+    expect(perInstance).toBeLessThanOrEqual(108);
+    const perVm = INSTANCES.filter((r) => r.vm_env === "candidate-a").length;
+    expect(perInstance * perVm).toBeLessThan(271);
     const pc = parse<Doc>(`${BASE}/priorityclass.yaml`);
     expect(pc.value).toBeGreaterThan(0);
     expect(pc.value).toBeLessThan(1_000_000_000);

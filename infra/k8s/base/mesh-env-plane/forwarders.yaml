@@ -57,9 +57,11 @@ spec:
             - TCP:$(MESH_CONTROL_HOST):443
           ports:
             - { name: control, containerPort: 8443, protocol: TCP }
+          # Guaranteed QoS (B17), right-sized: socat measured 5.8 MiB with 7 listeners -> 12Mi. Each
+          # concurrent connection forks a child; this cap is the first limit to raise at the T2/T4 load gate.
           resources:
-            requests: { cpu: 20m, memory: 32Mi }
-            limits: { cpu: 20m, memory: 32Mi }
+            requests: { cpu: 20m, memory: 12Mi }
+            limits: { cpu: 20m, memory: 12Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
@@ -133,9 +135,11 @@ spec:
             - { name: litellm, containerPort: 4000, protocol: TCP }
             - { name: temporal, containerPort: 7233, protocol: TCP }
             - { name: worker-health, containerPort: 30900, protocol: TCP }
+          # Guaranteed QoS (B17), right-sized: socat measured 5.8 MiB with 7 listeners -> 12Mi. Each
+          # concurrent connection forks a child; this cap is the first limit to raise at the T2/T4 load gate.
           resources:
-            requests: { cpu: 20m, memory: 32Mi }
-            limits: { cpu: 20m, memory: 32Mi }
+            requests: { cpu: 20m, memory: 12Mi }
+            limits: { cpu: 20m, memory: 12Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }

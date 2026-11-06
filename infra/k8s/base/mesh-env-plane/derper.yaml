@@ -67,10 +67,10 @@ spec:
           ports:
             - { name: derp-http, containerPort: 3340, protocol: TCP }
             - { name: stun, containerPort: 3478, hostPort: 3478, protocol: UDP }
-          # Guaranteed QoS (B17).
+          # Guaranteed QoS (B17), right-sized: measured 3.0 MiB idle (stock image, local) -> 12Mi.
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits: { cpu: 50m, memory: 64Mi }
+            requests: { cpu: 50m, memory: 12Mi }
+            limits: { cpu: 50m, memory: 12Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }

@@ -97,9 +97,11 @@ spec:
                 protocol: UDP,
               }
           # Guaranteed QoS (B17).
+          # Guaranteed QoS (B17), right-sized: a joined userspace tailscaled measured 41.5 MiB with traffic
+          # forced through our relay (local proof) -> 56Mi.
           resources:
-            requests: { cpu: 100m, memory: 128Mi }
-            limits: { cpu: 100m, memory: 128Mi }
+            requests: { cpu: 100m, memory: 56Mi }
+            limits: { cpu: 100m, memory: 56Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
@@ -120,9 +122,10 @@ spec:
             - { name: XDG_CONFIG_HOME, value: /tmp/config }
           ports:
             - { name: publish, containerPort: 8080, protocol: TCP }
+          # Right-sized: caddy file-server measured 12.6 MiB idle -> 16Mi.
           resources:
-            requests: { cpu: 20m, memory: 32Mi }
-            limits: { cpu: 20m, memory: 32Mi }
+            requests: { cpu: 20m, memory: 16Mi }
+            limits: { cpu: 20m, memory: 16Mi }
           securityContext:
             allowPrivilegeEscalation: false
             # The stock caddy binary carries cap_net_bind_service as a file capability; exec fails
