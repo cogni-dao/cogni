@@ -5,7 +5,8 @@
 # tailscale 1.104.4 in userspace (no TUN, no capability, non-root) running substrate-gw.sh: the
 # fail-closed map-poll watchdog (HR20) and the enrollment publisher (HR11). Holds NO key: it joins
 # by approval over the verified channel and re-requests approval by itself after a device delete or
-# a coordinator wipe. Forwards exactly the five registry ports (serve.json) through substrate-fwd.
+# a coordinator wipe. Forwards exactly the declared registry ports (serve.json: 5432, 5435, 6379, 4000, 7233 and
+# scheduler-worker health 30900) through substrate-fwd.
 #
 # Names, not addresses: hostAliases pin the control host and the relay host to the two forwarder
 # Services (fixed ClusterIPs in this namespace), so substrate-gw never resolves a public name and,

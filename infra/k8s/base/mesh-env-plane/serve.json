@@ -4,6 +4,7 @@
     "5435": { "TCPForward": "substrate-fwd:5435" },
     "6379": { "TCPForward": "substrate-fwd:6379" },
     "4000": { "TCPForward": "substrate-fwd:4000" },
-    "7233": { "TCPForward": "substrate-fwd:7233" }
+    "7233": { "TCPForward": "substrate-fwd:7233" },
+    "30900": { "TCPForward": "substrate-fwd:30900" }
   }
 }

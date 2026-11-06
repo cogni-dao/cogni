@@ -54,7 +54,8 @@ const VM_HOST: Record<(typeof ENVS)[number], string> = {
   preview: "cogni-preview.vm.cognidao.org",
   production: "cogni.vm.cognidao.org",
 };
-const REGISTRY_PORTS = ["4000", "5432", "5435", "6379", "7233"];
+// The service-type registry ports + scheduler-worker health (30900, reviewed mesh-grantable, T5).
+const REGISTRY_PORTS = ["30900", "4000", "5432", "5435", "6379", "7233"];
 
 interface Mount {
   name: string;
@@ -616,13 +617,38 @@ describe("env VM mesh plane on the env's own k3s (task.5428, B5)", () => {
     expect(sh).not.toMatch(/--auth-?key|TS_AUTHKEY/);
   });
 
-  it("serve exposes exactly the five registry ports, each through substrate-fwd", () => {
+  it("serve exposes exactly the registry ports + worker health, each through substrate-fwd, policy-allowed", () => {
     const serve = JSON.parse(read(`${ENV_PLANE}/serve.json`)) as {
       TCP: Record<string, { TCPForward: string }>;
     };
     expect(Object.keys(serve.TCP).sort()).toEqual(REGISTRY_PORTS);
     for (const [p, v] of Object.entries(serve.TCP)) {
       expect(v.TCPForward).toBe(`substrate-fwd:${p}`);
+    }
+    // Every served port has a forwarder listener + Service port and is allowed by both policies.
+    const svc = fwd.find(
+      (d) => d.kind === "Service" && d.metadata.name === "substrate-fwd"
+    );
+    const svcPorts = (svc?.spec.ports ?? []).map((p) => String(p.port));
+    const policies = docs("networkpolicy.yaml") as unknown as {
+      metadata: { name: string };
+      spec: { egress: { ports?: { port: number }[] }[] };
+    }[];
+    const allowed = (name: string) =>
+      policies
+        .find((np) => np.metadata.name === name)
+        ?.spec.egress.flatMap((e) => e.ports ?? [])
+        .map((p) => String(p.port)) ?? [];
+    const script = fwd
+      .find(
+        (d) => d.kind === "Deployment" && d.metadata.name === "substrate-fwd"
+      )
+      ?.spec.template.spec.containers[0]?.args?.join("\n");
+    for (const p of REGISTRY_PORTS) {
+      expect(svcPorts, `substrate-fwd Service ${p}`).toContain(p);
+      expect(allowed("substrate-gw"), `substrate-gw egress ${p}`).toContain(p);
+      expect(allowed("mesh-forwarders"), `forwarder egress ${p}`).toContain(p);
+      expect(script).toMatch(new RegExp(`for p in [0-9 ]*\\b${p}\\b`));
     }
   });
 

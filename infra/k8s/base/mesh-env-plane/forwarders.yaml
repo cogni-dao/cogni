@@ -8,7 +8,8 @@
 #
 #   mesh-control-fwd  :443 -> MESH_CONTROL_HOST:443   (the env's Headscale on the production edge)
 #   substrate-fwd     :443 -> MESH_VM_HOST:443        (our relay, behind this VM's edge Caddy)
-#                     :5432/:5435/:6379/:4000/:7233 -> MESH_VM_HOST:<same>  (the shared services,
+#                     :5432/:5435/:6379/:4000/:7233/:30900 -> MESH_VM_HOST:<same>  (the shared
+#                     services and scheduler-worker health, a reviewed mesh-grantable port (T5),
 #                     reached exactly like the env overlays' ExternalName substrate Services)
 #
 # Fixed ClusterIPs (10.43.250.41/.42, inside the k3s service CIDR the hardener already names) are the
@@ -114,7 +115,7 @@ spec:
           args:
             - |
               socat -d TCP-LISTEN:8443,fork,reuseaddr "TCP:${MESH_VM_HOST}:443" &
-              for p in 5432 5435 6379 4000 7233; do
+              for p in 5432 5435 6379 4000 7233 30900; do
                 socat -d "TCP-LISTEN:$p,fork,reuseaddr" "TCP:${MESH_VM_HOST}:$p" &
               done
               wait -n
@@ -125,6 +126,7 @@ spec:
             - { name: redis, containerPort: 6379, protocol: TCP }
             - { name: litellm, containerPort: 4000, protocol: TCP }
             - { name: temporal, containerPort: 7233, protocol: TCP }
+            - { name: worker-health, containerPort: 30900, protocol: TCP }
           resources:
             requests: { cpu: 20m, memory: 32Mi }
             limits: { cpu: 20m, memory: 32Mi }
@@ -151,3 +153,9 @@ spec:
     - { name: redis, port: 6379, targetPort: redis, protocol: TCP }
     - { name: litellm, port: 4000, targetPort: litellm, protocol: TCP }
     - { name: temporal, port: 7233, targetPort: temporal, protocol: TCP }
+    - {
+        name: worker-health,
+        port: 30900,
+        targetPort: worker-health,
+        protocol: TCP,
+      }
