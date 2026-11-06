@@ -50,7 +50,7 @@
  *   - INTERIM_APP_PROVIDERS (task.5405): `NODE_DEPLOY_APP_PROVIDERS` (comma-separated akash accounts, max 16)
  *     is sent as `allowProviders` on every APP create; unset sends none.
  *   - MESH_LANES_ONLY (task.5431): a lane whose `NODE_DEPLOY_SUBSTRATE_TRANSPORTS` value is `mesh` gets its
- *     env tailnet: a `HeadscaleSocketAdapter` over `/var/run/headscale/<env>.sock` (the pod-local socket
+ *     env tailnet: a `HeadscaleSocketAdapter` over `/var/run/headscale/<env>/headscale.sock` (the pod-local socket
  *     task.5428 shares with this container only; no API key exists), one `MeshPlane`, the attempt-key
  *     Secrets in the lane's `cogni-node-deploy-<env>` namespace, and the env VM's published `substrate-gw`
  *     request read over verified HTTPS. Its mesh pass runs inside the reconcile loop, under the leader lock.
@@ -97,8 +97,12 @@ const LISTEN_PORT = 8080;
 const CREDENTIAL_DIR = "/var/run/secrets/node-deploy-sequencer";
 const TICK_MS = 5_000;
 const RECONCILE_MS = 60_000;
-/** task.5428: each env Headscale's unix socket on the pod-local emptyDir (`unix_socket` in its config). */
-const HEADSCALE_SOCKET_DIR = "/var/run/headscale";
+/**
+ * task.5428: each env Headscale's unix socket, `/var/run/headscale/<env>/headscale.sock`, on a pod-local
+ * volume shared by that Headscale container and this one only (`unix_socket` in its config).
+ */
+const headscaleSocketFor = (env: string): string =>
+  `/var/run/headscale/${env}/headscale.sock`;
 
 // biome-ignore lint/style/noProcessEnv: dedicated process composition root validates its own minimal env
 const runtimeEnv = process.env;
@@ -257,14 +261,14 @@ function meshFor(lane: EnvLane) {
     {
       environment: lane.environment,
       controlUrl: lane.meshControlUrl,
-      socket: `${HEADSCALE_SOCKET_DIR}/${lane.environment}.sock`,
+      socket: headscaleSocketFor(lane.environment),
     },
     "node_deploy_sequencer_mesh_lane"
   );
   return {
     plane: new MeshPlane(
       new HeadscaleSocketAdapter({
-        socketPath: `${HEADSCALE_SOCKET_DIR}/${lane.environment}.sock`,
+        socketPath: headscaleSocketFor(lane.environment),
       }),
       lane.environment
     ),

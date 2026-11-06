@@ -302,6 +302,8 @@ class FakeRuntimeSecrets implements NodeRuntimeSecretsPort {
     ...Object.fromEntries(DECLARED.map((k) => [k, `value-of-${k}`])),
     // Poly's Postgres is its own cell (not the VM): it must never become a grant or a listener.
     DATABASE_URL: "postgresql://poly@poly-db.cell.example:5432/poly",
+    DATABASE_SERVICE_URL:
+      "postgresql://poly_service:pw@poly-db.cell.example:5432/poly",
     DOLTGRES_URL: `postgresql://dolt@${SUBSTRATE}:5435/knowledge`,
     DATABASE_MIGRATION_URL: "postgresql://m@poly-db.cell.example:5432/poly",
   };
@@ -600,12 +602,18 @@ describe("HR 3, 16, 21: the companions carry exactly the derived ports", () => {
   const SHARED_PG = "postgresql://poly@203.0.113.7:5432/poly";
 
   it("a bucket Postgres DSN on the VM's resolved address is rebound and granted 5432; a failed lookup rebinds nothing", async () => {
+    const sharedBucket = {
+      DATABASE_URL: SHARED_PG,
+      DATABASE_SERVICE_URL:
+        "postgresql://poly_service:pw@203.0.113.7:5432/poly",
+      DATABASE_MIGRATION_URL: "postgresql://m:pw@203.0.113.7:5432/poly",
+    };
     const shared = harness({
-      bucket: { DATABASE_URL: SHARED_PG },
+      bucket: sharedBucket,
       addresses: ["203.0.113.7"],
     });
     const a = await deployed(shared, "poly");
-    expect(a.mesh?.ports).toEqual([4000, 5432, 5435, 6379, 7233]);
+    expect(a.mesh?.ports).toEqual([4000, 5432, 5435, 6379, 7233, 30900]);
     const app = appCreates(shared)[0]?.spec.services[0];
     expect(app?.env?.DATABASE_URL).toContain("@cogni-substrate:5432/");
     expect(
@@ -613,11 +621,11 @@ describe("HR 3, 16, 21: the companions carry exactly the derived ports", () => {
     ).toEqual(a.mesh?.ports);
 
     const unresolved = harness({
-      bucket: { DATABASE_URL: SHARED_PG },
+      bucket: sharedBucket,
       addresses: "fail",
     });
     const b = await deployed(unresolved, "poly");
-    expect(b.mesh?.ports).toEqual([4000, 5435, 6379, 7233]);
+    expect(b.mesh?.ports).toEqual([4000, 5435, 6379, 7233, 30900]);
     expect(appCreates(unresolved)[0]?.spec.services[0]?.env?.DATABASE_URL).toBe(
       SHARED_PG
     );
@@ -632,7 +640,7 @@ describe("HR 3, 16, 21: the companions carry exactly the derived ports", () => {
     expect(app?.env?.REDIS_URL).toBe("redis://cogni-substrate:6379");
     expect(app?.env?.LITELLM_BASE_URL).toBe("http://cogni-substrate:4000");
     // Poly's own Postgres cell (5432 elsewhere) is not a grant; the VM Doltgres (5435) is.
-    expect(a.mesh?.ports).toEqual([4000, 5435, 6379, 7233]);
+    expect(a.mesh?.ports).toEqual([4000, 5435, 6379, 7233, 30900]);
     expect(substrateOf(req)?.expose?.map((e) => e.port)).toEqual(a.mesh?.ports);
     const policy = JSON.parse(h.hs.policy ?? "{}") as {
       acls: { src: string[]; dst: string[] }[];
@@ -642,11 +650,13 @@ describe("HR 3, 16, 21: the companions carry exactly the derived ports", () => {
         action: "accept",
         proto: "tcp",
         src: [`tag:node-${NODES.poly}`],
-        dst: ["tag:substrate:4000,5435,6379,7233"],
+        dst: ["tag:substrate:4000,5435,6379,7233,30900"],
       },
     ]);
-    // The non-registry worker health port is not injected on a mesh attempt, so it is never a listener.
-    expect(app?.env?.SCHEDULER_WORKER_HEALTH_URL).toBeUndefined();
+    // The scheduler-worker health port is a reviewed registry row (task.5432): bound like the rest.
+    expect(app?.env?.SCHEDULER_WORKER_HEALTH_URL).toBe(
+      "http://cogni-substrate:30900"
+    );
     // Doltgres moves to the companion; Poly's own Postgres cell keeps its endpoint.
     expect(app?.env?.DOLTGRES_URL).toContain("@cogni-substrate:5435/");
     expect(app?.env?.DATABASE_URL).toContain("@poly-db.cell.example:5432/");
@@ -689,7 +699,7 @@ describe("HR 3, 16, 21: the companions carry exactly the derived ports", () => {
         authKey: "k",
         controlUrl: CONTROL,
         deviceName: "d",
-        ports: [30900],
+        ports: [22],
         images: MESH_COMPANION_IMAGES,
       })
     ).toThrow(/not a substrate port/);
