@@ -174,6 +174,11 @@ echo "[8/8] mesh edge sites: relay + publish per VM tailnet, coordinator per seq
 source "$REPO_ROOT/scripts/ci/lib/mesh-plane.sh"
 # shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
 source "$REPO_ROOT/scripts/setup/lib/cogni-deployment-identity.sh"
+# The renderer's own all-present check, loaded by itself (the script renders when sourced whole), so the
+# negative cases below run the real function, never a missing command.
+# shellcheck source=/dev/null
+source <(sed -n '/^assert_mesh_vm_sites() {$/,/^}$/p' "$REPO_ROOT/scripts/ci/render-caddyfile.sh")
+declare -F assert_mesh_vm_sites >/dev/null || fail "assert_mesh_vm_sites not loaded from render-caddyfile.sh"
 # deploy-infra.sh calls `--domain "$DOMAIN"` only (frozen, untouched): the env derives from the domain.
 CAND="$(bash scripts/ci/render-caddyfile.sh --domain test.cognidao.org)"
 [ "$CAND" = "$(bash scripts/ci/render-caddyfile.sh --domain test.cognidao.org --env candidate-a)" ] \
@@ -205,6 +210,7 @@ for tailnet in $vm_tailnets; do
 done
 [ "$(grep -c 'handle /.well-known/cogni-mesh/' <<<"$pb")" = "2" ] || fail "VM alias must carry exactly the two publish paths"
 # The one-writer check really fails when a tailnet's route is missing.
+assert_mesh_vm_sites candidate-a "$CAND" || fail "the full candidate-a render must pass the all-present check"
 if assert_mesh_vm_sites candidate-a "$(grep -v '^derp-test-candidate-a.cogni-testing.org {$' <<<"$CAND")" 2>/dev/null; then
   fail "a missing relay site must fail the render"
 fi
@@ -239,7 +245,21 @@ done
 [ "$(mesh_host test-candidate-a control)" = "mesh-test-candidate-a.cogni-testing.org" ] \
   || fail "the test coordinator host must be in the test-fleet zone"
 grep -Fq 'mesh-candidate-a.cognidao.org {' <<<"$CAND" && fail "candidate-a edge must not front the canonical candidate-a coordinator"
-grep -Eq '^derp-|cogni-mesh/' <<<"$PROD" && fail "production must render no mesh VM site before slice T1p"
+# T1p: the production VM serves the canonical production tailnet's relay + publisher. The edge site and the
+# hardener drop land BEFORE the instance that opens the NodePorts (CD6: the drop precedes the ports).
+[ "$(mesh_vm_tailnets production | paste -sd' ' -)" = "production" ] \
+  || fail "the production VM must serve exactly the production tailnet"
+pd="$(block_of derp-production.cognidao.org "$PROD")"
+grep -Fq "reverse_proxy host.docker.internal:$(mesh_tailnet_field production relay_np)" <<<"$pd" \
+  || fail "derp-production must proxy to the production derper NodePort"
+grep -Fq 'handle /.well-known/cogni-mesh/production/substrate-gw.json {' <<<"$(block_of cogni.vm.cognidao.org "$PROD")" \
+  || fail "the production VM alias must carry the production publish path"
+assert_mesh_vm_sites production "$PROD" || fail "production render must carry every production mesh route"
+# Every relay site and publish path on the production edge is the production tailnet's own: no other tailnet's.
+[ "$(grep -E '^derp-' <<<"$PROD" | grep -vxF 'derp-production.cognidao.org {' || true)" = "" ] \
+  || fail "production must render no relay site other than derp-production"
+[ "$(grep -oE 'cogni-mesh/[a-z0-9-]+/' <<<"$PROD" | sort -u | grep -vxF 'cogni-mesh/production/' || true)" = "" ] \
+  || fail "production must render no publish path other than the production tailnet's"
 grep -Eq '^(derp|mesh)-|cogni-mesh/' <<<"$(bash scripts/ci/render-caddyfile.sh --domain preview.cognidao.org)" \
   && fail "preview edge must render no mesh site"
 grep -Fq 'issuer acme' <<<"$RENDERED" && fail "template render must not carry env-specific mesh sites"
@@ -269,12 +289,10 @@ grep -Fq 'MESH_UDP' "$HARDEN" && fail "no-op UDP ACCEPT rules must not return"
   || fail "test-operator relay host must be in the test-fleet zone cogni-testing.org"
 [ "$(mesh_host test-candidate-a control)" = "mesh-test-candidate-a.cogni-testing.org" ] \
   || fail "test-operator control host must be in the test-fleet zone cogni-testing.org"
-# Both tailnets on the candidate-a VM own distinct UDP ports (design §1 parity): STUN and WireGuard.
-[ "$(mesh_tailnet_field candidate-a stun_port)/$(mesh_tailnet_field candidate-a wireguard_port)" = "3478/41641" ] \
-  || fail "canonical candidate-a tailnet UDP ports must be 3478/41641"
-[ "$(mesh_tailnet_field test-candidate-a stun_port)/$(mesh_tailnet_field test-candidate-a wireguard_port)" = "3479/41642" ] \
-  || fail "test-candidate-a tailnet UDP ports must be 3479/41642"
-for col in coordinator_np relay_np publish_np stun_port wireguard_port derp_region; do
+# Relay-only with STUN off (P4): the mesh plane opens no public UDP port. The table has no STUN column,
+# and substrate-gw's WireGuard port is pod-local (TS_PORT), so it may repeat across VMs.
+mesh_tailnet_field candidate-a stun_port >/dev/null 2>&1 && fail "the tailnet table must carry no STUN port (STUN off)"
+for col in coordinator_np relay_np publish_np derp_region; do
   vals="$(for t in $(mesh_tailnets); do mesh_tailnet_field "$t" "$col"; done | grep -v '^$')"
   [ "$(sort <<<"$vals" | uniq -d)" = "" ] || fail "duplicate $col in the mesh tailnet table"
 done

@@ -391,6 +391,10 @@ assert_eq "$(cf_a_record_content test-token zone123 derp-candidate-a.cognidao.or
   "production places the canonical candidate-a relay host on the candidate-a VM (its alias record)"
 assert_eq "$(cf_a_record_proxied test-token zone123 derp-candidate-a.cognidao.org)" "false" \
   "derp-candidate-a is DNS-only"
+assert_eq "$(cf_a_record_content test-token zone123 derp-production.cognidao.org)" "84.32.9.111" \
+  "production places its own relay host on its own VM (T1p)"
+assert_eq "$(cf_a_record_proxied test-token zone123 derp-production.cognidao.org)" "false" \
+  "derp-production is DNS-only"
 assert_eq "$(grep -c 'cogni-testing.org' "$CF_STORE" || true)" "0" \
   "the production run writes nothing in the test-fleet zone"
 if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \

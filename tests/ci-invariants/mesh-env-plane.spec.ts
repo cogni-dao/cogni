@@ -51,7 +51,6 @@ const FIELDS = [
   "coordinator_np",
   "relay_np",
   "publish_np",
-  "stun_port",
   "wireguard_port",
   "derp_region",
   "zone",
@@ -67,7 +66,16 @@ const TABLE: Row[] = (
   .map(
     (r) => Object.fromEntries(r.split("|").map((v, i) => [FIELDS[i], v])) as Row
   );
-const INSTANCES = TABLE.filter((r) => r.vm_env !== "");
+// CD6 (qualify before exposure): a VM row's edge site and hardener drop ship and reach the VM BEFORE the
+// instance that opens its NodePorts. A tailnet listed here has its VM row (edge + firewall, T1p b1) but no
+// instance yet; the instance PR (T1p b2) removes it from this list in the same change that adds the overlay.
+const EDGE_BEFORE_INSTANCE = new Set(["production"]);
+const INSTANCES = TABLE.filter(
+  (r) => r.vm_env !== "" && !EDGE_BEFORE_INSTANCE.has(r.tailnet)
+);
+const PENDING = TABLE.filter(
+  (r) => r.vm_env !== "" && EDGE_BEFORE_INSTANCE.has(r.tailnet)
+);
 const REGISTRY_PORTS = ["30900", "4000", "5432", "5435", "6379", "7233"];
 
 interface Port {
@@ -295,13 +303,48 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     }
   });
 
+  it.each(
+    PENDING.map((r) => [r.tailnet, r] as const)
+  )("edge before instance %s: a firewall-only VM row; no instance and no manifest opens its NodePorts yet (CD6)", (name, r) => {
+    expect(r.relay_np).not.toBe("");
+    expect(r.publish_np).not.toBe("");
+    const exists = (rel: string): boolean => {
+      try {
+        readFileSync(path.join(root, rel));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(exists(`${overlayDir(r)}/kustomization.yaml`)).toBe(false);
+    expect(
+      exists(
+        `infra/k8s/argocd/control-plane/${r.vm_env}/${r.vm_env}-mesh-plane-${name}-application.yaml`
+      )
+    ).toBe(false);
+    for (const port of [r.relay_np, r.publish_np]) {
+      // git grep exits 1 when nothing matches: that is the passing case.
+      let hits = "";
+      try {
+        hits = execFileSync(
+          "git",
+          ["grep", "-l", "-w", "-e", port, "--", "infra/k8s"],
+          { cwd: root, encoding: "utf8" }
+        ).trim();
+      } catch (e) {
+        if ((e as { status?: number }).status !== 1) throw e;
+      }
+      expect(hits, port).toBe("");
+    }
+  });
+
   it("NodePort preflight: every mesh NodePort is distinct and claimed by no other manifest in the repo", () => {
     const owners: [string, string[]][] = TABLE.flatMap((r) => [
       [
         r.coordinator_np,
         [`infra/k8s/base/node-deploy-mesh/tailnets/${r.tailnet}/service.yaml`],
       ],
-      ...(r.vm_env
+      ...(r.vm_env && !EDGE_BEFORE_INSTANCE.has(r.tailnet)
         ? ([
             [
               r.relay_np,
