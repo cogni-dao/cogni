@@ -214,6 +214,8 @@ grep -Fq -- '-t raw -A PREROUTING -i "$PUBLIC_IFACE" -p tcp -m multiport --dport
 for svc in $(catalog_compose_services_for_env candidate-a); do
   yq -e ".services.\"$svc\"" "$RUNTIME_COMPOSE" >/dev/null || fail "catalog compose service '$svc' is not in $RUNTIME_COMPOSE"
 done
+grep -Eq "image: $(infra_image_tag derper)@sha256:[0-9a-f]{64}$" "$RUNTIME_COMPOSE" \
+  || fail "derper is not pinned by digest at its current content-hash tag $(infra_image_tag derper) (re-pin after the PR build)"
 grep -Fq 'render-caddyfile.sh" --domain "$DOMAIN" --env "$DEPLOY_ENVIRONMENT"' "$DEPLOY_INFRA" || fail "deploy-infra does not render the env's mesh sites"
 grep -Fq 'INFRA_SERVICES="$INFRA_SERVICES ${CATALOG_COMPOSE_SERVICES:-}"' "$DEPLOY_INFRA" || fail "deploy-infra does not start catalog compose services"
 pass "relay/publish on candidate-a VM, 3 coordinators on the production edge, NodePorts hardened, catalog-scoped services"

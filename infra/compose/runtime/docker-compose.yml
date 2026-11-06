@@ -912,7 +912,9 @@ services:
   # with a public ACME certificate. Holds no secret. It checks clients against its env's Headscale
   # /verify and FAILS OPEN, so the relay keeps working while the coordinator is down (HR9).
   derper:
-    image: ghcr.io/cogni-dao/cogni-template:derper-PENDING_CI_BUILD
+    # Built by PR Build run 42150965372 (job "build (derper)") from infra/images/derper at content
+    # hash 11a5aebb2de6. A Dockerfile change yields a new tag; re-pin the digest that build resolves.
+    image: ghcr.io/cogni-dao/cogni-template:derper-11a5aebb2de6@sha256:5db57d611db2111db6a7baa9037fb0c009a6267edbf1edba515618504b3f4222
     restart: unless-stopped
     networks:
       - cogni-edge
