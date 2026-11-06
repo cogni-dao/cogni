@@ -270,7 +270,10 @@ while read -r tailnet; do
   if [ "$zone" != "$FORK_ROOT" ]; then
     echo "  other    ${tailnet} mesh hosts (zone ${zone}): written by the ${DEPLOY_ENV} operator sequencer (NODE_DEPLOY_MESH_DNS_RECORDS)"
     mesh_foreign_hosts+=("$(mesh_host "$tailnet" control)")
-    mesh_foreign_targets+=("$(vm_host_for_env "$DEPLOY_ENV" "$FORK_ROOT" "$mesh_slug")")
+    # The control host CNAMEs to the VM of the env whose edge fronts this coordinator (the table's
+    # coordinator_env), never to a workload env.
+    coord_env="$(mesh_tailnet_field "$tailnet" coordinator_env)"
+    mesh_foreign_targets+=("$(vm_host_for_env "$coord_env" "$FORK_ROOT" "$mesh_slug")")
     relay_env="$(mesh_tailnet_field "$tailnet" vm_env)"
     if [ -n "$relay_env" ]; then
       mesh_foreign_hosts+=("$(mesh_host "$tailnet" relay)")
