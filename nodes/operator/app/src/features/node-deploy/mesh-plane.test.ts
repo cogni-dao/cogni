@@ -43,6 +43,7 @@ import {
   MeshPlane,
   meshSecretName,
   SUBSTRATE_MISMATCH_ALERT,
+  SUBSTRATE_NODE_KEY_BOUND_MS,
   SUBSTRATE_REQUEST_MAX_AGE_MS,
 } from "./mesh-plane";
 import { denyAllPolicy, serializeMeshPolicy } from "./mesh-policy";
@@ -841,21 +842,174 @@ describe("HR 11 — substrate-gw approval over the verified channel", () => {
     expect(fake.devices.size).toBe(0);
   });
 
-  it("an auth id with no pending request approves nothing", async () => {
+  it("an auth id with no pending request approves nothing (a forged id, with or without a node key)", async () => {
+    // A failed AuthRegister closes approval until the next reconcile, so each case gets a ready plane.
+    for (const nodeKey of ["n", ""]) {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      expect(
+        await plane.approveSubstrateGateway(
+          { authId: "nope", machineKey: "m", nodeKey, publishedAt: fake.now },
+          fake.now
+        )
+      ).toEqual({ outcome: "refused", reason: "registration_not_found" });
+      expect(fake.devices.size).toBe(0);
+    }
+  });
+
+  it("refuses a request with no auth id or no machine key without calling AuthRegister", async () => {
     const fake = new FakeHeadscale();
     const plane = await readyPlane(fake);
-    expect(
-      await plane.approveSubstrateGateway(
-        {
-          authId: "nope",
-          machineKey: "m",
-          nodeKey: "n",
-          publishedAt: fake.now,
-        },
+    const req = publish(fake);
+    for (const bad of [
+      { ...req, authId: "" },
+      { ...req, machineKey: "" },
+    ])
+      expect(await plane.approveSubstrateGateway(bad, fake.now)).toEqual({
+        outcome: "refused",
+        reason: "malformed",
+      });
+    expect(fake.calls).not.toContain("AuthRegister");
+  });
+
+  describe("two stages: the node key is published only after approval (task.5428 substrate-gw.sh)", () => {
+    /** The VM's publish before approval: auth id + machine key, no node key yet. */
+    const beforeApproval = (fake: FakeHeadscale) => ({
+      ...publish(fake),
+      nodeKey: "",
+    });
+    /** The VM's publish after approval: no auth id, the node key the device now knows. */
+    const afterApproval = (fake: FakeHeadscale, nodeKey = "nodekey:gw") => ({
+      authId: "",
+      machineKey: "mkey:gw",
+      nodeKey,
+      publishedAt: fake.now,
+    });
+    const listed = async (fake: FakeHeadscale) => fake.listNodes();
+
+    it("approves on tags + machine key, then verifies the node key on the next re-read", async () => {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      const approved = await plane.approveSubstrateGateway(
+        beforeApproval(fake),
         fake.now
-      )
-    ).toEqual({ outcome: "refused", reason: "registration_not_found" });
-    expect(fake.devices.size).toBe(0);
+      );
+      expect(approved).toMatchObject({
+        outcome: "approved",
+        nodeKeyVerified: false,
+      });
+      // Before the VM republishes, the device is pending inside the bound.
+      expect(
+        await plane.verifySubstrateNodeKey(
+          beforeApproval(fake),
+          await listed(fake),
+          fake.now + 15_000
+        )
+      ).toMatchObject({ outcome: "pending" });
+      fake.now += 30_000;
+      expect(
+        await plane.verifySubstrateNodeKey(
+          afterApproval(fake),
+          await listed(fake),
+          fake.now
+        )
+      ).toMatchObject({ outcome: "verified" });
+      expect(fake.devices.size).toBe(1);
+      // Verified: later re-reads with the same key are quiet.
+      expect(
+        await plane.verifySubstrateNodeKey(
+          afterApproval(fake),
+          await listed(fake),
+          fake.now
+        )
+      ).toEqual({ outcome: "none" });
+    });
+
+    it("a mismatched machine key at approval deletes the device and alerts", async () => {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      const result = await plane.approveSubstrateGateway(
+        { ...beforeApproval(fake), machineKey: "mkey:attacker" },
+        fake.now
+      );
+      expect(result).toMatchObject({
+        outcome: "mismatch",
+        alert: SUBSTRATE_MISMATCH_ALERT,
+        tagsExact: true,
+        machineKeyMatches: false,
+        deleted: true,
+      });
+      expect(fake.devices.size).toBe(0);
+    });
+
+    it("a late node key that differs from the device's deletes it and alerts", async () => {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      await plane.approveSubstrateGateway(beforeApproval(fake), fake.now);
+      fake.now += 30_000;
+      expect(
+        await plane.verifySubstrateNodeKey(
+          afterApproval(fake, "nodekey:attacker"),
+          await listed(fake),
+          fake.now
+        )
+      ).toMatchObject({
+        outcome: "mismatch",
+        alert: SUBSTRATE_MISMATCH_ALERT,
+        reason: "node_key_mismatch",
+        deleted: true,
+      });
+      expect(fake.devices.size).toBe(0);
+    });
+
+    it("no node key published within the bound deletes the device; a stale publish confirms nothing", async () => {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      const approvedAt = fake.now;
+      await plane.approveSubstrateGateway(beforeApproval(fake), approvedAt);
+      const stale = {
+        ...afterApproval(fake),
+        publishedAt: approvedAt - SUBSTRATE_REQUEST_MAX_AGE_MS,
+      };
+      expect(
+        await plane.verifySubstrateNodeKey(
+          stale,
+          await listed(fake),
+          approvedAt + SUBSTRATE_NODE_KEY_BOUND_MS + 1
+        )
+      ).toMatchObject({
+        outcome: "mismatch",
+        reason: "node_key_not_published",
+        deleted: true,
+      });
+      expect(fake.devices.size).toBe(0);
+    });
+
+    it("an already registered gateway whose published node key changes is deleted (no approval state needed)", async () => {
+      const fake = new FakeHeadscale();
+      const plane = await readyPlane(fake);
+      fake.addDevice({
+        tags: ["tag:substrate"],
+        machineKey: "mkey:gw",
+        nodeKey: "nodekey:gw",
+        keyId: null,
+      });
+      expect(
+        await plane.verifySubstrateNodeKey(
+          afterApproval(fake),
+          await listed(fake),
+          fake.now
+        )
+      ).toEqual({ outcome: "none" });
+      expect(
+        await plane.verifySubstrateNodeKey(
+          afterApproval(fake, "nodekey:other"),
+          await listed(fake),
+          fake.now
+        )
+      ).toMatchObject({ outcome: "mismatch", reason: "node_key_mismatch" });
+      expect(fake.devices.size).toBe(0);
+    });
   });
 });
 

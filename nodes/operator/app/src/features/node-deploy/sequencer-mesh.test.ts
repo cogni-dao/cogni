@@ -987,6 +987,84 @@ describe("HR 7, 8: device check", () => {
 // HR 10, HR 11: wipe recovery and gateway approval
 // ---------------------------------------------------------------------------------------------
 
+describe("HR 11: substrate-gw approval in two stages over the verified channel", () => {
+  const gateways = (h: H) =>
+    [...h.hs.devices.values()].filter((d) => d.tags.includes("tag:substrate"));
+
+  it("a late published node key that differs from the approved device deletes it and alerts", async () => {
+    const h = harness();
+    h.hs.devices.clear(); // no gateway yet
+    await h.seq.reconcileAll();
+    h.hs.pending.set("auth-1", {
+      machineKey: "mkey:gw",
+      nodeKey: "nodekey:gw",
+    });
+    h.published.request = {
+      authId: "auth-1",
+      machineKey: "mkey:gw",
+      nodeKey: "",
+      publishedAt: h.clock.now(),
+    };
+    await h.passes(1);
+    expect(gateways(h)).toHaveLength(1);
+    h.published.request = {
+      authId: "",
+      machineKey: "mkey:gw",
+      nodeKey: "nodekey:attacker",
+      publishedAt: h.clock.now() + 60_000,
+    };
+    await h.passes(1);
+    const alert = meshLogs(h, "node_mesh_substrate_mismatch")[0];
+    expect(alert?.level).toBe("error");
+    expect(alert?.fields).toMatchObject({
+      stage: "node_key",
+      reason: "node_key_mismatch",
+      outcome: "deleted",
+    });
+    expect(gateways(h)).toHaveLength(0);
+  });
+
+  it("a gateway that never publishes its node key is deleted after the bound", async () => {
+    const h = harness();
+    h.hs.devices.clear();
+    await h.seq.reconcileAll();
+    h.hs.pending.set("auth-1", {
+      machineKey: "mkey:gw",
+      nodeKey: "nodekey:gw",
+    });
+    h.published.request = {
+      authId: "auth-1",
+      machineKey: "mkey:gw",
+      nodeKey: "",
+      publishedAt: h.clock.now(),
+    };
+    await h.passes(1);
+    h.published.request = null; // the channel goes quiet
+    await h.passes(6);
+    expect(meshLogs(h, "node_mesh_substrate_mismatch")[0]?.fields.reason).toBe(
+      "node_key_not_published"
+    );
+    expect(gateways(h)).toHaveLength(0);
+  });
+
+  it("a forged auth id approves nothing", async () => {
+    const h = harness();
+    h.hs.devices.clear();
+    await h.seq.reconcileAll();
+    h.published.request = {
+      authId: "forged",
+      machineKey: "mkey:x",
+      nodeKey: "",
+      publishedAt: h.clock.now(),
+    };
+    await h.passes(1);
+    expect(meshLogs(h, "node_mesh_substrate_refused")[0]?.fields.reason).toBe(
+      "registration_not_found"
+    );
+    expect(gateways(h)).toHaveLength(0);
+  });
+});
+
 describe("HR 10, 11: a wiped Headscale recovers by derivation, with no person", () => {
   it("re-seeds deny-all then the derived policy, re-approves the published substrate-gw, and re-keys the live lease", async () => {
     const h = harness();
@@ -1000,7 +1078,7 @@ describe("HR 10, 11: a wiped Headscale recovers by derivation, with no person", 
       meshLogs(h, "node_mesh_policy").some((l) => l.fields.wasAbsent === true)
     ).toBe(true);
 
-    // The VM publishes its pending request; the pass approves it (HR 11).
+    // The VM publishes its pending request with no node key yet; the pass approves it (HR 11 stage 1).
     h.hs.pending.set("auth-1", {
       machineKey: "mkey:gw2",
       nodeKey: "nodekey:gw2",
@@ -1008,11 +1086,25 @@ describe("HR 10, 11: a wiped Headscale recovers by derivation, with no person", 
     h.published.request = {
       authId: "auth-1",
       machineKey: "mkey:gw2",
+      nodeKey: "",
+      publishedAt: h.clock.now() + 60_000,
+    };
+    await h.passes(1);
+    expect(
+      meshLogs(h, "node_mesh_substrate_approved")[0]?.fields.nodeKeyVerified
+    ).toBe(false);
+    // The VM republishes with the node key it now knows; the next pass verifies it (stage 2).
+    h.published.request = {
+      authId: "",
+      machineKey: "mkey:gw2",
       nodeKey: "nodekey:gw2",
       publishedAt: h.clock.now() + 60_000,
     };
     await h.passes(1);
-    expect(meshLogs(h, "node_mesh_substrate_approved")).toHaveLength(1);
+    expect(meshLogs(h, "node_mesh_substrate_node_key_verified")).toHaveLength(
+      1
+    );
+    expect(meshLogs(h, "node_mesh_substrate_mismatch")).toHaveLength(0);
     // A stale publish is refused.
     h.published.request = {
       ...h.published.request,

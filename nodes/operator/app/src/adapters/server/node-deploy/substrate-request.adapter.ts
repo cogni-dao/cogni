@@ -11,8 +11,9 @@
  * Invariants:
  *   - VERIFIED_CHANNEL: HTTPS only, the platform's public certificate and host-name verification (Node's
  *     default `fetch`), no redirect followed, bounded time and size. Anything else throws.
- *   - NOTHING_TO_APPROVE_IS_NULL: a 404, or a request with an empty `authId` (the device is registered),
- *     is `null`.
+ *   - ABSENT_IS_NULL: only a 404 is `null`. A registered device publishes an empty `authId` with its
+ *     machine and node keys; that publish is returned, because the node-key check (stage 2 of HR 11)
+ *     reads it after approval.
  *   - NO_CREDENTIAL: the file holds public ids only; nothing here is a secret.
  * Side-effects: IO (HTTPS)
  * @internal
@@ -54,10 +55,8 @@ export class HttpsSubstrateRequestSource implements SubstrateRequestSourcePort {
     if (body.length > MAX_BYTES)
       throw new Error("substrate request read: body too large");
     const raw = JSON.parse(body) as Record<string, unknown>;
-    const authId = text(raw.authId);
-    if (!authId) return null;
     return {
-      authId,
+      authId: text(raw.authId),
       machineKey: text(raw.machineKey),
       nodeKey: text(raw.nodeKey),
       publishedAt: Date.parse(text(raw.publishedAt)),

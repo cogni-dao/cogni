@@ -165,8 +165,10 @@ export interface MeshKeyStorePort {
 
 /** The `substrate-gw` enrollment request its env VM publishes over the verified DNS-only channel. */
 export interface PublishedSubstrateRequest {
+  /** Empty once the device is registered. */
   readonly authId: string;
   readonly machineKey: string;
+  /** Empty until the device is approved (tailscaled exposes no pending node key). */
   readonly nodeKey: string;
   /** Epoch ms of the publish. */
   readonly publishedAt: number;
@@ -174,8 +176,8 @@ export interface PublishedSubstrateRequest {
 
 /**
  * Reads the env VM's published `substrate-gw` request over HTTPS with public certificate and host-name
- * verification (HR 11). `null` = nothing to approve (no file, or the device is already registered and
- * publishes no auth id). A transport or parse failure throws.
+ * verification (HR 11). `null` = no file. A registered device's publish (empty `authId`) is returned: it
+ * carries the node key the approval's second stage compares. A transport or parse failure throws.
  */
 export interface SubstrateRequestSourcePort {
   read(): Promise<PublishedSubstrateRequest | null>;

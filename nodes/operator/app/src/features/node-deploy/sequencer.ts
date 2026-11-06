@@ -2574,6 +2574,9 @@ export class NodeDeploySequencer {
         attempt,
         reason: "mesh_lane_unavailable: this lane no longer runs the mesh",
       };
+    // ONE derivation (CD2): the grant and the listeners are the ports the attempt's resolved env names.
+    // When T5 (task.5432, #3046) lands, this reads `nodeAppSubstrateBinding(...).ports`, the same
+    // binding `nodeAppEnv` derives the env from.
     const { ports, refused } = substratePortsOf(runtime.env, [
       MESH_SUBSTRATE_HOST,
       this.d.runtime?.substrateHost,
@@ -2896,6 +2899,12 @@ export class NodeDeploySequencer {
     );
   }
 
+  /**
+   * HR 11 over the verified channel, both stages. Stage 1 approves a fresh published `authId` whose
+   * registered device has tags exactly `[tag:substrate]` and the published machine key. Stage 2 runs on
+   * every pass: the published node key must equal the gateway's, and a gateway approved before its node
+   * key was published must show it within the bound; otherwise it is deleted (`node_mesh_substrate_mismatch`).
+   */
   private async approveGateway(
     mesh: SequencerMeshDeps,
     devices: readonly MeshDevice[],
@@ -2912,46 +2921,80 @@ export class NodeDeploySequencer {
         undefined,
         { outcome: "unreadable", reason: errText(error).slice(0, 200) }
       );
-      return;
+      // An unreadable channel confirms nothing; the bound still runs.
+      request = null;
     }
-    if (!request) return;
     const gateway = substrateGateway(devices);
-    // Already registered with this machine key: the publish is a few seconds behind; nothing to approve.
-    if (gateway && gateway.machineKey === request.machineKey) return;
-    const r = await mesh.plane.approveSubstrateGateway(request, now);
-    if (r.outcome === "approved")
+    // Stage 1. Already registered with this machine key: the publish lags a few seconds; nothing to do.
+    if (
+      request?.authId &&
+      !(gateway && gateway.machineKey === request.machineKey)
+    ) {
+      const r = await mesh.plane.approveSubstrateGateway(request, now);
+      if (r.outcome === "approved")
+        await this.meshEvent(
+          "info",
+          "node_mesh_substrate_approved",
+          undefined,
+          undefined,
+          {
+            outcome: "approved",
+            headscaleDeviceId: r.headscaleDeviceId,
+            expiryDisabled: r.expiryDisabled,
+            nodeKeyVerified: r.nodeKeyVerified,
+          }
+        );
+      else if (r.outcome === "mismatch")
+        await this.meshEvent(
+          "error",
+          "node_mesh_substrate_mismatch",
+          undefined,
+          undefined,
+          {
+            outcome: r.deleted ? "deleted" : "delete_failed",
+            stage: "approve",
+            headscaleDeviceId: r.headscaleDeviceId,
+            tagsExact: r.tagsExact,
+            machineKeyMatches: r.machineKeyMatches,
+            nodeKeyMatches: r.nodeKeyMatches,
+          }
+        );
+      else
+        await this.meshEvent(
+          "warn",
+          "node_mesh_substrate_refused",
+          undefined,
+          undefined,
+          { outcome: "refused", reason: r.reason }
+        );
+      return; // stage 2 runs on the next re-read, against the device list it lists then
+    }
+    // Stage 2.
+    const check = await mesh.plane.verifySubstrateNodeKey(
+      request,
+      devices,
+      now
+    );
+    if (check.outcome === "verified")
       await this.meshEvent(
         "info",
-        "node_mesh_substrate_approved",
+        "node_mesh_substrate_node_key_verified",
         undefined,
         undefined,
-        {
-          outcome: "approved",
-          headscaleDeviceId: r.headscaleDeviceId,
-          expiryDisabled: r.expiryDisabled,
-        }
+        { outcome: "verified", headscaleDeviceId: check.headscaleDeviceId }
       );
-    else if (r.outcome === "mismatch")
+    else if (check.outcome === "mismatch")
       await this.meshEvent(
         "error",
         "node_mesh_substrate_mismatch",
         undefined,
         undefined,
         {
-          outcome: r.deleted ? "deleted" : "delete_failed",
-          headscaleDeviceId: r.headscaleDeviceId,
-          tagsExact: r.tagsExact,
-          machineKeyMatches: r.machineKeyMatches,
-          nodeKeyMatches: r.nodeKeyMatches,
+          outcome: check.deleted ? "deleted" : "delete_failed",
+          stage: "node_key",
+          reason: check.reason,
+          headscaleDeviceId: check.headscaleDeviceId,
         }
-      );
-    else
-      await this.meshEvent(
-        "warn",
-        "node_mesh_substrate_refused",
-        undefined,
-        undefined,
-        { outcome: "refused", reason: r.reason }
       );
   }
 
