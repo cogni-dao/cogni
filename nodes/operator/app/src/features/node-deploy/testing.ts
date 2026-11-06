@@ -46,6 +46,8 @@ import {
 } from "@/ports";
 import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 
+import { SUBSTRATE_PORTS } from "./substrate-ports";
+
 export const WORKLOAD_ZONE = resolveWorkloadZoneBinding({
   fleetOwner: "cogni-dao",
   zoneName: "cognidao.org",
@@ -571,7 +573,7 @@ export function canaryDb(
     kind: "state",
     image: `postgres:16@${DIGEST}`,
     command: ["bash", "-c", "echo db"],
-    port: 5432,
+    port: SUBSTRATE_PORTS.postgres,
     expose: { tcp: { global: true } },
     cpu: 0.5,
     memoryMi: 512,

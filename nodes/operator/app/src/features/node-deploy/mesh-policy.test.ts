@@ -128,16 +128,29 @@ describe("deriveMeshPolicy", () => {
   });
 
   it("refuses a port outside the service-type registry, so no other VM port reaches the tailnet (HR 3)", () => {
-    for (const port of [22, 30900, 8080, 5433])
+    for (const port of [22, 30901, 8080, 5433])
       expect(() =>
         deriveMeshPolicy({
           owner: OWNER,
           grants: [{ nodeId: NODE_A, ports: [port] }],
         })
       ).toThrow(MeshPolicyError);
-    expect(Object.values(SUBSTRATE_PORTS).sort()).toEqual([
-      4000, 5432, 5435, 6379, 7233,
+    expect(Object.values(SUBSTRATE_PORTS).sort((a, b) => a - b)).toEqual([
+      4000, 5432, 5435, 6379, 7233, 30900,
     ]);
+  });
+
+  it("grants the reviewed scheduler-worker health row (task.5432 review B1)", () => {
+    const doc = deriveMeshPolicy({
+      owner: OWNER,
+      grants: [
+        {
+          nodeId: NODE_A,
+          ports: [SUBSTRATE_PORTS["scheduler-worker-health"], 7233],
+        },
+      ],
+    });
+    expect(doc.acls[0]?.dst).toEqual(["tag:substrate:7233,30900"]);
   });
 
   it("refuses a node id that is not a valid lowercase tag name", () => {
