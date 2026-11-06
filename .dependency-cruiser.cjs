@@ -342,7 +342,7 @@ module.exports = {
       name: "no-internal-adapter-imports",
       severity: "error",
       from: {
-        path: "^nodes/operator/app/src/(?!adapters/server/)(?!auth\\.ts$)(?!bootstrap/container\\.ts$)(?!bootstrap/graph-executor\\.factory\\.ts$)(?!bootstrap/agent-discovery\\.ts$)(?!bootstrap/jobs/(syncGovernanceSchedules|reconcileCatalogNodeRegistry)\\.job\\.ts$)",
+        path: "^nodes/operator/app/src/(?!adapters/server/)(?!auth\\.ts$)(?!bootstrap/container\\.ts$)(?!bootstrap/graph-executor\\.factory\\.ts$)(?!bootstrap/agent-discovery\\.ts$)(?!bootstrap/node-deploy-sequencer\\.ts$)(?!bootstrap/jobs/(syncGovernanceSchedules|reconcileCatalogNodeRegistry)\\.job\\.ts$)",
       },
       to: {
         path: "^nodes/operator/app/src/adapters/server/(?!index\\.ts$).*\\.ts$",
@@ -352,6 +352,8 @@ module.exports = {
         "Exempt: auth.ts (bootstrap), container.ts (trust boundaries), " +
         "graph-executor.factory.ts + agent-discovery.ts (sandbox subpath imports " +
         "to avoid Turbopack bundling dockerode native addon chain), " +
+        "node-deploy-sequencer.ts (the Headscale gRPC client stays out of the " +
+        "@/adapters/server barrel the Next app imports; task.5429/5431), " +
         "allowlisted bootstrap jobs (need serviceDb for advisory locks).",
     },
 

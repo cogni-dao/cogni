@@ -74,14 +74,15 @@ import {
   EsoNodeRuntimeSecrets,
   GhcrBuiltImageResolver,
   HttpProbe,
+  HttpsSubstrateRequestSource,
   ImageCatalogNodes,
+  KubernetesMeshKeys,
   KubernetesStatePasswords,
   PostgresNodeDeployStore,
   resolveCloudflareZoneId,
 } from "@/adapters/server";
+// By path, not the barrel: the Headscale gRPC client stays out of `@/adapters/server`, which the Next app imports.
 import { HeadscaleSocketAdapter } from "@/adapters/server/node-deploy/headscale.adapter";
-import { KubernetesMeshKeys } from "@/adapters/server/node-deploy/mesh-keys.adapter";
-import { HttpsSubstrateRequestSource } from "@/adapters/server/node-deploy/substrate-request.adapter";
 import {
   type EnvLane,
   EnvLaneConfigError,
