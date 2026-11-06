@@ -321,16 +321,79 @@ describe("renderBundleMarkdown", () => {
     // Placeholders are brace-form so the ONLY angle brackets are real tags —
     // an angle-bracket placeholder (<PR>) would collide with the tag grammar.
     expect(g).not.toMatch(/<(PR|candidate|target|node)>/);
-    // (2)/(3) flight + deploy: follow the release/run to its end, then ONE .buildSha read (task.5420).
+    // (2)/(3) flight + deploy: follow the release/run to its end; app identity is classified below.
     expect(g).toContain(".buildSha");
     expect(g).toContain("/api/v1/deploy/workloads/releases/{releaseId}");
     expect(g).toContain("Never poll /version");
     // Terse by contract: the whole block must stay short enough to recall.
-    expect(g.length).toBeLessThan(1000);
+    expect(g.length).toBeLessThan(1500);
     // The render actually inlines it under a discoverable header.
     const markdown = renderBundleMarkdown(baseInput);
     expect(markdown).toContain("## Watch an async gate — CI · flight · deploy");
     expect(markdown).toContain(SESSION_WATCH_GATE);
+  });
+
+  it("renders strict app release identity and feature evidence in the complete bundle", () => {
+    const markdown = renderBundleMarkdown({
+      ...baseInput,
+      toolingInvariants: [...SESSION_BOOTSTRAP_INVARIANTS],
+      orientation: {
+        id: "operator-agent-orientation",
+        content: "App release orientation.",
+      },
+    });
+    expect(markdown).toContain("Read /validate-candidate");
+    expect(markdown).toContain("exact served requested SHA, readiness");
+    expect(markdown).toContain("feature-specific Loki; require agent traces when applicable");
+    expect(markdown).toContain("applicable UI/API behavior");
+    expect(markdown).toContain("surfaces on the app artifact path");
+    expect(markdown).not.toContain("feature-specific Loki and agent traces");
+    expect(markdown).toContain(
+      "App artifact path: terminal release or run plus one served .buildSha read; wrong requested SHA = FAILED"
+    );
+    expect(markdown).toContain("gh run watch {run} --exit-status");
+    expect(markdown).not.toContain(
+      "read the FIXED behavior back from Loki at that SHA"
+    );
+    expect(markdown).not.toContain(
+      "verdict = release or run end + one .buildSha read"
+    );
+  });
+
+  it("keeps TRACE conditional for a deterministic non-agent app", () => {
+    const markdown = renderBundleMarkdown({
+      ...baseInput,
+      toolingInvariants: [...SESSION_BOOTSTRAP_INVARIANTS],
+    });
+    expect(markdown).toContain("feature-specific Loki; require agent traces when applicable");
+    expect(markdown).toContain("exact served requested SHA, readiness");
+    expect(markdown).not.toContain("feature-specific Loki and agent traces");
+  });
+
+  it("renders bounded no-app native proof without an unconditional app verdict", () => {
+    const markdown = renderBundleMarkdown({
+      ...baseInput,
+      toolingInvariants: [...SESSION_BOOTSTRAP_INVARIANTS],
+      orientation: {
+        id: "operator-agent-orientation",
+        content: "Native operation orientation.",
+      },
+    });
+    expect(markdown).toContain("follow its impact classification");
+    expect(markdown).toContain("terminal native execution");
+    expect(markdown).toContain("eligible no-app operation");
+    expect(markdown).toContain(
+      "exact consumed source/config/artifact identity"
+    );
+    expect(markdown).toContain("actual caller selection");
+    expect(markdown).toContain("attributable native behavior");
+    expect(markdown).toContain("all owning proof");
+    expect(markdown).toContain(
+      "missing proof or native semantics is failure or unknown, never green"
+    );
+    expect(markdown).toContain("A green run alone is not validation");
+    expect(markdown).not.toContain("Then ONE .buildSha read");
+    expect(markdown).not.toContain("green run + wrong SHA = FAILED");
   });
 
   it("keeps the CICD-sequence invariant free of the watch mechanics it delegates", () => {
