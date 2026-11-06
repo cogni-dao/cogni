@@ -15,6 +15,9 @@
 #   6. The derived node DB inventory includes every catalog node.
 #   7. Infra reconcile cannot inline/overlap production backups, and Postgres
 #      crash attribution remains observable.
+#   8. task.5428 mesh VM sites: one relay site + one publish path per tailnet of
+#      the VM (both candidate-a tailnets), DNS-only ACME, a both-present check,
+#      edge-only NodePorts dropped after DOCKER-USER, no deploy-infra change.
 #
 # Run: bash scripts/ci/tests/render-caddyfile.test.sh
 set -euo pipefail
@@ -165,5 +168,84 @@ grep -Fq 'OpenBao writer SA lookup remained unavailable after 3 attempts' "$DEPL
 grep -Fq 'refusing to claim the SA is absent' "$DEPLOY_INFRA" \
   || fail "unknown OpenBao writer SA lookup failures invent absence"
 pass "backup execution is candidate-gated + serialized; OpenBao login and SA lookup retries are bounded and fail-closed"
+
+echo "[8/8] mesh VM sites: one relay + one publish path per tailnet, DNS-only ACME, hardened (task.5428 P2)"
+# shellcheck source=scripts/ci/lib/mesh-plane.sh
+source "$REPO_ROOT/scripts/ci/lib/mesh-plane.sh"
+# shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
+source "$REPO_ROOT/scripts/setup/lib/cogni-deployment-identity.sh"
+# deploy-infra.sh calls `--domain "$DOMAIN"` only (frozen, untouched): the env derives from the domain.
+CAND="$(bash scripts/ci/render-caddyfile.sh --domain test.cognidao.org)"
+[ "$CAND" = "$(bash scripts/ci/render-caddyfile.sh --domain test.cognidao.org --env candidate-a)" ] \
+  || fail "domain-derived env differs from explicit --env candidate-a"
+[ "$(grep -c '^  local_certs$' <<<"$CAND")" = "1" ] || fail "global local_certs must stay for every proxied host"
+vm_tailnets="$(mesh_vm_tailnets candidate-a | paste -sd' ' -)"
+[ "$vm_tailnets" = "candidate-a test-candidate-a" ] \
+  || fail "candidate-a VM must serve the canonical and the test-operator tailnets (got: $vm_tailnets)"
+block_of() { awk -v h="$1 {" '$0 == h {p=1} p {print} p && /^}$/ {exit}' <<<"$2"; }
+for tailnet in $vm_tailnets; do
+  relay="$(mesh_host "$tailnet" relay cognidao.org)"
+  rb="$(block_of "$relay" "$CAND")"
+  [ -n "$rb" ] || fail "relay site $relay missing"
+  grep -Fq 'issuer acme' <<<"$rb" || fail "$relay must use a public ACME issuer (DNS-only)"
+  grep -Fq '@mesh path /derp /derp/* /generate_204' <<<"$rb" || fail "$relay must route only DERP paths"
+  grep -Fq "reverse_proxy host.docker.internal:$(mesh_tailnet_field "$tailnet" relay_np)" <<<"$rb" \
+    || fail "$relay upstream is not its relay NodePort"
+  grep -Fq 'respond 404' <<<"$rb" || fail "$relay does not refuse other paths"
+done
+vm_host="$(cogni_vm_host_for_env candidate-a cognidao.org cogni)"
+pb="$(block_of "$vm_host" "$CAND")"
+[ -n "$pb" ] || fail "VM alias publish site $vm_host missing"
+grep -Fq 'issuer acme' <<<"$pb" || fail "VM alias site must use a public ACME issuer (DNS-only)"
+for tailnet in $vm_tailnets; do
+  grep -Fq "handle /.well-known/cogni-mesh/${tailnet}/substrate-gw.json {" <<<"$pb" \
+    || fail "publish path for $tailnet missing"
+  grep -Fq "reverse_proxy host.docker.internal:$(mesh_tailnet_field "$tailnet" publish_np)" <<<"$pb" \
+    || fail "publish upstream for $tailnet is not its publisher NodePort"
+done
+[ "$(grep -c 'handle /.well-known/cogni-mesh/' <<<"$pb")" = "2" ] || fail "VM alias must carry exactly the two publish paths"
+# The one-writer check really fails when a tailnet's route is missing.
+if assert_mesh_vm_sites candidate-a "$(grep -v '^derp-test-candidate-a.cognidao.org {$' <<<"$CAND")" 2>/dev/null; then
+  fail "a missing relay site must fail the render"
+fi
+if assert_mesh_vm_sites candidate-a "$(grep -v 'cogni-mesh/candidate-a/' <<<"$CAND")" 2>/dev/null; then
+  fail "a missing publish path must fail the render"
+fi
+# Envs without a VM tailnet render no mesh site; the drift-gated template is unchanged.
+for d in cognidao.org preview.cognidao.org; do
+  grep -Eq '^(derp|mesh)-|cogni-mesh/' <<<"$(bash scripts/ci/render-caddyfile.sh --domain "$d")" \
+    && fail "$d must render no mesh VM site yet"
+done
+grep -Fq 'issuer acme' <<<"$RENDERED" && fail "template render must not carry env-specific mesh sites"
+# Hardener drops exactly the table's edge-only NodePorts, before NAT, only after DOCKER-USER is complete.
+HARDEN="infra/provision/cherry/harden-docker-public-ports.sh"
+edge_only="$(sed -n 's/^MESH_EDGE_ONLY_PORTS="\(.*\)"$/\1/p' "$HARDEN")"
+expanded=""
+IFS=, read -r -a parts <<<"$edge_only"
+for part in "${parts[@]}"; do
+  if [[ "$part" == *:* ]]; then
+    for ((p = ${part%:*}; p <= ${part#*:}; p++)); do expanded+="${expanded:+,}$p"; done
+  else
+    expanded+="${expanded:+,}$part"
+  fi
+done
+[ "$expanded" = "$(mesh_edge_only_nodeports_csv)" ] \
+  || fail "$HARDEN MESH_EDGE_ONLY_PORTS ($edge_only) != mesh-plane.sh edge-only NodePorts ($(mesh_edge_only_nodeports_csv))"
+raw_line="$(grep -n -- '-t raw -A PREROUTING -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$MESH_EDGE_ONLY_PORTS"' "$HARDEN" | cut -d: -f1)"
+drop_line="$(grep -n -- '--comment "$TAG:drop-public" -j DROP' "$HARDEN" | cut -d: -f1)"
+[ -n "$raw_line" ] || fail "edge-only ports are not dropped before NAT"
+[ "$raw_line" -gt "$drop_line" ] || fail "raw-table block must run after DOCKER-USER's public DROP (fail closed)"
+grep -Fq 'MESH_UDP' "$HARDEN" && fail "no-op UDP ACCEPT rules must not return"
+# Table invariants: unique ports and regions; NodePorts off the catalog 100-stride.
+for col in coordinator_np relay_np publish_np stun_port wireguard_port derp_region; do
+  vals="$(for t in $(mesh_tailnets); do mesh_tailnet_field "$t" "$col"; done | grep -v '^$')"
+  [ "$(sort <<<"$vals" | uniq -d)" = "" ] || fail "duplicate $col in the mesh tailnet table"
+done
+for p in $(mesh_edge_only_nodeports_csv | tr , ' '); do
+  [ $((p % 100)) -ne 0 ] || fail "edge-only NodePort $p sits on the catalog node_port stride"
+done
+# The frozen deploy brain is untouched by the mesh plane.
+grep -Eq 'MESH_|mesh-plane' "$DEPLOY_INFRA" && fail "deploy-infra.sh must carry no mesh-plane logic"
+pass "both candidate-a tailnets' relay + publish routes, one writer with a both-present check, hardened, deploy brain untouched"
 
 echo "PASS: render-caddyfile.test.sh"
