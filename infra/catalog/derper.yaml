@@ -1,0 +1,12 @@
+name: derper
+# task.5428 — the env relay image of the per-env mesh plane (hub node-service-delivery §1, task.5384).
+# type: infra = built in CI like litellm/doltgres (content-hash tag `derper-<hash>`). It is NOT a
+# Compose service: Argo delivers it to each env VM's own k3s (infra/k8s/base/mesh-env-plane), pinned
+# BY DIGEST (CD10). The build is not yet byte-reproducible; exit tracked in task.5435.
+type: infra
+port: 3340
+dockerfile: infra/images/derper/Dockerfile
+build_context: infra/images/derper
+image_tag_suffix: "-derper"
+migrator_tag_suffix: ""
+path_prefix: infra/images/derper/
