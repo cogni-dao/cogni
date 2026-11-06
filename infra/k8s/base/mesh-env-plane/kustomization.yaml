@@ -13,10 +13,10 @@
 # cogni-mesh-<tailnet>, nameSuffix -<tailnet> (renames the cluster-scoped PriorityClass and its references)
 # and its own values from the tailnet table in scripts/ci/lib/mesh-plane.sh, in its `mesh-env` ConfigMap:
 # MESH_CONTROL_HOST (mesh-<tailnet>.<zone>, the same name the DNS writer publishes), MESH_RELAY_HOST
-# (derp-<tailnet>.<zone>), MESH_VM_HOST (vm_host_for_env, the substrate's node address), MESH_STUN_PORT,
-# MESH_WIREGUARD_PORT and the watchdog bound. Each overlay patches the instance-unique host-level values
-# (forwarder ClusterIPs, relay/publisher NodePorts, STUN/WireGuard hostPorts) and declares the hostAlias
-# replacements AFTER those patches. Pinned by tests/ci-invariants/mesh-env-plane.spec.ts.
+# (derp-<tailnet>.<zone>), MESH_VM_HOST (vm_host_for_env, the substrate's node address),
+# MESH_WIREGUARD_PORT (pod-local; relay-only) and the watchdog bound. Each overlay patches the
+# instance-unique host-level values (forwarder ClusterIPs, relay/publisher NodePorts) and declares the
+# hostAlias replacements AFTER those patches. No instance opens a hostPort: relay-only, STUN off. Pinned by tests/ci-invariants/mesh-env-plane.spec.ts.
 #
 # HR21 egress rule = NetworkPolicy `substrate-gw` (networkpolicy.yaml): substrate-gw may reach ONLY
 # its two forwarders, with no DNS (every name it dials is a hostAlias). The forwarders hold the named destinations (control host :443,
