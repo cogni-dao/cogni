@@ -34,16 +34,21 @@
  *   - ONE_SUBSTRATE_BINDING (task.5432, CD2): the substrate block and the Doltgres endpoint come from
  *     `nodeAppSubstrateBinding`, the same output the sequencer gives the mesh grant and the companion
  *     listeners. Ports come only from `substrate-ports.ts`; this file spells no port.
- *   - MESH_ENV (task.5432): on a `mesh` attempt the substrate host is `cogni-substrate`, `DOLTGRES_URL`
- *     keeps the bucket credential and database with the binding's host and port, and no port without a
- *     mesh grant is injected (the egress-only scheduler-worker health URL is omitted). The key set
- *     otherwise equals the egress key set: no mesh identifier or credential reaches the app.
+ *   - MESH_ENV (task.5432): on a `mesh` attempt the substrate block (Temporal, Redis, the AI gateway and
+ *     the scheduler-worker health URL) names `cogni-substrate` with registry ports, and every injected
+ *     port is in the attempt's grant. The key set equals the egress key set: no mesh identifier or
+ *     credential reaches the app.
+ *   - DOLTGRES_ON_THE_VM (task.5432 review B2): on a `mesh` attempt a bucket `DOLTGRES_URL` is rebound to
+ *     `cogni-substrate` and the registry Doltgres port ONLY when its host is the lane's substrate (env VM)
+ *     host: its name or one of `substrateAddresses` (bindings.ts SHARED_VM_MATCH). Any other host, or a
+ *     DSN that cannot be parsed, is refused before the paid create: its credential is never redirected.
  *   - SHARED_POSTGRES_ONLY (task.5432): on a `mesh` attempt a bucket `DATABASE_URL`, `DATABASE_SERVICE_URL`
  *     or `DATABASE_MIGRATION_URL` is rebound to the binding's host and the registry Postgres port ONLY
- *     when its host is the lane's substrate (env VM) host: its name or one of `substrateAddresses`
- *     (bindings.ts SHARED_VM_MATCH). Any other host (a dedicated cell, such as Poly production's) is left
- *     untouched. Postgres is granted only when such a rebind happens. The bucket names the VM by address
- *     today, so with no addresses nothing is rebound: that release then fails its proof and blue stays.
+ *     when its host is the lane's substrate (env VM) host. A dedicated cell (such as Poly production's)
+ *     is left untouched. Postgres is granted only when such a rebind happens. All present keys must agree
+ *     (node-database-contract): some on the VM and some not is refused. An unparseable DSN, or one whose
+ *     query sets `host`, `hostaddr` or `port`, is refused. The bucket names the VM by address today, so a
+ *     mesh attempt needs `substrateAddresses`: with none, Doltgres is refused and nothing is paid.
  *   - EGRESS_UNCHANGED: an absent transport is `egress`, byte for byte the composition env above.
  * Side-effects: none
  * Links: infra/crossplane/xcomputeworkload/composition.yaml, packages/repo-spec/src/node-app-deployment.ts,
@@ -56,18 +61,15 @@ import { resolveRuntimeProfileSecretRefs } from "@cogni/repo-spec";
 import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
 
 import {
-  dsnHost,
+  DsnShapeError,
   isSubstrateVmHost,
+  parsePostgresDsn,
   rebindDsnEndpoint,
   resolveSubstrateBinding,
   type SubstrateBinding,
   type SubstrateTransport,
 } from "./bindings";
-import {
-  EGRESS_ONLY_PORTS,
-  SUBSTRATE_PORTS,
-  type SubstrateType,
-} from "./substrate-ports";
+import { SUBSTRATE_PORTS, type SubstrateType } from "./substrate-ports";
 
 /** Database pool maxes from the node's catalog `database.<env>.runtimePoolLimits` (public policy). */
 export interface NodeAppPoolLimits {
@@ -195,11 +197,8 @@ const SUBSTRATE_FIELDS = {
     `redis://${i.host}:${SUBSTRATE_PORTS.redis}`,
   LITELLM_BASE_URL: (i: SubstrateFieldInput) =>
     `http://${i.host}:${SUBSTRATE_PORTS["ai-gateway"]}`,
-};
-/** Egress only: not a registry row, so a mesh attempt never receives it (hard requirement 3). */
-const EGRESS_ONLY_SUBSTRATE_FIELDS = {
   SCHEDULER_WORKER_HEALTH_URL: (i: SubstrateFieldInput) =>
-    `http://${i.host}:${EGRESS_ONLY_PORTS["scheduler-worker-health"]}`,
+    `http://${i.host}:${SUBSTRATE_PORTS["scheduler-worker-health"]}`,
 };
 const DOLTGRES_URL = "DOLTGRES_URL";
 /** Postgres DSN keys that may name the shared env VM Postgres. */
@@ -258,7 +257,6 @@ export function runtimeOwnedEnvKeys(
           COMMON_FIELDS,
           APP_BASE_FIELDS,
           SUBSTRATE_FIELDS,
-          EGRESS_ONLY_SUBSTRATE_FIELDS,
           POOL_FIELDS,
           LOKI_FIELDS,
           APP_IDENTITY_FIELDS,
@@ -273,11 +271,12 @@ export function runtimeOwnedEnvKeys(
   ]);
 }
 
-/** The shared services the node app's substrate block names (Temporal, Redis, the AI gateway). */
+/** The shared services the node app's substrate block names. */
 const NODE_APP_SUBSTRATE_TYPES: readonly SubstrateType[] = [
   "temporal",
   "redis",
   "ai-gateway",
+  "scheduler-worker-health",
 ];
 
 export interface NodeAppSubstrateBindingInput {
@@ -291,50 +290,88 @@ export interface NodeAppSubstrateBindingInput {
   readonly substrateAddresses?: readonly string[] | undefined;
   readonly secretKeys?: readonly string[] | undefined;
   readonly boundEnvNames?: readonly string[] | undefined;
-  /** The bucket values. Read only to find which Postgres DSNs name the env VM; never copied out. */
+  /** The bucket values. Read only to find which DSNs name the lane VM; never copied into the binding. */
   readonly secrets?: Readonly<Record<string, string>> | undefined;
 }
 
-/**
- * SHARED_POSTGRES_ONLY: the bucket Postgres DSN keys a mesh attempt rebinds, i.e. those whose host equals
- * the lane's substrate (env VM) host. Empty for egress, for no VM host, and for a dedicated cell host.
- */
-function sharedPostgresKeysOnVm(
+/** What a mesh attempt rebinds from the bucket. Empty for egress. */
+interface MeshRebinds {
+  readonly doltgres: boolean;
+  readonly postgres: readonly string[];
+}
+
+const refuse = (why: string): never => {
+  throw new Error(`node app env refused: ${why}`);
+};
+
+/** Is this bucket DSN on the lane VM? Refuses (throws) an unparseable or endpoint-overriding DSN. */
+function onLaneVm(
+  key: string,
+  dsn: string,
   input: NodeAppSubstrateBindingInput
-): readonly string[] {
-  if ((input.transport ?? "egress") !== "mesh") return [];
+): boolean {
+  let host: string;
+  try {
+    host = parsePostgresDsn(dsn).host;
+  } catch (error) {
+    if (error instanceof DsnShapeError)
+      return refuse(`${key}: ${error.message}`);
+    throw error;
+  }
+  return isSubstrateVmHost(host, input.substrateHost, input.substrateAddresses);
+}
+
+/**
+ * DOLTGRES_ON_THE_VM + SHARED_POSTGRES_ONLY: decide which bucket DSNs a mesh attempt rebinds, or refuse.
+ * The one decision both the grant (`nodeAppSubstrateBinding`) and the env (`nodeAppEnv`) read.
+ */
+function meshRebinds(input: NodeAppSubstrateBindingInput): MeshRebinds {
+  if ((input.transport ?? "egress") !== "mesh")
+    return { doltgres: false, postgres: [] };
   const keys = nodeAppSecretKeys(input.secretKeys, input.boundEnvNames);
   const injectable = injectableSecrets(keys, input.secrets ?? {});
-  return SHARED_POSTGRES_DSN_KEYS.filter((k) => {
-    const dsn = injectable[k];
-    const host = dsn === undefined ? undefined : dsnHost(dsn);
-    return (
-      host !== undefined &&
-      isSubstrateVmHost(host, input.substrateHost, input.substrateAddresses)
+  const doltgres = injectable[DOLTGRES_URL];
+  if (doltgres !== undefined && !onLaneVm(DOLTGRES_URL, doltgres, input))
+    refuse(
+      "DOLTGRES_URL is not on the lane VM (name or substrateAddresses); its credential is not redirected"
     );
-  });
+  const present = SHARED_POSTGRES_DSN_KEYS.filter(
+    (k) => injectable[k] !== undefined
+  );
+  const onVm = present.filter((k) =>
+    onLaneVm(k, injectable[k] as string, input)
+  );
+  if (onVm.length > 0 && onVm.length < present.length)
+    refuse(
+      `Postgres DSNs disagree on the endpoint: ${onVm.join(", ")} on the lane VM, ${present
+        .filter((k) => !onVm.includes(k))
+        .join(", ")} elsewhere`
+    );
+  return { doltgres: doltgres !== undefined, postgres: onVm };
 }
 
 /**
  * THE substrate binding of one node app attempt (task.5432, CD2). The sequencer passes the SAME input it
- * gives `nodeAppEnv`; `ports` is the attempt's mesh grant (`NodeSubstrateGrant.ports`) and the
- * `cogni-substrate` listener set, and `nodeAppEnv` derives its substrate env from this same output.
- * Doltgres is included when `DOLTGRES_URL` comes from the bucket (not from a state binding). Postgres is
- * included only on a mesh attempt whose bucket Postgres DSN names the env VM (SHARED_POSTGRES_ONLY).
+ * gives `nodeAppEnv`, INCLUDING `secrets` and `substrateAddresses`; `ports` is the attempt's mesh grant
+ * (`NodeSubstrateGrant.ports`) and the `cogni-substrate` listener set, and `nodeAppEnv` derives its
+ * substrate env from this same output. On mesh, Doltgres and Postgres are granted only when their bucket
+ * DSN is rebound (it names the lane VM); a refusal throws here too, before anything is paid.
  */
 export function nodeAppSubstrateBinding(
   input: NodeAppSubstrateBindingInput
 ): SubstrateBinding | undefined {
+  const transport = input.transport ?? "egress";
   const keys = nodeAppSecretKeys(input.secretKeys, input.boundEnvNames);
+  const rebinds = meshRebinds(input);
+  const doltgres =
+    transport === "mesh" ? rebinds.doltgres : keys.includes(DOLTGRES_URL);
   return resolveSubstrateBinding({
-    transport: input.transport ?? "egress",
+    transport,
     vmHost: input.substrateHost,
     types: [
       ...NODE_APP_SUBSTRATE_TYPES,
-      ...(keys.includes(DOLTGRES_URL) ? (["doltgres"] as const) : []),
-      ...(sharedPostgresKeysOnVm(input).length > 0
-        ? (["postgres"] as const)
-        : []),
+      ...(doltgres ? (["doltgres"] as const) : []),
+      ...(rebinds.postgres.length > 0 ? (["postgres"] as const) : []),
     ],
   });
 }
@@ -360,31 +397,25 @@ export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
     ...fieldValues(APP_BASE_FIELDS, input),
   };
   const binding = nodeAppSubstrateBinding(input);
-  if (binding) {
-    const at = { host: binding.host, env: input.env };
-    Object.assign(e, fieldValues(SUBSTRATE_FIELDS, at));
-    if (binding.transport === "egress")
-      Object.assign(e, fieldValues(EGRESS_ONLY_SUBSTRATE_FIELDS, at));
-  }
+  if (binding)
+    Object.assign(
+      e,
+      fieldValues(SUBSTRATE_FIELDS, { host: binding.host, env: input.env })
+    );
   for (const [key, value] of Object.entries(injectable))
     e[appSecretDestination(key)] = value;
-  // MESH_ENV: the bucket keeps the Doltgres credential; the binding owns its endpoint.
-  const doltgres = injectable[DOLTGRES_URL];
-  if (binding?.transport === "mesh" && doltgres !== undefined) {
-    if (!binding.types.includes("doltgres"))
-      throw new Error("node app env refused: Doltgres has no mesh binding");
-    e[DOLTGRES_URL] = rebindDsnEndpoint(
-      doltgres,
-      binding.host,
-      SUBSTRATE_PORTS.doltgres
-    );
-  }
-  // SHARED_POSTGRES_ONLY: a DSN on the env VM moves to the binding; a dedicated cell keeps its endpoint.
-  const sharedPostgres = sharedPostgresKeysOnVm(input);
-  if (binding?.transport === "mesh" && sharedPostgres.length > 0) {
-    if (!binding.types.includes("postgres"))
-      throw new Error("node app env refused: Postgres has no mesh binding");
-    for (const key of sharedPostgres)
+  // DOLTGRES_ON_THE_VM + SHARED_POSTGRES_ONLY: the bucket keeps the credential; the binding owns the
+  // endpoint of a DSN on the lane VM. A dedicated cell keeps its endpoint.
+  if (binding?.transport === "mesh") {
+    const rebinds = meshRebinds(input);
+    const doltgres = injectable[DOLTGRES_URL];
+    if (rebinds.doltgres && doltgres !== undefined)
+      e[DOLTGRES_URL] = rebindDsnEndpoint(
+        doltgres,
+        binding.host,
+        SUBSTRATE_PORTS.doltgres
+      );
+    for (const key of rebinds.postgres)
       e[key] = rebindDsnEndpoint(
         injectable[key] as string,
         binding.host,

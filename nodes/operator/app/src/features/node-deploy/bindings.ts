@@ -161,16 +161,51 @@ export function resolveSubstrateBinding(
   };
 }
 
-/** `postgres[ql]://<userinfo>@<host>[:port]/<database>[?query][#fragment]`. Userinfo is required. */
+/**
+ * `postgres[ql]://<userinfo>@<host>[:port]/<database>[?query][#fragment]`. Userinfo is required. One host
+ * only: a comma multi-host list is not matched.
+ */
 const POSTGRES_DSN =
-  /^(postgres(?:ql)?:\/\/[^@/?#\s]+@)(\[[0-9a-fA-F:.]+\]|[^/?#:@[\]\s]+)(?::\d{1,5})?(\/[^/?#\s]+(?:[?#][^\s]*)?)$/;
+  /^(postgres(?:ql)?:\/\/[^@/?#\s]+@)(\[[0-9a-fA-F:.]+\]|[^/?#:@,[\]\s]+)(?::\d{1,5})?(\/[^/?#\s]+(?:[?#][^\s]*)?)$/;
+
+/** Query keys that override the URL endpoint in libpq and pg-connection-string. */
+const ENDPOINT_OVERRIDE_KEYS = new Set(["host", "hostaddr", "port"]);
+
+/** A DSN that cannot be classified or rebound safely. The message never carries the DSN value. */
+export class DsnShapeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DsnShapeError";
+  }
+}
 
 /**
- * The host of a Postgres-wire DSN, lowercased (`undefined` when the DSN has another shape). It reads no
- * credential into its result.
+ * Parse a single-host Postgres-wire DSN. Throws `DsnShapeError` on any other shape, and when its query
+ * sets `host`, `hostaddr` or `port` (the URL host would then not be the host it dials). The result holds
+ * the lowercased host only, never a credential.
  */
-export function dsnHost(dsn: string): string | undefined {
-  return POSTGRES_DSN.exec(dsn)?.[2]?.toLowerCase();
+export function parsePostgresDsn(dsn: string): {
+  readonly host: string;
+  readonly match: RegExpExecArray;
+} {
+  const m = POSTGRES_DSN.exec(dsn);
+  if (!m)
+    throw new DsnShapeError(
+      "not a single-host postgres DSN with a credential and a database"
+    );
+  const query = (m[3] as string).split("#")[0]?.split("?")[1] ?? "";
+  for (const pair of query.split("&")) {
+    const raw = pair.split("=")[0] ?? "";
+    let key: string;
+    try {
+      key = decodeURIComponent(raw).trim().toLowerCase();
+    } catch {
+      throw new DsnShapeError("DSN query key is not decodable");
+    }
+    if (ENDPOINT_OVERRIDE_KEYS.has(key))
+      throw new DsnShapeError(`DSN query overrides the endpoint (${key}=)`);
+  }
+  return { host: (m[2] as string).toLowerCase(), match: m };
 }
 
 const IPV4 =
@@ -226,10 +261,11 @@ export function rebindDsnEndpoint(
     throw new Error(`dsn rebind: port out of range: ${port}`);
   if (!/^[a-z0-9][a-z0-9.-]*$/.test(host))
     throw new Error(`dsn rebind: host is not a plain name: ${host}`);
-  const m = POSTGRES_DSN.exec(dsn);
-  if (!m)
-    throw new Error(
-      "dsn rebind: not a postgres DSN with a credential and a database"
-    );
+  let m: RegExpExecArray;
+  try {
+    m = parsePostgresDsn(dsn).match;
+  } catch (error) {
+    throw new DsnShapeError(`dsn rebind: ${(error as Error).message}`);
+  }
   return `${m[1]}${host}:${port}${m[3]}`;
 }
