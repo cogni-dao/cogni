@@ -85,12 +85,15 @@ sleep() { :; } # Error-path retries are finite; do not spend wall time in a fixt
   TARGET_NODE=operator
   DEPLOY_ENVIRONMENT=candidate-a
   SECRETS_CONTROL_ENV=production
-  mkdir -p "$CACHE_DIR/operator" "$CACHE_DIR/__owner__/operator"
+  load_function scripts/ci/secret-materialize.sh inherited_key_value
+  INHERITED_OWNERS_JSON="$(pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/print-secret-inheritance.ts" \
+    "$REPO_ROOT" "$DEPLOY_ENVIRONMENT" "$SECRETS_CONTROL_ENV")"
+  mkdir -p "$CACHE_DIR/operator" "$CACHE_DIR/__owners__/production/operator"
   for key in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD DATABASE_URL DATABASE_SERVICE_URL; do
-    printf '%s' "production-$key" > "$CACHE_DIR/__owner__/operator/$key"
+    printf '%s' "production-$key" > "$CACHE_DIR/__owners__/production/operator/$key"
   done
-  printf '%s' shared-engine > "$CACHE_DIR/__owner__/operator/DOLTGRES_PASSWORD"
-  printf '%s' shared-master > "$CACHE_DIR/__owner__/operator/LITELLM_MASTER_KEY"
+  printf '%s' shared-engine > "$CACHE_DIR/__owners__/production/operator/DOLTGRES_PASSWORD"
+  printf '%s' shared-master > "$CACHE_DIR/__owners__/production/operator/LITELLM_MASTER_KEY"
   for key in APP_DB_PASSWORD APP_DB_SERVICE_PASSWORD DATABASE_URL DATABASE_SERVICE_URL; do
     [[ -z "$(bao_get_field operator "$key")" ]]
     printf '%s' "candidate-$key" > "$CACHE_DIR/operator/$key"
@@ -125,6 +128,9 @@ sleep() { :; } # Error-path retries are finite; do not spend wall time in a fixt
   CACHE_DIR="$TMPROOT/inheritance-cache"
   DEPLOY_ENVIRONMENT=candidate-a
   SECRETS_CONTROL_ENV=production
+  load_function scripts/ci/secret-materialize.sh inherited_key_value
+  INHERITED_OWNERS_JSON="$(pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/print-secret-inheritance.ts" \
+    "$REPO_ROOT" "$DEPLOY_ENVIRONMENT" "$SECRETS_CONTROL_ENV")"
   NODE_BASELINE_KEYS=(POSTHOG_API_KEY POSTHOG_HOST TAVILY_API_KEY)
   DSN_DEFER_KEYS=' '
   COMPOSED_DSN_KEYS=' '
@@ -140,9 +146,9 @@ sleep() { :; } # Error-path retries are finite; do not spend wall time in a fixt
   _resolve_node_value() { echo 'unexpected target fallback' >&2; exit 1; }
   baseline_loop=$(sed -n '/^for k in "${NODE_BASELINE_KEYS\[@\]}"; do$/,/^done$/p' "$REPO_ROOT/scripts/ci/secret-materialize.sh")
   [[ -n "$baseline_loop" ]]
-  mkdir -p "$CACHE_DIR/__owner__/operator"
-  printf '%s' owner-posthog > "$CACHE_DIR/__owner__/operator/POSTHOG_API_KEY"
-  printf '%s' https://owner-posthog.example > "$CACHE_DIR/__owner__/operator/POSTHOG_HOST"
+  mkdir -p "$CACHE_DIR/__owners__/production/operator"
+  printf '%s' owner-posthog > "$CACHE_DIR/__owners__/production/operator/POSTHOG_API_KEY"
+  printf '%s' https://owner-posthog.example > "$CACHE_DIR/__owners__/production/operator/POSTHOG_HOST"
   for TARGET_NODE in ordinary-target operator; do
     mkdir -p "$CACHE_DIR/$TARGET_NODE"
     printf '%s' stale-target > "$CACHE_DIR/$TARGET_NODE/POSTHOG_API_KEY"
@@ -151,21 +157,21 @@ sleep() { :; } # Error-path retries are finite; do not spend wall time in a fixt
     [[ "$(bao_get_field "$TARGET_NODE" POSTHOG_API_KEY)" == owner-posthog ]]
     [[ "$(bao_get_field "$TARGET_NODE" POSTHOG_HOST)" == https://owner-posthog.example ]]
     [[ ! -f "$CACHE_DIR/$TARGET_NODE/TAVILY_API_KEY" ]] # Optional and unconfigured.
-    printf '%s' owner-tavily > "$CACHE_DIR/__owner__/operator/TAVILY_API_KEY"
+    printf '%s' owner-tavily > "$CACHE_DIR/__owners__/production/operator/TAVILY_API_KEY"
     eval "$baseline_loop"
     [[ "$(bao_get_field "$TARGET_NODE" TAVILY_API_KEY)" == owner-tavily ]]
-    rm "$CACHE_DIR/__owner__/operator/TAVILY_API_KEY"
+    rm "$CACHE_DIR/__owners__/production/operator/TAVILY_API_KEY"
     if (eval "$baseline_loop") > "$TMPROOT/optional-stale.out" 2>&1; then
       echo 'missing optional owner retained a stale target credential' >&2; exit 1
     fi
     rm "$CACHE_DIR/$TARGET_NODE/TAVILY_API_KEY"
-    mv "$CACHE_DIR/__owner__/operator/POSTHOG_API_KEY" "$TMPROOT/owner-posthog"
+    mv "$CACHE_DIR/__owners__/production/operator/POSTHOG_API_KEY" "$TMPROOT/owner-posthog"
     printf '%s' stale-target > "$CACHE_DIR/$TARGET_NODE/POSTHOG_API_KEY"
     if (eval "$baseline_loop") > "$TMPROOT/required-stale.out" 2>&1; then
       echo 'missing required owner retained a stale target credential' >&2; exit 1
     fi
     [[ "$(bao_get_field "$TARGET_NODE" POSTHOG_API_KEY)" == stale-target ]]
-    mv "$TMPROOT/owner-posthog" "$CACHE_DIR/__owner__/operator/POSTHOG_API_KEY"
+    mv "$TMPROOT/owner-posthog" "$CACHE_DIR/__owners__/production/operator/POSTHOG_API_KEY"
   done
 )
 echo 'target-owner-bank: lane precedence, missing/denied/unknown refusal and shared custody pass'

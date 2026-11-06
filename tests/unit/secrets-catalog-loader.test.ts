@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  inheritedSecretOwner,
   isSetupSecretsManaged,
   loadSecretsCatalog,
   openBaoPathFor,
@@ -42,6 +43,79 @@ afterEach(() => {
 });
 
 describe("secrets-catalog-loader · capability fan-out (v2)", () => {
+  it("binds candidate scheduler to its lane while other owners stay in control", () => {
+    writeOperatorCatalog(`
+  - name: SCHEDULER_API_TOKEN
+    tier: A1
+    service: _shared
+    inheritFrom: operator
+    inheritEnvironmentByLane: {candidate-a: lane}
+    required: true
+    category: Internal
+    source: human
+    description: existing sender key
+    steps: []
+`);
+    const { routing } = loadSecretsCatalog({ repoRoot });
+    const entry = routing.SCHEDULER_API_TOKEN;
+    expect(entry.inheritEnvironmentByLane).toEqual({ "candidate-a": "lane" });
+    expect(inheritedSecretOwner(entry, "candidate-a", "production")).toEqual({
+      environment: "candidate-a",
+      service: "operator",
+    });
+    expect(inheritedSecretOwner(entry, "preview", "production")).toEqual({
+      environment: "production",
+      service: "operator",
+    });
+    expect(inheritedSecretOwner(entry, "production", "production")).toEqual({
+      environment: "production",
+      service: "operator",
+    });
+    expect(
+      inheritedSecretOwner(
+        { tier: "A1", inheritFrom: "operator" },
+        "candidate-a",
+        "production"
+      )
+    ).toEqual({ environment: "production", service: "operator" });
+  });
+
+  it.each([
+    "inheritEnvironmentByLane: {candidate-b: lane}",
+    "inheritEnvironmentByLane: {candidate-a: production}",
+  ])("refuses invalid inherited-owner policy: %s", (policy) => {
+    writeOperatorCatalog(`
+  - name: SCHEDULER_API_TOKEN
+    tier: A1
+    service: _shared
+    inheritFrom: operator
+    ${policy}
+    required: true
+    category: Internal
+    source: human
+    description: policy fixture
+    steps: []
+`);
+    expect(() => loadSecretsCatalog({ repoRoot })).toThrow();
+  });
+
+  it("requires an owner for an inherited environment selector", () => {
+    writeOperatorCatalog(`
+  - name: SCHEDULER_API_TOKEN
+    tier: A1
+    service: _shared
+    inheritEnvironmentByLane: {candidate-a: lane}
+    required: true
+    category: Internal
+    source: human
+    description: policy fixture
+    steps: []
+`);
+    expect(() => loadSecretsCatalog({ repoRoot })).toThrow(
+      /requires inheritFrom/
+    );
+  });
+
   it("carries appliesTo + shared into the routing record", () => {
     writeOperatorCatalog(`
   - name: AUTH_SECRET

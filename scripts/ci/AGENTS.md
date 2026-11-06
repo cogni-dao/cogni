@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-10-22
+- **Last reviewed:** 2026-11-05
 
 ## Purpose
 
@@ -40,6 +40,7 @@ CI/CD automation scripts and configuration documentation for multiple pipeline s
 - `lib/maintenance-fence.py check <deploy-tree>` is the read-only node-generic marker/audited-source-floor guard; no grant, claim, preserve or maintenance write command.
 - Normal node reconcile never starts/recreates shared PG/Dolt, rewrites shared runtime env/install-creds or rotates mirror custody. Existing engines are infra prerequisites; target provisioners always use `--no-deps`.
 - Bank calls distinguish target LANE from explicit CONTROL-owner intent even when operator has both roles. Missing target values never fall back to an owner; inheritance is declared by catalog `inheritFrom`.
+- `inheritEnvironmentByLane` selects lane/control byte authority through the typed catalog resolver. Omitted lanes retain control inheritance; caches include environment and service. Missing selected owners never fall back.
 - Every runner and direct reconcile resolves the actual catalog provider and refuses an explicit mismatch before materialization.
 
 ## Responsibilities

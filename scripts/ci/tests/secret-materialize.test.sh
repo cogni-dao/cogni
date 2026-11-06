@@ -169,7 +169,7 @@ if [[ "${!#}" == http://127.0.0.1:8200/v1/auth/kubernetes/login ]]; then
   while [[ $# -gt 0 ]]; do
     case "$1" in --output) out="$2"; shift 2 ;; --data-binary) body="${2#@}"; shift 2 ;; *) shift ;; esac
   done
-  jq -e '.role == "candidate-a-writer" and .jwt == "owned.jwt.signature"' "$body" >/dev/null || exit 9
+  jq -e --arg role "${FAKE_EXPECTED_WRITER_ROLE:-candidate-a-writer}" '.role == $role and .jwt == "owned.jwt.signature"' "$body" >/dev/null || exit 9
   printf '{"auth":{"client_token":"writer-token"}}' > "$out"
   printf '200'; exit 0
 fi
@@ -181,6 +181,9 @@ if [[ "${!#}" == http://127.0.0.1:8200/v1/cogni/data/* ]]; then
   done
   path="${url#http://127.0.0.1:8200/v1/cogni/data/}"
   dir="${FAKE_BAO_ROOT}/cogni/${path}"
+  if [[ "${FAKE_OWNER_DENIED:-0}" == 1 && "$path" == candidate-a/operator ]]; then
+    printf '{"errors":["permission denied"]}' > "$out"; printf '403'; exit 0
+  fi
   if [[ ! -d "$dir" ]]; then printf '{"errors":[]}' > "$out"; printf '404'; exit 0; fi
   data='{}'
   for f in "$dir"/*; do
@@ -961,4 +964,97 @@ assert r.returncode==0 and json.loads(r.stdout)["rebind"] is None
 print("PASS: binding CLI and host-rebind guards preserve private values and identities")
 PY
 
+# bug.5571: custody may be production while the runtime sender belongs to the
+# candidate lane. Distinct fixtures make accidental control fallback observable.
+REAL_PYTHON="$(command -v python3)"
+cat > "$FAKEBIN/getent" <<'EOF'
+#!/usr/bin/env bash
+[[ "$*" == 'ahostsv4 cogni-candidate-a.vm.cognidao.org' ]] || exit 1
+printf '10.0.0.2 STREAM fixture\n'
+EOF
+cat > "$FAKEBIN/dig" <<'EOF'
+#!/usr/bin/env bash
+exit 1 # No ambient DNS in this fixture.
+EOF
+cat > "$FAKEBIN/python3" <<'EOF'
+#!/usr/bin/env bash
+[[ "$*" != *socket.getaddrinfo* ]] || exit 1
+exec "$REAL_PYTHON" "$@"
+EOF
+chmod +x "$FAKEBIN/getent" "$FAKEBIN/dig" "$FAKEBIN/python3"
+mkdir -p "$BAO_ROOT/cogni/production/operator"
+cp "$BAO_ROOT/cogni/candidate-a/operator/"* "$BAO_ROOT/cogni/production/operator/"
+printf '%s' control-scheduler-fixture > "$BAO_ROOT/cogni/production/operator/SCHEDULER_API_TOKEN"
+printf '%s' control-billing-fixture > "$BAO_ROOT/cogni/production/operator/BILLING_INGEST_TOKEN"
+printf '%s' control-scheduler-fixture > "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
+auth_before="$(cat "$BAO_ROOT/cogni/candidate-a/node-template/AUTH_SECRET")"
+run_foreign_inheritance() {
+  env PATH="$FAKEBIN:$PATH" REAL_PYTHON="$REAL_PYTHON" REAL_PNPM="$REAL_PNPM" \
+    VM_HOST=fake DOMAIN=test.cognidao.org FORK_DOMAIN_ROOT=cognidao.org \
+    SECRETS_CONTROL_ENV=production FAKE_EXPECTED_WRITER_ROLE=production-writer \
+    SSH_OPTS="-i fake-key -o StrictHostKeyChecking=no" \
+    SECRET_MATERIALIZE_SSH_BIN="$FAKEBIN/ssh" FAKE_REMOTE_PATH="$FAKEBIN" \
+    FAKE_BAO_ROOT="$BAO_ROOT" FAKE_LITELLM_STORE="$LITELLM_STORE" \
+    FAKE_LITELLM_LOG="$LITELLM_LOG" FAKE_LITELLM_MASTER_KEY=sk-cogni-operator-master \
+    FAKE_PATCH_LOG="$TMPROOT/inheritance-writes" "$@" \
+    bash scripts/ci/secret-materialize.sh candidate-a node-template
+}
+run_foreign_inheritance > "$TMPROOT/out-foreign.txt"
+cmp "$BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
+cmp "$BAO_ROOT/cogni/production/operator/BILLING_INGEST_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/BILLING_INGEST_TOKEN"
+[[ "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/AUTH_SECRET")" == "$auth_before" ]] \
+  || { echo 'scheduler repair changed node auth secret' >&2; exit 1; }
+: > "$TMPROOT/inheritance-writes"
+run_foreign_inheritance > "$TMPROOT/out-foreign-repeat.txt"
+grep -q 'created=0 ' "$TMPROOT/out-foreign-repeat.txt"
+[[ ! -s "$TMPROOT/inheritance-writes" ]] || { echo 'repeat inheritance wrote a bank' >&2; exit 1; }
+
+# Both an existing divergent target and a runner value are forbidden substitutes.
+mv "$BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN" "$TMPROOT/lane-scheduler"
+for receiver in existing cold; do
+  if [[ "$receiver" == cold ]]; then mv "$BAO_ROOT/cogni/candidate-a/node-template" "$TMPROOT/saved-receiver"; fi
+  : > "$TMPROOT/inheritance-writes"
+  if run_foreign_inheritance SCHEDULER_API_TOKEN=runner-scheduler-fixture > "$TMPROOT/out-missing-$receiver.txt" 2>&1; then
+    echo "missing lane owner accepted for $receiver receiver" >&2; exit 1
+  fi
+  grep -q 'declared owner operator/SCHEDULER_API_TOKEN is absent' "$TMPROOT/out-missing-$receiver.txt"
+  [[ ! -s "$TMPROOT/inheritance-writes" ]] || { echo 'missing lane owner caused a write' >&2; exit 1; }
+  if [[ "$receiver" == cold ]]; then mv "$TMPROOT/saved-receiver" "$BAO_ROOT/cogni/candidate-a/node-template"; fi
+done
+mv "$TMPROOT/lane-scheduler" "$BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN"
+for receiver in existing cold; do
+  if [[ "$receiver" == existing ]]; then
+    printf '%s' stale-scheduler-fixture > "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
+  else
+    mv "$BAO_ROOT/cogni/candidate-a/node-template" "$TMPROOT/saved-receiver"
+  fi
+  : > "$TMPROOT/inheritance-writes"
+  if run_foreign_inheritance FAKE_OWNER_DENIED=1 SCHEDULER_API_TOKEN=runner-scheduler-fixture > "$TMPROOT/out-denied-$receiver.txt" 2>&1; then
+    echo "denied lane owner accepted for $receiver receiver" >&2; exit 1
+  fi
+  grep -q 'unavailable reading cogni/candidate-a/operator' "$TMPROOT/out-denied-$receiver.txt"
+  [[ ! -s "$TMPROOT/inheritance-writes" ]] || { echo 'denied lane owner caused a write' >&2; exit 1; }
+  if [[ "$receiver" == cold ]]; then mv "$TMPROOT/saved-receiver" "$BAO_ROOT/cogni/candidate-a/node-template"; fi
+done
+# A receiver missing the field takes the qualified lane key.
+rm -f "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
+run_foreign_inheritance > "$TMPROOT/out-foreign-cold.txt"
+cmp "$BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
+echo "PASS: candidate scheduler follows its lane, control siblings stay controlled, missing/denied owners fail closed"
+# Exercise the other existing inheritance helper itself with the same typed
+# emitter and divergent lane/control caches; no copied resolution algorithm.
+(
+  CACHE_DIR="$TMPROOT/real-helper-cache"
+  mkdir -p "$CACHE_DIR/__owners__/candidate-a/operator" "$CACHE_DIR/__owners__/production/operator"
+  printf '%s' lane-helper-fixture > "$CACHE_DIR/__owners__/candidate-a/operator/SCHEDULER_API_TOKEN"
+  printf '%s' control-helper-fixture > "$CACHE_DIR/__owners__/production/operator/SCHEDULER_API_TOKEN"
+  INHERITED_OWNERS_JSON="$("$REAL_PNPM" --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/print-secret-inheritance.ts" "$REPO_ROOT" candidate-a production)"
+  eval "$(sed -n '/^inherited_key_value() {$/,/^}$/p' scripts/ci/secret-materialize.sh)"
+  eval "$(sed -n '/^inherit_shared_value() {$/,/^}$/p' scripts/ci/secret-materialize.sh)"
+  _cat_field() { printf '%s' operator; }
+  unset SCHEDULER_API_TOKEN
+  inherit_shared_value SCHEDULER_API_TOKEN
+  [[ "$SCHEDULER_API_TOKEN" == lane-helper-fixture ]]
+)
+echo "PASS: real shared inheritance helper selects lane cache"
 echo "PASS: secret-materialize.test.sh"
