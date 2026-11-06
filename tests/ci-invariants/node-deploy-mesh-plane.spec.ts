@@ -7,8 +7,7 @@
  *   beside the production node-deploy sequencer, and the env VM plane (relay, substrate-gw, forwarders)
  *   on the env VM's own k3s, so a later edit cannot quietly reopen an admin surface, share a socket, a
  *   tailnet or a route to a Tailscale-operated host.
- * Scope: Reads committed YAML/JSON/shell; renders the two overlays with `kubectl kustomize` only when
- *   kubectl exists; does not contact a cluster, Docker or the network.
+ * Scope: Reads committed files and does not contact a cluster, Docker or the network (renders overlays only if kubectl exists).
  * Invariants:
  *   - ONE_TAILNET_PER_ENV (HR2): own container, PVC `headscale-<env>`, port and socket VOLUME; each socket
  *     volume is mounted only by its Headscale and the sequencer (all containers share uid 1001).
