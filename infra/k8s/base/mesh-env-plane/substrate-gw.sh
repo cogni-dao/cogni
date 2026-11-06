@@ -7,9 +7,11 @@
 # tailscale 1.104.4 image's tailscaled + tailscale CLI + busybox (sh, sed, awk, bc, base64).
 #
 # Three jobs, one loop:
-#   1. RUN   tailscaled in userspace (no TUN, no capabilities), state on a VM volume, no log upload,
-#            our control URL only. `tailscale up` holds NO key: an unregistered device asks to join
-#            with --advertise-tags=tag:substrate and waits for approval (enrollment by approval).
+#   1. RUN   tailscaled in userspace (no TUN, no capabilities), state on the env VM's local-path PVC,
+#            no log upload, our control URL only. `tailscale up` holds NO key: an unregistered device
+#            asks to join with --advertise-tags=tag:substrate and waits for approval (enrollment by
+#            approval). It asks AGAIN whenever the device is not joined and has no pending request
+#            (its node was deleted, HR11, or the coordinator was wiped, HR10): no person acts.
 #   2. GUARD (fail closed, hard requirement 20). substrate-gw enforces the policy from its LAST map, so
 #            while it cannot reach Headscale a deleted node keeps access. When the device is out of
 #            its map poll for longer than SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS (default 4 h) this loop
@@ -17,17 +19,19 @@
 #            the declared serve config again. The lost-since clock is kept on the state volume, so a
 #            container restart does not reset the bound.
 #   3. PUBLISH the enrollment request: {authId, machineKey, nodeKey, backendState, publishedAt} at
-#            $SUBSTRATE_GW_PUBLISH_DIR/substrate-gw.json, served read-only by substrate-gw-publisher
+#            $SUBSTRATE_GW_PUBLISH_DIR/substrate-gw.json, served read-only by the publisher sidecar
 #            behind this VM's DNS-only ACME site. Nothing here is a credential: the sequencer approves
 #            ONLY a request it reads over that verified channel and then checks tags + keys (HR11).
 #            tailscale 1.104.4 exposes no pending node key and no machine key on its CLI/LocalAPI, so
 #            the machine key is derived from the device's own state (X25519 of `_machinekey`, in bc)
 #            and the node key is published as soon as the device knows it (after approval).
 #
-# Log lines are JSON on stdout (Loki {service="substrate-gw"}):
+# Delivery: infra/k8s/base/mesh-env-plane (Argo, the env VM's own k3s). Log lines are JSON on stdout
+# (Loki {namespace="cogni-mesh",container="substrate-gw"}):
 #   substrate_gw_watchdog        heartbeat once a minute
 #   substrate_gw_map_poll_lost   every tick while joined but out of map poll {lostSeconds, boundSeconds}
 #   substrate_gw_enrollment_pending  once a minute while not joined (waiting for approval)
+#   substrate_gw_enrollment_requested  `tailscale up` (re)issued: boot, deleted device or wiped coordinator
 #   substrate_gw_serve_reset     the bound passed; forwarding stopped
 #   substrate_gw_serve_restored  the declared serve config is applied (boot or map poll returned)
 set -u
@@ -162,12 +166,19 @@ until ts status --json >/dev/null 2>&1; do
 done
 
 # Holds no key. Registered state on the volume: returns at once. Unregistered: waits for approval.
-ts up --login-server="$MESH_CONTROL_URL" --hostname="$TS_HOSTNAME" \
-  --advertise-tags=tag:substrate --accept-dns=false --accept-routes=false --timeout=0 >/dev/null 2>&1 &
-UP=$!
+UP=""
+request_enrollment() {
+  [ -z "$UP" ] || kill "$UP" 2>/dev/null || true
+  ts up --login-server="$MESH_CONTROL_URL" --hostname="$TS_HOSTNAME" \
+    --advertise-tags=tag:substrate --accept-dns=false --accept-routes=false --timeout=0 >/dev/null 2>&1 &
+  UP=$!
+  log substrate_gw_enrollment_requested "\"reason\":\"$1\""
+}
+request_enrollment boot
 
 MKEY=""
 tick=0
+noauth=0
 while kill -0 "$TSD" 2>/dev/null; do
   [ -n "$MKEY" ] || MKEY="$(machine_key 2>/dev/null || true)"
   st="$(ts status --json 2>/dev/null || true)"
@@ -175,6 +186,18 @@ while kill -0 "$TSD" 2>/dev/null; do
   auth_url="$(field "$st" '  ' AuthURL)"
   node_key="$(field "$st" '    ' PublicKey)"
   publish "${backend:-unknown}" "$auth_url" "$node_key"
+
+  # Re-enrollment (HR10/HR11): not joined and no pending request for more than 2 ticks, or the
+  # waiting `tailscale up` is gone -> ask again, so a fresh authId is published with no person.
+  case "$backend" in
+    NeedsLogin | NeedsMachineAuth | Stopped)
+      if [ -z "$auth_url" ]; then noauth=$((noauth + 1)); else noauth=0; fi
+      if [ "$noauth" -gt 2 ] || ! kill -0 "${UP:-0}" 2>/dev/null; then
+        noauth=0
+        request_enrollment "not_joined_no_pending_request"
+      fi ;;
+    *) noauth=0 ;;
+  esac
 
   t="$(now)"
   if in_map_poll "$backend" "$st"; then

@@ -26,9 +26,7 @@ discovery.relabel "docker_logs" {
     // NOTE: River comments are `//`. A `#` comment is an ILLEGAL CHARACTER that makes
     // the whole file unparseable and exits alloy 1 — which is exactly how this file
     // took candidate-a's metrics pipeline dark for ~20 minutes.
-    // task.5428: the mesh plane (derper, substrate-gw + its forwarders) ships its stdout too;
-    // substrate_gw_map_poll_lost / _serve_reset drive infra/grafana/alerts/mesh-plane.alerts.yaml.
-    regex         = "(app|postgres|temporal-postgres|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy|alloy-k8s-events|pdc-agent|redis|doltgres|doltgres-provision|doltgres-migrate-.*|doltgres-commit-.*|derper|substrate-gw|substrate-gw-publisher|mesh-control-fwd|substrate-fwd)"
+    regex         = "(app|postgres|temporal-postgres|litellm|caddy|scheduler-worker|temporal|db-backup|openfga|openfga-migrate|autoheal|alloy|alloy-k8s-events|pdc-agent|redis|doltgres|doltgres-provision|doltgres-migrate-.*|doltgres-commit-.*)"
     action        = "keep"
   }
 

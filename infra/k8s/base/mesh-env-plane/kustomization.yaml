@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the env VM half of the per-env mesh plane (hub node-service-delivery §1-§2, design
+# refinement B5): the relay (derper), the env's ONE tailnet device (substrate-gw + fail-closed
+# watchdog + enrollment publisher) and its two named forwarders, delivered by Argo to the env VM's
+# OWN k3s (same failure domain as the substrate it fronts), never by Compose and never by production.
+#
+# Included by one overlay per env that runs the plane (infra/k8s/overlays/<env>/mesh-plane), which an
+# Argo Application under infra/k8s/argocd/control-plane/<env>/ reconciles. The overlay supplies the
+# only env values, in its `mesh-env` ConfigMap: MESH_CONTROL_HOST (= the env's Headscale server_url
+# host, the same name scripts/ci/reconcile-node-dns.sh writes DNS-only to the production edge),
+# MESH_VM_HOST (= vm_host_for_env, the env VM's DNS-only alias) and the watchdog bound.
+#
+# HR21 egress rule = NetworkPolicy `substrate-gw` (networkpolicy.yaml): substrate-gw may reach ONLY
+# its two forwarders and cluster DNS. The forwarders hold the named destinations (control host :443,
+# relay + substrate ports on the VM alias); a NetworkPolicy cannot name a host, so the address is
+# resolved from the very DNS record the B6 writer owns — one source, nothing typed.
+#
+# Eviction (B17): every container is Guaranteed (requests == limits) and every pod runs at the
+# `cogni-mesh-critical` PriorityClass, so kubelet memory-pressure eviction reaches them last.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - priorityclass.yaml
+  - pvc.yaml
+  - derper.yaml
+  - substrate-gw.yaml
+  - forwarders.yaml
+  - networkpolicy.yaml
+configMapGenerator:
+  - name: substrate-gw-files
+    files:
+      - substrate-gw.sh
+      - serve.json

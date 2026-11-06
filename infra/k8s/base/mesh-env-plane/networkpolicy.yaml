@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — HR21 egress rule for substrate-gw, as policy (k3s enforces NetworkPolicy with its
+# embedded kube-router controller). substrate-gw may send ONLY to:
+#   - mesh-control-fwd :8443  -> its Headscale (MESH_CONTROL_HOST:443)
+#   - substrate-fwd    :8443  -> our relay (MESH_VM_HOST:443, the VM's edge Caddy -> derper)
+#   - substrate-fwd    :5432/5435/6379/4000/7233 -> the env VM's shared services
+#   - cluster DNS      :53    (to resolve `substrate-fwd` for serve.json)
+# Everything else — every Tailscale-operated host, log upload, bootstrap DNS — has no path.
+# Ingress: UDP 41641 (WireGuard, hostPort) and TCP 8080 (publisher, hostPort 3341 for the edge Caddy).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: substrate-gw
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: substrate-gw
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - { protocol: UDP, port: 41641 }
+        - { protocol: TCP, port: 8080 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mesh-control-fwd
+      ports:
+        - { protocol: TCP, port: 8443 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: substrate-fwd
+      ports:
+        - { protocol: TCP, port: 8443 }
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 5435 }
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 4000 }
+        - { protocol: TCP, port: 7233 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# The forwarders accept only substrate-gw and may send only on their declared target ports (+ DNS
+# to resolve their named targets). Their destinations are fixed by their own command lines.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mesh-forwarders
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [mesh-control-fwd, substrate-fwd]
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: substrate-gw
+  egress:
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 5435 }
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 4000 }
+        - { protocol: TCP, port: 7233 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }

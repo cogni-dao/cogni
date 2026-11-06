@@ -17,10 +17,11 @@
 # those values from the same catalog helpers for atomic reload of a running
 # Caddy; no fresh container environment is then required (bug.5133).
 #
-# task.5428 — `--env <env>` (with `--domain`) adds the env's mesh-plane sites, derived from committed
-# declarations only (scripts/ci/lib/mesh-plane.sh): the env VM's DNS-only relay/publish site when
-# infra/catalog/derper.yaml lists the env, and one `mesh-<lane>.<zone>` coordinator site per declared
-# Headscale when this env's edge fronts the coordinators. These hosts are DNS-only (Headscale does not
+# task.5428 — `--domain` also renders the env's mesh-plane sites, derived from committed declarations
+# only (scripts/ci/lib/mesh-plane.sh): the env VM's DNS-only relay/publish site when the env has a
+# mesh-plane overlay (infra/k8s/overlays/<env>/mesh-plane), and one `mesh-<lane>.<zone>` coordinator
+# site per declared Headscale when this env's edge fronts the coordinators. The env is the one whose
+# operator domain equals `--domain` (cogni_operator_domain_for_env), or `--env` when given. These hosts are DNS-only (Headscale does not
 # work behind a Cloudflare proxy), so each site overrides the global `local_certs` with a publicly
 # trusted ACME issuer; every proxied host keeps `local_certs`.
 #
@@ -100,12 +101,12 @@ ${host} {
     reverse_proxy ${upstream}
   }
 BLOCK
-  if [[ "$upstream" == derper:* ]]; then
-    cat <<'BLOCK'
+  if [[ "$upstream" == *":${MESH_RELAY_HOSTPORT}" ]]; then
+    cat <<BLOCK
 
   handle /.well-known/cogni-mesh/substrate-gw.json {
     rewrite * /substrate-gw.json
-    reverse_proxy substrate-gw-publisher:8080
+    reverse_proxy host.docker.internal:${MESH_PUBLISH_HOSTPORT}
   }
 BLOCK
   fi
@@ -123,6 +124,23 @@ BLOCK
 BLOCK
 }
 
+# hostPorts of base/mesh-env-plane (derper.yaml derp-http, substrate-gw.yaml publisher); pinned equal
+# to the manifests by scripts/ci/tests/render-caddyfile.test.sh.
+MESH_RELAY_HOSTPORT=3340
+MESH_PUBLISH_HOSTPORT=3341
+
+# The env whose operator domain is DOMAIN under the deployment root, or empty (a fork/local domain).
+env_for_domain() {
+  local domain="$1" root candidate
+  root="${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}"
+  for candidate in production preview candidate-a $(mesh_control_lanes); do
+    if [[ "$(cogni_operator_domain_for_env "$candidate" "$root" 2>/dev/null)" == "$domain" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+}
+
 # task.5428 — the env's mesh-plane sites (see header). Nothing is emitted for an env with no plane.
 emit_mesh_sites() {
   local env="$1" root slug lane
@@ -131,8 +149,9 @@ emit_mesh_sites() {
   if mesh_vm_plane_in_env "$env"; then
     echo
     echo "# ── mesh relay + enrollment publish (DNS-only VM alias, public ACME) ──────"
-    # Relay (derper behind TLS on 443) + the substrate-gw enrollment request. Nothing else.
-    emit_mesh_site "$(cogni_vm_host_for_env "$env" "$root" "$slug")" "derper:3340" \
+    # Relay (derper behind TLS on 443) + the substrate-gw enrollment request, both k3s hostPorts on
+    # this VM (infra/k8s/base/mesh-env-plane). Nothing else.
+    emit_mesh_site "$(cogni_vm_host_for_env "$env" "$root" "$slug")" "host.docker.internal:${MESH_RELAY_HOSTPORT}" \
       '/derp' '/derp/*' '/generate_204'
   fi
   if mesh_control_edge_in_env "$env"; then
@@ -240,7 +259,7 @@ case "${1:-}" in
         *) echo "[ERROR] --env must be candidate-a, candidate-*, preview or production (got: '$4')" >&2; exit 2 ;;
       esac
     fi
-    render "$2" "${4:-}"
+    render "$2" "${4:-$(env_for_domain "$2")}"
     ;;
   *) echo "[ERROR] unknown argument: $1" >&2; exit 2 ;;
 esac

@@ -7,7 +7,7 @@
 # render-caddyfile.sh so the VM, the edge and the k8s coordinators can never disagree.
 #
 # One source per fact (hub node-service-delivery §1-§2):
-#   - which env VMs run the relay + gateway   -> infra/catalog/derper.yaml `envs:` + `compose_services:`
+#   - which env VMs run the relay + gateway   -> an overlay infra/k8s/overlays/<env>/mesh-plane (Argo, env k3s)
 #   - an env's control URL (TLS 443 only)     -> server_url of infra/k8s/base/node-deploy-mesh/config/headscale-<env>.yaml
 #   - an env's coordinator NodePort           -> port `headscale-<env>` in infra/k8s/base/node-deploy-mesh/service.yaml
 #   - which env's edge fronts the coordinators -> the env whose operator overlay lists the node-deploy-mesh component
@@ -15,24 +15,17 @@
 # Intentionally no `set -euo pipefail` — meant to be sourced; callers own shell options. Needs yq.
 
 _mesh_plane_root="${MESH_PLANE_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
-_mesh_plane_catalog="${COGNI_CATALOG_ROOT:-${_mesh_plane_root}/infra/catalog}"
 _mesh_plane_component="${_mesh_plane_root}/infra/k8s/base/node-deploy-mesh"
 
-# Space-separated Compose services that type:infra catalog rows ship in ENV (their `envs:` contain it).
-#   catalog_compose_services_for_env ENV
-catalog_compose_services_for_env() {
-  local env="$1" f out=""
-  for f in "$_mesh_plane_catalog"/*.yaml; do
-    [ "$(yq -N '.type' "$f")" = "infra" ] || continue
-    yq -N -e ".envs // [] | contains([\"$env\"])" "$f" >/dev/null 2>&1 || continue
-    out+=" $(yq -N '.compose_services // [] | join(" ")' "$f")"
-  done
-  printf '%s' "$(printf '%s' "$out" | xargs)"
+# True when ENV's VM runs the relay + gateway: it has a mesh-plane overlay (base/mesh-env-plane).
+mesh_vm_plane_in_env() {
+  [ -f "$_mesh_plane_root/infra/k8s/overlays/$1/mesh-plane/kustomization.yaml" ]
 }
 
-# True when ENV's VM runs the relay + gateway (the derper row lists it).
-mesh_vm_plane_in_env() {
-  yq -N -e ".envs // [] | contains([\"$1\"])" "$_mesh_plane_catalog/derper.yaml" >/dev/null 2>&1
+# A literal from ENV's mesh-plane overlay `mesh-env` ConfigMap (MESH_CONTROL_HOST, MESH_VM_HOST, ...).
+mesh_vm_plane_value() {
+  yq -N ".configMapGenerator[] | select(.name == \"mesh-env\") | .literals[] | select(test(\"^$2=\")) | sub(\"^$2=\"; \"\")" \
+    "$_mesh_plane_root/infra/k8s/overlays/$1/mesh-plane/kustomization.yaml"
 }
 
 # The envs with a declared coordinator, sorted (one config file each).
@@ -66,7 +59,7 @@ mesh_control_nodeport_for_env() {
   printf '%s' "$p"
 }
 
-# Comma-separated coordinator NodePorts (the hardener drops them from the public NIC).
+# Comma-separated coordinator NodePorts (the hardener drops them, with the relay/publisher hostPorts).
 mesh_control_nodeports_csv() {
   local lane out=""
   while read -r lane; do

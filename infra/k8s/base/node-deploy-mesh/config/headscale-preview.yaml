@@ -58,9 +58,10 @@ dns:
   override_local_dns: false
   nameservers:
     global: []
-# Pod-local socket on the shared emptyDir. Only the sequencer container mounts it (HR12).
-unix_socket: /var/run/headscale/preview.sock
-unix_socket_permission: "0770"
+# Pod-local socket on this env's OWN emptyDir (`headscale-socket-preview`), mounted only by this
+# container and the sequencer (HR2, HR12). All containers share uid 1001; the volume is the boundary.
+unix_socket: /var/run/headscale/preview/headscale.sock
+unix_socket_permission: "0700"
 logtail:
   enabled: false
 taildrop:

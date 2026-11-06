@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — candidate-a's mesh plane on the candidate-a VM's own k3s (base/mesh-env-plane).
+# Reconciled by infra/k8s/argocd/control-plane/candidate-a/candidate-a-mesh-plane-application.yaml.
+#
+# The ONLY env values live in `mesh-env` below; tests/ci-invariants/node-deploy-mesh-plane.spec.ts pins
+#   MESH_CONTROL_HOST == host of infra/k8s/base/node-deploy-mesh/config/headscale-candidate-a.yaml
+#                        server_url == the record scripts/ci/reconcile-node-dns.sh writes DNS-only
+#   MESH_VM_HOST      == vm_host_for_env(candidate-a) == the DERP map hostname of derp-candidate-a.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: cogni-mesh
+resources:
+  - namespace.yaml
+components:
+  - ../../../base/mesh-env-plane
+configMapGenerator:
+  - name: mesh-env
+    literals:
+      - MESH_CONTROL_HOST=mesh-candidate-a.cognidao.org
+      - MESH_VM_HOST=cogni-candidate-a.vm.cognidao.org
+      # HR20 bound: 4 h. The short-bound test sets a smaller value here in a reviewed PR, flights it
+      # through the control-plane lane, and reverts it the same way.
+      - SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS=14400
+replacements:
+  - source:
+      kind: ConfigMap
+      name: mesh-env
+      fieldPath: data.MESH_CONTROL_HOST
+    targets:
+      - select: { kind: Deployment, name: substrate-gw }
+        fieldPaths: [spec.template.spec.hostAliases.0.hostnames.0]
+  - source:
+      kind: ConfigMap
+      name: mesh-env
+      fieldPath: data.MESH_VM_HOST
+    targets:
+      - select: { kind: Deployment, name: substrate-gw }
+        fieldPaths: [spec.template.spec.hostAliases.1.hostnames.0]

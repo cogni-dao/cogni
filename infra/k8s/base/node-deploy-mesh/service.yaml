@@ -22,6 +22,9 @@ metadata:
     app.kubernetes.io/part-of: cogni
 spec:
   type: NodePort
+  # B2: a NotReady sequencer pod (e.g. its /readyz on a DB loss) must not withdraw every env's
+  # coordinator endpoint; each Headscale container is guarded by its own liveness probe.
+  publishNotReadyAddresses: true
   selector:
     app.kubernetes.io/name: node-deploy-sequencer
   ports:

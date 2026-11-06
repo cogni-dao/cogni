@@ -15,14 +15,15 @@
 # because their no-data state is Alerting by design (an absent coordinator health stream must page).
 #
 # Source events:
-#   substrate-gw (Loki {env,service="substrate-gw"}, infra/compose/runtime/configs/mesh/substrate-gw.sh)
+#   substrate-gw (Loki {env,namespace="cogni-mesh",service="substrate-gw"} via the k3s pod-log source;
+#     infra/k8s/base/mesh-env-plane/substrate-gw.sh)
 #     msg="substrate_gw_map_poll_lost"  every 15 s while joined but out of map poll {lostSeconds,boundSeconds}
 #     msg="substrate_gw_serve_reset"    the bound passed; forwarding stopped (fail closed)
 #     msg="substrate_gw_watchdog"       heartbeat once a minute
 #   Caddy (Loki {env,service="caddy"}) certmagic: logger tls.renew / tls.obtain / tls.cache.maintenance,
 #     fields identifier + remaining (seconds; Caddy encodes durations as float seconds)
-#   sequencer pod (Loki {env="production",namespace="cogni-production"}): container sequencer
-#     (msg node_deploy_sequencer_leader, 1/min heartbeat) and containers headscale-<env> (JSON logs)
+#   sequencer pod (Loki {env="production",namespace="cogni-production"}): containers headscale-<env>
+#     (JSON logs); Kubernetes events {source="k8s-events"} (alloy-k8s-events) for its rollout
 #   sequencer, slice T2: msg="node_mesh_coordinator_health" {env, outcome}, msg="node_mesh_substrate_mismatch"
 apiVersion: 1
 groups:
@@ -54,7 +55,7 @@ groups:
                 - evaluator: { type: gt, params: [60] }
               refId: THRESHOLD
         annotations:
-          summary: "substrate_gw_map_poll_lost on {{ $labels.env }}: the env gateway cannot reach its Headscale (mesh-<env>.<zone>). It still forwards on its last policy, so a revoked node keeps access until the map poll returns or the 4 h bound stops forwarding. Check the production sequencer pod's headscale-<env> container, the production edge route and the env VM's mesh-control-fwd."
+          summary: "substrate_gw_map_poll_lost on {{ $labels.env }}: the env gateway cannot reach its Headscale (mesh-<env>.<zone>). It still forwards on its last policy, so a revoked node keeps access until the map poll returns or the 4 h bound stops forwarding. Check the production sequencer pod's headscale-<env> container, the production edge route and cogni-mesh/mesh-control-fwd on the env VM."
         labels: { severity: warning, plane: mesh }
         noDataState: OK
         execErrState: Alerting
@@ -116,7 +117,7 @@ groups:
         execErrState: Alerting
 
       # The gateway watchdog itself is gone (container down, VM down, or log shipping broken).
-      # Envs listed here are the envs of infra/catalog/derper.yaml; add one with that catalog edit.
+      # Envs listed here are the envs with an infra/k8s/overlays/<env>/mesh-plane overlay.
       - uid: mesh-substrate-gw-no-heartbeat
         title: substrate-gw watchdog heartbeat missing for 5 minutes
         condition: THRESHOLD
@@ -139,7 +140,7 @@ groups:
                 - evaluator: { type: lt, params: [1] }
               refId: THRESHOLD
         annotations:
-          summary: "No substrate_gw_watchdog line from candidate-a in 5 minutes: the env gateway (or its fail-closed watchdog) is not running, or its logs are not shipped. Check the cogni-runtime substrate-gw container on the env VM."
+          summary: "No substrate_gw_watchdog line from candidate-a in 5 minutes: the env gateway (or its fail-closed watchdog) is not running, or its logs are not shipped. Check the cogni-mesh/substrate-gw pod on the env VM's k3s (Argo app candidate-a-mesh-plane)."
         labels: { severity: critical, plane: mesh }
         noDataState: Alerting
         execErrState: Alerting
@@ -202,21 +203,24 @@ groups:
         noDataState: OK
         execErrState: Alerting
 
-      # A sequencer rollout takes longer than 10 minutes. In production the per-env coordinators restart
-      # with the pod (CD5), so a slow rollout is a coordinator outage. The leader heartbeat (1/min) is
-      # absent from pod stop until the new process holds the lock; 10 minutes of silence is a rollout
-      # (or a crash) past the bound. The Deployment's progressDeadlineSeconds is the same 600 s.
+      # A sequencer rollout takes longer than 10 minutes (B7). In production the per-env coordinators
+      # restart with the pod (CD5), so a stuck rollout is a coordinator outage. Read the Kubernetes
+      # events in Loki (alloy-k8s-events -> {source="k8s-events"}): Warning events on the sequencer pod
+      # or Deployment (BackOff, Unhealthy liveness, FailedMount of a headscale PVC/socket volume,
+      # FailedScheduling, ProgressDeadlineExceeded) that keep arriving for 10 minutes mean the new pod
+      # has not come up within the bound. The leader heartbeat is NOT a rollout signal: it keeps
+      # flowing while a headscale container is down, and node-deploy.alerts.yaml already owns it.
       - uid: mesh-sequencer-rollout-slow
-        title: Node deploy sequencer rollout longer than 10 minutes
+        title: Node deploy sequencer rollout stuck for more than 10 minutes
         condition: THRESHOLD
-        for: 0s
+        for: 10m
         data:
           - refId: COUNT
             datasourceUid: grafanacloud-logs
             relativeTimeRange: { from: 600, to: 0 }
             model:
               datasource: { type: loki, uid: grafanacloud-logs }
-              expr: 'sum(count_over_time({env="production",service="sequencer"} | json | msg="node_deploy_sequencer_leader" [10m]))'
+              expr: 'sum(count_over_time({source="k8s-events",env="production",namespace="cogni-production",event_type="Warning"} | json | name=~"operator-node-deploy-sequencer.*" | reason=~"ProgressDeadlineExceeded|BackOff|Unhealthy|FailedMount|FailedAttachVolume|FailedScheduling|FailedCreatePodSandBox|Failed" [10m]))'
               queryType: instant
               refId: COUNT
           - refId: THRESHOLD
@@ -225,16 +229,16 @@ groups:
               type: threshold
               expression: COUNT
               conditions:
-                - evaluator: { type: lt, params: [1] }
+                - evaluator: { type: gt, params: [0] }
               refId: THRESHOLD
         annotations:
-          summary: "No production sequencer leader line for 10 minutes: the operator-node-deploy-sequencer rollout (and with it every env's Headscale) has not completed within its 10-minute bound. Check the pod's containers (sequencer, headscale-<env>) and their PVC mounts."
+          summary: "operator-node-deploy-sequencer has emitted Warning events (BackOff / Unhealthy / FailedMount / FailedScheduling / ProgressDeadlineExceeded) for 10 minutes: its rollout, and with it every env's Headscale coordinator, has not completed within the bound. Read the pod's events and its headscale-<env> container logs."
         labels: { severity: critical, plane: mesh }
-        noDataState: Alerting
+        noDataState: OK
         execErrState: Alerting
 
-      # A coordinator container is crash-looping (each start logs "starting headscale"), so the rollout
-      # cannot finish even if the sequencer process is up.
+      # A coordinator container is crash-looping (each start logs {"message":"starting headscale"},
+      # verified against v0.29.7 output), so that env has no stable coordinator.
       - uid: mesh-headscale-restarting
         title: A Headscale coordinator restarted more than 3 times in 15 minutes
         condition: THRESHOLD
@@ -245,7 +249,7 @@ groups:
             relativeTimeRange: { from: 900, to: 0 }
             model:
               datasource: { type: loki, uid: grafanacloud-logs }
-              expr: 'sum by (container) (count_over_time({env="production",namespace="cogni-production",container=~"headscale-.+"} |= "starting headscale" [15m]))'
+              expr: 'sum by (container) (count_over_time({env="production",namespace="cogni-production",container=~"headscale-.+"} |~ "(?i)starting headscale" [15m]))'
               queryType: instant
               refId: COUNT
           - refId: THRESHOLD

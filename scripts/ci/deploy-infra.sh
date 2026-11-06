@@ -631,16 +631,6 @@ log_info "Edge routing (catalog-driven): ${EDGE_ENV_LINES}"
 LITELLM_NODE_HOST="$(cogni_vm_host_for_env "$DEPLOY_ENVIRONMENT" "${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}" "$(cogni_deployment_slug)")"
 LITELLM_NODE_ENDPOINTS="$(node_billing_endpoint_csv "$LITELLM_NODE_HOST" "$DEPLOY_ENVIRONMENT" "$DOMAIN")"
 log_info "LiteLLM callback routing (catalog-driven): ${LITELLM_NODE_ENDPOINTS}"
-# task.5428 — mesh plane, declaration-driven (scripts/ci/lib/mesh-plane.sh): a type:infra row's
-# compose_services start only in its `envs:`; the VM's control URL is its env's Headscale server_url.
-# shellcheck source=scripts/ci/lib/mesh-plane.sh
-source "$REPO_ROOT/scripts/ci/lib/mesh-plane.sh"
-CATALOG_COMPOSE_SERVICES="$(catalog_compose_services_for_env "$DEPLOY_ENVIRONMENT")"
-MESH_VM_HOST="$LITELLM_NODE_HOST"
-MESH_CONTROL_HOST="$(mesh_control_host_for_env "$DEPLOY_ENVIRONMENT" 2>/dev/null || true)"
-! mesh_vm_plane_in_env "$DEPLOY_ENVIRONMENT" || [[ -n "$MESH_CONTROL_HOST" ]] \
-  || log_fatal "infra/catalog/derper.yaml lists ${DEPLOY_ENVIRONMENT} but no coordinator is declared for it (infra/k8s/base/node-deploy-mesh/config/headscale-${DEPLOY_ENVIRONMENT}.yaml)"
-log_info "Catalog compose services for ${DEPLOY_ENVIRONMENT}: ${CATALOG_COMPOSE_SERVICES:-none}; mesh control: ${MESH_CONTROL_HOST:-none}"
 # LiteLLM image is a type:infra catalog target — content-hash tagged + built in
 # CI (no manual docker build / hand-pin). Resolve the same tag CI pushed.
 LITELLM_IMAGE="$(infra_image_tag litellm)"
@@ -1393,9 +1383,6 @@ append_env_if_set "$RUNTIME_ENV" LOKI_WRITE_URL "${GRAFANA_CLOUD_LOKI_URL-}"
 append_env_if_set "$RUNTIME_ENV" LOKI_USERNAME "${GRAFANA_CLOUD_LOKI_USER-}"
 append_env_if_set "$RUNTIME_ENV" LOKI_PASSWORD "${GRAFANA_CLOUD_LOKI_API_KEY-}"
 append_env_if_set "$RUNTIME_ENV" METRICS_TOKEN "${METRICS_TOKEN-}"
-# task.5428 — mesh plane hosts (public names, not credentials; runner-derived from declarations).
-append_env_if_set "$RUNTIME_ENV" MESH_CONTROL_HOST "${MESH_CONTROL_HOST-}"
-append_env_if_set "$RUNTIME_ENV" MESH_VM_HOST "${MESH_VM_HOST-}"
 append_env_if_set "$RUNTIME_ENV" SCHEDULER_API_TOKEN "${SCHEDULER_API_TOKEN-}"
 append_env_if_set "$RUNTIME_ENV" BILLING_INGEST_TOKEN "${BILLING_INGEST_TOKEN-}"
 append_env_if_set "$RUNTIME_ENV" INTERNAL_OPS_TOKEN "${INTERNAL_OPS_TOKEN-}"
@@ -1791,8 +1778,6 @@ if [[ -n "${GRAFANA_PDC_SIGNING_TOKEN:-}" && -n "${GRAFANA_PDC_HOSTED_GRAFANA_ID
 else
   log_warn "Grafana PDC agent not started: GRAFANA_PDC_SIGNING_TOKEN, GRAFANA_PDC_HOSTED_GRAFANA_ID, or GRAFANA_PDC_CLUSTER is unset"
 fi
-# task.5428 — catalog-scoped services (type:infra `compose_services` in this env), runner-derived.
-INFRA_SERVICES="$INFRA_SERVICES ${CATALOG_COMPOSE_SERVICES:-}"
 
 runtime_compose_up_with_retry() {
   local profile="$1"
@@ -2805,7 +2790,7 @@ log_info "deploy-infra-remote.sh ready: ${LOCAL_SIZE} bytes, sha256=${LOCAL_SHA}
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Materialize catalog routes before rsync so running Caddy needs no fresh env.
-bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" --domain "$DOMAIN" --env "$DEPLOY_ENVIRONMENT" > "$REPO_ROOT/infra/compose/edge/configs/Caddyfile.tmpl"
+bash "$REPO_ROOT/scripts/ci/render-caddyfile.sh" --domain "$DOMAIN" > "$REPO_ROOT/infra/compose/edge/configs/Caddyfile.tmpl"
 
 # Dry-run exit (no SSH, no rsync, no compose up)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2938,7 +2923,6 @@ REMOTE_ENV_VARS=(
   LITELLM_NODE_ENDPOINTS COGNI_DEFAULT_NODE_ID ACTIONS_AUTOMATION_BOT_PAT
   LITELLM_IMAGE OPENFGA_IMAGE COMMIT_SHA DEPLOY_ACTOR K8S_SECRETS_ONLY
   OPERATOR_DATABASE_SERVICE_URL REMOTE_HARDEN_SCRIPT REMOTE_COMPUTE_EGRESS_ALLOWLIST
-  CATALOG_COMPOSE_SERVICES MESH_CONTROL_HOST MESH_VM_HOST
 )
 REMOTE_ENV_FILE="$ARTIFACT_DIR/deploy-infra-env.sh"
 : > "$REMOTE_ENV_FILE"

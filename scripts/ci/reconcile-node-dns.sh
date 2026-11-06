@@ -245,6 +245,39 @@ for node in "${NODE_TARGETS[@]}"; do
   fi
 done
 
+# task.5428 — the per-env mesh coordinator hosts (`mesh-<env>.<zone>`) live on the edge of the env
+# whose operator overlay carries the node-deploy-mesh Component (production). Headscale does not work
+# behind a Cloudflare proxy, so these records are ALWAYS proxied=false (DNS-only), whatever the apex
+# does; the edge Caddy serves them with a public ACME certificate. Hosts derive from the committed
+# Headscale server_url (scripts/ci/lib/mesh-plane.sh) — the same source the edge render reads.
+# shellcheck source=scripts/ci/lib/mesh-plane.sh
+source "${SCRIPT_DIR}/lib/mesh-plane.sh"
+if mesh_control_edge_in_env "$DEPLOY_ENV"; then
+  node="mesh-coordinator"
+  while read -r lane; do
+    host="$(mesh_control_host_for_env "$lane")" || { write_dns_summary "failure"; exit 1; }
+    expected="$VM_IP"
+    if $CHECK; then
+      content=$(cf_a_record_content "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host")
+      proxied_now=$(cf_a_record_proxied "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host")
+      if [ "$content" = "$VM_IP" ] && [ "$proxied_now" = "false" ]; then
+        echo "  ok       ${host} → ${VM_IP} (DNS-only)"
+        state="ok"
+      else
+        echo "  MISSING  ${host} (resolves to '${content:-none}', proxied=${proxied_now:-n/a}; want ${VM_IP}, proxied=false)"
+        state="missing"
+        missing+=("$host")
+      fi
+    else
+      state=$(cf_upsert_a_record "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host" "$VM_IP" false) \
+        || { echo "[ERROR] upsert failed for ${host}" >&2; write_dns_summary "failure"; exit 1; }
+      echo "  ${host} → ${VM_IP} (proxied=false, mesh coordinator): ${state}"
+      content="$VM_IP"
+    fi
+    append_dns_record
+  done < <(mesh_control_lanes)
+fi
+
 if $CHECK && [ "${#missing[@]}" -gt 0 ]; then
   write_dns_summary "failure"
   echo "[ERROR] ${#missing[@]} node host(s) missing DNS: ${missing[*]}" >&2

@@ -360,6 +360,44 @@ COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org \
 assert_eq "$(cf_a_record_content test-token zone123 akashnode-test.cognidao.org)" "84.32.9.111" \
   "an env with NO placement override still reconciles (K3S_IS_DEFAULT)"
 
+# task.5428 — the production edge carries the mesh coordinators: every mesh-<env> host is written
+# to the same VM, ALWAYS DNS-only (Headscale cannot sit behind the Cloudflare proxy), and --check
+# gates both content and proxy state. candidate-a's edge carries none.
+for lane in candidate-a preview production; do
+  assert_eq "$(cf_a_record_content test-token zone123 "mesh-${lane}.cognidao.org")" "84.32.9.111" \
+    "mesh-${lane} coordinator host points at the production edge VM"
+  assert_eq "$(cf_a_record_proxied test-token zone123 "mesh-${lane}.cognidao.org")" "false" \
+    "mesh-${lane} coordinator host is DNS-only"
+done
+if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org \
+  bash scripts/ci/reconcile-node-dns.sh production --check >/dev/null 2>&1; then
+  printf 'OK   --check is green with DNS-only mesh coordinator hosts\n'; pass=$((pass + 1))
+else
+  printf 'FAIL --check must pass once mesh coordinator hosts exist\n'; fail=$((fail + 1))
+fi
+CF_STORE="$CF_STORE" python3 -c '
+import json, os
+s = json.load(open(os.environ["CF_STORE"]))
+for r in s["records"]:
+    if r["name"] == "mesh-preview.cognidao.org":
+        r["proxied"] = True
+json.dump(s, open(os.environ["CF_STORE"], "w"))'
+if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org \
+  bash scripts/ci/reconcile-node-dns.sh production --check >/dev/null 2>&1; then
+  printf 'FAIL --check must fail when a mesh coordinator host is proxied\n'; fail=$((fail + 1))
+else
+  printf 'OK   --check fails a proxied mesh coordinator host\n'; pass=$((pass + 1))
+fi
+CF_STORE="$CF_STORE" python3 -c '
+import json, os
+json.dump({"records": [
+    {"id": "apex", "name": "test.cognidao.org", "content": "84.32.9.111", "proxied": False, "type": "A"},
+], "next_id": 9}, open(os.environ["CF_STORE"], "w"))'
+COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org \
+  bash scripts/ci/reconcile-node-dns.sh candidate-a >/dev/null 2>&1
+assert_eq "$(grep -c 'mesh-' "$CF_STORE" || true)" "0" \
+  "candidate-a reconcile writes no mesh coordinator host"
+
 # ── Lib: the existence probe is type-aware, so a CNAME is never "absent" ──────
 # Pre-fix the probe pinned ?type=A, read a live CNAME as absent, and POSTed an A
 # that Cloudflare rejects with 81053 — surfacing only as a bare "upsert failed".

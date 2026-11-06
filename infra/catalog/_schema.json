@@ -415,13 +415,6 @@
       "type": "boolean",
       "description": "When true, this node serves the bare base domain (e.g. operator → https://${DOMAIN}). Defaults to false: every other node uses the ${name}-${DOMAIN} (multi-level domains) or ${name}.${DOMAIN} (TLD-style) convention. Consumed by host_for_node() in scripts/ci/lib/image-tags.sh. Exactly one catalog entry per repo should set this true."
     },
-    "compose_services": {
-      "type": "array",
-      "description": "task.5428 — type:infra only: the infra/compose/runtime services this row ships. deploy-infra.sh starts them ONLY in the row's `envs:` (scripts/ci/lib/mesh-plane.sh catalog_compose_services_for_env), so an env-generic Compose file stays env-scoped by catalog data, not by a script branch.",
-      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
-      "minItems": 1,
-      "uniqueItems": true
-    },
     "reliability": {
       "type": "object",
       "additionalProperties": false,

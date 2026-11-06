@@ -3,27 +3,35 @@
 
 /**
  * Module: `@tests/ci-invariants/node-deploy-mesh-plane`
- * Purpose: Pin the declarative shape of the per-env mesh plane (task.5428): the Headscale containers,
- *   PVCs, configs and client Service beside the node-deploy sequencer, and the env VM's relay + gateway
- *   Compose services, so a later edit cannot quietly reopen an admin surface, a Tailscale relay or a
- *   shared tailnet.
- * Scope: Reads committed YAML/JSON/shell only; does not run kubectl, docker or touch the network.
+ * Purpose: Pin the declarative shape of the per-env mesh plane (task.5428): the Headscale coordinators
+ *   beside the production node-deploy sequencer, and the env VM plane (relay, substrate-gw, forwarders)
+ *   on the env VM's own k3s, so a later edit cannot quietly reopen an admin surface, share a socket, a
+ *   tailnet or a route to a Tailscale-operated host.
+ * Scope: Reads committed YAML/JSON/shell; renders the two overlays with `kubectl kustomize` only when
+ *   kubectl exists; does not contact a cluster, Docker or the network.
  * Invariants:
- *   - ONE_TAILNET_PER_ENV (HR2): own container, PVC `headscale-<env>` (1Gi RWO local-path), socket, port.
+ *   - ONE_TAILNET_PER_ENV (HR2): own container, PVC `headscale-<env>`, port and socket VOLUME; each socket
+ *     volume is mounted only by its Headscale and the sequencer (all containers share uid 1001).
  *   - PINNED_AND_BOUNDED: one Headscale digest; requests 25m/64Mi, limits 200m/256Mi; non-root, no caps.
- *   - NO_ADMIN_SURFACE (HR12): gRPC on loopback, insecure refused, sequencer-only unix socket, no API key.
- *   - OUR_RELAY_ONLY (HR9/21): no embedded DERP, no derp.urls, one region = the env VM alias on 443.
- *   - TLS_443_ONLY (HR22): server_url is https://mesh-<env>.<zone> with no port.
- *   - CONFIGS_DIFFER_ONLY_BY_ENV: the three Headscale configs are one file modulo env name and ports.
- *   - RELOADER_NAMED_ONLY (CD5): no reloader `auto`; exactly the projected Secrets.
- *   - SUBSTRATE_GW_HAS_NO_ROUTE_OFF_VM (HR21): it joins only the internal `mesh-gw` network; its two
- *     names resolve to local forwarders; it publishes no port; serve exposes exactly the 5 registry ports.
- * Side-effects: IO (reads committed files)
- * Links: task.5428, task.5384, hub node-service-delivery, infra/k8s/base/node-deploy-mesh/
+ *   - NO_ADMIN_SURFACE (HR12): gRPC on loopback, insecure refused, socket 0700, no API key.
+ *   - NO_READINESS_COUPLING (CD5/CD7): no Headscale readiness probe; the client Service publishes
+ *     not-ready addresses.
+ *   - RELOADER_NAMED_ONLY (CD5): no `auto`; exactly the projected Secrets and the operator ConfigMap.
+ *   - OUR_RELAY_ONLY / TLS_443_ONLY (HR9/21/22): no embedded DERP, no derp.urls, https server_url.
+ *   - ENV_PLANE_ON_ENV_K3S (B5): relay + gateway are an Argo-delivered Component on the env cluster;
+ *     no Compose service, no deploy-infra.sh logic.
+ *   - SUBSTRATE_GW_EGRESS_IS_POLICY (HR21): NetworkPolicy lets substrate-gw reach only its forwarders
+ *     and cluster DNS; its two names pin to the forwarder ClusterIPs; the control name is the SAME
+ *     Headscale server_url host the DNS writer publishes.
+ *   - EVICTED_LAST (B17): every env-plane container is Guaranteed and runs at cogni-mesh-critical.
+ * Side-effects: IO (reads committed files; optional local kubectl kustomize)
+ * Links: task.5428, task.5384, task.5435, hub node-service-delivery, infra/k8s/base/node-deploy-mesh/,
+ *   infra/k8s/base/mesh-env-plane/
  * @internal
  */
 
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -33,9 +41,13 @@ const root = path.resolve(__dirname, "../..");
 const read = (relative: string): string =>
   readFileSync(path.join(root, relative), "utf8");
 const parse = <T>(relative: string): T => yaml.parse(read(relative)) as T;
+const parseAll = <T>(relative: string): T[] =>
+  yaml.parseAllDocuments(read(relative)).map((d) => d.toJS() as T);
 
 const ENVS = ["candidate-a", "preview", "production"] as const;
 const COMPONENT = "infra/k8s/base/node-deploy-mesh";
+const ENV_PLANE = "infra/k8s/base/mesh-env-plane";
+const CAND_OVERLAY = "infra/k8s/overlays/candidate-a/mesh-plane";
 const HEADSCALE_IMAGE =
   "ghcr.io/juanfont/headscale:v0.29.7@sha256:11f81665e842809db9fe3006a38c56a66e968baa5abd4bac498e86445572b970";
 const VM_HOST: Record<(typeof ENVS)[number], string> = {
@@ -45,33 +57,58 @@ const VM_HOST: Record<(typeof ENVS)[number], string> = {
 };
 const REGISTRY_PORTS = ["4000", "5432", "5435", "6379", "7233"];
 
+interface Mount {
+  name: string;
+  mountPath: string;
+  subPath?: string;
+  readOnly?: boolean;
+}
+interface Port {
+  name: string;
+  containerPort: number;
+  hostPort?: number;
+  protocol?: string;
+}
 interface Container {
   name: string;
   image?: string;
   args?: string[];
-  ports?: { name: string; containerPort: number }[];
-  resources?: unknown;
+  command?: string[];
+  env?: { name: string; value?: string }[];
+  ports?: Port[];
+  resources?: { requests?: unknown; limits?: unknown };
   securityContext?: Record<string, unknown>;
-  volumeMounts?: {
-    name: string;
-    mountPath: string;
-    subPath?: string;
-    readOnly?: boolean;
-  }[];
+  readinessProbe?: unknown;
+  livenessProbe?: unknown;
+  volumeMounts?: Mount[];
 }
-interface PodPatch {
+interface Volume {
+  name: string;
+  emptyDir?: Record<string, unknown>;
+  configMap?: { name: string };
+  persistentVolumeClaim?: { claimName: string };
+  projected?: { sources: { secret: { name: string } }[] };
+}
+interface PodSpec {
+  containers: Container[];
+  volumes: Volume[];
+  priorityClassName?: string;
+  hostAliases?: { ip: string; hostnames: string[] }[];
+}
+interface Workload {
+  kind: string;
+  metadata: { name: string; annotations?: Record<string, string> };
   spec: {
-    template: {
-      spec: {
-        containers: Container[];
-        volumes: {
-          name: string;
-          emptyDir?: unknown;
-          configMap?: { name: string };
-          persistentVolumeClaim?: { claimName: string };
-        }[];
-      };
-    };
+    template: { spec: PodSpec };
+    type?: string;
+    clusterIP?: string;
+    publishNotReadyAddresses?: boolean;
+    ports?: {
+      name: string;
+      port: number;
+      targetPort: string;
+      nodePort?: number;
+    }[];
   };
 }
 interface HeadscaleConfig {
@@ -93,45 +130,73 @@ interface HeadscaleConfig {
   logtail: { enabled: boolean };
   disable_check_updates: boolean;
 }
-interface DerpMap {
-  regions: Record<
-    string,
-    {
-      regionid: number;
-      nodes: {
-        hostname: string;
-        derpport: number;
-        stunport: number;
-        stunonly: boolean;
-        ipv4?: string;
-      }[];
-    }
-  >;
-}
-interface ComposeService {
-  image?: string;
-  networks?: string[] | Record<string, { ipv4_address?: string } | null>;
-  ports?: string[];
-  extra_hosts?: string[];
-  environment?: Record<string, string>;
-  command?: string[];
-  user?: string;
-  cap_drop?: string[];
-  read_only?: boolean;
-}
 
-const patch = parse<PodPatch>(`${COMPONENT}/deployment-patch.yaml`);
-const podSpec = patch.spec.template.spec;
 const config = (env: string) =>
   parse<HeadscaleConfig>(`${COMPONENT}/config/headscale-${env}.yaml`);
 const port = (addr: string) => Number(addr.split(":").pop());
+const hostOf = (url: string) => url.replace(/^https:\/\//, "");
 
-describe("mesh coordinators beside the node-deploy sequencer (task.5428)", () => {
-  it("is a Component carrying exactly three PVCs, the client Service and all six configs", () => {
+const kubectlAvailable = (() => {
+  try {
+    execFileSync("kubectl", ["version", "--client"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const render = (overlay: string): Workload[] =>
+  yaml
+    .parseAllDocuments(
+      execFileSync("kubectl", ["kustomize", path.join(root, overlay)], {
+        encoding: "utf8",
+      })
+    )
+    .map((d) => d.toJS() as Workload);
+
+/** Which containers of a pod spec mount each volume. */
+function mountersByVolume(spec: PodSpec): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const c of spec.containers) {
+    for (const m of c.volumeMounts ?? []) {
+      out[m.name] = [...(out[m.name] ?? []), c.name].sort();
+    }
+  }
+  return out;
+}
+
+function expectSocketIsolation(spec: PodSpec) {
+  const mounters = mountersByVolume(spec);
+  for (const env of ENVS) {
+    const vol = `headscale-socket-${env}`;
+    expect(mounters[vol], vol).toEqual(
+      [`headscale-${env}`, "sequencer"].sort()
+    );
+    expect(spec.volumes.find((v) => v.name === vol)?.emptyDir).toEqual({
+      medium: "Memory",
+      sizeLimit: "1Mi",
+    });
+    for (const c of spec.containers.filter((x) =>
+      [`headscale-${env}`, "sequencer"].includes(x.name)
+    )) {
+      expect(c.volumeMounts?.find((m) => m.name === vol)?.mountPath).toBe(
+        `/var/run/headscale/${env}`
+      );
+    }
+  }
+  expect(
+    spec.volumes.filter((v) => v.name.startsWith("headscale-socket")).length
+  ).toBe(ENVS.length);
+}
+
+describe("mesh coordinators beside the production node-deploy sequencer (task.5428)", () => {
+  const patch = parse<Workload>(`${COMPONENT}/deployment-patch.yaml`);
+  const podSpec = patch.spec.template.spec;
+
+  it("is a Component with three PVCs, the client Service and all six configs, in production only", () => {
     const k = parse<{
       kind: string;
       resources: string[];
-      configMapGenerator: { name: string; files: string[] }[];
+      configMapGenerator: { files: string[] }[];
     }>(`${COMPONENT}/kustomization.yaml`);
     expect(k.kind).toBe("Component");
     expect(k.resources).toEqual(["pvc.yaml", "service.yaml"]);
@@ -141,9 +206,6 @@ describe("mesh coordinators beside the node-deploy sequencer (task.5428)", () =>
         `config/headscale-${e}.yaml`,
       ]).sort()
     );
-  });
-
-  it("only the production operator overlay (the canonical lanes' sequencer) includes it", () => {
     const prod = parse<{ components?: string[] }>(
       "infra/k8s/overlays/production/operator/kustomization.yaml"
     );
@@ -158,9 +220,8 @@ describe("mesh coordinators beside the node-deploy sequencer (task.5428)", () =>
 
   it.each(
     ENVS
-  )("headscale-%s: pinned, bounded, unprivileged, own PVC + socket + config", (env) => {
+  )("headscale-%s: pinned, bounded, unprivileged, no readiness probe, own PVC + config", (env) => {
     const c = podSpec.containers.find((x) => x.name === `headscale-${env}`);
-    expect(c).toBeDefined();
     expect(c?.image).toBe(HEADSCALE_IMAGE);
     expect(c?.args).toEqual([
       "serve",
@@ -176,10 +237,15 @@ describe("mesh coordinators beside the node-deploy sequencer (task.5428)", () =>
       capabilities: { drop: ["ALL"] },
       readOnlyRootFilesystem: true,
     });
+    expect(c?.readinessProbe).toBeUndefined();
+    expect(c?.livenessProbe).toBeDefined();
     expect(c?.ports?.[0]?.containerPort).toBe(port(config(env).listen_addr));
     expect(c?.volumeMounts).toEqual([
       { name: `headscale-${env}`, mountPath: "/var/lib/headscale" },
-      { name: "headscale-sockets", mountPath: "/var/run/headscale" },
+      {
+        name: `headscale-socket-${env}`,
+        mountPath: `/var/run/headscale/${env}`,
+      },
       {
         name: "headscale-config",
         mountPath: "/etc/headscale/config.yaml",
@@ -199,27 +265,31 @@ describe("mesh coordinators beside the node-deploy sequencer (task.5428)", () =>
     ).toEqual({ claimName: `headscale-${env}` });
   });
 
-  it("the sequencer is the only other container on the socket volume, and it holds no API key", () => {
-    const seq = podSpec.containers.find((x) => x.name === "sequencer");
-    expect(seq?.volumeMounts).toEqual([
-      { name: "headscale-sockets", mountPath: "/var/run/headscale" },
-    ]);
-    expect(podSpec.containers.map((c) => c.name).sort()).toEqual(
-      ["sequencer", ...ENVS.map((e) => `headscale-${e}`)].sort()
-    );
+  it("each env socket volume is mounted ONLY by that env's Headscale and the sequencer (patch)", () => {
+    expectSocketIsolation(podSpec);
     expect(read(`${COMPONENT}/deployment-patch.yaml`)).not.toMatch(
       /HEADSCALE_API_KEY|apikey|api_key/i
     );
   });
 
+  it.skipIf(!kubectlAvailable)(
+    "each env socket volume is mounted ONLY by that env's Headscale and the sequencer (rendered production overlay)",
+    () => {
+      const dep = render("infra/k8s/overlays/production/operator").find(
+        (d) =>
+          d?.kind === "Deployment" &&
+          d.metadata.name === "operator-node-deploy-sequencer"
+      );
+      expect(dep).toBeDefined();
+      if (dep) expectSocketIsolation(dep.spec.template.spec);
+    }
+  );
+
   it("PVCs are headscale-<env>, 1Gi, ReadWriteOnce, local-path", () => {
-    const pvcs = yaml.parseAllDocuments(read(`${COMPONENT}/pvc.yaml`)).map(
-      (d) =>
-        d.toJS() as {
-          metadata: { name: string };
-          spec: Record<string, unknown>;
-        }
-    );
+    const pvcs = parseAll<{
+      metadata: { name: string };
+      spec: Record<string, unknown>;
+    }>(`${COMPONENT}/pvc.yaml`);
     expect(pvcs.map((p) => p.metadata.name)).toEqual(
       ENVS.map((e) => `headscale-${e}`)
     );
@@ -234,14 +304,14 @@ describe("mesh coordinators beside the node-deploy sequencer (task.5428)", () =>
 
   it.each(
     ENVS
-  )("headscale-%s config: TLS 443 control, no admin surface, our relay only", (env) => {
+  )("headscale-%s config: TLS 443 control, no admin surface, own socket, our relay only", (env) => {
     const c = config(env);
     expect(c.server_url).toBe(`https://mesh-${env}.cognidao.org`);
     expect(c.grpc_listen_addr).toMatch(/^127\.0\.0\.1:\d+$/);
     expect(c.metrics_listen_addr).toMatch(/^127\.0\.0\.1:\d+$/);
     expect(c.grpc_allow_insecure).toBe(false);
-    expect(c.unix_socket).toBe(`/var/run/headscale/${env}.sock`);
-    expect(c.unix_socket_permission).toBe("0770");
+    expect(c.unix_socket).toBe(`/var/run/headscale/${env}/headscale.sock`);
+    expect(c.unix_socket_permission).toBe("0700");
     expect(c.derp).toEqual({
       server: { enabled: false },
       urls: [],
@@ -255,9 +325,10 @@ describe("mesh coordinators beside the node-deploy sequencer (task.5428)", () =>
     expect(c.policy.mode).toBe("database");
     expect(c.logtail.enabled).toBe(false);
     expect(c.disable_check_updates).toBe(true);
-    expect(port(c.listen_addr)).not.toBe(8080); // the sequencer's health port
-
-    const derp = parse<DerpMap>(`${COMPONENT}/config/derp-${env}.yaml`);
+    expect(port(c.listen_addr)).not.toBe(8080);
+    const derp = parse<{
+      regions: Record<string, { nodes: Record<string, unknown>[] }>;
+    }>(`${COMPONENT}/config/derp-${env}.yaml`);
     const regions = Object.values(derp.regions);
     expect(regions).toHaveLength(1);
     expect(regions[0]?.nodes).toEqual([
@@ -275,7 +346,10 @@ describe("mesh coordinators beside the node-deploy sequencer (task.5428)", () =>
     const normalize = (env: string) =>
       read(`${COMPONENT}/config/headscale-${env}.yaml`)
         .replace(
-          new RegExp(`(mesh-|headscale/|for the )${env}([. ])`, "g"),
+          new RegExp(
+            `(mesh-|headscale/|headscale-socket-|for the )${env}([. /\`])`,
+            "g"
+          ),
           "$1<env>$2"
         )
         .replace(/:(81|91)8\d$/gm, ":<port>")
@@ -290,24 +364,15 @@ describe("mesh coordinators beside the node-deploy sequencer (task.5428)", () =>
     expect(new Set(ports).size).toBe(ports.length);
   });
 
-  it("the client Service maps headscale-<env> to each container port, off the node_port stride", () => {
-    const svc = parse<{
-      spec: {
-        type: string;
-        ports: {
-          name: string;
-          port: number;
-          targetPort: string;
-          nodePort: number;
-        }[];
-      };
-    }>(`${COMPONENT}/service.yaml`);
+  it("the client Service maps headscale-<env> to each container, off the node_port stride, not-ready published", () => {
+    const svc = parse<Workload>(`${COMPONENT}/service.yaml`);
     expect(svc.spec.type).toBe("NodePort");
-    expect(svc.spec.ports.map((p) => p.name)).toEqual(
+    expect(svc.spec.publishNotReadyAddresses).toBe(true);
+    expect(svc.spec.ports?.map((p) => p.name)).toEqual(
       ENVS.map((e) => `headscale-${e}`)
     );
     for (const env of ENVS) {
-      const p = svc.spec.ports.find((x) => x.name === `headscale-${env}`);
+      const p = svc.spec.ports?.find((x) => x.name === `headscale-${env}`);
       const c = podSpec.containers.find((x) => x.name === `headscale-${env}`);
       expect(p?.port).toBe(port(config(env).listen_addr));
       expect(p?.targetPort).toBe(c?.ports?.[0]?.name);
@@ -315,92 +380,245 @@ describe("mesh coordinators beside the node-deploy sequencer (task.5428)", () =>
     }
   });
 
-  it("Reloader rolls the pod only for the Secrets it reads (CD5)", () => {
-    const base = read("infra/k8s/base/node-deploy-sequencer/deployment.yaml");
-    const doc = yaml.parse(base) as {
-      metadata: { annotations: Record<string, string> };
-      spec: {
-        template: {
-          spec: {
-            volumes: {
-              projected?: { sources: { secret: { name: string } }[] };
-            }[];
-          };
-        };
-      };
-    };
-    expect(
-      doc.metadata.annotations["reloader.stakater.com/auto"]
-    ).toBeUndefined();
+  it("Reloader rolls the pod only for the Secrets and the operator ConfigMap it reads (CD5)", () => {
+    const doc = parse<Workload>(
+      "infra/k8s/base/node-deploy-sequencer/deployment.yaml"
+    );
+    const ann = doc.metadata.annotations ?? {};
+    expect(ann["reloader.stakater.com/auto"]).toBeUndefined();
     const projected = new Set(
       doc.spec.template.spec.volumes.flatMap(
         (v) => v.projected?.sources.map((s) => s.secret.name) ?? []
       )
     );
     expect(
-      doc.metadata.annotations["secret.reloader.stakater.com/reload"]
-        ?.split(",")
-        .sort()
+      ann["secret.reloader.stakater.com/reload"]?.split(",").sort()
     ).toEqual([...projected].sort());
+    expect(ann["configmap.reloader.stakater.com/reload"]).toBe(
+      "operator-node-app-config"
+    );
+    for (const env of ["candidate-a", "production"]) {
+      const k = parse<{ namePrefix: string; patches: { patch?: string }[] }>(
+        `infra/k8s/overlays/${env}/operator/kustomization.yaml`
+      );
+      expect(k.namePrefix).toBe("operator-");
+      const refs = (
+        k.patches
+          .map((p) => p.patch ?? "")
+          .join("\n")
+          .match(/configMapKeyRef:\s*\n\s*name: ([a-z-]+)/g) ?? []
+      ).map((m) => m.replace(/.*name: /s, ""));
+      expect(new Set(refs)).toEqual(new Set(["node-app-config"]));
+    }
   });
 });
 
-describe("env VM relay + gateway Compose services (task.5428)", () => {
-  const compose = parse<{
-    services: Record<string, ComposeService>;
-    networks: Record<
-      string,
-      { internal?: boolean; ipam?: { config: { subnet: string }[] } }
-    >;
-  }>("infra/compose/runtime/docker-compose.yml");
-  const svc = (name: string): ComposeService => {
-    const s = compose.services[name];
-    if (!s) throw new Error(`compose service ${name} missing`);
-    return s;
-  };
-  const ipOn = (name: string, net: string) => {
-    const n = svc(name).networks;
-    return Array.isArray(n) ? undefined : n?.[net]?.ipv4_address;
-  };
+describe("env VM mesh plane on the env's own k3s (task.5428, B5)", () => {
+  const docs = (file: string) => parseAll<Workload>(`${ENV_PLANE}/${file}`);
+  const derper = docs("derper.yaml")[0] as Workload;
+  const gw = docs("substrate-gw.yaml")[0] as Workload;
+  const fwd = docs("forwarders.yaml");
+  const overlay = parse<{
+    namespace: string;
+    components: string[];
+    configMapGenerator: { name: string; literals: string[] }[];
+  }>(`${CAND_OVERLAY}/kustomization.yaml`);
+  const meshEnv = Object.fromEntries(
+    (
+      overlay.configMapGenerator.find((g) => g.name === "mesh-env")?.literals ??
+      []
+    ).map((l) => l.split("=", 2) as [string, string])
+  );
 
-  it("the catalog row scopes exactly the mesh services, candidate-a first", () => {
-    const row = parse<{
-      type: string;
-      envs: string[];
-      compose_services: string[];
-    }>("infra/catalog/derper.yaml");
-    expect(row.type).toBe("infra");
-    expect(row.envs).toEqual(["candidate-a"]);
-    for (const s of row.compose_services)
-      expect(compose.services[s]).toBeDefined();
+  it("is delivered by Argo to the candidate-a cluster from the reviewed control-plane ref", () => {
+    const app = parse<{
+      spec: {
+        source: { path: string; targetRevision: string };
+        destination: { server: string; namespace: string };
+      };
+    }>(
+      "infra/k8s/argocd/control-plane/candidate-a/candidate-a-mesh-plane-application.yaml"
+    );
+    expect(app.spec.source.path).toBe(CAND_OVERLAY);
+    expect(app.spec.source.targetRevision).toBe(
+      "deploy/candidate-a-control-plane"
+    );
+    expect(app.spec.destination).toEqual({
+      server: "https://kubernetes.default.svc",
+      namespace: "cogni-mesh",
+    });
+    expect(overlay.namespace).toBe("cogni-mesh");
+    expect(overlay.components).toEqual(["../../../base/mesh-env-plane"]);
+    expect(
+      parse<{ kind: string }>(`${ENV_PLANE}/kustomization.yaml`).kind
+    ).toBe("Component");
   });
 
-  it("substrate-gw has no route off the VM: internal mesh-gw only, local names, no published port", () => {
-    const gw = svc("substrate-gw");
-    expect(gw.networks).toEqual({ "mesh-gw": { ipv4_address: "10.100.9.2" } });
-    expect(compose.networks["mesh-gw"]?.internal).toBe(true);
-    expect(gw.ports).toBeUndefined();
-    expect(gw.extra_hosts).toEqual([
-      `\${MESH_CONTROL_HOST:-mesh-control.invalid}:${ipOn("mesh-control-fwd", "mesh-gw")}`,
-      `\${MESH_VM_HOST:-mesh-vm.invalid}:${ipOn("substrate-fwd", "mesh-gw")}`,
+  it("is not a Compose service and adds nothing to the frozen deploy brain", () => {
+    expect(read("infra/compose/runtime/docker-compose.yml")).not.toMatch(
+      /derper|substrate-gw|mesh-control-fwd/
+    );
+    expect(read("scripts/ci/deploy-infra.sh")).not.toMatch(
+      /MESH_|CATALOG_COMPOSE/
+    );
+    expect(read("infra/catalog/derper.yaml")).not.toMatch(
+      /compose_services|^envs:/m
+    );
+    expect(
+      existsSync(path.join(root, "infra/compose/runtime/configs/mesh"))
+    ).toBe(false);
+  });
+
+  it("env values come from ONE source each: the control name is the Headscale server_url the DNS writer publishes", () => {
+    expect(meshEnv.MESH_CONTROL_HOST).toBe(
+      hostOf(config("candidate-a").server_url)
+    );
+    expect(meshEnv.MESH_VM_HOST).toBe(VM_HOST["candidate-a"]);
+    expect(meshEnv.SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS).toBe("14400");
+    // reconcile-node-dns.sh writes exactly mesh_control_host_for_env (server_url) DNS-only.
+    const dns = read("scripts/ci/reconcile-node-dns.sh");
+    expect(dns).toContain('host="$(mesh_control_host_for_env "$lane")"');
+    expect(dns).toContain(
+      'cf_upsert_a_record "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host" "$VM_IP" false'
+    );
+    const control = fwd.find(
+      (d) => d.kind === "Deployment" && d.metadata.name === "mesh-control-fwd"
+    );
+    expect(control?.spec.template.spec.containers[0]?.args).toContain(
+      "TCP:$(MESH_CONTROL_HOST):443"
+    );
+  });
+
+  it("substrate-gw egress is policy: only its forwarders and cluster DNS (HR21)", () => {
+    const np = docs("networkpolicy.yaml").find(
+      (d) => d.metadata.name === "substrate-gw"
+    ) as unknown as {
+      spec: {
+        podSelector: unknown;
+        policyTypes: string[];
+        egress: {
+          to: { podSelector?: { matchLabels: Record<string, string> } }[];
+        }[];
+      };
+    };
+    expect(np.spec.policyTypes).toEqual(["Ingress", "Egress"]);
+    expect(np.spec.podSelector).toEqual({
+      matchLabels: { "app.kubernetes.io/name": "substrate-gw" },
+    });
+    const targets = np.spec.egress.map(
+      (e) => e.to[0]?.podSelector?.matchLabels ?? {}
+    );
+    expect(targets).toEqual([
+      { "app.kubernetes.io/name": "mesh-control-fwd" },
+      { "app.kubernetes.io/name": "substrate-fwd" },
+      { "k8s-app": "kube-dns" },
     ]);
-    expect(gw.image).toBe(
+    // Its two names pin to the forwarder Services' fixed ClusterIPs.
+    const ipOf = (name: string) =>
+      fwd.find((d) => d.kind === "Service" && d.metadata.name === name)?.spec
+        .clusterIP;
+    expect(gw.spec.template.spec.hostAliases?.map((h) => h.ip)).toEqual([
+      ipOf("mesh-control-fwd"),
+      ipOf("substrate-fwd"),
+    ]);
+  });
+
+  it.skipIf(!kubectlAvailable)(
+    "the rendered overlay pins substrate-gw's control and relay names to the forwarders",
+    () => {
+      const dep = render(CAND_OVERLAY).find(
+        (d) => d?.kind === "Deployment" && d.metadata.name === "substrate-gw"
+      );
+      expect(dep?.spec.template.spec.hostAliases).toEqual([
+        { ip: "10.43.250.41", hostnames: [meshEnv.MESH_CONTROL_HOST] },
+        { ip: "10.43.250.42", hostnames: [meshEnv.MESH_VM_HOST] },
+      ]);
+    }
+  );
+
+  it("every container is Guaranteed and every pod runs at cogni-mesh-critical (B17)", () => {
+    const pc = parse<{ metadata: { name: string }; value: number }>(
+      `${ENV_PLANE}/priorityclass.yaml`
+    );
+    expect(pc.metadata.name).toBe("cogni-mesh-critical");
+    expect(pc.value).toBeGreaterThanOrEqual(1_000_000_000);
+    const workloads = [
+      derper,
+      gw,
+      ...fwd.filter((d) => d.kind === "Deployment"),
+    ];
+    expect(workloads.map((w) => w.metadata.name).sort()).toEqual(
+      ["derper", "mesh-control-fwd", "substrate-fwd", "substrate-gw"].sort()
+    );
+    for (const w of workloads) {
+      expect(w.spec.template.spec.priorityClassName, w.metadata.name).toBe(
+        "cogni-mesh-critical"
+      );
+      for (const c of w.spec.template.spec.containers) {
+        expect(c.resources?.requests, `${w.metadata.name}/${c.name}`).toEqual(
+          c.resources?.limits
+        );
+        expect(c.securityContext?.allowPrivilegeEscalation).toBe(false);
+        expect(c.securityContext?.readOnlyRootFilesystem).toBe(true);
+      }
+    }
+  });
+
+  it("exposure is the declared hostPorts only; the edge-only ones are hardened off the public NIC", () => {
+    const hostPorts = [derper, gw]
+      .flatMap((w) => w.spec.template.spec.containers)
+      .flatMap((c) => c.ports ?? [])
+      .filter((p) => p.hostPort)
+      .map((p) => `${p.protocol}/${p.hostPort}`)
+      .sort();
+    expect(hostPorts).toEqual(
+      ["TCP/3340", "TCP/3341", "UDP/3478", "UDP/41641"].sort()
+    );
+    const harden = read("infra/provision/cherry/harden-docker-public-ports.sh");
+    expect(harden).toMatch(/^MESH_EDGE_ONLY_PORTS="3340,3341,32441:32443"$/m);
+  });
+
+  it("substrate-gw: stock pinned tailscale, non-root, no key, fail-closed by default, re-enrolls by itself", () => {
+    const c = gw.spec.template.spec.containers.find(
+      (x) => x.name === "substrate-gw"
+    );
+    expect(c?.image).toBe(
       "tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c"
     );
-    expect(gw.environment).toMatchObject({
-      TS_NO_LOGS_NO_SUPPORT: "true",
-      MESH_CONTROL_URL: "https://${MESH_CONTROL_HOST:-mesh-control.invalid}",
-      SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS:
-        "${SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS:-14400}",
-    });
-    expect(gw.cap_drop).toEqual(["ALL"]);
-    expect(gw.read_only).toBe(true);
+    expect(c?.ports).toEqual([
+      {
+        name: "wireguard",
+        containerPort: 41641,
+        hostPort: 41641,
+        protocol: "UDP",
+      },
+    ]);
+    expect(c?.env).toEqual(
+      expect.arrayContaining([
+        { name: "TS_NO_LOGS_NO_SUPPORT", value: "true" },
+        { name: "MESH_CONTROL_URL", value: "https://$(MESH_CONTROL_HOST)" },
+        { name: "KUBERNETES_SERVICE_HOST", value: "" },
+      ])
+    );
+    expect(
+      (
+        gw.spec.template.spec as unknown as {
+          securityContext: { runAsUser: number };
+        }
+      ).securityContext.runAsUser
+    ).toBe(10001);
+    const sh = read(`${ENV_PLANE}/substrate-gw.sh`);
+    expect(sh).toContain(
+      'BOUND="${SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS:-14400}"'
+    );
+    expect(sh).toContain("ts serve reset");
+    expect(sh).toContain("--advertise-tags=tag:substrate");
+    expect(sh).toContain('request_enrollment "not_joined_no_pending_request"');
+    expect(sh).not.toMatch(/--auth-?key|TS_AUTHKEY/);
   });
 
-  it("serve exposes exactly the five registry ports, each through the local forwarder", () => {
-    const serve = JSON.parse(
-      read("infra/compose/runtime/configs/mesh/serve.json")
-    ) as {
+  it("serve exposes exactly the five registry ports, each through substrate-fwd", () => {
+    const serve = JSON.parse(read(`${ENV_PLANE}/serve.json`)) as {
       TCP: Record<string, { TCPForward: string }>;
     };
     expect(Object.keys(serve.TCP).sort()).toEqual(REGISTRY_PORTS);
@@ -409,31 +627,19 @@ describe("env VM relay + gateway Compose services (task.5428)", () => {
     }
   });
 
-  it("the watchdog is fail-closed by default (4 h) and holds no key", () => {
-    const sh = read("infra/compose/runtime/configs/mesh/substrate-gw.sh");
-    expect(sh).toContain(
-      'BOUND="${SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS:-14400}"'
-    );
-    expect(sh).toContain("ts serve reset");
-    expect(sh).toContain("--advertise-tags=tag:substrate");
-    expect(sh).not.toMatch(/--auth-?key|TS_AUTHKEY/);
-  });
-
   it("derper is pinned by digest, unprivileged, our relay checking its env coordinator (fail open)", () => {
-    const d = svc("derper");
-    expect(d.image).toMatch(
+    const c = derper.spec.template.spec.containers[0];
+    expect(c?.image).toMatch(
       /^ghcr\.io\/cogni-dao\/cogni-template:derper-[0-9a-f]{12}@sha256:[0-9a-f]{64}$/
     );
-    expect(d.ports).toEqual(["3478:3478/udp"]);
-    expect(d.command).toEqual(
+    expect(c?.args).toEqual(
       expect.arrayContaining([
         "-a=:3340",
         "-http-port=-1",
-        "-verify-client-url=https://${MESH_CONTROL_HOST:-mesh-control.invalid}/verify",
+        "-verify-client-url=https://$(MESH_CONTROL_HOST)/verify",
         "-verify-client-url-fail-open=true",
       ])
     );
-    expect(d.user).toBe("65532:65532");
-    expect(d.cap_drop).toEqual(["ALL"]);
+    expect(c?.securityContext?.capabilities).toEqual({ drop: ["ALL"] });
   });
 });

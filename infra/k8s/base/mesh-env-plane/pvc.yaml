@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — substrate-gw's own node state (machine + node key, persisted serve config, the
+# watchdog's lost-since clock). It never leaves this VM. `local-path` = the k3s default class the
+# cluster already uses for OpenBao (infra/k8s/argocd/openbao/values.yaml); its directories are 0777,
+# so substrate-gw runs non-root.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: substrate-gw-state
+  labels:
+    app.kubernetes.io/name: substrate-gw
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

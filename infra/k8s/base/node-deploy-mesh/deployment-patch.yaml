@@ -6,7 +6,13 @@
 # Headscale's only client: it reaches each server over that env's pod-local unix socket, so no
 # Headscale API key exists and no gRPC listener is reachable (hard requirement 12).
 #
-# Per env: own process, own PVC (`headscale-<env>`), own socket, own client port (hard requirement 2).
+# Per env: own process, own PVC (`headscale-<env>`), own client port, and its OWN socket volume
+# (`headscale-socket-<env>`, mounted ONLY by that env's Headscale and by the sequencer). Every container
+# here runs as uid 1001, so a file mode cannot isolate sockets; separate volumes do (hard requirement 2):
+# the internet-facing candidate-a Headscale has no path to production's socket.
+# No readiness probe on a Headscale container (CD5/CD7): pod Ready is the AND of all containers, so one
+# env's coordinator must never drop the other envs' endpoints or gate the operator promote. Liveness
+# restarts a wedged coordinator; the client Service publishes not-ready addresses.
 # Restarts are expected (CD5): the server key + database stay on the PVC and running sessions continue.
 apiVersion: apps/v1
 kind: Deployment
@@ -19,9 +25,19 @@ spec:
         - name: sequencer
           volumeMounts:
             # Read-write: connect(2) on a unix socket needs write permission on the socket inode.
-            # The emptyDir holds only the three sockets.
-            - name: headscale-sockets
-              mountPath: /var/run/headscale
+            # One volume per env; each holds only that env's socket.
+            - {
+                name: headscale-socket-candidate-a,
+                mountPath: /var/run/headscale/candidate-a,
+              }
+            - {
+                name: headscale-socket-preview,
+                mountPath: /var/run/headscale/preview,
+              }
+            - {
+                name: headscale-socket-production,
+                mountPath: /var/run/headscale/production,
+              }
         - name: headscale-candidate-a
           image: ghcr.io/juanfont/headscale:v0.29.7@sha256:11f81665e842809db9fe3006a38c56a66e968baa5abd4bac498e86445572b970
           imagePullPolicy: IfNotPresent
@@ -36,9 +52,6 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
             readOnlyRootFilesystem: true
-          readinessProbe:
-            httpGet: { path: /health, port: headscale-ca }
-            periodSeconds: 10
           livenessProbe:
             httpGet: { path: /health, port: headscale-ca }
             initialDelaySeconds: 15
@@ -46,7 +59,10 @@ spec:
             failureThreshold: 6
           volumeMounts:
             - { name: headscale-candidate-a, mountPath: /var/lib/headscale }
-            - { name: headscale-sockets, mountPath: /var/run/headscale }
+            - {
+                name: headscale-socket-candidate-a,
+                mountPath: /var/run/headscale/candidate-a,
+              }
             - name: headscale-config
               mountPath: /etc/headscale/config.yaml
               subPath: headscale-candidate-a.yaml
@@ -69,9 +85,6 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
             readOnlyRootFilesystem: true
-          readinessProbe:
-            httpGet: { path: /health, port: headscale-pv }
-            periodSeconds: 10
           livenessProbe:
             httpGet: { path: /health, port: headscale-pv }
             initialDelaySeconds: 15
@@ -79,7 +92,10 @@ spec:
             failureThreshold: 6
           volumeMounts:
             - { name: headscale-preview, mountPath: /var/lib/headscale }
-            - { name: headscale-sockets, mountPath: /var/run/headscale }
+            - {
+                name: headscale-socket-preview,
+                mountPath: /var/run/headscale/preview,
+              }
             - name: headscale-config
               mountPath: /etc/headscale/config.yaml
               subPath: headscale-preview.yaml
@@ -102,9 +118,6 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
             readOnlyRootFilesystem: true
-          readinessProbe:
-            httpGet: { path: /health, port: headscale-pd }
-            periodSeconds: 10
           livenessProbe:
             httpGet: { path: /health, port: headscale-pd }
             initialDelaySeconds: 15
@@ -112,7 +125,10 @@ spec:
             failureThreshold: 6
           volumeMounts:
             - { name: headscale-production, mountPath: /var/lib/headscale }
-            - { name: headscale-sockets, mountPath: /var/run/headscale }
+            - {
+                name: headscale-socket-production,
+                mountPath: /var/run/headscale/production,
+              }
             - name: headscale-config
               mountPath: /etc/headscale/config.yaml
               subPath: headscale-production.yaml
@@ -122,7 +138,11 @@ spec:
               subPath: derp-production.yaml
               readOnly: true
       volumes:
-        - name: headscale-sockets
+        - name: headscale-socket-candidate-a
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }
+        - name: headscale-socket-preview
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }
+        - name: headscale-socket-production
           emptyDir: { medium: Memory, sizeLimit: 1Mi }
         - name: headscale-config
           configMap:

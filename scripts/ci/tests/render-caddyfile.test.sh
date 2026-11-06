@@ -15,9 +15,9 @@
 #   6. The derived node DB inventory includes every catalog node.
 #   7. Infra reconcile cannot inline/overlap production backups, and Postgres
 #      crash attribution remains observable.
-#   8. task.5428 mesh plane: `--env` sites derive from committed declarations
-#      (DNS-only ACME, client paths only, NodePorts dropped from the public NIC,
-#      VM services scoped by infra/catalog/derper.yaml envs).
+#   8. task.5428 mesh plane: sites derive from committed declarations
+#      (DNS-only ACME, client paths only, edge-only ports dropped from the public
+#      NIC after DOCKER-USER, VM plane scoped by its env overlay, no deploy-infra change).
 #
 # Run: bash scripts/ci/tests/render-caddyfile.test.sh
 set -euo pipefail
@@ -172,14 +172,27 @@ pass "backup execution is candidate-gated + serialized; OpenBao login and SA loo
 echo "[8/8] mesh plane sites are derived, DNS-only ACME, path-filtered and env-scoped (task.5428)"
 # shellcheck source=scripts/ci/lib/mesh-plane.sh
 source "$REPO_ROOT/scripts/ci/lib/mesh-plane.sh"
-CAND="$(bash scripts/ci/render-caddyfile.sh --domain test.cognidao.org --env candidate-a)"
-PROD="$(bash scripts/ci/render-caddyfile.sh --domain cognidao.org --env production)"
-PREV="$(bash scripts/ci/render-caddyfile.sh --domain preview.cognidao.org --env preview)"
+# shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
+source "$REPO_ROOT/scripts/setup/lib/cogni-deployment-identity.sh"
+# deploy-infra.sh calls `--domain "$DOMAIN"` only (frozen, untouched): the env derives from the domain.
+CAND="$(bash scripts/ci/render-caddyfile.sh --domain test.cognidao.org)"
+PROD="$(bash scripts/ci/render-caddyfile.sh --domain cognidao.org)"
+PREV="$(bash scripts/ci/render-caddyfile.sh --domain preview.cognidao.org)"
+[ "$CAND" = "$(bash scripts/ci/render-caddyfile.sh --domain test.cognidao.org --env candidate-a)" ] \
+  || fail "domain-derived env differs from explicit --env candidate-a"
 [ "$(grep -c '^  local_certs$' <<<"$PROD")" = "1" ] || fail "global local_certs must stay for every proxied host"
-# candidate-a VM: relay + enrollment publish on its DNS-only alias, nothing else.
-grep -Fq 'cogni-candidate-a.vm.cognidao.org {' <<<"$CAND" || fail "candidate-a VM relay/publish site missing"
-grep -Fq '@mesh path /derp /derp/* /generate_204' <<<"$CAND" || fail "relay site must route only DERP paths"
-grep -Fq 'reverse_proxy substrate-gw-publisher:8080' <<<"$CAND" || fail "enrollment publish route missing"
+MESH_BASE="infra/k8s/base/mesh-env-plane"
+relay_port="$(yq -N '.spec.template.spec.containers[0].ports[] | select(.name == "derp-http") | .hostPort' "$MESH_BASE/derper.yaml")"
+publish_port="$(yq -N '.spec.template.spec.containers[] | select(.name == "publisher") | .ports[0].hostPort' "$MESH_BASE/substrate-gw.yaml")"
+# candidate-a VM: relay + enrollment publish on its DNS-only alias (from its overlay), nothing else.
+vm_host="$(mesh_vm_plane_value candidate-a MESH_VM_HOST)"
+[ "$vm_host" = "$(cogni_vm_host_for_env candidate-a cognidao.org cogni)" ] || fail "overlay MESH_VM_HOST ($vm_host) != vm_host_for_env"
+vm_block="$(awk -v h="$vm_host {" '$0 == h {p=1} p {print} p && /^}$/ {exit}' <<<"$CAND")"
+[ -n "$vm_block" ] || fail "candidate-a VM relay/publish site missing"
+grep -Fq 'issuer acme' <<<"$vm_block" || fail "VM site must use a public ACME issuer (DNS-only alias)"
+grep -Fq '@mesh path /derp /derp/* /generate_204' <<<"$vm_block" || fail "relay site must route only DERP paths"
+grep -Fq "reverse_proxy host.docker.internal:${relay_port}" <<<"$vm_block" || fail "relay upstream is not derper hostPort $relay_port"
+grep -Fq "reverse_proxy host.docker.internal:${publish_port}" <<<"$vm_block" || fail "publish upstream is not publisher hostPort $publish_port"
 grep -Fq 'mesh-candidate-a.cognidao.org {' <<<"$CAND" && fail "candidate-a edge must not front the coordinators"
 # production edge: one coordinator site per declared Headscale, client paths only, its NodePort.
 lanes=0
@@ -195,29 +208,36 @@ while read -r lane; do
   grep -Fq 'respond 404' <<<"$block" || fail "$host does not refuse other paths"
 done < <(mesh_control_lanes)
 [ "$lanes" = "3" ] || fail "expected coordinators for candidate-a, preview and production, found $lanes"
-grep -Fq 'mesh-' <<<"$PREV" && fail "preview edge must render no mesh site yet (no relay row, no coordinator component)"
+[ "$(mesh_vm_plane_value candidate-a MESH_CONTROL_HOST)" = "$(mesh_control_host_for_env candidate-a)" ] \
+  || fail "candidate-a overlay MESH_CONTROL_HOST != Headscale server_url host (the name reconcile-node-dns.sh writes)"
+grep -Fq 'mesh-' <<<"$PREV" && fail "preview edge must render no mesh site yet (no plane overlay, no coordinator component)"
 # Template mode (the committed drift-gated file) is unchanged by the mesh plane.
 grep -Fq 'issuer acme' <<<"$RENDERED" && fail "template render must not carry env-specific mesh sites"
-# Hardener drops exactly the declared coordinator NodePorts from the public NIC.
+# Hardener drops exactly the declared edge-only ports (relay + publisher hostPorts, coordinator
+# NodePorts) from the public NIC, before NAT and only after DOCKER-USER is complete.
 HARDEN="infra/provision/cherry/harden-docker-public-ports.sh"
-declared="$(mesh_control_nodeports_csv)"
-range="$(sed -n 's/^MESH_CONTROL_NODEPORTS="\([0-9]*\):\([0-9]*\)"$/\1 \2/p' "$HARDEN")"
-read -r lo hi <<<"$range"
-expanded=""; for ((p = lo; p <= hi; p++)); do expanded+="${expanded:+,}$p"; done
-[ "$expanded" = "$declared" ] || fail "$HARDEN MESH_CONTROL_NODEPORTS ($range) != service.yaml NodePorts ($declared)"
-grep -Fq -- '-t raw -A PREROUTING -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$MESH_CONTROL_NODEPORTS"' "$HARDEN" \
-  || fail "coordinator NodePorts are not dropped before NAT"
-# deploy-infra: catalog-scoped services + the env render.
-[ "$(catalog_compose_services_for_env candidate-a)" = "derper substrate-gw substrate-gw-publisher mesh-control-fwd substrate-fwd" ] \
-  || fail "candidate-a compose services: $(catalog_compose_services_for_env candidate-a)"
-[ -z "$(catalog_compose_services_for_env production)" ] || fail "production must not start the VM mesh plane before slice T1p"
-for svc in $(catalog_compose_services_for_env candidate-a); do
-  yq -e ".services.\"$svc\"" "$RUNTIME_COMPOSE" >/dev/null || fail "catalog compose service '$svc' is not in $RUNTIME_COMPOSE"
+edge_only="$(sed -n 's/^MESH_EDGE_ONLY_PORTS="\(.*\)"$/\1/p' "$HARDEN")"
+expanded=""
+IFS=, read -r -a parts <<<"$edge_only"
+for part in "${parts[@]}"; do
+  if [[ "$part" == *:* ]]; then
+    for ((p = ${part%:*}; p <= ${part#*:}; p++)); do expanded+="${expanded:+,}$p"; done
+  else
+    expanded+="${expanded:+,}$part"
+  fi
 done
-grep -Eq "image: $(infra_image_tag derper)@sha256:[0-9a-f]{64}$" "$RUNTIME_COMPOSE" \
+[ "$expanded" = "${relay_port},${publish_port},$(mesh_control_nodeports_csv)" ] \
+  || fail "$HARDEN MESH_EDGE_ONLY_PORTS ($edge_only) != relay/publisher hostPorts + coordinator NodePorts"
+raw_line="$(grep -n -- '-t raw -A PREROUTING -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$MESH_EDGE_ONLY_PORTS"' "$HARDEN" | cut -d: -f1)"
+drop_line="$(grep -n -- '--comment "$TAG:drop-public" -j DROP' "$HARDEN" | cut -d: -f1)"
+[ -n "$raw_line" ] || fail "edge-only ports are not dropped before NAT"
+[ "$raw_line" -gt "$drop_line" ] || fail "raw-table block must run after DOCKER-USER's public DROP (fail closed)"
+grep -Fq 'MESH_UDP' "$HARDEN" && fail "no-op UDP ACCEPT rules must not return"
+# The frozen deploy brain is untouched by the mesh plane (B5).
+grep -Eq 'MESH_|CATALOG_COMPOSE' "$DEPLOY_INFRA" && fail "deploy-infra.sh must carry no mesh-plane logic"
+grep -Eq 'derper|substrate-gw' "$RUNTIME_COMPOSE" && fail "the VM mesh plane is not a Compose service (B5)"
+grep -Eq "image: $(infra_image_tag derper)@sha256:[0-9a-f]{64}$" "$MESH_BASE/derper.yaml" \
   || fail "derper is not pinned by digest at its current content-hash tag $(infra_image_tag derper) (re-pin after the PR build)"
-grep -Fq 'render-caddyfile.sh" --domain "$DOMAIN" --env "$DEPLOY_ENVIRONMENT"' "$DEPLOY_INFRA" || fail "deploy-infra does not render the env's mesh sites"
-grep -Fq 'INFRA_SERVICES="$INFRA_SERVICES ${CATALOG_COMPOSE_SERVICES:-}"' "$DEPLOY_INFRA" || fail "deploy-infra does not start catalog compose services"
-pass "relay/publish on candidate-a VM, 3 coordinators on the production edge, NodePorts hardened, catalog-scoped services"
+pass "relay/publish on candidate-a VM, 3 coordinators on the production edge, edge-only ports hardened, deploy brain untouched"
 
 echo "PASS: render-caddyfile.test.sh"

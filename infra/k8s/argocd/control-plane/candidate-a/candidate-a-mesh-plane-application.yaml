@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Argo CD Application — candidate-a-mesh-plane (task.5428; hub node-service-delivery §1-§2, B5).
+#
+# Reconciles infra/k8s/overlays/candidate-a/mesh-plane onto the candidate-a VM's OWN k3s: the relay
+# (derper), the env's one tailnet device (substrate-gw + watchdog + enrollment publisher) and its two
+# forwarders. Same failure domain as the substrate it fronts; production k3s is never in this path.
+#
+# targetRevision deploy/candidate-a-control-plane, like the root that registers this Application:
+# the production operator fast-forwards that ref to a REVIEWED head via
+# POST /api/v1/deploy/infra-reconcile, so candidate-a runs the reviewed shape before it is on main.
+#
+# prune: true — removing the plane from git removes it. The state PVC is substrate-gw's node key
+# only; a loss re-enrolls by approval with no person (HR10/HR11).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: candidate-a-mesh-plane
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: deploy/candidate-a-control-plane
+    path: infra/k8s/overlays/candidate-a/mesh-plane
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cogni-mesh
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true

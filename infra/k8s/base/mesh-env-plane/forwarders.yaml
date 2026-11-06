@@ -1,0 +1,153 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — substrate-gw's only two ways off its pod, each a stock socat with fixed, NAMED targets
+# from the overlay's mesh-env ConfigMap. Their names resolve to the DNS records the operator writes
+# (scripts/ci/reconcile-node-dns.sh for mesh-<env>, provision for the VM alias), so no address is
+# typed anywhere. End-to-end TLS stays with tailscaled (SNI + public certificate check).
+#
+#   mesh-control-fwd  :443 -> MESH_CONTROL_HOST:443   (the env's Headscale on the production edge)
+#   substrate-fwd     :443 -> MESH_VM_HOST:443        (our relay, behind this VM's edge Caddy)
+#                     :5432/:5435/:6379/:4000/:7233 -> MESH_VM_HOST:<same>  (the shared services,
+#                     reached exactly like the env overlays' ExternalName substrate Services)
+#
+# Fixed ClusterIPs (10.43.250.41/.42, inside the k3s service CIDR the hardener already names) are the
+# targets of substrate-gw's hostAliases; nothing else uses them.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mesh-control-fwd
+  labels:
+    app.kubernetes.io/name: mesh-control-fwd
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mesh-control-fwd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mesh-control-fwd
+        app.kubernetes.io/part-of: cogni-mesh
+    spec:
+      priorityClassName: cogni-mesh-critical
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: socat
+          image: alpine/socat@sha256:466c8a0383e16463fabdb7df01008292fb78d07da60224a46cb5d3142ce122ed
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MESH_CONTROL_HOST
+              valueFrom:
+                { configMapKeyRef: { name: mesh-env, key: MESH_CONTROL_HOST } }
+          args:
+            - -d
+            - TCP-LISTEN:8443,fork,reuseaddr
+            - TCP:$(MESH_CONTROL_HOST):443
+          ports:
+            - { name: control, containerPort: 8443, protocol: TCP }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { cpu: 20m, memory: 32Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mesh-control-fwd
+  labels:
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  type: ClusterIP
+  clusterIP: 10.43.250.41
+  selector:
+    app.kubernetes.io/name: mesh-control-fwd
+  ports:
+    - { name: control, port: 443, targetPort: control, protocol: TCP }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: substrate-fwd
+  labels:
+    app.kubernetes.io/name: substrate-fwd
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: substrate-fwd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: substrate-fwd
+        app.kubernetes.io/part-of: cogni-mesh
+    spec:
+      priorityClassName: cogni-mesh-critical
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: socat
+          image: alpine/socat@sha256:466c8a0383e16463fabdb7df01008292fb78d07da60224a46cb5d3142ce122ed
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MESH_VM_HOST
+              valueFrom:
+                { configMapKeyRef: { name: mesh-env, key: MESH_VM_HOST } }
+          command: [/bin/sh, -c]
+          # One listener per declared port; the container exits (and restarts) if any listener dies.
+          args:
+            - |
+              socat -d TCP-LISTEN:8443,fork,reuseaddr "TCP:${MESH_VM_HOST}:443" &
+              for p in 5432 5435 6379 4000 7233; do
+                socat -d "TCP-LISTEN:$p,fork,reuseaddr" "TCP:${MESH_VM_HOST}:$p" &
+              done
+              wait -n
+          ports:
+            - { name: relay, containerPort: 8443, protocol: TCP }
+            - { name: postgres, containerPort: 5432, protocol: TCP }
+            - { name: doltgres, containerPort: 5435, protocol: TCP }
+            - { name: redis, containerPort: 6379, protocol: TCP }
+            - { name: litellm, containerPort: 4000, protocol: TCP }
+            - { name: temporal, containerPort: 7233, protocol: TCP }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { cpu: 20m, memory: 32Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: substrate-fwd
+  labels:
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  type: ClusterIP
+  clusterIP: 10.43.250.42
+  selector:
+    app.kubernetes.io/name: substrate-fwd
+  ports:
+    - { name: relay, port: 443, targetPort: relay, protocol: TCP }
+    - { name: postgres, port: 5432, targetPort: postgres, protocol: TCP }
+    - { name: doltgres, port: 5435, targetPort: doltgres, protocol: TCP }
+    - { name: redis, port: 6379, targetPort: redis, protocol: TCP }
+    - { name: litellm, port: 4000, targetPort: litellm, protocol: TCP }
+    - { name: temporal, port: 7233, targetPort: temporal, protocol: TCP }

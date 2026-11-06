@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 (B17) — the mesh plane is every node lease's path to its shared services on this env.
+# Under memory pressure kubelet evicts by QoS then priority; the mesh pods are Guaranteed and sit
+# above every workload class, below the system classes (2e9). preemptionPolicy Never: they wait for
+# room, they never evict a running workload to get it.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: cogni-mesh-critical
+value: 1000000000
+preemptionPolicy: Never
+globalDefault: false
+description: "task.5428 mesh plane (relay, substrate-gw, forwarders): evicted last, never preempts."

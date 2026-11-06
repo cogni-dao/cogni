@@ -710,6 +710,19 @@ if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] && [[ -n "${CLOUDFLARE_ZONE_ID:-}" ]]; t
     is_primary_host "$node" && continue  # apex already in DNS_RECORDS
     DNS_RECORDS+=("$(host_for_node "$node" "$DOMAIN")")
   done
+  # task.5428 — this env's edge fronts the per-env mesh coordinators when its operator overlay carries
+  # the node-deploy-mesh Component (production). Hosts derive from the committed Headscale server_url
+  # (scripts/ci/lib/mesh-plane.sh); scripts/ci/reconcile-node-dns.sh writes the same records on every
+  # promote. Always DNS-only: Headscale does not work behind the Cloudflare proxy.
+  MESH_DNS_RECORDS=()
+  # shellcheck source=../ci/lib/mesh-plane.sh
+  . "$REPO_ROOT/scripts/ci/lib/mesh-plane.sh"
+  if mesh_control_edge_in_env "$DEPLOY_ENV"; then
+    while read -r lane; do
+      MESH_DNS_RECORDS+=("$(mesh_control_host_for_env "$lane")")
+    done < <(mesh_control_lanes)
+    DNS_RECORDS+=("${MESH_DNS_RECORDS[@]}")
+  fi
 
   for fqdn in "${DNS_RECORDS[@]}"; do
     # Proxy state per record:
@@ -720,7 +733,7 @@ if [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] && [[ -n "${CLOUDFLARE_ZONE_ID:-}" ]]; t
     #     access (port 30000+) still reach the origin directly. Cloudflare
     #     proxy only forwards 80/443 — non-standard ports get dropped on
     #     proxied records.
-    if [[ "$fqdn" == "$VM_DNS_HOST" ]]; then
+    if [[ "$fqdn" == "$VM_DNS_HOST" || " ${MESH_DNS_RECORDS[*]} " == *" $fqdn "* ]]; then
       proxied="false"
     else
       proxied="true"
