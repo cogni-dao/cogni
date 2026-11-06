@@ -45,21 +45,64 @@ interface Kustomization {
 interface DeploymentPatch {
   spec: {
     template: {
-      spec: { containers: { env: { name: string; value: string }[] }[] };
+      spec: {
+        containers: {
+          env: {
+            name: string;
+            value?: string;
+            valueFrom?: {
+              configMapKeyRef: {
+                name: string;
+                key: string;
+                optional?: boolean;
+              };
+            };
+          }[];
+        }[];
+      };
     };
   };
 }
 
 /** The `value` of one env var the overlay sets BY NAME on the sequencer Deployment. */
-function sequencerEnv(kustomization: Kustomization, name: string) {
+function sequencerEnvEntry(kustomization: Kustomization, name: string) {
   const patch = kustomization.patches?.find(
     (p) =>
       p.target?.kind === "Deployment" &&
       p.target.name === "node-deploy-sequencer"
   );
   const doc = yaml.parse(patch?.patch ?? "") as DeploymentPatch;
-  return doc.spec.template.spec.containers[0]?.env.find((e) => e.name === name)
-    ?.value;
+  return doc.spec.template.spec.containers[0]?.env.find((e) => e.name === name);
+}
+
+function sequencerEnv(kustomization: Kustomization, name: string) {
+  return sequencerEnvEntry(kustomization, name)?.value;
+}
+
+function expectFleetOwner(kustomization: Kustomization, owner: string) {
+  expect(sequencerEnvEntry(kustomization, "NODE_DEPLOY_FLEET_OWNER")).toEqual({
+    name: "NODE_DEPLOY_FLEET_OWNER",
+    valueFrom: {
+      configMapKeyRef: {
+        name: "node-app-config",
+        key: "NODE_SUBMODULE_PARENT_OWNER",
+        optional: true,
+      },
+    },
+  });
+  const patch = kustomization.patches?.find(
+    (p) => p.target?.kind === "ConfigMap" && p.target.name === "node-app-config"
+  );
+  const operations = yaml.parse(patch?.patch ?? "[]") as {
+    op: string;
+    path: string;
+    value: string;
+  }[];
+  expect(
+    operations.filter((op) => op.path === "/data/NODE_SUBMODULE_PARENT_OWNER")
+  ).toEqual([
+    { op: "add", path: "/data/NODE_SUBMODULE_PARENT_OWNER", value: owner },
+  ]);
 }
 
 const base = yaml
@@ -353,9 +396,7 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
     });
 
     it("the sequencer is told its fleet org, so it never claims another fleet's nodes", () => {
-      expect(sequencerEnv(production, "NODE_DEPLOY_FLEET_OWNER")).toBe(
-        "cogni-dao"
-      );
+      expectFleetOwner(production, "cogni-dao");
     });
 
     it("the candidate-a overlay serves only itself, and its fleet is cogni-test-org (the test operator claims no canonical node)", () => {
@@ -364,9 +405,7 @@ describe("node-deploy sequencer ExternalSecret admission policy (task.5405)", ()
       ) as Kustomization;
       expect(sequencerEnv(candidate, "NODE_DEPLOY_ENVS")).toBeUndefined();
       // story.5137 test lane: the test sequencer's edge guard admits only test-org nodes, never cogni-dao.
-      expect(sequencerEnv(candidate, "NODE_DEPLOY_FLEET_OWNER")).toBe(
-        "cogni-test-org"
-      );
+      expectFleetOwner(candidate, "cogni-test-org");
     });
   });
 });

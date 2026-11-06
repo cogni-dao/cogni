@@ -53,6 +53,7 @@ const base = {
   deployEnvironment: "production",
   podNamespace: "cogni-production",
   secretsNamespace: "cogni-node-deploy-production",
+  operatorDomainRoot: "cognidao.org",
   substrateHost: HOSTS.production,
 };
 const MULTI = {
@@ -70,6 +71,7 @@ describe("resolveEnvLanes", () => {
         environment: "production",
         secretsNamespace: "cogni-node-deploy-production",
         substrateHost: HOSTS.production,
+        operatorDomain: "cognidao.org",
       },
     ]);
   });
@@ -80,6 +82,10 @@ describe("resolveEnvLanes", () => {
         environment: env,
         secretsNamespace: secretsNamespaceFor(env),
         substrateHost: HOSTS[env],
+        operatorDomain:
+          env === "production"
+            ? "cognidao.org"
+            : `${env === "candidate-a" ? "test" : "preview"}.cognidao.org`,
       }))
     );
   });
@@ -179,6 +185,7 @@ function lane(
       secrets,
       catalog,
       substrateHost: resolved.substrateHost,
+      operatorDomain: resolved.operatorDomain,
     },
     chain: new FakeChain(shared.payer),
     clock: shared.clock,

@@ -257,6 +257,8 @@ patches:
                 env:
                   - name: DEPLOY_ENVIRONMENT
                     value: candidate-a
+                  - name: NODE_DEPLOY_OPERATOR_DOMAIN_ROOT
+                    value: cognidao.org
                   - name: NODE_DEPLOY_SECRETS_NAMESPACE
                     value: cogni-node-deploy-candidate-a
                   - name: AKASH_CHAIN_OWNER
@@ -272,15 +274,23 @@ patches:
                   # NODE_SUBMODULE_PARENT_OWNER, which the route uses; unset admits no remote-source node, so the
                   # sequencer's edge guard would refuse every test node's host (story.5137 test lane).
                   - name: NODE_DEPLOY_FLEET_OWNER
-                    value: cogni-test-org
+                    valueFrom:
+                      configMapKeyRef:
+                        name: node-app-config
+                        key: NODE_SUBMODULE_PARENT_OWNER
+                        optional: true
+                  - name: NODE_DEPLOY_WORKLOAD_ZONE
+                    valueFrom:
+                      configMapKeyRef:
+                        name: node-app-config
+                        key: NODE_DEPLOY_WORKLOAD_ZONE
+                        optional: true
                   # story.5137 — this TEST operator's node hosts live in the isolated test zone, not in
                   # cognidao.org (hub test-fleet-parity-boundary; dns-ops skill). Its Cloudflare token
                   # (OpenBao cogni/candidate-a/operator/CLOUDFLARE_API_TOKEN) is scoped to this zone only,
                   # so the sequencer resolves the zone id BY NAME with that token. The operator endpoint
                   # (test.cognidao.org) and the substrate host above stay in cognidao.org. Production and
-                  # preview leave this unset (default cognidao.org).
-                  - name: NODE_DEPLOY_EDGE_ZONE
-                    value: cogni-testing.org
+                  # production sets cognidao.org explicitly; preview has no local binding.
   - target:
       kind: ConfigMap
       name: node-app-config
@@ -355,6 +365,9 @@ patches:
         path: /data/KNOWLEDGE_DOLTHUB_REMOTE_URL
         value: "https://doltremoteapi.dolthub.com/cogni-dao/knowledge-operator-candidate-a"
       # Submodule pin-PR target: candidate-a uses the throwaway org mirror.
+      - op: add
+        path: /data/NODE_DEPLOY_WORKLOAD_ZONE
+        value: "cogni-testing.org"
       - op: add
         path: /data/NODE_SUBMODULE_PARENT_OWNER
         value: "cogni-test-org"

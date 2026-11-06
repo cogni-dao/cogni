@@ -255,6 +255,7 @@ function harness(slug = "red", all: readonly string[] = ["red", "poly"]) {
       secrets: bucket,
       catalog: new Catalog(slug, all),
       substrateHost: "cogni.vm.cognidao.org",
+      operatorDomain: "cognidao.org",
     },
     chain: new FakeChain(payer),
     clock,

@@ -27,6 +27,8 @@
  * @public
  */
 
+import { hostForEnv, isFlightEnv } from "@/shared/node-registry/deploy-hosts";
+
 /** The envs a node-deploy lane can exist in. */
 const NODE_DEPLOY_ENVS = ["candidate-a", "preview", "production"] as const;
 type NodeDeployEnv = (typeof NODE_DEPLOY_ENVS)[number];
@@ -44,11 +46,13 @@ export interface EnvLane {
   readonly secretsNamespace: string;
   /** `vm_host_for_env` of this env's VM: where its shared substrate answers. */
   readonly substrateHost: string;
+  readonly operatorDomain: string;
 }
 
 export class EnvLaneConfigError extends Error {
   constructor(
     readonly code:
+      | "operator_domain_invalid"
       | "environment_invalid"
       | "environment_duplicate"
       | "secrets_namespace_invalid"
@@ -64,6 +68,7 @@ export class EnvLaneConfigError extends Error {
 export interface EnvLaneInput {
   /** The pod's own `DEPLOY_ENVIRONMENT`. */
   readonly deployEnvironment: string;
+  readonly operatorDomainRoot: string | undefined;
   /** The pod's own (wallet) namespace; no lane may use it for secrets. */
   readonly podNamespace: string;
   /** `NODE_DEPLOY_ENVS`: comma-separated envs; unset serves only `deployEnvironment`. */
@@ -103,6 +108,22 @@ export function parseSubstrateHosts(
 
 /** Resolve the per-env lanes the one process serves, or throw `EnvLaneConfigError` (boot refuses). */
 export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
+  const root = input.operatorDomainRoot;
+  // Keep lanes observable when issuer config is invalid; nodeAppEnv refuses a fresh create.
+  const validRoot =
+    !!root &&
+    root.length <= 245 &&
+    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
+      root
+    );
+  const issuerFor = (env: string): string => {
+    if (!isFlightEnv(env))
+      throw new EnvLaneConfigError(
+        "environment_invalid",
+        `unsupported environment "${env}"`
+      );
+    return validRoot && root ? hostForEnv("operator", true, env, root) : "";
+  };
   const listed = (input.environments ?? "")
     .split(",")
     .map((e) => e.trim())
@@ -131,6 +152,7 @@ export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
         environment: input.deployEnvironment,
         secretsNamespace: ns,
         substrateHost: hostFor(input.deployEnvironment, true),
+        operatorDomain: issuerFor(input.deployEnvironment),
       },
     ];
   }
@@ -163,6 +185,7 @@ export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
       environment: env,
       secretsNamespace,
       substrateHost: hostFor(env, own),
+      operatorDomain: issuerFor(env),
     });
   }
   return lanes;
