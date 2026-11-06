@@ -174,7 +174,6 @@ const IDENTITY: Record<string, Rule[]> = {
       "NODE_MINT_OWNER",
       "NODE_TEMPLATE_OWNER",
       "NODE_SUBMODULE_PARENT_OWNER",
-      "NODE_DEPLOY_WORKLOAD_ZONE",
       "NODE_SUBMODULE_PARENT_REPO",
       "DOLTHUB_OWNER",
       "DOLTHUB_NONPROD_OWNER",
@@ -252,6 +251,11 @@ const IDENTITY: Record<string, Rule[]> = {
       ),
     },
     {
+      why: "the fleet workload DNS zone is domain identity: candidate and production use their own zones (story.5137)",
+      pattern:
+        /^patch\[ConfigMap\/node-app-config\] add \/data\/NODE_DEPLOY_WORKLOAD_ZONE$/,
+    },
+    {
       why: "env name",
       pattern: envValue(
         "database-reliability-actuator",
@@ -308,6 +312,15 @@ const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
         "tests/ci-invariants/node-deploy-sequencer-admission.spec.ts pins the production side.",
       pattern:
         /^(patch\[ConfigMap\/node-app-config\] add \/data\/NODE_DEPLOY_ENVS|patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[(NODE_DEPLOY_ENVS|NODE_DEPLOY_FLEET_OWNER|NODE_DEPLOY_SUBSTRATE_HOSTS)\]\.(name|value)|patch\[ValidatingAdmissionPolicyBinding\/node-deploy-sequencer-externalsecrets\] replace \/spec\/matchResources\/namespaceSelector\/matchExpressions\/0\/values\[[12]\]|resource\[Application\/node-deploy-env-namespaces\]\..+|kustomization\.replacements\[1\]\.(source\.(fieldPath|kind|name)|targets\[0\]\.(fieldPaths\[0\]|select\.kind)))$/,
+    },
+    {
+      why:
+        "ONE COORDINATOR PER TAILNET (task.5428, hub node-service-delivery §1 + test-fleet parity): each " +
+        "operator overlay includes the Headscale Components of exactly the tailnets its sequencer writes. " +
+        "Production: the canonical candidate-a, preview and production tailnets. candidate-a (test operator): " +
+        "only its own test-candidate-a tailnet, with no production identity. The same Component code, a " +
+        "different tailnet set; tests/ci-invariants/node-deploy-mesh-coordinators.spec.ts pins both sides.",
+      pattern: /^kustomization\.components\[\d+\]$/,
     },
   ],
   "scheduler-worker": [

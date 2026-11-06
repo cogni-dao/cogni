@@ -245,6 +245,43 @@ for node in "${NODE_TARGETS[@]}"; do
   fi
 done
 
+# task.5428 — the mesh hosts this env's VM serves, from the ONE tailnet table (scripts/ci/lib/mesh-plane.sh):
+# the control host `mesh-<tailnet>.<zone>` of every tailnet whose coordinator this env's edge fronts, and
+# the relay host `derp-<tailnet>.<zone>` of every tailnet whose relay runs on this env's VM. Headscale and
+# DERP do not work behind a Cloudflare proxy, so these records are ALWAYS proxied=false (DNS-only),
+# whatever the apex does; the edge Caddy serves them with public ACME certificates.
+# shellcheck source=scripts/ci/lib/mesh-plane.sh
+source "${SCRIPT_DIR}/lib/mesh-plane.sh"
+mesh_dns_hosts=()
+while read -r tailnet; do
+  [ -n "$tailnet" ] && mesh_dns_hosts+=("$(mesh_host "$tailnet" control "$FORK_ROOT")")
+done < <(mesh_coordinator_tailnets "$DEPLOY_ENV")
+while read -r tailnet; do
+  [ -n "$tailnet" ] && mesh_dns_hosts+=("$(mesh_host "$tailnet" relay "$FORK_ROOT")")
+done < <(mesh_vm_tailnets "$DEPLOY_ENV")
+node="mesh-plane"
+for host in "${mesh_dns_hosts[@]}"; do
+  expected="$VM_IP"
+  if $CHECK; then
+    content=$(cf_a_record_content "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host")
+    proxied_now=$(cf_a_record_proxied "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host")
+    if [ "$content" = "$VM_IP" ] && [ "$proxied_now" = "false" ]; then
+      echo "  ok       ${host} → ${VM_IP} (DNS-only)"
+      state="ok"
+    else
+      echo "  MISSING  ${host} (resolves to '${content:-none}', proxied=${proxied_now:-n/a}; want ${VM_IP}, proxied=false)"
+      state="missing"
+      missing+=("$host")
+    fi
+  else
+    state=$(cf_upsert_a_record "$CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_ZONE_ID" "$host" "$VM_IP" false) \
+      || { echo "[ERROR] upsert failed for ${host}" >&2; write_dns_summary "failure"; exit 1; }
+    echo "  ${host} → ${VM_IP} (proxied=false, mesh plane): ${state}"
+    content="$VM_IP"
+  fi
+  append_dns_record
+done
+
 if $CHECK && [ "${#missing[@]}" -gt 0 ]; then
   write_dns_summary "failure"
   echo "[ERROR] ${#missing[@]} node host(s) missing DNS: ${missing[*]}" >&2

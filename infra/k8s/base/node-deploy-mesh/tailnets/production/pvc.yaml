@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the `production` tailnet's Headscale database + server key (hard requirement 2). A lost volume is
+# a wipe: it recovers by re-derivation with no person (hard requirement 10), never by restore.
+# `local-path` is the k3s default class the cluster already uses for OpenBao
+# (infra/k8s/argocd/openbao/values.yaml); named so a cluster default change cannot move this state.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: headscale-production
+  labels:
+    app.kubernetes.io/name: node-deploy-sequencer
+    app.kubernetes.io/component: mesh-coordinator
+    cogni.dev/mesh-tailnet: production
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi

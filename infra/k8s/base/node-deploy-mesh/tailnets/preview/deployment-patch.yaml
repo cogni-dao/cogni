@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the `preview` Headscale container beside its one writer, the sequencer (hub
+# node-service-delivery §1). The sequencer reaches it over this tailnet's pod-local unix socket, so no
+# Headscale API key exists and no gRPC listener is reachable (hard requirement 12). Own process, own
+# PVC, own client port and its OWN socket volume, mounted ONLY by this container and the sequencer
+# (hard requirement 2). No readiness probe (CD5/CD7): pod Ready is the AND of all containers, so one
+# tailnet's coordinator never drops another's endpoints or gates the operator promote.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node-deploy-sequencer
+spec:
+  template:
+    spec:
+      containers:
+        - name: sequencer
+          volumeMounts:
+            # Read-write: connect(2) on a unix socket needs write permission on the socket inode.
+            - {
+                name: headscale-socket-preview,
+                mountPath: /var/run/headscale/preview,
+              }
+        - name: headscale-preview
+          image: ghcr.io/juanfont/headscale:v0.29.7@sha256:11f81665e842809db9fe3006a38c56a66e968baa5abd4bac498e86445572b970
+          imagePullPolicy: IfNotPresent
+          args: [serve, --config, /etc/headscale/config.yaml]
+          ports:
+            - name: hs-pv
+              containerPort: 8182
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          livenessProbe:
+            httpGet: { path: /health, port: hs-pv }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - { name: headscale-preview, mountPath: /var/lib/headscale }
+            - {
+                name: headscale-socket-preview,
+                mountPath: /var/run/headscale/preview,
+              }
+            - name: headscale-config-preview
+              mountPath: /etc/headscale/config.yaml
+              subPath: headscale.yaml
+              readOnly: true
+            - name: headscale-config-preview
+              mountPath: /etc/headscale/derp.yaml
+              subPath: derp.yaml
+              readOnly: true
+      volumes:
+        - name: headscale-socket-preview
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }
+        - name: headscale-config-preview
+          configMap:
+            name: node-deploy-mesh-preview
+        - name: headscale-preview
+          persistentVolumeClaim: { claimName: headscale-preview }
