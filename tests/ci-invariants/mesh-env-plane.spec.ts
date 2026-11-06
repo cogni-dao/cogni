@@ -306,6 +306,44 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     }
   });
 
+  it("NodePort preflight: every mesh NodePort is distinct and claimed by no other manifest in the repo", () => {
+    const owners: [string, string[]][] = TABLE.flatMap((r) => [
+      [
+        r.coordinator_np,
+        [`infra/k8s/base/node-deploy-mesh/tailnets/${r.tailnet}/service.yaml`],
+      ],
+      ...(r.vm_env
+        ? ([
+            [
+              r.relay_np,
+              [`${BASE}/derper.yaml`, `${overlayDir(r)}/kustomization.yaml`],
+            ],
+            [
+              r.publish_np,
+              [
+                `${BASE}/substrate-gw.yaml`,
+                `${overlayDir(r)}/kustomization.yaml`,
+              ],
+            ],
+          ] as [string, string[]][])
+        : []),
+    ]);
+    const ports = owners.map(([p]) => p);
+    expect(new Set(ports).size).toBe(ports.length);
+    for (const [port, allowed] of owners) {
+      const hits = execFileSync(
+        "git",
+        ["grep", "-l", "-w", "-e", port, "--", "infra/k8s"],
+        { cwd: root, encoding: "utf8" }
+      )
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+      expect(hits.length, port).toBeGreaterThan(0);
+      for (const h of hits) expect(allowed, `${port} in ${h}`).toContain(h);
+    }
+  });
+
   it("substrate-gw egress is policy: only its two forwarders, no DNS (HR21, zero contact)", () => {
     const np = parseAll<Doc>(`${BASE}/networkpolicy.yaml`).find(
       (d) => d.metadata.name === "substrate-gw"
@@ -411,8 +449,10 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         }
       }
     }
-    // Right-sized to measured footprints (task.5428): one instance requests at most 108Mi, so all
-    // instances on one VM stay under that VM's 7-day minimum MemAvailable (candidate-a: 271 MiB).
+    // Right-sized to measured footprints (task.5428): one instance requests at most 108Mi. The candidate-a
+    // VM's budget counts every mesh request on it: its env-plane instances AND the test operator's Headscale
+    // (P3, coordinator_env candidate-a). The total stays at or under 240Mi, a 31 MiB margin below the VM's
+    // 7-day minimum MemAvailable (271 MiB).
     const mib = (v: unknown): number => {
       const m = /^(\d+)Mi$/.exec(String(v));
       if (!m) throw new Error(`memory request not in Mi: ${String(v)}`);
@@ -430,7 +470,22 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
       );
     expect(perInstance).toBeLessThanOrEqual(108);
     const perVm = INSTANCES.filter((r) => r.vm_env === "candidate-a").length;
-    expect(perInstance * perVm).toBeLessThan(271);
+    const headscale = TABLE.filter(
+      (r) => r.coordinator_env === "candidate-a"
+    ).map((r) => {
+      const patch = parse<Doc>(
+        `infra/k8s/base/node-deploy-mesh/tailnets/${r.tailnet}/deployment-patch.yaml`
+      );
+      const c = patch.spec.template.spec.containers.find(
+        (x) => x.name === `headscale-${r.tailnet}`
+      );
+      return mib(
+        (c?.resources?.requests as { memory?: string } | undefined)?.memory
+      );
+    });
+    expect(headscale.length).toBeGreaterThan(0);
+    const total = perInstance * perVm + headscale.reduce((a, b) => a + b, 0);
+    expect(total).toBeLessThanOrEqual(240);
     const pc = parse<Doc>(`${BASE}/priorityclass.yaml`);
     expect(pc.value).toBeGreaterThan(0);
     expect(pc.value).toBeLessThan(1_000_000_000);
