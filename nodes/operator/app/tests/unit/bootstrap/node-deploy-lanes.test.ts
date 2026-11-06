@@ -140,8 +140,22 @@ describe("actual sequencer lane composition without new DNS authority", () => {
     await lanes.reconcileAll();
     const saved = (id: string) => store.attempts.find((a) => a.id === id);
     expect(saved(ambiguous.attempt.id)?.externalName).toBe(ambiguous.dseq);
-    expect(saved(ambiguous.attempt.id)?.phase).toBe("failed");
-    expect(payer.byDseq(ambiguous.dseq).state).toBe("closed");
+    // The adopted paid effect is proven and then HELD at cutover (dependency/waiting): an invalid
+    // binding neither moves the edge nor closes a proven green; a valid restart can still activate it.
+    expect(saved(ambiguous.attempt.id)?.phase).toBe("proven");
+    expect(payer.byDseq(ambiguous.dseq).state).toBe("active");
+    expect(
+      log.lines.some(
+        (l) =>
+          l.fields.workload === "ambiguous" &&
+          l.fields.step === "dependency" &&
+          l.fields.outcome === "waiting" &&
+          l.fields.reason === "workload_zone_not_configured"
+      )
+    ).toBe(true);
+    expect(events.some((e) => e === `payer.delete:${ambiguous.dseq}`)).toBe(
+      false
+    );
     expect(saved(closing.attempt.id)?.phase).toBe("failed");
     expect(payer.byDseq(closing.dseq).state).toBe("closed");
     expect(saved(active.attempt.id)?.phase).toBe("active");
