@@ -7,13 +7,14 @@
  *   `https://<vm_host_for_env>/.well-known/cogni-mesh/<tailnet>/substrate-gw.json`, the per-tailnet path
  *   task.5428's VM step publishes behind the VM's DNS-only ACME site (`render-caddyfile.sh`, #3051).
  * Scope: One HTTPS GET and a strict parse. No approval decision: `MeshPlane.approveSubstrateGateway`
- *   checks age, tags and keys.
+ *   checks age, then the registered tags and the tailnet's one `tag:substrate` device.
  * Invariants:
  *   - VERIFIED_CHANNEL: HTTPS only, the platform's public certificate and host-name verification (Node's
  *     default `fetch`), no redirect followed, bounded time and size. Anything else throws.
- *   - ABSENT_IS_NULL: only a 404 is `null`. A registered device publishes an empty `authId` with its
- *     machine and node keys; that publish is returned, because the node-key check (stage 2 of HR 11)
- *     reads it after approval.
+ *   - ABSENT_IS_NULL: only a 404 is `null`. A registered device publishes an empty `authId`; that
+ *     publish is returned and approves nothing.
+ *   - EXTRA_FIELDS_IGNORED: only `authId` and `publishedAt` are read. A publisher that still sends
+ *     `machineKey` / `nodeKey` (#3053 until its follow-up) parses the same: no key is compared (HR 11).
  *   - NO_CREDENTIAL: the file holds public ids only; nothing here is a secret.
  * Side-effects: IO (HTTPS)
  * @internal
@@ -61,8 +62,6 @@ export class HttpsSubstrateRequestSource implements SubstrateRequestSourcePort {
     const raw = JSON.parse(body) as Record<string, unknown>;
     return {
       authId: text(raw.authId),
-      machineKey: text(raw.machineKey),
-      nodeKey: text(raw.nodeKey),
       publishedAt: Date.parse(text(raw.publishedAt)),
     };
   }

@@ -7,8 +7,9 @@
  *   over a fake Headscale that follows v0.29.7's observed rules: per-attempt transport (HR 18), derived
  *   listeners = grant (HR 3), fail-closed policy before any mint (HR 4), one stored key per attempt across
  *   a lost mint response and restarts (HR 5), expire-then-delete revocation with a retained blue (HR 6),
- *   device health without storms (HR 8), wipe recovery (HR 10), unprivileged pinned companions (HR 16,
- *   HR 21), and no key value in any log or step (HR 14).
+ *   device health without storms (HR 8), wipe recovery (HR 10), approval with no key compare (HR 11),
+ *   no paid create without one online gateway (HR 23), unprivileged pinned companions (HR 16, HR 21),
+ *   and no key value in any log or step (HR 14).
  * Scope: The REAL sequencer and MeshPlane over in-memory fakes. No network, no Kubernetes.
  * Invariants: every hard requirement named above has at least one falsifying case here.
  * Side-effects: none
@@ -1049,15 +1050,59 @@ describe("HR 7, 8: device check", () => {
   });
 });
 
+describe("HR 23: no gateway, no paid create", () => {
+  it("a release with no substrate-gw waits unpaid and logs node_mesh_mint_refused; it deploys once the gateway is back", async () => {
+    const h = harness();
+    const [gw] = [...h.hs.devices.values()];
+    if (!gw) throw new Error("no seeded gateway");
+    h.hs.devices.clear();
+    await h.seq.reconcileAll();
+    await h.release("poly");
+    await h.seq.step(h.key("poly"));
+    const [waiting] = await h.attempts("poly");
+    expect(waiting?.phase).toBe("planned");
+    expect(waiting?.error).toBe("mesh_key_pending: mint_gateway_absent");
+    expect(h.payer.createRequests).toHaveLength(0);
+    expect(h.hs.calls).not.toContain("CreatePreAuthKey");
+    const refused = meshLogs(h, "node_mesh_mint_refused");
+    expect(refused).toHaveLength(1);
+    expect(refused[0]?.level).toBe("warn");
+    expect(refused[0]?.fields).toMatchObject({
+      nodeId: NODES.poly,
+      env: ENV,
+      releaseId: waiting?.releaseId,
+      attempt: 1,
+      outcome: "refused",
+      reason: "gateway_absent",
+    });
+
+    // An offline gateway is no better: still unpaid.
+    h.hs.devices.set(gw.headscaleDeviceId, { ...gw, online: false });
+    await h.seq.step(h.key("poly"));
+    expect((await h.attempts("poly"))[0]?.error).toBe(
+      "mesh_key_pending: mint_gateway_offline"
+    );
+    expect(h.payer.createRequests).toHaveLength(0);
+
+    // The gateway is online again: the SAME attempt mints, stores and pays once.
+    h.hs.devices.set(gw.headscaleDeviceId, gw);
+    await h.seq.step(h.key("poly"));
+    const [a] = await h.attempts("poly");
+    expect(a?.id).toBe(waiting?.id);
+    expect(a?.phase).toBe("active");
+    expect(appCreates(h)).toHaveLength(1);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------
 // HR 10, HR 11: wipe recovery and gateway approval
 // ---------------------------------------------------------------------------------------------
 
-describe("HR 11: substrate-gw approval in two stages over the verified channel", () => {
+describe("HR 11: substrate-gw approval over the verified channel, no key compare", () => {
   const gateways = (h: H) =>
     [...h.hs.devices.values()].filter((d) => d.tags.includes("tag:substrate"));
 
-  it("a late published node key that differs from the approved device deletes it and alerts", async () => {
+  it("approves a fresh published auth id once; a publish that lags names it again and nothing is re-registered", async () => {
     const h = harness();
     h.hs.devices.clear(); // no gateway yet
     await h.seq.reconcileAll();
@@ -1065,32 +1110,37 @@ describe("HR 11: substrate-gw approval in two stages over the verified channel",
       machineKey: "mkey:gw",
       nodeKey: "nodekey:gw",
     });
-    h.published.request = {
-      authId: "auth-1",
-      machineKey: "mkey:gw",
-      nodeKey: "",
-      publishedAt: h.clock.now(),
-    };
+    h.published.request = { authId: "auth-1", publishedAt: h.clock.now() };
     await h.passes(1);
     expect(gateways(h)).toHaveLength(1);
-    h.published.request = {
-      authId: "",
-      machineKey: "mkey:gw",
-      nodeKey: "nodekey:attacker",
-      publishedAt: h.clock.now() + 60_000,
-    };
+    expect(
+      meshLogs(h, "node_mesh_substrate_approved")[0]?.fields
+    ).toMatchObject({ outcome: "approved", expiryDisabled: true });
+    await h.passes(2); // the publisher has not caught up yet
+    expect(h.hs.calls.filter((c) => c === "AuthRegister")).toHaveLength(1);
+    expect(meshLogs(h, "node_mesh_substrate_refused")).toHaveLength(0);
+  });
+
+  it("a second tag:substrate device is deleted at once and alerts; the enrolled gateway stays", async () => {
+    const h = harness(); // one substrate-gw is enrolled
+    await h.seq.reconcileAll();
+    const [enrolled] = gateways(h);
+    h.hs.pending.set("auth-2", { machineKey: "mkey:x", nodeKey: "nodekey:x" });
+    h.published.request = { authId: "auth-2", publishedAt: h.clock.now() };
     await h.passes(1);
     const alert = meshLogs(h, "node_mesh_substrate_mismatch")[0];
     expect(alert?.level).toBe("error");
     expect(alert?.fields).toMatchObject({
-      stage: "node_key",
-      reason: "node_key_mismatch",
       outcome: "deleted",
+      tagsExact: true,
+      substrateDevices: 2,
     });
-    expect(gateways(h)).toHaveLength(0);
+    expect(gateways(h).map((d) => d.headscaleDeviceId)).toEqual([
+      enrolled?.headscaleDeviceId,
+    ]);
   });
 
-  it("publisher stopped after approval: substrate-gw stays enrolled and an alert fires after 10 minutes (B19)", async () => {
+  it("publisher stopped after approval: substrate-gw stays enrolled and nothing alerts", async () => {
     const h = harness();
     h.hs.devices.clear();
     await h.seq.reconcileAll();
@@ -1098,20 +1148,10 @@ describe("HR 11: substrate-gw approval in two stages over the verified channel",
       machineKey: "mkey:gw",
       nodeKey: "nodekey:gw",
     });
-    h.published.request = {
-      authId: "auth-1",
-      machineKey: "mkey:gw",
-      nodeKey: "",
-      publishedAt: h.clock.now(),
-    };
+    h.published.request = { authId: "auth-1", publishedAt: h.clock.now() };
     await h.passes(1);
     h.published.request = null; // the publisher stops
-    await h.passes(8);
-    expect(meshLogs(h, "node_mesh_substrate_node_key_unknown")).toHaveLength(0);
-    await h.passes(3);
-    const alert = meshLogs(h, "node_mesh_substrate_node_key_unknown");
-    expect(alert).toHaveLength(1);
-    expect(alert[0]?.level).toBe("error");
+    await h.passes(15);
     expect(meshLogs(h, "node_mesh_substrate_mismatch")).toHaveLength(0);
     expect(gateways(h)).toHaveLength(1);
   });
@@ -1120,12 +1160,7 @@ describe("HR 11: substrate-gw approval in two stages over the verified channel",
     const h = harness();
     h.hs.devices.clear();
     await h.seq.reconcileAll();
-    h.published.request = {
-      authId: "forged",
-      machineKey: "mkey:x",
-      nodeKey: "",
-      publishedAt: h.clock.now(),
-    };
+    h.published.request = { authId: "forged", publishedAt: h.clock.now() };
     await h.passes(1);
     expect(meshLogs(h, "node_mesh_substrate_refused")[0]?.fields.reason).toBe(
       "registration_not_found"
@@ -1147,38 +1182,21 @@ describe("HR 10, 11: a wiped Headscale recovers by derivation, with no person", 
       meshLogs(h, "node_mesh_policy").some((l) => l.fields.wasAbsent === true)
     ).toBe(true);
 
-    // The VM publishes its pending request with no node key yet; the pass approves it (HR 11 stage 1).
+    // The VM publishes its pending auth id; the pass approves it (HR 11).
     h.hs.pending.set("auth-1", {
       machineKey: "mkey:gw2",
       nodeKey: "nodekey:gw2",
     });
     h.published.request = {
       authId: "auth-1",
-      machineKey: "mkey:gw2",
-      nodeKey: "",
       publishedAt: h.clock.now() + 60_000,
     };
     await h.passes(1);
-    expect(
-      meshLogs(h, "node_mesh_substrate_approved")[0]?.fields.nodeKeyVerified
-    ).toBe(false);
-    // The VM republishes with the node key it now knows; the next pass verifies it (stage 2).
-    h.published.request = {
-      authId: "",
-      machineKey: "mkey:gw2",
-      nodeKey: "nodekey:gw2",
-      publishedAt: h.clock.now() + 60_000,
-    };
-    await h.passes(1);
-    expect(meshLogs(h, "node_mesh_substrate_node_key_verified")).toHaveLength(
-      1
-    );
+    expect(meshLogs(h, "node_mesh_substrate_approved")).toHaveLength(1);
     expect(meshLogs(h, "node_mesh_substrate_mismatch")).toHaveLength(0);
     // A stale publish is refused.
     h.published.request = {
-      ...h.published.request,
       authId: "auth-2",
-      machineKey: "mkey:other",
       publishedAt: h.clock.now() - 10 * 60_000,
     };
     await h.passes(1);
