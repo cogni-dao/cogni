@@ -166,6 +166,14 @@ const POSTGRES_DSN =
   /^(postgres(?:ql)?:\/\/[^@/?#\s]+@)(\[[0-9a-fA-F:.]+\]|[^/?#:@[\]\s]+)(?::\d{1,5})?(\/[^/?#\s]+(?:[?#][^\s]*)?)$/;
 
 /**
+ * The host of a Postgres-wire DSN, lowercased (`undefined` when the DSN has another shape). It reads no
+ * credential into its result.
+ */
+export function dsnHost(dsn: string): string | undefined {
+  return POSTGRES_DSN.exec(dsn)?.[2]?.toLowerCase();
+}
+
+/**
  * Replace ONLY the endpoint of a Postgres-wire DSN. The credential, database and query stay byte for
  * byte (the bucket keeps the credential; the binding owns the endpoint). Throws on any other shape.
  */

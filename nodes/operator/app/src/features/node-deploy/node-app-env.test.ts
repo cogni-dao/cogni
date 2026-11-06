@@ -473,9 +473,81 @@ describe("mesh transport (task.5432)", () => {
     expect(text).not.toContain("s3cr");
   });
 
-  it("Postgres DSNs keep their placement-owned bucket endpoint", () => {
+  it("bucket values that do not name the VM keep their value", () => {
     expect(mesh().DATABASE_URL).toBe("v-DATABASE_URL");
     expect(mesh().DATABASE_MIGRATION_URL).toBe("v-DATABASE_MIGRATION_URL");
+  });
+
+  describe("SHARED_POSTGRES_ONLY", () => {
+    const pg = (host: string, role: string) =>
+      `postgresql://${role}:pw%21@${host}:5432/cogni_poly?sslmode=disable`;
+    const withPostgres = (host: string): Record<string, string> => ({
+      ...bucket(),
+      DATABASE_URL: pg(host, "app_poly"),
+      DATABASE_SERVICE_URL: pg(host, "service_poly"),
+      DATABASE_MIGRATION_URL: pg(host, "migration_poly"),
+    });
+    const meshWith = (secrets: Record<string, string>) => ({
+      ...lane,
+      transport: "mesh" as const,
+      secrets,
+    });
+
+    it("a shared-VM Postgres DSN rebinds to cogni-substrate and the grant gains Postgres", () => {
+      const input = meshWith(withPostgres(VM_HOST.toUpperCase()));
+      const env = nodeAppEnv(input);
+      for (const [key, role] of [
+        ["DATABASE_URL", "app_poly"],
+        ["DATABASE_SERVICE_URL", "service_poly"],
+        ["DATABASE_MIGRATION_URL", "migration_poly"],
+      ] as const)
+        expect(env[key]).toBe(pg("cogni-substrate", role));
+      expect(Object.values(env).join("\n")).not.toContain(VM_HOST);
+      const binding = nodeAppSubstrateBinding(input);
+      expect(binding?.types).toContain("postgres");
+      expect(binding?.ports).toEqual([4000, 5432, 5435, 6379, 7233]);
+      expect(JSON.stringify(binding)).not.toContain("pw%21");
+    });
+
+    it("a dedicated-cell Postgres DSN is untouched and Postgres is not granted", () => {
+      const cell = "poly-cell.provider.example";
+      const input = meshWith(withPostgres(cell));
+      const env = nodeAppEnv(input);
+      expect(env.DATABASE_URL).toBe(pg(cell, "app_poly"));
+      expect(env.DATABASE_SERVICE_URL).toBe(pg(cell, "service_poly"));
+      expect(env.DATABASE_MIGRATION_URL).toBe(pg(cell, "migration_poly"));
+      const binding = nodeAppSubstrateBinding(input);
+      expect(binding?.types).not.toContain("postgres");
+      expect(binding?.ports).not.toContain(5432);
+    });
+
+    it("rebinds per key: only the DSNs on the VM move", () => {
+      const cell = "poly-cell.provider.example";
+      const env = nodeAppEnv(
+        meshWith({
+          ...withPostgres(cell),
+          DATABASE_MIGRATION_URL: pg(VM_HOST, "migration_poly"),
+        })
+      );
+      expect(env.DATABASE_URL).toBe(pg(cell, "app_poly"));
+      expect(env.DATABASE_MIGRATION_URL).toBe(
+        pg("cogni-substrate", "migration_poly")
+      );
+    });
+
+    it("egress, and a DSN naming another host than the lane's VM host, are untouched", () => {
+      const vmDsns = withPostgres(VM_HOST);
+      expect(nodeAppEnv({ ...lane, secrets: vmDsns }).DATABASE_URL).toBe(
+        pg(VM_HOST, "app_poly")
+      );
+      expect(
+        nodeAppSubstrateBinding({ ...lane, secrets: vmDsns })?.types
+      ).not.toContain("postgres");
+      // The bucket's address form is not the lane's host name: no rebind, no grant.
+      const byAddress = meshWith(withPostgres(VM_IP));
+      expect(nodeAppEnv(byAddress).DATABASE_URL).toBe(pg(VM_IP, "app_poly"));
+      expect(nodeAppSubstrateBinding(byAddress)?.ports).not.toContain(5432);
+    });
   });
 
   it("a DOLTGRES_URL supplied by a state binding is neither required nor rebound, and leaves the grant", () => {

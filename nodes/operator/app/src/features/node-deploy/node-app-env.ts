@@ -37,8 +37,11 @@
  *   - MESH_ENV (task.5432): on a `mesh` attempt the substrate host is `cogni-substrate`, `DOLTGRES_URL`
  *     keeps the bucket credential and database with the binding's host and port, and no port without a
  *     mesh grant is injected (the egress-only scheduler-worker health URL is omitted). The key set
- *     otherwise equals the egress key set: no mesh identifier or credential reaches the app. Postgres DSNs
- *     keep their bucket endpoint: their host is placement-owned (shared VM or dedicated cell).
+ *     otherwise equals the egress key set: no mesh identifier or credential reaches the app.
+ *   - SHARED_POSTGRES_ONLY (task.5432): on a `mesh` attempt a bucket `DATABASE_URL`, `DATABASE_SERVICE_URL`
+ *     or `DATABASE_MIGRATION_URL` is rebound to the binding's host and the registry Postgres port ONLY
+ *     when its host equals the lane's substrate (env VM) host. Any other host (a dedicated cell, such as
+ *     Poly production's) is left untouched. Postgres is granted only when such a rebind happens.
  *   - EGRESS_UNCHANGED: an absent transport is `egress`, byte for byte the composition env above.
  * Side-effects: none
  * Links: infra/crossplane/xcomputeworkload/composition.yaml, packages/repo-spec/src/node-app-deployment.ts,
@@ -51,6 +54,7 @@ import { resolveRuntimeProfileSecretRefs } from "@cogni/repo-spec";
 import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
 
 import {
+  dsnHost,
   rebindDsnEndpoint,
   resolveSubstrateBinding,
   type SubstrateBinding,
@@ -193,6 +197,12 @@ const EGRESS_ONLY_SUBSTRATE_FIELDS = {
     `http://${i.host}:${EGRESS_ONLY_PORTS["scheduler-worker-health"]}`,
 };
 const DOLTGRES_URL = "DOLTGRES_URL";
+/** Postgres DSN keys that may name the shared env VM Postgres. */
+const SHARED_POSTGRES_DSN_KEYS = [
+  "DATABASE_URL",
+  "DATABASE_SERVICE_URL",
+  "DATABASE_MIGRATION_URL",
+] as const;
 const POOL_FIELDS = {
   DB_POOL_MAX: (i: NodeAppPoolLimits) => String(i.app),
   DB_SERVICE_POOL_MAX: (i: NodeAppPoolLimits) => String(i.service),
@@ -271,6 +281,25 @@ export interface NodeAppSubstrateBindingInput {
   readonly substrateHost?: string | undefined;
   readonly secretKeys?: readonly string[] | undefined;
   readonly boundEnvNames?: readonly string[] | undefined;
+  /** The bucket values. Read only to find which Postgres DSNs name the env VM; never copied out. */
+  readonly secrets?: Readonly<Record<string, string>> | undefined;
+}
+
+/**
+ * SHARED_POSTGRES_ONLY: the bucket Postgres DSN keys a mesh attempt rebinds, i.e. those whose host equals
+ * the lane's substrate (env VM) host. Empty for egress, for no VM host, and for a dedicated cell host.
+ */
+function sharedPostgresKeysOnVm(
+  input: NodeAppSubstrateBindingInput
+): readonly string[] {
+  const vm = input.substrateHost?.toLowerCase();
+  if ((input.transport ?? "egress") !== "mesh" || !vm) return [];
+  const keys = nodeAppSecretKeys(input.secretKeys, input.boundEnvNames);
+  const injectable = injectableSecrets(keys, input.secrets ?? {});
+  return SHARED_POSTGRES_DSN_KEYS.filter((k) => {
+    const dsn = injectable[k];
+    return dsn !== undefined && dsnHost(dsn) === vm;
+  });
 }
 
 /**
@@ -278,7 +307,7 @@ export interface NodeAppSubstrateBindingInput {
  * gives `nodeAppEnv`; `ports` is the attempt's mesh grant (`NodeSubstrateGrant.ports`) and the
  * `cogni-substrate` listener set, and `nodeAppEnv` derives its substrate env from this same output.
  * Doltgres is included when `DOLTGRES_URL` comes from the bucket (not from a state binding). Postgres is
- * not included: its endpoint is placement-owned.
+ * included only on a mesh attempt whose bucket Postgres DSN names the env VM (SHARED_POSTGRES_ONLY).
  */
 export function nodeAppSubstrateBinding(
   input: NodeAppSubstrateBindingInput
@@ -290,6 +319,9 @@ export function nodeAppSubstrateBinding(
     types: [
       ...NODE_APP_SUBSTRATE_TYPES,
       ...(keys.includes(DOLTGRES_URL) ? (["doltgres"] as const) : []),
+      ...(sharedPostgresKeysOnVm(input).length > 0
+        ? (["postgres"] as const)
+        : []),
     ],
   });
 }
@@ -333,6 +365,18 @@ export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
       binding.host,
       SUBSTRATE_PORTS.doltgres
     );
+  }
+  // SHARED_POSTGRES_ONLY: a DSN on the env VM moves to the binding; a dedicated cell keeps its endpoint.
+  const sharedPostgres = sharedPostgresKeysOnVm(input);
+  if (binding?.transport === "mesh" && sharedPostgres.length > 0) {
+    if (!binding.types.includes("postgres"))
+      throw new Error("node app env refused: Postgres has no mesh binding");
+    for (const key of sharedPostgres)
+      e[key] = rebindDsnEndpoint(
+        injectable[key] as string,
+        binding.host,
+        SUBSTRATE_PORTS.postgres
+      );
   }
   // Platform identity and optional catalog/push outputs retain precedence over secrets.
   if (input.databasePoolLimits)
