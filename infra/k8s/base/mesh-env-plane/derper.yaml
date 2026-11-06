@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — this tailnet's own relay (one relay per tailnet): stock upstream cmd/derper 1.104.4, built by operator CI through the
+# existing type:infra image build (infra/catalog/derper.yaml) and pinned BY DIGEST (CD10; the
+# reproducibility exit is task.5435). Holds no secret. It checks clients against its env's
+# Headscale /verify and FAILS OPEN, so the relay keeps working while the coordinator is down (HR9).
+#
+# Exposure: UDP STUN on this tailnet's own port (hostPort: the fixed port its relay map names; the
+# instance overlay sets it from the tailnet table). TCP 3340 = plain-HTTP DERP behind the `derper`
+# NodePort Service, reached ONLY by this VM's edge Caddy (host.docker.internal:<nodePort>), which serves
+# `derp-<tailnet>.<zone>` (DNS-only) on 443 with a public ACME certificate; the hardener drops the
+# NodePort from the public NIC before NAT.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: derper
+  labels:
+    app.kubernetes.io/name: derper
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  replicas: 1
+  # hostPorts cannot surge on one node.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: derper
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: derper
+        app.kubernetes.io/part-of: cogni-mesh
+    spec:
+      priorityClassName: cogni-mesh-critical
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: derper
+          # Built by PR Build run 42150965372 (job "build (derper)") at content hash 11a5aebb2de6.
+          # The digest is the identity; an affected rebuild re-points the tag to new bytes (task.5435).
+          image: ghcr.io/cogni-dao/cogni-template:derper-11a5aebb2de6@sha256:5db57d611db2111db6a7baa9037fb0c009a6267edbf1edba515618504b3f4222
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MESH_RELAY_HOST
+              valueFrom:
+                { configMapKeyRef: { name: mesh-env, key: MESH_RELAY_HOST } }
+            - name: MESH_STUN_PORT
+              valueFrom:
+                { configMapKeyRef: { name: mesh-env, key: MESH_STUN_PORT } }
+            - name: MESH_CONTROL_HOST
+              valueFrom:
+                { configMapKeyRef: { name: mesh-env, key: MESH_CONTROL_HOST } }
+          args:
+            - -hostname=$(MESH_RELAY_HOST)
+            - -a=:3340
+            - -http-port=-1
+            - -stun-port=$(MESH_STUN_PORT)
+            - -c=/tmp/derper.json
+            - -verify-client-url=https://$(MESH_CONTROL_HOST)/verify
+            - -verify-client-url-fail-open=true
+          ports:
+            - { name: derp-http, containerPort: 3340, protocol: TCP }
+            - { name: stun, containerPort: 3478, hostPort: 3478, protocol: UDP }
+          # Guaranteed QoS (B17).
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 50m, memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          livenessProbe:
+            httpGet: { path: /derp/probe, port: derp-http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: derper
+  labels:
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: derper
+  ports:
+    - {
+        name: derp-http,
+        port: 3340,
+        targetPort: derp-http,
+        protocol: TCP,
+        nodePort: 32340,
+      }
