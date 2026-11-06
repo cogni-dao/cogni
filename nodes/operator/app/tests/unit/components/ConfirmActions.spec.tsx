@@ -17,15 +17,14 @@ function button(name: string): HTMLButtonElement {
 }
 
 /**
- * Renders the gate and counts real form submissions. jsdom cannot navigate, so the
- * POST is suppressed; the count is what proves a click did — or did not — fire one.
+ * Renders the gate and counts submit events without canceling them. Synthetic
+ * events do not navigate; cancellation belongs to the component guard.
  */
 function renderGate(): { form: HTMLFormElement; submits: () => number } {
   let submits = 0;
   render(<ConfirmActions mode="link" />);
   const form = button(CONFIRM).closest("form") as HTMLFormElement;
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
+  form.addEventListener("submit", () => {
     submits += 1;
   });
   return { form, submits: () => submits };
