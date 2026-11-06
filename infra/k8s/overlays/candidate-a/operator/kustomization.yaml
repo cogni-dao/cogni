@@ -296,6 +296,12 @@ patches:
                   # so the sequencer resolves the zone id BY NAME with that token. The operator endpoint
                   # (test.cognidao.org) and the substrate host above stay in cognidao.org. Production sets
                   # cognidao.org explicitly; preview has no local binding.
+                  # task.5428 — the test tailnet's DNS-only hosts live in this test zone, so THIS sequencer
+                  # (the only holder of the test-zone token) is their one writer: a CNAME to the candidate-a
+                  # VM alias, proxied=false, read back every 10 minutes (features/node-deploy/mesh-dns.ts).
+                  # Pinned equal to scripts/ci/lib/mesh-plane.sh by node-deploy-mesh-coordinators.spec.ts.
+                  - name: NODE_DEPLOY_MESH_DNS_RECORDS
+                    value: mesh-test-candidate-a=cogni-candidate-a.vm.cognidao.org,derp-test-candidate-a=cogni-candidate-a.vm.cognidao.org
   - target:
       kind: ConfigMap
       name: node-app-config

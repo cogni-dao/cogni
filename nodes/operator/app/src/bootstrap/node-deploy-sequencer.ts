@@ -55,6 +55,10 @@
  *     Secrets in the lane's `cogni-node-deploy-<env>` namespace, and the env VM's published `substrate-gw`
  *     request read over verified HTTPS. Its mesh pass runs inside the reconcile loop, under the leader lock.
  *     An egress lane builds none of it.
+ *   - MESH_DNS_IN_ZONE (task.5428): `NODE_DEPLOY_MESH_DNS_RECORDS` (`mesh-<t>=<vm alias>,derp-<t>=<vm alias>`)
+ *     names the DNS-only mesh hosts this process alone can write: the test tailnet's hosts in the test zone,
+ *     whose token only the test operator holds. The leader writes them through the SAME bound-zone client the
+ *     edge uses, every 10 minutes, and logs one `node_deploy_sequencer_mesh_dns` line per record per pass.
  * Side-effects: IO (Postgres, actuator HTTP, Cloudflare, Kubernetes API, provider ingress; health listener)
  * Links: @features/node-deploy/sequencer, infra/k8s/base/node-deploy-sequencer, task.5400
  * @internal
@@ -89,6 +93,12 @@ import {
   EnvLaneSequencers,
   resolveEnvLanes,
 } from "@/features/node-deploy/env-lanes";
+import {
+  ensureMeshDnsRecords,
+  MeshDnsConfigError,
+  type MeshDnsRecord,
+  parseMeshDnsRecords,
+} from "@/features/node-deploy/mesh-dns";
 import { MeshPlane } from "@/features/node-deploy/mesh-plane";
 import { DEFAULT_SEQUENCER_CONFIG } from "@/features/node-deploy/sequencer";
 import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
@@ -104,6 +114,7 @@ const RECONCILE_MS = 60_000;
  */
 const headscaleSocketFor = (tailnet: string): string =>
   `/var/run/headscale/${tailnet}/headscale.sock`;
+const MESH_DNS_MS = 600_000;
 
 // biome-ignore lint/style/noProcessEnv: dedicated process composition root validates its own minimal env
 const runtimeEnv = process.env;
@@ -348,6 +359,66 @@ if (!composed.edgeConfigured) {
 }
 const laneSequencers = composed.lanes;
 
+// task.5428 MESH_DNS_IN_ZONE: the declared DNS-only mesh hosts, written with the bound zone's own client.
+let meshDnsRecords: readonly MeshDnsRecord[];
+try {
+  meshDnsRecords = parseMeshDnsRecords(runtimeEnv.NODE_DEPLOY_MESH_DNS_RECORDS);
+} catch (error) {
+  if (!(error instanceof MeshDnsConfigError)) throw error;
+  log.fatal(
+    { reason: "MeshDnsConfigInvalid", causeMessage: error.message },
+    "node_deploy_sequencer_mesh_dns_invalid"
+  );
+  throw error;
+}
+const meshDnsBinding = composed.authority.ok
+  ? composed.authority.binding
+  : undefined;
+const meshDns =
+  meshDnsRecords.length > 0 && meshDnsBinding
+    ? await edgeDnsFor(meshDnsBinding)
+    : undefined;
+
+async function writeMeshDns(): Promise<void> {
+  if (meshDnsRecords.length === 0) return;
+  const zone = meshDnsBinding?.zoneName;
+  if (!meshDns || !meshDnsBinding) {
+    for (const r of meshDnsRecords)
+      log.error(
+        {
+          environment,
+          host: `${r.label}.${zone ?? "?"}`,
+          target: r.target,
+          outcome: "unconfigured",
+        },
+        "node_deploy_sequencer_mesh_dns"
+      );
+    return;
+  }
+  try {
+    for (const r of await ensureMeshDnsRecords(
+      meshDns,
+      meshDnsBinding,
+      meshDnsRecords
+    ))
+      log.info({ environment, ...r }, "node_deploy_sequencer_mesh_dns");
+  } catch (error) {
+    const causeMessage =
+      error instanceof Error ? error.message.slice(0, 300) : "unknown";
+    for (const r of meshDnsRecords)
+      log.error(
+        {
+          environment,
+          host: `${r.label}.${zone}`,
+          target: r.target,
+          outcome: "failed",
+          causeMessage,
+        },
+        "node_deploy_sequencer_mesh_dns"
+      );
+  }
+}
+
 /** A failure that repeats every pass is logged once per 10 minutes per (loop, env, message). */
 const loopErrorAt = new Map<string, number>();
 
@@ -472,6 +543,10 @@ loop("tick", TICK_MS, async () => {
 loop("reconcile", RECONCILE_MS, async () => {
   await assertLeader();
   await sequencer.reconcileAll();
+});
+loop("mesh-dns", MESH_DNS_MS, async () => {
+  await assertLeader();
+  await writeMeshDns();
 });
 
 function shutdown(signal: string): void {

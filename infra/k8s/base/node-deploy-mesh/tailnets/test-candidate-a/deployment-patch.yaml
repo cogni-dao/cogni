@@ -29,8 +29,11 @@ spec:
           ports:
             - name: hs-tca
               containerPort: 8184
+          # Request right-sized (task.5428): Headscale v0.29.7 measured 9.7 MiB RSS idle with this config
+          # (stock image, local). The request counts in the env VM's memory budget; the limit is the
+          # design's §1 burst ceiling.
           resources:
-            requests: { cpu: 25m, memory: 64Mi }
+            requests: { cpu: 25m, memory: 24Mi }
             limits: { cpu: 200m, memory: 256Mi }
           securityContext:
             allowPrivilegeEscalation: false

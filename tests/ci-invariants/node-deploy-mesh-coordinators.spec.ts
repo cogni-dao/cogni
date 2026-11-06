@@ -13,13 +13,18 @@
  *     public DERP, one region = the tailnet's own relay host; table-derived NodePorts with publishNotReadyAddresses.
  *   - DECOUPLED_HEALTH (CD5/CD7): no Headscale readiness probe; Reloader rolls only on the sequencer's Secrets + ConfigMap;
  *     the rollout alert reads Kubernetes events and a liveness rule pages when that source is silent.
+ *   - ONE_WRITER_PER_MESH_RECORD (CD4): every mesh record (each tailnet's control host; its relay host once it has a
+ *     VM) has exactly one real writer. In the CI writer's zone (production's workload zone): reconcile-node-dns.sh in the
+ *     coordinator env's run. In any other zone: the coordinator env's operator sequencer, whose bound workload zone must
+ *     equal that zone and whose NODE_DEPLOY_MESH_DNS_RECORDS must list exactly those records, each a CNAME to its VM
+ *     alias. No overlay declares a record the table does not derive.
  * Side-effects: IO (reads committed files; optional local kubectl kustomize)
  * Links: task.5428, task.5384, bug.5579, hub node-service-delivery, infra/k8s/base/node-deploy-mesh/
  * @internal
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -282,7 +287,7 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
       "/etc/headscale/config.yaml",
     ]);
     expect(c?.resources).toEqual({
-      requests: { cpu: "25m", memory: "64Mi" },
+      requests: { cpu: "25m", memory: "24Mi" },
       limits: { cpu: "200m", memory: "256Mi" },
     });
     expect(c?.securityContext).toEqual({
@@ -383,6 +388,68 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
     }
   );
 
+  it("NodePort preflight: no other manifest in the repo claims a coordinator NodePort", () => {
+    const yamls = (dir: string): string[] =>
+      readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? yamls(`${dir}/${e.name}`)
+          : /\.ya?ml$/.test(e.name)
+            ? [`${dir}/${e.name}`]
+            : []
+      );
+    const claims = new Map<string, string[]>();
+    for (const f of yamls("infra/k8s"))
+      for (const m of read(f).matchAll(/nodePort:\s*"?(\d+)"?/g))
+        claims.set(m[1] ?? "", [...(claims.get(m[1] ?? "") ?? []), f]);
+    for (const t of TABLE)
+      expect(claims.get(t.coordinator_np), t.tailnet).toEqual([
+        `${BASE}/${t.tailnet}/service.yaml`,
+      ]);
+  });
+
+  it("every mesh record has exactly one real writer; the test zone's is its operator sequencer (CD4)", () => {
+    const overlay = (env: string) =>
+      read(`infra/k8s/overlays/${env}/operator/kustomization.yaml`);
+    const zoneOf = (env: string) =>
+      overlay(env).match(
+        /path: \/data\/NODE_DEPLOY_WORKLOAD_ZONE\n\s+value: "?([a-z0-9.-]+)"?/
+      )?.[1];
+    const declared = (env: string) =>
+      (
+        overlay(env).match(
+          /name: NODE_DEPLOY_MESH_DNS_RECORDS\n\s+value: (\S+)/
+        )?.[1] ?? ""
+      )
+        .split(",")
+        .filter(Boolean)
+        .sort();
+    // scripts/setup/lib/fork-identity.sh vm_host_for_env, canonical fleet in the production zone.
+    const vmHost = (env: string) =>
+      env === "production"
+        ? "cogni.vm.cognidao.org"
+        : `cogni-${env}.vm.cognidao.org`;
+    const ciZone = zoneOf("production");
+    expect(ciZone).toBe("cognidao.org");
+    const expected: Record<string, string[]> = {
+      production: [],
+      "candidate-a": [],
+    };
+    for (const t of TABLE) {
+      if (t.zone === ciZone) continue; // reconcile-node-dns.sh writes it in the coordinator env's run
+      expect(zoneOf(t.coordinator_env), t.tailnet).toBe(t.zone);
+      expected[t.coordinator_env]?.push(
+        `${t.control_label}=${vmHost(t.coordinator_env)}`
+      );
+      if (t.vm_env)
+        expected[t.coordinator_env]?.push(
+          `${t.relay_label}=${vmHost(t.vm_env)}`
+        );
+    }
+    expect(expected["candidate-a"]?.length).toBeGreaterThan(0);
+    for (const env of ["production", "candidate-a"])
+      expect(declared(env), env).toEqual((expected[env] ?? []).sort());
+  });
+
   it("Reloader rolls the sequencer pod only for the Secrets and the operator ConfigMap it reads (CD5)", () => {
     const doc = parse<Doc>(
       "infra/k8s/base/node-deploy-sequencer/deployment.yaml"
@@ -423,5 +490,10 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
     const live = rule("mesh-k8s-events-source-silent");
     expect(live?.data[0]?.model.expr).toContain('source="k8s-events"');
     expect(live?.noDataState).toBe("Alerting");
+    // The mesh DNS writer's evidence: a failure warns and missing evidence pages.
+    expect(rule("mesh-dns-writer-failed")?.data[0]?.model.expr).toContain(
+      'msg="node_deploy_sequencer_mesh_dns"'
+    );
+    expect(rule("mesh-dns-writer-no-data")?.noDataState).toBe("Alerting");
   });
 });

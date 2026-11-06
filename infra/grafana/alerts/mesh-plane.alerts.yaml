@@ -13,6 +13,7 @@
 # `grafanacloud-logs` is the production Loki source (one stack, env is a label).
 # The rules marked `slice: T2` read events the sequencer emits once slice T2 ships; apply them with T2,
 # because their no-data state is Alerting by design (an absent coordinator health stream must page).
+# The rule marked `slice: P4` reads the env-plane substrate-gw (task.5428 P4); apply it with P4.
 #
 # Source events:
 #   substrate-gw (Loki {env,namespace="cogni-mesh",service="substrate-gw"} via the k3s pod-log source;
@@ -25,6 +26,8 @@
 #   sequencer pod (Loki {env="production",namespace="cogni-production"}): containers headscale-<env>
 #     (JSON logs); Kubernetes events {source="k8s-events"} (alloy-k8s-events) for its rollout
 #   sequencer, slice T2: msg="node_mesh_coordinator_health" {env, outcome}, msg="node_mesh_substrate_mismatch"
+#   sequencer (candidate-a test operator): msg="node_deploy_sequencer_mesh_dns" {outcome, host, target}, one
+#     line per record per pass (features/node-deploy/mesh-dns.ts)
 apiVersion: 1
 groups:
   - orgId: 1
@@ -119,6 +122,7 @@ groups:
       # The gateway watchdog itself is gone (container down, VM down, or log shipping broken).
       # One substrate-gw per tailnet on the candidate-a VM (cogni-mesh-candidate-a, cogni-mesh-test-candidate-a):
       # fewer than both namespaces heartbeating is an alert. Add a namespace with each new instance.
+      # slice: P4 — no substrate-gw runs before P4, and this rule's no-data state pages.
       - uid: mesh-substrate-gw-no-heartbeat
         title: A candidate-a substrate-gw watchdog heartbeat missing for 5 minutes
         condition: THRESHOLD
@@ -141,8 +145,8 @@ groups:
                 - evaluator: { type: lt, params: [2] }
               refId: THRESHOLD
         annotations:
-          summary: "No substrate_gw_watchdog line from candidate-a in 5 minutes: the env gateway (or its fail-closed watchdog) is not running, or its logs are not shipped. Check the cogni-mesh/substrate-gw pod on the env VM's k3s (Argo app candidate-a-mesh-plane)."
-        labels: { severity: critical, plane: mesh }
+          summary: "No substrate_gw_watchdog line from candidate-a in 5 minutes: the env gateway (or its fail-closed watchdog) is not running, or its logs are not shipped. Check the cogni-mesh-<tailnet>/substrate-gw pods on the env VM's k3s (Argo apps candidate-a-mesh-plane-<tailnet>)."
+        labels: { severity: critical, plane: mesh, slice: P4 }
         noDataState: Alerting
         execErrState: Alerting
 
@@ -204,8 +208,12 @@ groups:
         noDataState: OK
         execErrState: Alerting
 
-      # A sequencer rollout takes longer than 10 minutes (B7). In production the per-env coordinators
-      # restart with the pod (CD5), so a stuck rollout is a coordinator outage. Read the Kubernetes
+      # A sequencer rollout takes longer than 10 minutes (B7). In production and candidate-a the per-tailnet
+      # coordinators restart with the pod (CD5), so a stuck rollout is a coordinator outage.
+      # LIMITS (a proxy until kube-state-metrics exists, bug.5165): it counts Warning events over 10 minutes
+      # with `for: 10m`, so it fires after 10 to 20 minutes of continuous Warnings. A rollout stuck with only
+      # Normal events (a slow image pull) never fires, and ProgressDeadlineExceeded is a Deployment
+      # condition that may never be emitted as an event. Read the Kubernetes
       # events in Loki (alloy-k8s-events -> {source="k8s-events"}): Warning events on the sequencer pod
       # or Deployment (BackOff, Unhealthy liveness, FailedMount of a headscale PVC/socket volume,
       # FailedScheduling, ProgressDeadlineExceeded) that keep arriving for 10 minutes mean the new pod
@@ -266,7 +274,7 @@ groups:
                 - evaluator: { type: lt, params: [2] }
               refId: THRESHOLD
         annotations:
-          summary: "No production Kubernetes event reached Loki in 30 minutes (bug.5579). Every event-based rule, including the sequencer rollout alert, is blind until alloy-k8s-events ships again on the production VM."
+          summary: "Production or candidate-a Kubernetes events did not reach Loki in 30 minutes (bug.5579). Every event-based rule, including the sequencer rollout alert, is blind for that env until alloy-k8s-events ships again on its VM."
         labels: { severity: critical, plane: mesh }
         noDataState: Alerting
         execErrState: Alerting
@@ -327,6 +335,64 @@ groups:
           summary: "{{ $labels.container }} refused more than 10 mesh credentials in 15 minutes. A revoked attempt key keeps retrying (expected for a few minutes after a revoke) or a lease holds a wrong key. Read the sequencer's attempt keys and the lease's cogni-mesh companion logs."
         labels: { severity: warning, plane: mesh }
         noDataState: OK
+        execErrState: Alerting
+
+      # The test tailnet's DNS-only records (cogni-testing.org) are written by the candidate-a test operator's
+      # sequencer, the only holder of that zone's token. A failed write or readback leaves the test
+      # coordinator and relay unreachable and their certificates unissued.
+      - uid: mesh-dns-writer-failed
+        title: Sequencer cannot write a mesh DNS record
+        condition: THRESHOLD
+        for: 0s
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 1800, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'sum by (env, host) (count_over_time({env="candidate-a",service="sequencer"} | json | msg="node_deploy_sequencer_mesh_dns" | outcome!~"ok|created|updated" [30m]))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+              refId: THRESHOLD
+        annotations:
+          summary: "The {{ $labels.env }} sequencer could not write or read back the DNS-only mesh record {{ $labels.host }} in 30 minutes. Read node_deploy_sequencer_mesh_dns lines (outcome, causeMessage): a zone-token scope or an ambiguous record is the usual cause."
+        labels: { severity: warning, plane: mesh }
+        noDataState: OK
+        execErrState: Alerting
+
+      # Missing evidence pages: the writer logs every record on every pass (10 minutes).
+      - uid: mesh-dns-writer-no-data
+        title: No mesh DNS writer evidence for 30 minutes
+        condition: THRESHOLD
+        for: 0s
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 1800, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'sum(count_over_time({env="candidate-a",service="sequencer"} | json | msg="node_deploy_sequencer_mesh_dns" [30m]))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: THRESHOLD
+        annotations:
+          summary: "No node_deploy_sequencer_mesh_dns line from the candidate-a sequencer in 30 minutes: the test tailnet's DNS records have no running writer (sequencer down, no leader, edge zone unresolved, or log shipping broken)."
+        labels: { severity: warning, plane: mesh }
+        noDataState: Alerting
         execErrState: Alerting
 
       # slice: T2 — the sequencer cannot reach a coordinator (design §2 "A failed Headscale call").

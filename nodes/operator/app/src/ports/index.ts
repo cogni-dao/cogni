@@ -321,6 +321,7 @@ export type {
   ChainTruthPort,
   DesiredRow,
   DesiredState,
+  DnsOnlyRecordInput,
   DnsRecord,
   DnsRecordInput,
   DnsRecordsPort,

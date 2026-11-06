@@ -249,21 +249,33 @@ done
 # (scripts/ci/lib/mesh-plane.sh): its control host `mesh-<tailnet>.<zone>` -> this env's VM (whose edge
 # fronts the coordinator) and its relay host `derp-<tailnet>.<zone>` -> the VM that runs its relay (this
 # VM, or another env's VM read from that VM's own alias record, written by provision). One writer per
-# tailnet: the run of its coordinator env. A run writes only hosts in ITS zone (FORK_DOMAIN_ROOT, the
-# zone its Cloudflare token is scoped to): canonical tailnets live in the production zone; the test
-# operator's tailnet lives in the isolated test-fleet zone and is written only by a run holding that
-# zone's token (hub test-fleet-parity-boundary). Headscale and DERP do not work behind a Cloudflare
-# proxy, so these records are ALWAYS proxied=false (DNS-only), whatever the apex does.
+# record. This run writes the tailnets in ITS zone (FORK_DOMAIN_ROOT, the zone its Cloudflare token is
+# scoped to): the canonical tailnets, in the production zone. A tailnet in another zone (the test
+# operator's, in the isolated test-fleet zone, hub test-fleet-parity-boundary) is written by its
+# coordinator env's operator sequencer, the only holder of that zone's token, as a DNS-only CNAME to the
+# VM alias (NODE_DEPLOY_MESH_DNS_RECORDS, features/node-deploy/mesh-dns.ts). This run never writes it;
+# --check resolves it publicly and FAILS when it is absent or points elsewhere, so a record with no
+# writer is never green. Headscale and DERP do not work behind a Cloudflare proxy, so these records are
+# ALWAYS proxied=false (DNS-only), whatever the apex does.
 # shellcheck source=scripts/ci/lib/mesh-plane.sh
 source "${SCRIPT_DIR}/lib/mesh-plane.sh"
 mesh_dns_hosts=()
 mesh_dns_ips=()
+mesh_foreign_hosts=()
+mesh_foreign_targets=()
 mesh_slug="$(fork_identity_slug "${SCRIPT_DIR}/../..")"
 while read -r tailnet; do
   [ -n "$tailnet" ] || continue
   zone="$(mesh_tailnet_field "$tailnet" zone)"
   if [ "$zone" != "$FORK_ROOT" ]; then
-    echo "  skip     ${tailnet} mesh hosts (zone ${zone}; written by the ${DEPLOY_ENV} run holding that zone's token)"
+    echo "  other    ${tailnet} mesh hosts (zone ${zone}): written by the ${DEPLOY_ENV} operator sequencer (NODE_DEPLOY_MESH_DNS_RECORDS)"
+    mesh_foreign_hosts+=("$(mesh_host "$tailnet" control)")
+    mesh_foreign_targets+=("$(vm_host_for_env "$DEPLOY_ENV" "$FORK_ROOT" "$mesh_slug")")
+    relay_env="$(mesh_tailnet_field "$tailnet" vm_env)"
+    if [ -n "$relay_env" ]; then
+      mesh_foreign_hosts+=("$(mesh_host "$tailnet" relay)")
+      mesh_foreign_targets+=("$(vm_host_for_env "$relay_env" "$FORK_ROOT" "$mesh_slug")")
+    fi
     continue
   fi
   mesh_dns_hosts+=("$(mesh_host "$tailnet" control)")
@@ -303,6 +315,30 @@ for i in "${!mesh_dns_hosts[@]}"; do
   fi
   append_dns_record
 done
+
+# Mesh hosts another writer owns (see above): --check reads them from public DNS (DoH; this run's token
+# cannot read that zone). Absent or pointing elsewhere = no working writer = MISSING.
+public_cname() {
+  "${DOH_CURL:-curl}" -fsS -m 10 -H 'accept: application/dns-json' \
+    "https://cloudflare-dns.com/dns-query?name=$1&type=CNAME" 2>/dev/null \
+    | python3 -c 'import json,sys; a=[x["data"] for x in json.load(sys.stdin).get("Answer",[]) if x.get("type")==5]; print(a[0].rstrip(".").lower() if a else "")' 2>/dev/null || true
+}
+if $CHECK; then
+  for i in "${!mesh_foreign_hosts[@]}"; do
+    host="${mesh_foreign_hosts[$i]}"
+    expected="${mesh_foreign_targets[$i]}"
+    content="$(public_cname "$host")"
+    if [ "$content" = "$expected" ]; then
+      echo "  ok       ${host} CNAME ${expected} (public DNS; written by the ${DEPLOY_ENV} sequencer)"
+      state="ok"
+    else
+      echo "  MISSING  ${host} (public CNAME '${content:-none}'; want ${expected}, written by the ${DEPLOY_ENV} sequencer)"
+      state="missing"
+      missing+=("$host")
+    fi
+    append_dns_record
+  done
+fi
 
 if $CHECK && [ "${#missing[@]}" -gt 0 ]; then
   write_dns_summary "failure"

@@ -174,6 +174,7 @@ const IDENTITY: Record<string, Rule[]> = {
       "NODE_MINT_OWNER",
       "NODE_TEMPLATE_OWNER",
       "NODE_SUBMODULE_PARENT_OWNER",
+      "NODE_DEPLOY_WORKLOAD_ZONE",
       "NODE_SUBMODULE_PARENT_REPO",
       "DOLTHUB_OWNER",
       "DOLTHUB_NONPROD_OWNER",
@@ -251,11 +252,6 @@ const IDENTITY: Record<string, Rule[]> = {
       ),
     },
     {
-      why: "the fleet workload DNS zone is domain identity: candidate and production use their own zones (story.5137)",
-      pattern:
-        /^patch\[ConfigMap\/node-app-config\] add \/data\/NODE_DEPLOY_WORKLOAD_ZONE$/,
-    },
-    {
       why: "env name",
       pattern: envValue(
         "database-reliability-actuator",
@@ -321,6 +317,15 @@ const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
         "only its own test-candidate-a tailnet, with no production identity. The same Component code, a " +
         "different tailnet set; tests/ci-invariants/node-deploy-mesh-coordinators.spec.ts pins both sides.",
       pattern: /^kustomization\.components\[\d+\]$/,
+    },
+    {
+      why:
+        "MESH DNS IN THE TEST ZONE (task.5428, CD4): the test tailnet's DNS-only hosts live in the isolated " +
+        "test zone, whose token only the candidate-a test operator holds, so its sequencer is their one " +
+        "writer. Production's canonical mesh hosts are written by scripts/ci/reconcile-node-dns.sh, so it " +
+        "declares none. tests/ci-invariants/node-deploy-mesh-coordinators.spec.ts pins the value to the table.",
+      pattern:
+        /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_MESH_DNS_RECORDS\]\.(name|value)$/,
     },
   ],
   "scheduler-worker": [

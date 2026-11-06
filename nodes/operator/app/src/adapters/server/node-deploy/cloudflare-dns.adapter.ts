@@ -18,6 +18,7 @@
 
 import { z } from "zod";
 import {
+  type DnsOnlyRecordInput,
   type DnsRecord,
   type DnsRecordInput,
   type DnsRecordsPort,
@@ -172,13 +173,16 @@ export class CloudflareDnsRecords implements DnsRecordsPort {
     return rows.map(CloudflareDnsRecords.map);
   }
 
-  async create(input: DnsRecordInput): Promise<DnsRecord> {
+  async create(input: DnsRecordInput | DnsOnlyRecordInput): Promise<DnsRecord> {
     return CloudflareDnsRecords.map(
       await this.cf<CfRecord>("POST", "/dns_records", { ...input, ttl: 1 })
     );
   }
 
-  async update(id: string, input: DnsRecordInput): Promise<DnsRecord> {
+  async update(
+    id: string,
+    input: DnsRecordInput | DnsOnlyRecordInput
+  ): Promise<DnsRecord> {
     return CloudflareDnsRecords.map(
       await this.cf<CfRecord>("PUT", `/dns_records/${id}`, { ...input, ttl: 1 })
     );

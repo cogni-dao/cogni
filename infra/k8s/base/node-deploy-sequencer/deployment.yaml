@@ -13,15 +13,16 @@
 #   3. Its Role allows get/create on Secrets in this namespace and nothing else (rbac.yaml).
 #   4. Nothing dials the sequencer itself; its health port exists for kubelet probes only. Losing it
 #      can never block a deploy of the operator: it only drives workloads declared to it. In production
-#      the pod also carries the per-env Headscale coordinators (base/node-deploy-mesh), whose client
-#      ports ARE dialed through the `node-deploy-mesh` Service (publishNotReadyAddresses).
+#      and candidate-a the pod also carries one Headscale coordinator per tailnet its sequencer writes
+#      (base/node-deploy-mesh/tailnets/<tailnet>), whose client ports ARE dialed through that tailnet's
+#      own `node-deploy-mesh-<tailnet>` Service (publishNotReadyAddresses).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: node-deploy-sequencer
   annotations:
     # task.5428 (CD5) — NAMED Secrets only, never `auto`. Reloader rolls the whole pod, and in production
-    # the pod also runs the per-env Headscale coordinators (base/node-deploy-mesh), so an unrelated
+    # and candidate-a the pod also runs the per-tailnet Headscale coordinators (base/node-deploy-mesh), so an unrelated
     # Secret must not restart them. These are exactly the Secrets the projected volume below reads.
     secret.reloader.stakater.com/reload: "akash-tx-actuator-env-secrets,operator-env-secrets"
     # The sequencer reads operator-node-app-config through configMapKeyRef (every operator overlay
