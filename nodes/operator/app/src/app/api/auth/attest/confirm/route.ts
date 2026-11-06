@@ -23,6 +23,7 @@
 
 import {
   IDENTITY_ATTESTATION_V1_PROTOCOL_SHA256,
+  IdentityAttestationOriginSchema,
   IdentityAttestationRequestSchema,
 } from "@cogni/node-contracts";
 import { cookies } from "next/headers";
@@ -46,6 +47,7 @@ import {
   BROKER_STATE_TTL_SECONDS,
   decodeBrokerState,
   encodeBrokerState,
+  matchesConsentBinding,
 } from "@/shared/identity/broker-state";
 import {
   buildGithubAuthorizeUrl,
@@ -87,36 +89,51 @@ function failure(errorCode: string, requestNodeId?: string): NextResponse {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
+  let env: ReturnType<typeof serverEnv>;
+  try {
+    env = serverEnv();
+  } catch {
+    return new NextResponse("Service unavailable", { status: 503 });
+  }
+  const origin = IdentityAttestationOriginSchema.safeParse(env.APP_BASE_URL);
+  if (!origin.success)
+    return new NextResponse("Service unavailable", { status: 503 });
+  if (request.headers.get("origin") !== origin.data) {
+    return new NextResponse("Request refused", { status: 403 });
+  }
   const cookieStore = await cookies();
-  const brokerState = await decodeBrokerState(
-    cookieStore.get(BROKER_STATE_COOKIE)?.value,
-    authSecret
-  );
+  const token = cookieStore.get(BROKER_STATE_COOKIE)?.value;
+  const brokerState = await decodeBrokerState(token, authSecret);
   if (!brokerState?.github) {
     return failure("broker_request_expired");
   }
 
   const form = await request.formData().catch(() => null);
-  const actions = form?.getAll("action") ?? [];
+  if (!form) return failure("invalid_request", brokerState.nodeId);
+  const bindings = form.getAll("consentBinding");
+  if (
+    !token ||
+    bindings.length !== 1 ||
+    !matchesConsentBinding(token, bindings[0])
+  ) {
+    return failure("consent_review_required", brokerState.nodeId);
+  }
+  const actions = form.getAll("action");
   const action =
     actions.length === 1 && typeof actions[0] === "string" ? actions[0] : null;
-  const env = serverEnv();
 
   if (action !== "confirm" && action !== "switch" && action !== "cancel") {
-    cookieStore.delete(BROKER_STATE_COOKIE);
     return failure("invalid_request", brokerState.nodeId);
   }
 
   if (action === "switch") {
     if (!isAttestableProvider(brokerState.provider)) {
-      cookieStore.delete(BROKER_STATE_COOKIE);
       return failure("invalid_request");
     }
     const provider = brokerState.provider;
     // Re-authenticate from scratch: fresh state + PKCE, no carried-over identity.
     const client = resolveGithubOauthClient(env);
     if (!client) {
-      cookieStore.delete(BROKER_STATE_COOKIE);
       return failure("attestation_unavailable");
     }
     const challenge = createAuthorizationChallenge();
@@ -154,9 +171,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  cookieStore.delete(BROKER_STATE_COOKIE);
-
   if (action !== "confirm") {
+    cookieStore.delete(BROKER_STATE_COOKIE);
     return failure("cancelled", brokerState.nodeId);
   }
 
@@ -176,6 +192,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       request: parsed.data,
       returnTo: brokerState.returnTo,
     });
+    cookieStore.delete(BROKER_STATE_COOKIE);
     brokerLog().info(
       {
         event: EVENT_NAMES.IDENTITY_BROKER_COMPLETE,

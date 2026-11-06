@@ -22,7 +22,7 @@ function button(name: string): HTMLButtonElement {
  */
 function renderGate(): { form: HTMLFormElement; submits: () => number } {
   let submits = 0;
-  render(<ConfirmActions mode="link" />);
+  render(<ConfirmActions mode="link" consentBinding={"a".repeat(64)} />);
   const form = button(CONFIRM).closest("form") as HTMLFormElement;
   form.addEventListener("submit", () => {
     submits += 1;
@@ -34,6 +34,10 @@ describe("ConfirmActions", () => {
   it("posts to the confirm route, whose only authority is the broker cookie", () => {
     const { form } = renderGate();
 
+    expect(form.querySelectorAll('input[name="consentBinding"]')).toHaveLength(
+      1
+    );
+    expect(form.querySelector('input[name="action"]')).toBeNull();
     expect(form.getAttribute("action")).toBe("/api/auth/attest/confirm");
     expect(form.getAttribute("method")?.toLowerCase()).toBe("post");
   });
@@ -88,6 +92,7 @@ vi.mock("next/headers", () => ({
 vi.mock("@/auth", () => ({ authSecret: "test" }));
 vi.mock("@/shared/identity/broker-state", () => ({
   BROKER_STATE_COOKIE: "test",
+  consentBinding: () => "a".repeat(64),
   decodeBrokerState: async () => ({
     github: { id: "123", login: "fixture" },
     nodeSlug: "fixture-node",

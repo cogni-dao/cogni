@@ -23,7 +23,13 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components";
 
-export function ConfirmActions({ mode }: { mode: "signin" | "link" }) {
+export function ConfirmActions({
+  mode,
+  consentBinding,
+}: {
+  mode: "signin" | "link";
+  consentBinding: string;
+}) {
   const [pending, setPending] = useState<string | null>(null);
   const submitted = useRef(false);
 
@@ -53,6 +59,7 @@ export function ConfirmActions({ mode }: { mode: "signin" | "link" }) {
         );
       }}
     >
+      <input type="hidden" name="consentBinding" value={consentBinding} />
       <Button
         disabled={pending !== null && pending !== "confirm"}
         name="action"

@@ -26,6 +26,7 @@ import { PageContainer, SectionCard } from "@/components";
 import { ATTESTATION_SIGNIN_PATH } from "@/shared/identity/broker-config";
 import {
   BROKER_STATE_COOKIE,
+  consentBinding,
   decodeBrokerState,
 } from "@/shared/identity/broker-state";
 
@@ -35,12 +36,10 @@ export const dynamic = "force-dynamic";
 
 export default async function IdentityAttestationConfirmPage() {
   const cookieStore = await cookies();
-  const brokerState = await decodeBrokerState(
-    cookieStore.get(BROKER_STATE_COOKIE)?.value,
-    authSecret
-  );
+  const token = cookieStore.get(BROKER_STATE_COOKIE)?.value;
+  const brokerState = await decodeBrokerState(token, authSecret);
 
-  if (!brokerState?.github) {
+  if (!brokerState?.github || !token) {
     return (
       <PageContainer maxWidth="sm">
         <SectionCard title="This request expired">
@@ -89,7 +88,7 @@ export default async function IdentityAttestationConfirmPage() {
         </p>
       </div>
 
-      <ConfirmActions mode={mode} />
+      <ConfirmActions mode={mode} consentBinding={consentBinding(token)} />
       {mode === "link" ? (
         <a
           href={`${targetOrigin}/profile`}
