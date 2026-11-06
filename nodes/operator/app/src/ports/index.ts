@@ -367,6 +367,28 @@ export type {
   ServingResult,
 } from "./node-flight.port";
 export type {
+  CreatePreAuthKeyInput,
+  HeadscaleDeviceId,
+  HeadscaleKeyId,
+  HeadscaleUser,
+  MeshApiKey,
+  MeshDevice,
+  MeshPolicy,
+  MeshPreAuthKey,
+  MeshUser,
+  MintedPreAuthKey,
+  NodeMeshErrorCode,
+  NodeMeshErrorReason,
+  NodeMeshPort,
+} from "./node-mesh.port";
+export {
+  headscaleDeviceId,
+  headscaleKeyId,
+  headscaleUser,
+  isNodeMeshError,
+  NodeMeshError,
+} from "./node-mesh.port";
+export type {
   NodeMigrationReportRecord,
   NodeMigrationReportStorePort,
   RecordNodeMigrationReportInput,

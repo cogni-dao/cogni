@@ -460,6 +460,12 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.0.0)
+      '@grpc/grpc-js':
+        specifier: 1.14.1
+        version: 1.14.1
+      '@grpc/proto-loader':
+        specifier: 0.8.0
+        version: 0.8.0
       '@kubernetes/client-node':
         specifier: ^0.22.3
         version: 0.22.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)

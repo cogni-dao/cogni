@@ -63,6 +63,8 @@
     "@dnd-kit/modifiers": "^9.0.0",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@grpc/grpc-js": "1.14.1",
+    "@grpc/proto-loader": "0.8.0",
     "@kubernetes/client-node": "^0.22.3",
     "@langchain/langgraph-sdk": "^0.0.32",
     "@octokit/auth-app": "^7.1.4",
