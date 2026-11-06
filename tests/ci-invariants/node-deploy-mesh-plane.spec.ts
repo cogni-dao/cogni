@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@tests/ci-invariants/node-deploy-mesh-plane`
@@ -7,7 +7,7 @@
  *   PVCs, configs and client Service beside the node-deploy sequencer, and the env VM's relay + gateway
  *   Compose services, so a later edit cannot quietly reopen an admin surface, a Tailscale relay or a
  *   shared tailnet.
- * Scope: Reads committed YAML/JSON/shell only. No kubectl, docker or network.
+ * Scope: Reads committed YAML/JSON/shell only; does not run kubectl, docker or touch the network.
  * Invariants:
  *   - ONE_TAILNET_PER_ENV (HR2): own container, PVC `headscale-<env>` (1Gi RWO local-path), socket, port.
  *   - PINNED_AND_BOUNDED: one Headscale digest; requests 25m/64Mi, limits 200m/256Mi; non-root, no caps.
