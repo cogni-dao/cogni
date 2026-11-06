@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 /**
- * Normal pre-reconcile materializer against an owned KV v2 OpenBao.
- * Kubernetes discovery/login and LiteLLM are simulated; KV GET, ACL, patch,
- * put, metadata and versions are native. No deployed endpoint is contacted.
- * The distinct deploy writer/candidate caller is outside this fixture's scope.
+ * Module: `@tests/ci-invariants/native/secret-materialize-openbao`
+ * Purpose: Verify normal materialization against owned OpenBao KV v2.
+ * Scope: CI-owned fixture; does not exercise the deploy writer or candidate caller.
+ * Invariants: KV data, ACLs and versions are native; no deployed endpoint is contacted.
+ * Side-effects: IO (owned containers, network and temporary files), time, randomness, process.env
+ * Links: task.5434, scripts/ci/secret-materialize.sh
+ * @internal
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -40,7 +43,9 @@ if (!process.env.CI)
     "OpenBao native fixture is CI-only; local skip is not runtime proof."
   );
 describe.skipIf(!process.env.CI)("normal materializer OpenBao custody", () => {
-  it("selects preview authority, converges, and fails closed", async () => {
+  it("selects preview authority, converges, and fails closed", async ({
+    signal,
+  }) => {
     await new Docker({ timeout: 10_000 }).ping();
     const dir = mkdtempSync(path.join(tmpdir(), "cogni-bao-native-"));
     const token = `root-${randomUUID()}`;
@@ -103,6 +108,7 @@ describe.skipIf(!process.env.CI)("normal materializer OpenBao custody", () => {
       const api = async (method: string, route: string, body?: unknown) => {
         const response = await fetch(`${addr}/v1/${route}`, {
           method,
+          signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
           headers: {
             "X-Vault-Token": token,
             "Content-Type": "application/json",
@@ -272,6 +278,7 @@ config="" body_file="" output_file="" wanted_alias=""${lite}`
             banks.map(async (bank) => {
               const response = await fetch(`${addr}/v1/cogni/data/${bank}`, {
                 headers: { "X-Vault-Token": token },
+                signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
               });
               if (response.status === 404) return [bank, null];
               if (!response.ok)
