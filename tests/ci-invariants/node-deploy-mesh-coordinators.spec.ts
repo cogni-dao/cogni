@@ -435,8 +435,10 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
       "candidate-a": [],
     };
     for (const t of TABLE) {
-      if (t.zone === ciZone) continue; // reconcile-node-dns.sh writes it in the coordinator env's run
+      // The coordinator env's sequencer derives the control URL https://mesh-<tailnet>.<zone> from its
+      // NODE_DEPLOY_WORKLOAD_ZONE (env-lanes.ts), so that zone must be the tailnet's zone.
       expect(zoneOf(t.coordinator_env), t.tailnet).toBe(t.zone);
+      if (t.zone === ciZone) continue; // reconcile-node-dns.sh writes it in the coordinator env's run
       expected[t.coordinator_env]?.push(
         `${t.control_label}=${vmHost(t.coordinator_env)}`
       );
@@ -446,6 +448,25 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
         );
     }
     expect(expected["candidate-a"]?.length).toBeGreaterThan(0);
+    // A mesh lane may only name a tailnet whose coordinator its own overlay runs (socket must exist).
+    for (const env of ["production", "candidate-a"]) {
+      const raw =
+        overlay(env).match(
+          /name: NODE_DEPLOY_SUBSTRATE_TRANSPORTS\n\s+value: "?([^"\n]+)"?/
+        )?.[1] ?? "";
+      for (const entry of raw
+        .split(",")
+        .map((e) => e.trim())
+        .filter(Boolean)) {
+        const [laneEnv = "", mode = ""] = entry.split("=");
+        const [transport, tailnet = laneEnv] = mode.split(":");
+        if (transport !== "mesh") continue;
+        expect(
+          TABLE.some((t) => t.tailnet === tailnet && t.coordinator_env === env),
+          `${env}: ${entry}`
+        ).toBe(true);
+      }
+    }
     for (const env of ["production", "candidate-a"])
       expect(declared(env), env).toEqual((expected[env] ?? []).sort());
   });

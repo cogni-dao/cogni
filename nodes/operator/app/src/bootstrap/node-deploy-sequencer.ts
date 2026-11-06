@@ -184,6 +184,7 @@ try {
     substrateHost: runtimeEnv.NODE_DEPLOY_SUBSTRATE_HOST,
     substrateHosts: runtimeEnv.NODE_DEPLOY_SUBSTRATE_HOSTS,
     substrateTransports: runtimeEnv.NODE_DEPLOY_SUBSTRATE_TRANSPORTS,
+    meshZone: runtimeEnv.NODE_DEPLOY_WORKLOAD_ZONE,
   });
 } catch (error) {
   if (!(error instanceof EnvLaneConfigError)) throw error;
