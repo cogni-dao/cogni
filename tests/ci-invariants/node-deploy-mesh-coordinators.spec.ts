@@ -317,15 +317,18 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
     const names = TABLE.map((t) => t.tailnet);
     const normalize = (t: string, file: string) => {
       const row = TABLE.find((r) => r.tailnet === t) as Tailnet;
-      // Comments are per-tailnet prose; compare the YAML content only.
-      return read(`${BASE}/${t}/${file}`)
-        .replace(/^\s*#.*$/gm, "")
+      // Compare the parsed YAML (comments and line wrapping are per-tailnet presentation).
+      return JSON.stringify(
+        yaml
+          .parseAllDocuments(read(`${BASE}/${t}/${file}`))
+          .map((d) => d.toJS())
+      )
         .replaceAll(t, "<t>")
         .replace(/\b(81|91)8\d\b/g, "<port>")
         .replace(/\b5048\d\b/g, "<port>")
         .replace(new RegExp(`\\b${row.coordinator_np}\\b`, "g"), "<np>")
         .replace(new RegExp(`\\b${row.derp_region}`, "g"), "<region>")
-        .replace(/stunport: \d+/g, "stunport: <stun>")
+        .replace(/"stunport":\d+/g, '"stunport":"<stun>"')
         .replace(/hs-[a-z]+/g, "hs-<x>");
     };
     for (const file of [
