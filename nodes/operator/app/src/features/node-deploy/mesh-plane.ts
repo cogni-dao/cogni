@@ -27,11 +27,17 @@
  *     the sweep skips and counts it (`unkeyedNodeDevices`) instead of deleting it.
  *   - VERIFIED_APPROVAL (HR 11): approve only a fresh verified `{authId, publishedAt}` (older than 5
  *     minutes is refused). The auth id binds the approval to the machine that asked, so no machine or
- *     node key is compared and there is no second stage (design section 2, Pareto cut). After
- *     `AuthRegister` a fresh device read must show the new device with tags exactly `[tag:substrate]`
- *     and exactly one `tag:substrate` device in the tailnet. Otherwise the new device is deleted at once
- *     and the result carries `node_mesh_substrate_mismatch`. A read that fails deletes it too (fail
- *     closed: an unverified approval is never kept).
+ *     node key is compared and there is no second stage (design section 2, Pareto cut). A new device
+ *     whose tags are not exactly `[tag:substrate]` is deleted at once (`node_mesh_substrate_mismatch`).
+ *   - VERIFIED_APPROVAL_SUPERSEDES (HR 10, HR 11 self-heal): only the env VM can publish on the verified
+ *     channel, so every OTHER `tag:substrate` device in the current epoch is an older registration of
+ *     the same VM (for example one that lost its tailscaled state). After approval they are deleted,
+ *     then a readback must show exactly the approved device with tags exactly `[tag:substrate]`. The
+ *     approved device is never deleted because an older device is present. A device read that fails
+ *     after `AuthRegister` deletes the new device (an unverified approval is not kept).
+ *   - DELETE_INTENT_RETRIED (N1): a gateway delete that fails is kept as an intent keyed by coordinator
+ *     epoch AND device id, and `retryPendingDeletes` retries it on every pass. An intent from another
+ *     epoch is dropped with no call (a wiped Headscale reuses device ids).
  *   - GATEWAY_BEFORE_MINT (HR 23, task.5431): no attempt key is minted unless the coordinator epoch read
  *     by the last reconcile is still the owner's creation time AND the tailnet has exactly one
  *     `tag:substrate` device, tagged exactly `[tag:substrate]` and online. Otherwise the mint is refused
@@ -141,6 +147,10 @@ export type ApprovalResult =
       readonly headscaleDeviceId: HeadscaleDeviceId;
       /** The design's tagged-device rule: a `substrate-gw` device never expires. */
       readonly expiryDisabled: boolean;
+      /** Older `tag:substrate` devices deleted because this verified approval supersedes them. */
+      readonly superseded: readonly HeadscaleDeviceId[];
+      /** Older devices whose delete failed: kept as intents, retried by `retryPendingDeletes`. */
+      readonly supersedePending: readonly HeadscaleDeviceId[];
     }
   | {
       readonly outcome: "refused";
@@ -155,20 +165,31 @@ export type ApprovalResult =
       readonly outcome: "mismatch";
       readonly alert: typeof SUBSTRATE_MISMATCH_ALERT;
       readonly headscaleDeviceId: HeadscaleDeviceId;
-      /** The new device's tags are exactly `[tag:substrate]`. */
-      readonly tagsExact: boolean;
-      /** `tag:substrate` devices in the tailnet after the approval (must be exactly 1). */
-      readonly substrateDevices: number;
-      /** False when the delete itself failed; the next pass must retry it. */
+      /**
+       * `tags`: the new device is not exactly `[tag:substrate]`. `readback`: after superseding, the
+       * approved device is gone or its tags changed.
+       */
+      readonly reason: "tags" | "readback";
+      /** False when the delete failed: kept as an intent and retried next pass (DELETE_INTENT_RETRIED). */
       readonly deleted: boolean;
     }
-  /** The device read after `AuthRegister` failed: the new device is deleted, never kept unverified. */
+  /** A device read after `AuthRegister` failed: the new device is deleted (or its delete is retried). */
   | {
       readonly outcome: "unverified";
       readonly headscaleDeviceId: HeadscaleDeviceId;
       readonly reason: NodeMeshErrorReason;
       readonly deleted: boolean;
     };
+
+export interface PendingDeleteResult {
+  /** Intents of the current epoch whose delete now succeeded (or the device was already gone). */
+  readonly deleted: readonly HeadscaleDeviceId[];
+  /** Intents from another coordinator epoch: dropped with no call. */
+  readonly dropped: readonly HeadscaleDeviceId[];
+  /** Still pending after a failed call; the failure closes minting like any other. */
+  readonly failed: readonly HeadscaleDeviceId[];
+  readonly reason?: NodeMeshErrorReason;
+}
 
 /** Why GATEWAY_BEFORE_MINT refuses a mint. */
 export type GatewayRefusal =
@@ -281,6 +302,11 @@ export class MeshPlane {
   private epochValue: string | null = null;
   /** Auth ids this process approved: a publish that still names one (lag) is not registered again. */
   private readonly approvedAuthIds = new Set<string>();
+  /** DELETE_INTENT_RETRIED: `<epoch>/<device id>` -> the intent. Never keyed by device id alone. */
+  private readonly pendingDeletes = new Map<
+    string,
+    { readonly epoch: string; readonly id: HeadscaleDeviceId }
+  >();
 
   constructor(
     private readonly mesh: NodeMeshPort,
@@ -396,53 +422,119 @@ export class MeshPlane {
     }
 
     const id = device.headscaleDeviceId;
-    let substrateDevices: number;
+    const exact = (d: MeshDevice) =>
+      d.tags.length === 1 && d.tags[0] === SUBSTRATE_TAG;
+    if (!exact(device))
+      return {
+        outcome: "mismatch",
+        alert: SUBSTRATE_MISMATCH_ALERT,
+        headscaleDeviceId: id,
+        reason: "tags",
+        deleted: await this.deleteOrQueue(id),
+      };
+
+    // VERIFIED_APPROVAL_SUPERSEDES: every other tag:substrate device is an older registration of this VM.
+    const superseded: HeadscaleDeviceId[] = [];
+    const supersedePending: HeadscaleDeviceId[] = [];
+    let retained: MeshDevice | undefined;
     try {
-      // A fresh read, not the registration answer alone: the tailnet must hold exactly this one gateway.
-      substrateDevices = (await this.mesh.listNodes()).filter((d) =>
-        d.tags.includes(SUBSTRATE_TAG)
-      ).length;
+      for (const d of await this.mesh.listNodes()) {
+        if (d.headscaleDeviceId === id || !d.tags.includes(SUBSTRATE_TAG))
+          continue;
+        if (await this.deleteOrQueue(d.headscaleDeviceId))
+          superseded.push(d.headscaleDeviceId);
+        else supersedePending.push(d.headscaleDeviceId);
+      }
+      // Readback: exactly the approved device remains (an older one may wait on its retried delete).
+      retained = (await this.mesh.listNodes()).find(
+        (d) => d.headscaleDeviceId === id
+      );
     } catch (error) {
       const reason = this.fail(error);
       return {
         outcome: "unverified",
         headscaleDeviceId: id,
         reason,
-        deleted: await this.deleteGateway(id),
+        deleted: await this.deleteOrQueue(id),
       };
     }
-    const tagsExact =
-      device.tags.length === 1 && device.tags[0] === SUBSTRATE_TAG;
-    if (tagsExact && substrateDevices === 1) {
-      if (this.approvedAuthIds.size >= MAX_REMEMBERED_AUTH_IDS)
-        this.approvedAuthIds.clear();
-      this.approvedAuthIds.add(request.authId);
+    if (!retained || !exact(retained))
       return {
-        outcome: "approved",
+        outcome: "mismatch",
+        alert: SUBSTRATE_MISMATCH_ALERT,
         headscaleDeviceId: id,
-        expiryDisabled: device.expiry === null,
+        reason: "readback",
+        deleted: retained ? await this.deleteOrQueue(id) : true,
       };
-    }
+    if (this.approvedAuthIds.size >= MAX_REMEMBERED_AUTH_IDS)
+      this.approvedAuthIds.clear();
+    this.approvedAuthIds.add(request.authId);
     return {
-      outcome: "mismatch",
-      alert: SUBSTRATE_MISMATCH_ALERT,
+      outcome: "approved",
       headscaleDeviceId: id,
-      tagsExact,
-      substrateDevices,
-      deleted: await this.deleteGateway(id),
+      expiryDisabled: retained.expiry === null,
+      superseded,
+      supersedePending,
     };
   }
 
-  /** Delete a refused gateway device; an already absent device counts as deleted. */
-  private async deleteGateway(id: HeadscaleDeviceId): Promise<boolean> {
+  /**
+   * Delete a gateway device now; an already absent device counts as deleted. A failed delete closes
+   * minting and is kept as an intent of the current epoch (DELETE_INTENT_RETRIED).
+   */
+  private async deleteOrQueue(id: HeadscaleDeviceId): Promise<boolean> {
+    const epoch = this.epochValue ?? "";
+    const k = `${epoch}/${id}`;
     try {
       await this.mesh.deleteNode(id);
+      this.pendingDeletes.delete(k);
       return true;
     } catch (error) {
-      const gone = isNodeMeshError(error) && error.reason === "node_not_found";
-      if (!gone) this.fail(error);
-      return gone;
+      if (isNodeMeshError(error) && error.reason === "node_not_found") {
+        this.pendingDeletes.delete(k);
+        return true;
+      }
+      this.fail(error);
+      this.pendingDeletes.set(k, { epoch, id });
+      return false;
     }
+  }
+
+  /** Gateway delete intents still pending (`<epoch>/<device id>`). */
+  get pendingDeleteIds(): readonly HeadscaleDeviceId[] {
+    return [...this.pendingDeletes.values()].map((x) => x.id);
+  }
+
+  /**
+   * DELETE_INTENT_RETRIED: retry every failed gateway delete of the current epoch (run once per pass,
+   * after the reconcile read the epoch). An intent from another epoch is dropped with no call. Stops at
+   * the first failed call.
+   */
+  async retryPendingDeletes(): Promise<PendingDeleteResult> {
+    const epoch = this.epochValue ?? "";
+    const deleted: HeadscaleDeviceId[] = [];
+    const dropped: HeadscaleDeviceId[] = [];
+    for (const [k, intent] of [...this.pendingDeletes]) {
+      if (intent.epoch !== epoch) {
+        this.pendingDeletes.delete(k);
+        dropped.push(intent.id);
+        continue;
+      }
+      try {
+        await this.mesh.deleteNode(intent.id);
+      } catch (error) {
+        if (!(isNodeMeshError(error) && error.reason === "node_not_found"))
+          return {
+            deleted,
+            dropped,
+            failed: this.pendingDeleteIds,
+            reason: this.fail(error),
+          };
+      }
+      this.pendingDeletes.delete(k);
+      deleted.push(intent.id);
+    }
+    return { deleted, dropped, failed: [] };
   }
 
   /**

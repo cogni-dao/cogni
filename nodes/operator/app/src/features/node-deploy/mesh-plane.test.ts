@@ -92,6 +92,8 @@ class FakeHeadscale implements NodeMeshPort {
   down = false;
   /** One shot: the next ListNodes fails. */
   failNextListNodes = false;
+  /** One shot per id: the next DeleteNode of that id fails (the device stays). */
+  readonly failDelete = new Set<string>();
   loseNextMintResponse = false;
   failExpire = false;
   readbackOverride: string | null = null;
@@ -197,6 +199,8 @@ class FakeHeadscale implements NodeMeshPort {
   }
   async deleteNode(id: HeadscaleDeviceId): Promise<void> {
     this.enter(`DeleteNode:${id}`);
+    if (this.failDelete.delete(id))
+      throw new NodeMeshError("DeleteNode", "unavailable", "other");
     if (!this.devices.delete(id))
       throw new NodeMeshError("DeleteNode", "not_found", "node_not_found");
   }
@@ -845,26 +849,90 @@ describe("HR 11 — substrate-gw approval over the verified channel", () => {
     expect(result).toMatchObject({
       outcome: "mismatch",
       alert: SUBSTRATE_MISMATCH_ALERT,
-      tagsExact: false,
-      substrateDevices: 1,
+      reason: "tags",
       deleted: true,
     });
     expect(fake.devices.size).toBe(0);
   });
 
-  it("deletes the new device and alerts when the tailnet would hold a second tag:substrate device", async () => {
+  it("a verified approval supersedes an enrolled gateway: the older device goes, the approved one stays", async () => {
     const fake = new FakeHeadscale();
-    const plane = await readyPlane(fake); // one substrate-gw is already enrolled
+    const plane = await readyPlane(fake); // gw1 is enrolled and online
     const result = await plane.approveSubstrateGateway(publish(fake), fake.now);
-    expect(result).toMatchObject({
-      outcome: "mismatch",
-      alert: SUBSTRATE_MISMATCH_ALERT,
-      tagsExact: true,
-      substrateDevices: 2,
-      deleted: true,
+    if (result.outcome !== "approved") throw new Error(result.outcome);
+    expect(result.superseded).toEqual(["gw1"]);
+    expect(result.supersedePending).toEqual([]);
+    expect([...fake.devices.keys()]).toEqual([result.headscaleDeviceId]);
+  });
+
+  it("state loss: an old offline gateway and a new verified request -> new approved, old deleted, mint allowed", async () => {
+    const fake = new FakeHeadscale();
+    fake.addGateway({ online: false }); // the VM lost its tailscaled state; gw1 never expires
+    const plane = await readyPlane(fake, { gateway: false });
+    const mint = () =>
+      plane.mintAttemptKey(attempt(RELEASE_1, 1), new Set(), fake.now);
+    expect(await mint()).toEqual({
+      outcome: "refused",
+      reason: "gateway_offline",
     });
-    // Only the new device goes; the enrolled gateway keeps serving.
-    expect([...fake.devices.keys()]).toEqual(["gw1"]);
+    const result = await plane.approveSubstrateGateway(publish(fake), fake.now);
+    if (result.outcome !== "approved") throw new Error(result.outcome);
+    expect(result.superseded).toEqual(["gw1"]);
+    expect([...fake.devices.keys()]).toEqual([result.headscaleDeviceId]);
+    // The new device is online: the mint opens.
+    expect((await mint()).outcome).toBe("minted");
+  });
+
+  it("N1: a failed supersede delete is retried on the next pass; the approved device is never deleted", async () => {
+    const fake = new FakeHeadscale();
+    fake.addGateway({ online: false });
+    const plane = await readyPlane(fake, { gateway: false });
+    fake.failDelete.add("gw1");
+    const result = await plane.approveSubstrateGateway(publish(fake), fake.now);
+    if (result.outcome !== "approved") throw new Error(result.outcome);
+    expect(result.superseded).toEqual([]);
+    expect(result.supersedePending).toEqual(["gw1"]);
+    expect([...fake.devices.keys()].sort()).toEqual(
+      ["gw1", result.headscaleDeviceId].sort()
+    );
+    expect(plane.pendingDeleteIds).toEqual(["gw1"]);
+    // Next pass: reconcile, retry, sweep; then the mint sees one gateway.
+    await plane.reconcilePolicy(GRANTS);
+    expect(await plane.retryPendingDeletes()).toEqual({
+      deleted: ["gw1"],
+      dropped: [],
+      failed: [],
+    });
+    await plane.sweep(new Set(), fake.now);
+    expect([...fake.devices.keys()]).toEqual([result.headscaleDeviceId]);
+    expect(plane.pendingDeleteIds).toEqual([]);
+    expect(
+      (await plane.mintAttemptKey(attempt(RELEASE_1, 1), new Set(), fake.now))
+        .outcome
+    ).toBe("minted");
+  });
+
+  it("N1: a delete intent from another coordinator epoch is dropped with no call", async () => {
+    const fake = new FakeHeadscale();
+    fake.addGateway({ online: false });
+    const plane = await readyPlane(fake, { gateway: false });
+    fake.failDelete.add("gw1");
+    await plane.approveSubstrateGateway(publish(fake), fake.now);
+    expect(plane.pendingDeleteIds).toEqual(["gw1"]);
+    // A wipe: the owner is re-created, so the stored id names nothing of the old epoch.
+    fake.now += 60_000;
+    fake.userCreatedAt.set(
+      "cogni-mesh-candidate-a",
+      new Date(fake.now).toISOString()
+    );
+    await plane.reconcilePolicy(GRANTS);
+    fake.calls.length = 0;
+    expect(await plane.retryPendingDeletes()).toEqual({
+      deleted: [],
+      dropped: ["gw1"],
+      failed: [],
+    });
+    expect(fake.calls).toEqual([]);
   });
 
   it("a device list that cannot be read after approval leaves nothing enrolled (fail closed)", async () => {

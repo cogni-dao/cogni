@@ -107,6 +107,8 @@ class FakeHeadscale implements NodeMeshPort {
   apiKeys: MeshApiKey[] = [];
   down = false;
   loseNextMintResponse = false;
+  /** One shot per id: the next DeleteNode of that id fails (the device stays). */
+  readonly failDelete = new Set<string>();
   /** Key and device ids restart at 1 on a wipe, like a fresh Headscale database (the B1 hazard). */
   private keySeq = 0;
   private deviceSeq = 0;
@@ -194,6 +196,8 @@ class FakeHeadscale implements NodeMeshPort {
   }
   async deleteNode(id: HeadscaleDeviceId): Promise<void> {
     this.enter(`DeleteNode:${id}`);
+    if (this.failDelete.delete(id))
+      throw new NodeMeshError("DeleteNode", "unavailable", "other");
     if (!this.devices.delete(id))
       throw new NodeMeshError("DeleteNode", "not_found", "node_not_found");
   }
@@ -1121,23 +1125,71 @@ describe("HR 11: substrate-gw approval over the verified channel, no key compare
     expect(meshLogs(h, "node_mesh_substrate_refused")).toHaveLength(0);
   });
 
-  it("a second tag:substrate device is deleted at once and alerts; the enrolled gateway stays", async () => {
-    const h = harness(); // one substrate-gw is enrolled
+  /** substrate-gw lost its tailscaled state: its old device stays (offline, no expiry); a release waits. */
+  async function stateLoss(h: H) {
+    const [old] = gateways(h);
+    if (!old) throw new Error("no seeded gateway");
+    h.hs.devices.set(old.headscaleDeviceId, { ...old, online: false });
     await h.seq.reconcileAll();
-    const [enrolled] = gateways(h);
-    h.hs.pending.set("auth-2", { machineKey: "mkey:x", nodeKey: "nodekey:x" });
+    await h.release("poly");
+    await h.seq.step(h.key("poly"));
+    expect((await h.attempts("poly"))[0]?.error).toBe(
+      "mesh_key_pending: mint_gateway_offline"
+    );
+    h.hs.pending.set("auth-2", { machineKey: "mkey:new", nodeKey: "nk:new" });
     h.published.request = { authId: "auth-2", publishedAt: h.clock.now() };
+    return old;
+  }
+
+  it("state loss: a new verified request supersedes the old offline gateway, and the waiting release deploys", async () => {
+    const h = harness();
+    const old = await stateLoss(h);
     await h.passes(1);
-    const alert = meshLogs(h, "node_mesh_substrate_mismatch")[0];
-    expect(alert?.level).toBe("error");
-    expect(alert?.fields).toMatchObject({
+    const [now] = gateways(h);
+    expect(gateways(h)).toHaveLength(1);
+    expect(now?.headscaleDeviceId).not.toBe(old.headscaleDeviceId);
+    const log = meshLogs(h, "node_mesh_substrate_superseded")[0];
+    expect(log?.fields).toMatchObject({
       outcome: "deleted",
-      tagsExact: true,
-      substrateDevices: 2,
+      headscaleDeviceId: now?.headscaleDeviceId,
+      deletedDeviceIds: [old.headscaleDeviceId],
+      pendingDeviceIds: [],
     });
-    expect(gateways(h).map((d) => d.headscaleDeviceId)).toEqual([
-      enrolled?.headscaleDeviceId,
-    ]);
+    expect(meshLogs(h, "node_mesh_substrate_mismatch")).toHaveLength(0);
+    expect(h.payer.createRequests).toHaveLength(0);
+    await h.seq.step(h.key("poly"));
+    expect((await h.attempts("poly"))[0]?.phase).toBe("active");
+    expect(appCreates(h)).toHaveLength(1);
+  });
+
+  it("N1: a failed supersede delete is retried on the next pass; the release stays unpaid until it lands", async () => {
+    const h = harness();
+    const old = await stateLoss(h);
+    h.hs.failDelete.add(old.headscaleDeviceId);
+    await h.passes(1);
+    expect(gateways(h)).toHaveLength(2); // the approved device is kept; the old one waits on the retry
+    expect(
+      meshLogs(h, "node_mesh_substrate_superseded")[0]?.fields
+    ).toMatchObject({
+      outcome: "delete_pending",
+      pendingDeviceIds: [old.headscaleDeviceId],
+    });
+    await h.seq.step(h.key("poly"));
+    expect((await h.attempts("poly"))[0]?.error).toBe(
+      "mesh_key_pending: mint_gateway_multiple"
+    );
+    expect(h.payer.createRequests).toHaveLength(0);
+    h.published.request = null; // registered: the publisher clears its auth id
+    await h.passes(1);
+    expect(
+      meshLogs(h, "node_mesh_substrate_delete_retry")[0]?.fields
+    ).toMatchObject({
+      outcome: "ok",
+      deletedDeviceIds: [old.headscaleDeviceId],
+    });
+    expect(gateways(h)).toHaveLength(1);
+    await h.seq.step(h.key("poly"));
+    expect((await h.attempts("poly"))[0]?.phase).toBe("active");
   });
 
   it("publisher stopped after approval: substrate-gw stays enrolled and nothing alerts", async () => {
