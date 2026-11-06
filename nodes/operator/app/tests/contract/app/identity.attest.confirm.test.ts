@@ -32,22 +32,32 @@ const cookieStore = vi.hoisted(() => ({
   }),
 }));
 const mockIssue = vi.hoisted(() => vi.fn());
+const eventInfo = vi.hoisted(() => vi.fn());
+const loggerFactory = vi.hoisted(() => vi.fn(() => ({ info: eventInfo })));
 const config = vi.hoisted(() => ({
   origin: "https://cognidao.org" as string | undefined,
+  throwEnv: false,
 }));
 
 vi.mock("next/headers", () => ({ cookies: async () => cookieStore }));
 vi.mock("@/shared/env", () => ({
-  serverEnv: () => ({
-    ...MOCK_SERVER_ENV,
-    APP_BASE_URL: config.origin,
-    GH_IDENTITY_OAUTH_CLIENT_ID: "client-id",
-    GH_IDENTITY_OAUTH_CLIENT_SECRET: "client-secret",
-    isProd: false,
-  }),
+  serverEnv: () => {
+    if (config.throwEnv) throw new Error("private fixture exception");
+    return {
+      ...MOCK_SERVER_ENV,
+      APP_BASE_URL: config.origin,
+      GH_IDENTITY_OAUTH_CLIENT_ID: "client-id",
+      GH_IDENTITY_OAUTH_CLIENT_SECRET: "client-secret",
+      isProd: false,
+    };
+  },
 }));
 vi.mock("@/shared/env/server-env", () => ({
   serverEnv: () => ({ ...MOCK_SERVER_ENV, isProd: false }),
+}));
+vi.mock("@/shared/observability", async (original) => ({
+  ...(await original<typeof import("@/shared/observability")>()),
+  makeLogger: loggerFactory,
 }));
 vi.mock("@/auth", () => ({ authSecret: "test-secret-0123456789abcdef" }));
 vi.mock("@/app/_facades/identity/attestation-broker.server", async (orig) => ({
@@ -63,11 +73,13 @@ vi.mock("@/bootstrap/http/rateLimiter", () => ({
 }));
 
 import { POST } from "@/app/api/auth/attest/confirm/route";
+import { getNodeId } from "@/shared/config";
 import {
   BROKER_STATE_COOKIE,
   decodeBrokerState,
   encodeBrokerState,
 } from "@/shared/identity/broker-state";
+import { EVENT_NAMES } from "@/shared/observability";
 
 const SECRET = "test-secret-0123456789abcdef";
 const GITHUB = { id: "295942454", login: "flock-leader" };
@@ -118,6 +130,7 @@ describe("/api/auth/attest/confirm contract tests", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     config.origin = "https://cognidao.org";
+    config.throwEnv = false;
     cookieStore.store.clear();
     mockIssue.mockResolvedValue({
       redirectUrl: `${AUTHENTICATED.returnTo}#attestation=signed.jwt`,
@@ -296,6 +309,7 @@ describe("consent snapshot refusal regressions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     config.origin = "https://cognidao.org";
+    config.throwEnv = false;
     cookieStore.store.clear();
     mockIssue.mockResolvedValue({
       redirectUrl: "https://fixture.example/#attestation=fixture",
@@ -356,6 +370,7 @@ describe("native consent security boundaries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     config.origin = "https://cognidao.org";
+    config.throwEnv = false;
     cookieStore.store.clear();
     mockIssue.mockResolvedValue({
       redirectUrl: "https://fixture.example/#attestation=fixture",
@@ -525,5 +540,103 @@ describe("native consent security boundaries", () => {
         { key: "X-Frame-Options", value: "DENY" },
       ])
     );
+  });
+});
+
+describe("early refusal terminal events", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    eventInfo.mockReset();
+    loggerFactory.mockClear();
+    config.origin = "https://cognidao.org";
+    config.throwEnv = false;
+    cookieStore.store.clear();
+  });
+
+  it.each([
+    ["environment failure", "invalid_configuration", 503],
+    ["invalid origin configuration", "invalid_configuration", 503],
+    ["foreign origin", "invalid_origin", 403],
+  ])("emits one safe event for %s", async (which, code, status) => {
+    await seed();
+    const token = cookieStore.store.get(BROKER_STATE_COOKIE);
+    const req = request("confirm");
+    if (which === "environment failure") config.throwEnv = true;
+    if (which === "invalid origin configuration")
+      config.origin = "http://invalid.example/private";
+    if (which === "foreign origin")
+      req.headers.set("origin", "https://private.example");
+    const formRead = vi.spyOn(req, "formData");
+    const result = await POST(req);
+    expect(result.status).toBe(status);
+    expect(eventInfo.mock.calls.length).toBe(1);
+    expect(loggerFactory).toHaveBeenCalledExactlyOnceWith({
+      nodeId: getNodeId(),
+      service: "identity-broker",
+    });
+    expect(eventInfo.mock.calls[0]).toEqual([
+      {
+        event: EVENT_NAMES.IDENTITY_BROKER_REJECTED,
+        leg: "confirm",
+        errorCode: code,
+        status,
+      },
+      "Identity broker confirmation rejected",
+    ]);
+    expect(cookieStore.get).not.toHaveBeenCalled();
+    expect(formRead).not.toHaveBeenCalled();
+    expect(cookieStore.set).not.toHaveBeenCalled();
+    expect(cookieStore.delete).not.toHaveBeenCalled();
+    expect(mockIssue).not.toHaveBeenCalled();
+    expect(cookieStore.store.get(BROKER_STATE_COOKIE) === token).toBe(true);
+  });
+
+  it("emits the operator identity on a cold configuration failure", async () => {
+    const expectedNodeId = getNodeId();
+    vi.stubEnv("COGNI_REPO_PATH", MOCK_SERVER_ENV.COGNI_REPO_ROOT ?? "");
+    try {
+      vi.resetModules();
+      const { POST: coldPost } = await import(
+        "@/app/api/auth/attest/confirm/route"
+      );
+      await seed();
+      const req = request("confirm");
+      config.throwEnv = true;
+      const response = await coldPost(req);
+      expect(response.status).toBe(503);
+      expect(eventInfo.mock.calls.length).toBe(1);
+      expect(loggerFactory).toHaveBeenCalledExactlyOnceWith({
+        nodeId: expectedNodeId,
+        service: "identity-broker",
+      });
+    } finally {
+      config.throwEnv = false;
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each([
+    "environment failure",
+    "invalid origin configuration",
+    "foreign origin",
+  ])("keeps %s controlled if logger throws", async (which) => {
+    await seed();
+    const token = cookieStore.store.get(BROKER_STATE_COOKIE);
+    const req = request("confirm");
+    if (which === "environment failure") config.throwEnv = true;
+    if (which === "invalid origin configuration")
+      config.origin = "http://invalid.example/private";
+    if (which === "foreign origin")
+      req.headers.set("origin", "https://private.example");
+    eventInfo.mockImplementationOnce(() => {
+      throw new Error("private logger exception");
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(which === "foreign origin" ? 403 : 503);
+    expect(cookieStore.get).not.toHaveBeenCalled();
+    expect(cookieStore.set).not.toHaveBeenCalled();
+    expect(cookieStore.delete).not.toHaveBeenCalled();
+    expect(mockIssue).not.toHaveBeenCalled();
+    expect(cookieStore.store.get(BROKER_STATE_COOKIE) === token).toBe(true);
   });
 });

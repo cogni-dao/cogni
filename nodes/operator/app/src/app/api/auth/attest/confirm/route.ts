@@ -10,8 +10,8 @@
  *   the subject from anywhere else.
  * Invariants:
  *   - CONFIRM_BEFORE_SIGN: reachable only by an explicit POST from the confirm screen.
- *   - TERMINAL_COOKIE_CLEAR: terminal responses clear the browser cookie; the relying
- *     node atomically consumes its nonce when binding.
+ *   - TERMINAL_COOKIE_CLEAR: successful confirm and explicit cancel clear the cookie;
+ *     refusals preserve it, and the relying node atomically consumes its nonce.
  *   - SWITCH_RE_AUTHENTICATES: "use a different account" restarts the GitHub leg with a
  *     fresh state + PKCE pair rather than reusing the previous authentication.
  *   - SITS_WITH_NEXTAUTH: unauthenticated by design — its authority is the signed
@@ -21,11 +21,14 @@
  * @public
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   IDENTITY_ATTESTATION_V1_PROTOCOL_SHA256,
   IdentityAttestationOriginSchema,
   IdentityAttestationRequestSchema,
 } from "@cogni/node-contracts";
+import { parseRepoSpec } from "@cogni/repo-spec";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import {
@@ -88,18 +91,59 @@ function failure(errorCode: string, requestNodeId?: string): NextResponse {
   );
 }
 
+/** The regular node lookup may itself require a valid serverEnv on a cold start. */
+function earlyEmitterNodeId(): string {
+  try {
+    return getNodeId();
+  } catch {
+    // Same configured repo and parser as getNodeId, without full env validation.
+    // biome-ignore lint/style/noProcessEnv: attribution must survive invalid serverEnv
+    const root = process.env.COGNI_REPO_PATH;
+    if (!root) throw new Error("Operator identity unavailable");
+    return parseRepoSpec(
+      readFileSync(join(root, ".cogni", "repo-spec.yaml"), "utf8")
+    ).node_id;
+  }
+}
+
+/** Emit a fixed refusal without reading the request or requiring a redirect base. */
+function refuseEarly(
+  errorCode: "invalid_configuration" | "invalid_origin",
+  status: 403 | 503
+): NextResponse {
+  try {
+    makeLogger({
+      nodeId: earlyEmitterNodeId(),
+      service: "identity-broker",
+    }).info(
+      {
+        event: EVENT_NAMES.IDENTITY_BROKER_REJECTED,
+        leg: "confirm",
+        errorCode,
+        status,
+      },
+      "Identity broker confirmation rejected"
+    );
+  } catch {
+    // A logging failure must not change this controlled refusal.
+  }
+  return new NextResponse(
+    status === 503 ? "Service unavailable" : "Request refused",
+    { status }
+  );
+}
+
 export async function POST(request: Request): Promise<NextResponse> {
   let env: ReturnType<typeof serverEnv>;
   try {
     env = serverEnv();
   } catch {
-    return new NextResponse("Service unavailable", { status: 503 });
+    return refuseEarly("invalid_configuration", 503);
   }
   const origin = IdentityAttestationOriginSchema.safeParse(env.APP_BASE_URL);
-  if (!origin.success)
-    return new NextResponse("Service unavailable", { status: 503 });
+  if (!origin.success) return refuseEarly("invalid_configuration", 503);
   if (request.headers.get("origin") !== origin.data) {
-    return new NextResponse("Request refused", { status: 403 });
+    return refuseEarly("invalid_origin", 403);
   }
   const cookieStore = await cookies();
   const token = cookieStore.get(BROKER_STATE_COOKIE)?.value;
