@@ -40,8 +40,10 @@
  *     otherwise equals the egress key set: no mesh identifier or credential reaches the app.
  *   - SHARED_POSTGRES_ONLY (task.5432): on a `mesh` attempt a bucket `DATABASE_URL`, `DATABASE_SERVICE_URL`
  *     or `DATABASE_MIGRATION_URL` is rebound to the binding's host and the registry Postgres port ONLY
- *     when its host equals the lane's substrate (env VM) host. Any other host (a dedicated cell, such as
- *     Poly production's) is left untouched. Postgres is granted only when such a rebind happens.
+ *     when its host is the lane's substrate (env VM) host: its name or one of `substrateAddresses`
+ *     (bindings.ts SHARED_VM_MATCH). Any other host (a dedicated cell, such as Poly production's) is left
+ *     untouched. Postgres is granted only when such a rebind happens. The bucket names the VM by address
+ *     today, so with no addresses nothing is rebound: that release then fails its proof and blue stays.
  *   - EGRESS_UNCHANGED: an absent transport is `egress`, byte for byte the composition env above.
  * Side-effects: none
  * Links: infra/crossplane/xcomputeworkload/composition.yaml, packages/repo-spec/src/node-app-deployment.ts,
@@ -55,6 +57,7 @@ import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-res
 
 import {
   dsnHost,
+  isSubstrateVmHost,
   rebindDsnEndpoint,
   resolveSubstrateBinding,
   type SubstrateBinding,
@@ -106,6 +109,8 @@ export interface NodeAppEnvInput {
    * companion and needs no `substrateHost`.
    */
   readonly transport?: SubstrateTransport | undefined;
+  /** The resolved addresses of `substrateHost` (read once per pass by the sequencer). See SHARED_POSTGRES_ONLY. */
+  readonly substrateAddresses?: readonly string[] | undefined;
   readonly databasePoolLimits?: NodeAppPoolLimits | undefined;
   readonly lokiPush?: NodeAppLokiPush | undefined;
   /**
@@ -279,6 +284,11 @@ export interface NodeAppSubstrateBindingInput {
   readonly transport?: SubstrateTransport | undefined;
   /** The env VM alias (`NODE_DEPLOY_SUBSTRATE_HOST[S]`). Used by `egress` only. */
   readonly substrateHost?: string | undefined;
+  /**
+   * The resolved IPv4/IPv6 addresses of `substrateHost`. A bucket Postgres DSN that names one of them is
+   * on the shared VM. Absent or empty: only the name matches, so nothing is rebound (fail safe).
+   */
+  readonly substrateAddresses?: readonly string[] | undefined;
   readonly secretKeys?: readonly string[] | undefined;
   readonly boundEnvNames?: readonly string[] | undefined;
   /** The bucket values. Read only to find which Postgres DSNs name the env VM; never copied out. */
@@ -292,13 +302,16 @@ export interface NodeAppSubstrateBindingInput {
 function sharedPostgresKeysOnVm(
   input: NodeAppSubstrateBindingInput
 ): readonly string[] {
-  const vm = input.substrateHost?.toLowerCase();
-  if ((input.transport ?? "egress") !== "mesh" || !vm) return [];
+  if ((input.transport ?? "egress") !== "mesh") return [];
   const keys = nodeAppSecretKeys(input.secretKeys, input.boundEnvNames);
   const injectable = injectableSecrets(keys, input.secrets ?? {});
   return SHARED_POSTGRES_DSN_KEYS.filter((k) => {
     const dsn = injectable[k];
-    return dsn !== undefined && dsnHost(dsn) === vm;
+    const host = dsn === undefined ? undefined : dsnHost(dsn);
+    return (
+      host !== undefined &&
+      isSubstrateVmHost(host, input.substrateHost, input.substrateAddresses)
+    );
   });
 }
 

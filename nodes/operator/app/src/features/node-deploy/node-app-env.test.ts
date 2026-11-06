@@ -7,7 +7,9 @@ import { describe, expect, it } from "vitest";
 import { OFF_CLUSTER_WORKLOAD_DENIED_KEYS } from "@/shared/secrets/node-secrets-reserved.data";
 
 import {
+  isSubstrateVmHost,
   MESH_SUBSTRATE_HOST,
+  normalizeHost,
   rebindDsnEndpoint,
   resolveSubstrateBinding,
 } from "./bindings";
@@ -543,10 +545,56 @@ describe("mesh transport (task.5432)", () => {
       expect(
         nodeAppSubstrateBinding({ ...lane, secrets: vmDsns })?.types
       ).not.toContain("postgres");
-      // The bucket's address form is not the lane's host name: no rebind, no grant.
-      const byAddress = meshWith(withPostgres(VM_IP));
-      expect(nodeAppEnv(byAddress).DATABASE_URL).toBe(pg(VM_IP, "app_poly"));
-      expect(nodeAppSubstrateBinding(byAddress)?.ports).not.toContain(5432);
+    });
+
+    it("no addresses: a DSN naming the VM by address is not rebound and Postgres is not granted (fail safe)", () => {
+      for (const substrateAddresses of [undefined, []]) {
+        const byAddress = {
+          ...meshWith(withPostgres(VM_IP)),
+          substrateAddresses,
+        };
+        expect(nodeAppEnv(byAddress).DATABASE_URL).toBe(pg(VM_IP, "app_poly"));
+        expect(nodeAppSubstrateBinding(byAddress)?.ports).not.toContain(5432);
+      }
+    });
+
+    it("a DSN naming one of the lane host's resolved addresses rebinds and grants Postgres", () => {
+      const input = {
+        ...meshWith(withPostgres(VM_IP)),
+        substrateAddresses: ["198.51.100.9", VM_IP],
+      };
+      const env = nodeAppEnv(input);
+      expect(env.DATABASE_URL).toBe(pg("cogni-substrate", "app_poly"));
+      expect(env.DATABASE_SERVICE_URL).toBe(
+        pg("cogni-substrate", "service_poly")
+      );
+      expect(Object.values(env).join("\n")).not.toContain(VM_IP);
+      expect(nodeAppSubstrateBinding(input)?.ports).toContain(5432);
+    });
+
+    it("IPv6 addresses compare in normalized form", () => {
+      const input = {
+        ...meshWith(withPostgres("[2001:DB8:0:0::7]")),
+        substrateAddresses: ["2001:db8::7"],
+      };
+      expect(nodeAppEnv(input).DATABASE_URL).toBe(
+        pg("cogni-substrate", "app_poly")
+      );
+      expect(nodeAppSubstrateBinding(input)?.ports).toContain(5432);
+      expect(normalizeHost("[2001:0db8:0000::0007]")).toBe("2001:db8::7");
+      expect(normalizeHost("010.0.0.1")).toBeUndefined();
+      expect(normalizeHost("not:an:ip:::x")).toBeUndefined();
+    });
+
+    it("a host matching neither the name nor an address is never rebound (dedicated cell)", () => {
+      const cell = "poly-cell.provider.example";
+      const input = {
+        ...meshWith(withPostgres(cell)),
+        substrateAddresses: [VM_IP, "2001:db8::7"],
+      };
+      expect(nodeAppEnv(input).DATABASE_URL).toBe(pg(cell, "app_poly"));
+      expect(nodeAppSubstrateBinding(input)?.ports).not.toContain(5432);
+      expect(isSubstrateVmHost("203.0.113.70", VM_HOST, [VM_IP])).toBe(false);
     });
   });
 

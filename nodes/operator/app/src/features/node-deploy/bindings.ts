@@ -173,6 +173,46 @@ export function dsnHost(dsn: string): string | undefined {
   return POSTGRES_DSN.exec(dsn)?.[2]?.toLowerCase();
 }
 
+const IPV4 =
+  /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)$/;
+
+/**
+ * One comparable form of a host: lowercase; IPv6 without brackets in its canonical compressed form (WHATWG
+ * URL serializer); IPv4 only in strict dotted-quad form (no leading zeros). `undefined` for an invalid
+ * address, which then matches nothing.
+ */
+export function normalizeHost(host: string): string | undefined {
+  const h = host.trim().toLowerCase();
+  if (h.length === 0) return undefined;
+  const bare = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+  if (bare.includes(":")) {
+    try {
+      return new URL(`http://[${bare}]/`).hostname.slice(1, -1);
+    } catch {
+      return undefined;
+    }
+  }
+  if (/^[\d.]+$/.test(bare)) return IPV4.test(bare) ? bare : undefined;
+  return bare;
+}
+
+/**
+ * SHARED_VM_MATCH (task.5432): `host` is the lane's substrate (env VM) host when it equals the lane host
+ * NAME or one of that name's resolved ADDRESSES, compared in normalized form. With no addresses only the
+ * name matches (fail safe: no rebind). A host that matches neither, such as a dedicated cell, never does.
+ */
+export function isSubstrateVmHost(
+  host: string,
+  vmHost: string | undefined,
+  vmAddresses: readonly string[] = []
+): boolean {
+  const h = normalizeHost(host);
+  if (h === undefined) return false;
+  return [vmHost, ...vmAddresses].some(
+    (c) => c !== undefined && normalizeHost(c) === h
+  );
+}
+
 /**
  * Replace ONLY the endpoint of a Postgres-wire DSN. The credential, database and query stay byte for
  * byte (the bucket keeps the credential; the binding owns the endpoint). Throws on any other shape.
