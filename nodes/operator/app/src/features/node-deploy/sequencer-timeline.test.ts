@@ -218,8 +218,8 @@ describe("release state on the read model", () => {
       states.push((await view(h)).desired.releaseState);
       h.clock.advance(60_000);
     }
-    // after attempts 1-3 the release is retrying; the NEXT tick writes the sequencer's park verdict (task.5409:
-    // a count alone is not a park, the sequencer may still grant one last-resort stop-then-start)
+    // after attempts 1-3 the release is retrying; the NEXT tick writes the sequencer's park verdict
+    // (a count alone is not a park)
     expect(states).toEqual(["failed", "failed", "failed", "parked"]);
     const v = await view(h);
     expect(v.desired.parkedReason).toMatch(

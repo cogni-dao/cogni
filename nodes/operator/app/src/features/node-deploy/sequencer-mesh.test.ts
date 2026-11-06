@@ -39,7 +39,6 @@ import {
   type NodeMeshPort,
   type NodeRuntimeSecretsPort,
   type PayerCreateRequest,
-  PayerError,
   type PublishedSubstrateRequest,
   type StoredMeshKey,
   type SubstrateTransport,
@@ -540,7 +539,7 @@ describe("HR 18: a lane switch never leaves a node without a serving path", () =
     expect(t({ workloadAttempts: [failed], nodeAttempts: [failed] })).toBe(
       "mesh"
     );
-    // stop-then-start: blue served at decision time but is not retained -> the served transport (egress)
+    // blue served but is not retained -> the served transport (egress)
     expect(t({ workloadAttempts: [blue], nodeAttempts: [blue] })).toBe(
       "egress"
     );
@@ -1206,43 +1205,10 @@ describe("HR 10, 11: a wiped Headscale recovers by derivation, with no person", 
 });
 
 // ---------------------------------------------------------------------------------------------
-// Review #3050: B3 stop-then-start ordering, B4 one Headscale writer, B5 drain after a switch-back
+// Review #3050: B4 one Headscale writer, B5 drain after a switch-back
 // ---------------------------------------------------------------------------------------------
 
 describe("review fixes", () => {
-  it("B3: a meshed node whose next create needs stop-then-start keeps blue when no key can be minted", async () => {
-    const h = harness();
-    const blue = await deployed(h, "poly");
-    expect(blue.transport).toBe("mesh");
-    // Release 2's first create: blue's provider was the only bidder screening could pass.
-    h.payer.createFault = (n) =>
-      n === 2
-        ? new PayerError(
-            "provider_rejected",
-            "none passed provider screening [refused: already_tried=1]",
-            false,
-            true
-          )
-        : undefined;
-    await h.release("poly", SHA_2);
-    await h.seq.step(h.key("poly"));
-    expect((await h.attempts("poly"))[0]?.phase).toBe("failed");
-    // A restart: minting is closed until the first mesh pass.
-    h.restart();
-    expect(await h.seq.step(h.key("poly"))).toBe("waiting_dependency");
-    const kept = (await h.attempts("poly")).find((a) => a.id === blue.id);
-    expect(kept?.phase).toBe("active");
-    expect(h.payer.byDseq(blue.externalName ?? "").state).toBe("active");
-    expect(h.log.steps()).not.toContain("stop_then_start:closing_blue");
-    // Once the pass opens minting, stop-then-start runs and the green lands on the mesh.
-    await h.seq.reconcileAll();
-    await h.seq.step(h.key("poly"));
-    expect(h.log.steps()).toContain("stop_then_start:closing_blue");
-    const [green] = await h.attempts("poly");
-    expect(green?.transport).toBe("mesh");
-    expect(green?.phase).toBe("active");
-  });
-
   it("B4: a concurrent mesh pass and mint serialize; the new key is granted and never swept", async () => {
     const h = harness();
     await h.seq.reconcileAll();
