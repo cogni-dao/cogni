@@ -20,6 +20,7 @@ import type {
   AttemptStep,
   ChainTruthPort,
   DesiredRow,
+  DnsOnlyRecordInput,
   DnsRecord,
   DnsRecordInput,
   DnsRecordsPort,
@@ -477,12 +478,15 @@ export class FakeDns implements DnsRecordsPort {
   async findByName(name: string): Promise<readonly DnsRecord[]> {
     return [...this.records.values()].filter((r) => r.name === name);
   }
-  async create(input: DnsRecordInput): Promise<DnsRecord> {
+  async create(input: DnsRecordInput | DnsOnlyRecordInput): Promise<DnsRecord> {
     this.ops.push(`create:${input.name}->${input.content}`);
     this.events.push("dns.create");
     return this.seed({ ...input });
   }
-  async update(id: string, input: DnsRecordInput): Promise<DnsRecord> {
+  async update(
+    id: string,
+    input: DnsRecordInput | DnsOnlyRecordInput
+  ): Promise<DnsRecord> {
     this.ops.push(`update:${input.name}->${input.content}`);
     this.events.push("dns.update");
     const r = { ...input, id };

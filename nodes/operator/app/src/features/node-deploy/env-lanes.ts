@@ -25,8 +25,10 @@
  *     `NODE_DEPLOY_SUBSTRATE_TRANSPORTS` (`env=mesh[:<tailnet>]|egress,...`) sets each lane's substrate
  *     transport; an unlisted env is `egress`. The lane's tailnet defaults to its env (the canonical fleet);
  *     an isolated fleet names its own (for example `candidate-a=mesh:test-candidate-a`). The tailnet names
- *     the Headscale socket, the control URL `https://mesh-<tailnet>.<root>` (its `server_url`, so a mesh
- *     lane needs a valid domain root) and the VM publish path `/.well-known/cogni-mesh/<tailnet>/`.
+ *     the Headscale socket, the control URL `https://mesh-<tailnet>.<zone>` and the VM publish path
+ *     `/.well-known/cogni-mesh/<tailnet>/`. The control URL is the tailnet's Headscale `server_url`, in the
+ *     fleet's bound workload zone (`NODE_DEPLOY_WORKLOAD_ZONE`; task.5428 tailnet table): cognidao.org for
+ *     the canonical fleet, the isolated test zone for the test operator. A mesh lane needs a valid zone.
  *     Never a per-node setting.
  * Side-effects: none (the runner calls the sequencers it is handed)
  * Links: bootstrap/node-deploy-sequencer.ts, infra/k8s/base/node-deploy-sequencer/admission-policy.yaml,
@@ -59,7 +61,7 @@ export interface EnvLane {
   readonly substrateTransport: SubstrateTransport;
   /** The lane's tailnet (default: its env). An egress lane keeps it so it can drain old mesh attempts. */
   readonly meshTailnet: string;
-  /** `https://mesh-<tailnet>.<root>`; set only for a `mesh` lane. */
+  /** `https://mesh-<tailnet>.<zone>` (`NODE_DEPLOY_WORKLOAD_ZONE`); set only for a `mesh` lane. */
   readonly meshControlUrl?: string | undefined;
 }
 
@@ -96,6 +98,8 @@ export interface EnvLaneInput {
   readonly substrateHosts?: string | undefined;
   /** `NODE_DEPLOY_SUBSTRATE_TRANSPORTS`: `env=mesh|egress,...`; unlisted envs are `egress`. */
   readonly substrateTransports?: string | undefined;
+  /** `NODE_DEPLOY_WORKLOAD_ZONE`: the fleet's bound zone, where each tailnet's control host lives. */
+  readonly meshZone?: string | undefined;
 }
 
 function isEnv(value: string): value is NodeDeployEnv {
@@ -159,15 +163,18 @@ export function parseSubstrateTransports(
 }
 
 /** Resolve the per-env lanes the one process serves, or throw `EnvLaneConfigError` (boot refuses). */
+const isDomain = (value: string | undefined): value is string =>
+  !!value &&
+  value.length <= 245 &&
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
+    value
+  );
+
 export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
   const root = input.operatorDomainRoot;
   // Keep lanes observable when issuer config is invalid; nodeAppEnv refuses a fresh create.
-  const validRoot =
-    !!root &&
-    root.length <= 245 &&
-    /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
-      root
-    );
+  const validRoot = isDomain(root);
+  const meshZone = input.meshZone?.trim();
   const issuerFor = (env: string): string => {
     if (!isFlightEnv(env))
       throw new EnvLaneConfigError(
@@ -189,15 +196,15 @@ export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
     const tailnet = t?.tailnet ?? env;
     if (t?.transport !== "mesh")
       return { substrateTransport: "egress", meshTailnet: tailnet };
-    if (!validRoot || !root)
+    if (!isDomain(meshZone))
       throw new EnvLaneConfigError(
         "substrate_transports_invalid",
-        `${env}=mesh needs a valid NODE_DEPLOY_OPERATOR_DOMAIN_ROOT (control URL https://mesh-${tailnet}.<root>)`
+        `${env}=mesh needs a valid NODE_DEPLOY_WORKLOAD_ZONE (control URL https://mesh-${tailnet}.<zone>)`
       );
     return {
       substrateTransport: "mesh",
       meshTailnet: tailnet,
-      meshControlUrl: `https://mesh-${tailnet}.${root}`,
+      meshControlUrl: `https://mesh-${tailnet}.${meshZone}`,
     };
   };
   const hostFor = (env: string, own: boolean): string => {

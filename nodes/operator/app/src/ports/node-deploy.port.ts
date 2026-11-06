@@ -370,6 +370,7 @@ export interface DnsRecord {
   readonly proxied: boolean;
 }
 
+/** The blue/green edge's record: always proxied (edge PROXIED_REQUIRED). */
 export interface DnsRecordInput {
   readonly type: "CNAME";
   readonly name: string;
@@ -377,13 +378,27 @@ export interface DnsRecordInput {
   readonly proxied: true;
 }
 
+/**
+ * A DNS-only mesh record (task.5428, `features/node-deploy/mesh-dns`): Headscale and DERP do not work
+ * behind the Cloudflare proxy, so these are never proxied. A separate type keeps the edge's literal.
+ */
+export interface DnsOnlyRecordInput {
+  readonly type: "CNAME";
+  readonly name: string;
+  readonly content: string;
+  readonly proxied: false;
+}
+
 /** Cloudflare zone records. Deliberately NO delete (NO_DNS_DELETE). */
 export interface DnsRecordsPort {
   /** Bound native zone ID must name this zone. Read access proves no edit permission. */
   assertZoneIdentity(zoneName: string): Promise<void>;
   findByName(name: string): Promise<readonly DnsRecord[]>;
-  create(input: DnsRecordInput): Promise<DnsRecord>;
-  update(id: string, input: DnsRecordInput): Promise<DnsRecord>;
+  create(input: DnsRecordInput | DnsOnlyRecordInput): Promise<DnsRecord>;
+  update(
+    id: string,
+    input: DnsRecordInput | DnsOnlyRecordInput
+  ): Promise<DnsRecord>;
   read(id: string): Promise<DnsRecord>;
 }
 

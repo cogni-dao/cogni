@@ -309,6 +309,24 @@ const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
       pattern:
         /^(patch\[ConfigMap\/node-app-config\] add \/data\/NODE_DEPLOY_ENVS|patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[(NODE_DEPLOY_ENVS|NODE_DEPLOY_FLEET_OWNER|NODE_DEPLOY_SUBSTRATE_HOSTS)\]\.(name|value)|patch\[ValidatingAdmissionPolicyBinding\/node-deploy-sequencer-externalsecrets\] replace \/spec\/matchResources\/namespaceSelector\/matchExpressions\/0\/values\[[12]\]|resource\[Application\/node-deploy-env-namespaces\]\..+|kustomization\.replacements\[1\]\.(source\.(fieldPath|kind|name)|targets\[0\]\.(fieldPaths\[0\]|select\.kind)))$/,
     },
+    {
+      why:
+        "ONE COORDINATOR PER TAILNET (task.5428, hub node-service-delivery §1 + test-fleet parity): each " +
+        "operator overlay includes the Headscale Components of exactly the tailnets its sequencer writes. " +
+        "Production: the canonical candidate-a, preview and production tailnets. candidate-a (test operator): " +
+        "only its own test-candidate-a tailnet, with no production identity. The same Component code, a " +
+        "different tailnet set; tests/ci-invariants/node-deploy-mesh-coordinators.spec.ts pins both sides.",
+      pattern: /^kustomization\.components\[\d+\]$/,
+    },
+    {
+      why:
+        "MESH DNS IN THE TEST ZONE (task.5428, CD4): the test tailnet's DNS-only hosts live in the isolated " +
+        "test zone, whose token only the candidate-a test operator holds, so its sequencer is their one " +
+        "writer. Production's canonical mesh hosts are written by scripts/ci/reconcile-node-dns.sh, so it " +
+        "declares none. tests/ci-invariants/node-deploy-mesh-coordinators.spec.ts pins the value to the table.",
+      pattern:
+        /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_MESH_DNS_RECORDS\]\.(name|value)$/,
+    },
   ],
   "scheduler-worker": [
     {
