@@ -855,18 +855,51 @@ describe("HR 11 — substrate-gw approval over the verified channel", () => {
     expect(fake.devices.size).toBe(0);
   });
 
-  it("a verified approval supersedes an enrolled gateway: the older device goes, the approved one stays", async () => {
+  it("a verified approval this pass is kept when two gateways are online; the other online one goes as a mismatch", async () => {
     const fake = new FakeHeadscale();
-    const plane = await readyPlane(fake); // gw1 is enrolled and online, created at the same instant
+    const plane = await readyPlane(fake); // gw1 is enrolled and online
+    fake.now += 30_000;
     const result = await plane.approveSubstrateGateway(publish(fake), fake.now);
     if (result.outcome !== "approved") throw new Error(result.outcome);
     expect(result.supersede).toMatchObject({
       ok: true,
       kept: result.headscaleDeviceId,
-      superseded: ["gw1"],
+      superseded: [],
+      mismatched: ["gw1"],
       failed: [],
     });
     expect([...fake.devices.keys()]).toEqual([result.headscaleDeviceId]);
+  });
+
+  it("B1: a hand-registered newer online device never evicts the real online gateway; it is deleted as a mismatch", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake); // gw1: the real gateway, online
+    fake.now += 30_000;
+    const forged = fake.addGateway(); // gw2: newer, online, not approved by this pass
+    expect(await plane.supersedeGateways()).toEqual({
+      ok: true,
+      kept: "gw1",
+      superseded: [],
+      mismatched: [forged.headscaleDeviceId],
+      failed: [],
+    });
+    expect([...fake.devices.keys()]).toEqual(["gw1"]);
+  });
+
+  it("the only online gateway is never deleted: a newer offline one stays and the mint waits", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake); // gw1 online
+    fake.now += 30_000;
+    fake.addGateway({ online: false }); // gw2 newer, offline
+    expect(await plane.supersedeGateways()).toMatchObject({
+      kept: "gw1",
+      superseded: [],
+      mismatched: [],
+    });
+    expect(fake.devices.size).toBe(2);
+    expect(
+      await plane.mintAttemptKey(attempt(RELEASE_1, 1), new Set(), fake.now)
+    ).toEqual({ outcome: "refused", reason: "gateway_multiple" });
   });
 
   it("state loss: an old offline gateway and a new verified request -> new approved, old deleted, mint allowed", async () => {
@@ -914,17 +947,18 @@ describe("HR 11 — substrate-gw approval over the verified channel", () => {
     expect([...fake.devices.keys()]).toEqual([result.headscaleDeviceId]);
   });
 
-  it("restart: a fresh plane with two tag:substrate devices deletes the older on its first pass; mint opens once the newest is online", async () => {
+  it("restart: a fresh plane recomputes; an old offline gateway goes once the newer one is online, then the mint opens", async () => {
     const fake = new FakeHeadscale();
-    const old = fake.addGateway(); // gw1
+    const old = fake.addGateway({ online: false }); // gw1: lost its state
     fake.now += 30_000;
-    const newest = fake.addGateway({ online: false }); // gw2 is still joining
+    const newest = fake.addGateway({ online: false }); // gw2: re-enrolled, still joining
     const plane = new MeshPlane(fake, "candidate-a"); // a restarted sequencer: no memory
     expect((await plane.reconcilePolicy(GRANTS)).ready).toBe(true);
+    // No gateway online: nothing is deleted.
     expect(await plane.supersedeGateways()).toEqual({
       ok: true,
-      kept: newest.headscaleDeviceId,
-      superseded: [old.headscaleDeviceId],
+      kept: null,
+      superseded: [],
       mismatched: [],
       failed: [],
     });
@@ -933,9 +967,16 @@ describe("HR 11 — substrate-gw approval over the verified channel", () => {
       plane.mintAttemptKey(attempt(RELEASE_1, 1), new Set(), fake.now);
     expect(await mint()).toEqual({
       outcome: "refused",
-      reason: "gateway_offline",
+      reason: "gateway_multiple",
     });
     fake.devices.set(newest.headscaleDeviceId, { ...newest, online: true });
+    expect(await plane.supersedeGateways()).toEqual({
+      ok: true,
+      kept: newest.headscaleDeviceId,
+      superseded: [old.headscaleDeviceId],
+      mismatched: [],
+      failed: [],
+    });
     expect((await mint()).outcome).toBe("minted");
   });
 

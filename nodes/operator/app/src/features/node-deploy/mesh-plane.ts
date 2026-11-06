@@ -29,13 +29,16 @@
  *     minutes is refused). The auth id binds the approval to the machine that asked, so no machine or
  *     node key is compared and there is no second stage (design section 2, Pareto cut). A new device
  *     whose tags are not exactly `[tag:substrate]` is deleted at once (`node_mesh_substrate_mismatch`).
- *   - NEWEST_GATEWAY_WINS (HR 10, HR 11 self-heal), stateless: in the current epoch only the sequencer
- *     creates a `tag:substrate` device, and only by a verified approval, so every such device is a real
- *     registration of the env VM (an older one may have lost its tailscaled state). `supersedeGateways`
- *     reads the device list and keeps the exact-tag device with the newest `createdAt`; it deletes every
- *     other `tag:substrate` device (a wrong-tag one as a mismatch). It holds no state: the sequencer runs
- *     it on every pass, so a failed delete, or a restart, is retried by the next pass. An approval runs
- *     it at once and keeps the approved device; that device is never deleted for an older one.
+ *   - ONE_GATEWAY_RECOMPUTED (HR 10, HR 11 self-heal; review B1), stateless, run every pass over one device
+ *     read of the current epoch. A wrong-tag `tag:substrate` device is deleted as a mismatch. Among
+ *     exact-tag gateways:
+ *     1. Two or more ONLINE: keep the one this pass approved from a verified request (`approved`), else
+ *        the OLDEST online one; delete the other online ones as a mismatch (a hand-registered newer device
+ *        never evicts the real gateway).
+ *     2. An OFFLINE gateway older than the kept online one is superseded (deleted): the VM lost its state
+ *        and re-enrolled. Nothing is deleted when no gateway is online, so the only online gateway is
+ *        never deleted.
+ *     The call holds no state: a restart or a failed delete is recomputed and retried by the next pass.
  *   - GATEWAY_BEFORE_MINT (HR 23, task.5431): no attempt key is minted unless the coordinator epoch read
  *     by the last reconcile is still the owner's creation time AND the tailnet has exactly one
  *     `tag:substrate` device, tagged exactly `[tag:substrate]` and online. Otherwise the mint is refused
@@ -145,7 +148,7 @@ export type ApprovalResult =
       readonly headscaleDeviceId: HeadscaleDeviceId;
       /** The design's tagged-device rule: a `substrate-gw` device never expires. */
       readonly expiryDisabled: boolean;
-      /** NEWEST_GATEWAY_WINS run at once; a failure here is retried by the next pass. */
+      /** ONE_GATEWAY_RECOMPUTED run at once; a failure here is retried by the next pass. */
       readonly supersede: SupersedeResult;
     }
   | {
@@ -170,11 +173,11 @@ export type ApprovalResult =
 export interface SupersedeResult {
   /** False when the device read or a delete failed; the next pass recomputes and retries. */
   readonly ok: boolean;
-  /** The exact-tag `tag:substrate` device kept (newest `createdAt`), or null when none exists. */
+  /** The online exact-tag gateway kept, or null when no gateway is online. */
   readonly kept: HeadscaleDeviceId | null;
-  /** Older exact-tag gateways deleted. */
+  /** Offline exact-tag gateways older than the kept one, deleted (the VM re-enrolled). */
   readonly superseded: readonly HeadscaleDeviceId[];
-  /** `tag:substrate` devices with other tags too, deleted as a mismatch. */
+  /** Wrong-tag `tag:substrate` devices and surplus online gateways, deleted as a mismatch. */
   readonly mismatched: readonly HeadscaleDeviceId[];
   /** Deletes that failed this pass. */
   readonly failed: readonly HeadscaleDeviceId[];
@@ -184,11 +187,11 @@ export interface SupersedeResult {
 const isExactGateway = (d: MeshDevice): boolean =>
   d.tags.length === 1 && d.tags[0] === SUBSTRATE_TAG;
 
-/** Newest first: `createdAt` (unknown = oldest), then the larger id (Headscale ids only grow). */
-const newestFirst = (a: MeshDevice, b: MeshDevice): number =>
-  (b.createdAt ? Date.parse(b.createdAt) : 0) -
-    (a.createdAt ? Date.parse(a.createdAt) : 0) ||
-  b.headscaleDeviceId.localeCompare(a.headscaleDeviceId, undefined, {
+/** Oldest first: `createdAt` (unknown = oldest), then the smaller id (Headscale ids only grow). */
+const oldestFirst = (a: MeshDevice, b: MeshDevice): number =>
+  (a.createdAt ? Date.parse(a.createdAt) : 0) -
+    (b.createdAt ? Date.parse(b.createdAt) : 0) ||
+  a.headscaleDeviceId.localeCompare(b.headscaleDeviceId, undefined, {
     numeric: true,
   });
 
@@ -433,7 +436,7 @@ export class MeshPlane {
       outcome: "approved",
       headscaleDeviceId: id,
       expiryDisabled: device.expiry === null,
-      // The approved device is kept even if an older one has the same `createdAt`.
+      // A verified approval of this pass is kept when two gateways are online.
       supersede: await this.supersedeGateways(id),
     };
   }
@@ -456,11 +459,11 @@ export class MeshPlane {
   }
 
   /**
-   * NEWEST_GATEWAY_WINS, recomputed from one device read (no state). Keep `prefer` when it is an
-   * exact-tag gateway, else the newest exact-tag gateway; delete every other `tag:substrate` device.
+   * ONE_GATEWAY_RECOMPUTED from one device read (no state). `approved` is the device this pass approved
+   * from a verified request, if any.
    */
   async supersedeGateways(
-    prefer?: HeadscaleDeviceId
+    approved?: HeadscaleDeviceId
   ): Promise<SupersedeResult> {
     let devices: readonly MeshDevice[];
     try {
@@ -476,20 +479,33 @@ export class MeshPlane {
       };
     }
     const substrate = devices.filter((d) => d.tags.includes(SUBSTRATE_TAG));
-    const exact = substrate.filter(isExactGateway).sort(newestFirst);
+    const exact = substrate.filter(isExactGateway).sort(oldestFirst);
+    const online = exact.filter((d) => d.online);
     const kept =
-      exact.find((d) => d.headscaleDeviceId === prefer) ?? exact[0] ?? null;
+      online.find((d) => d.headscaleDeviceId === approved) ?? online[0];
+    const doomed: { device: MeshDevice; as: "superseded" | "mismatched" }[] =
+      [];
+    for (const d of substrate) {
+      if (d === kept) continue;
+      if (!isExactGateway(d)) doomed.push({ device: d, as: "mismatched" });
+      else if (d.online)
+        doomed.push({ device: d, as: "mismatched" }); // 2+ online: not the kept one
+      else if (kept && oldestFirst(d, kept) < 0)
+        doomed.push({ device: d, as: "superseded" });
+      // An offline gateway newer than the kept one, or no gateway online: no delete.
+    }
     const superseded: HeadscaleDeviceId[] = [];
     const mismatched: HeadscaleDeviceId[] = [];
     const failed: HeadscaleDeviceId[] = [];
     let reason: NodeMeshErrorReason | undefined;
-    for (const d of substrate) {
-      if (d === kept) continue;
-      const deleted = await this.deleteDevice(d.headscaleDeviceId);
+    for (const { device, as } of doomed) {
+      const deleted = await this.deleteDevice(device.headscaleDeviceId);
       if (deleted === true)
-        (isExactGateway(d) ? superseded : mismatched).push(d.headscaleDeviceId);
+        (as === "superseded" ? superseded : mismatched).push(
+          device.headscaleDeviceId
+        );
       else {
-        failed.push(d.headscaleDeviceId);
+        failed.push(device.headscaleDeviceId);
         reason = deleted;
       }
     }

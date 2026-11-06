@@ -74,9 +74,9 @@
  *     attempt then waits unpaid and `node_mesh_mint_refused` names the reason, so a release with no
  *     gateway never pays for a lease that cannot reach its substrate.
  *   - MESH_PASS_UNDER_THE_LOCK (HR 4, 5, 6, 8): each reconcile pass, under the leader lock, first runs the
- *     env mesh pass: reconcile the derived policy (fail closed), keep only the newest `tag:substrate`
- *     device (stateless, every pass), approve the published `substrate-gw` (fresh verified auth id;
- *     exactly `[tag:substrate]`, else deleted; it supersedes older gateways),
+ *     env mesh pass: reconcile the derived policy (fail closed), recompute the one gateway (stateless:
+ *     an offline older gateway goes once a newer one is online; surplus online ones go as a mismatch),
+ *     approve the published `substrate-gw` (fresh verified auth id; exactly `[tag:substrate]`, else deleted),
  *     revoke every terminal attempt's key (expire, then delete its devices; a retiring blue only after it
  *     retires), delete a revoked attempt's Secret one pass later, sweep unstored keys, then the device
  *     check. A failed Headscale call stops every mesh write for that pass and resets the device window.
@@ -3011,7 +3011,7 @@ export class NodeDeploySequencer {
     const listed = await mesh.plane.listDevices();
     if (!listed.ok) return down("devices", listed.reason);
 
-    // NEWEST_GATEWAY_WINS, recomputed every pass with no state: a restart or a failed delete is retried here.
+    // ONE_GATEWAY_RECOMPUTED every pass with no state: a restart or a failed delete is retried here.
     const sup = await mesh.plane.supersedeGateways();
     await this.logSupersede(sup);
     if (!sup.ok && sup.reason) return down("substrate_supersede", sup.reason);
@@ -3194,7 +3194,7 @@ export class NodeDeploySequencer {
       );
   }
 
-  /** One NEWEST_GATEWAY_WINS outcome: superseded gateways and wrong-tag deletes (each only when non-empty). */
+  /** One ONE_GATEWAY_RECOMPUTED outcome: superseded offline gateways and mismatch deletes (each only when non-empty). */
   private async logSupersede(
     sup: Awaited<ReturnType<MeshPlane["supersedeGateways"]>>
   ): Promise<void> {
@@ -3218,7 +3218,11 @@ export class NodeDeploySequencer {
         "node_mesh_substrate_mismatch",
         undefined,
         undefined,
-        { outcome: "deleted", reason: "tags", deletedDeviceIds: sup.mismatched }
+        {
+          outcome: "deleted",
+          keptDeviceId: sup.kept,
+          deletedDeviceIds: sup.mismatched,
+        }
       );
   }
 

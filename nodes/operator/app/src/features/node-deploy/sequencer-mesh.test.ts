@@ -1192,15 +1192,26 @@ describe("HR 11: substrate-gw approval over the verified channel, no key compare
     expect((await h.attempts("poly"))[0]?.phase).toBe("active");
   });
 
-  it("restart: a fresh sequencer with two tag:substrate devices deletes the older on its first pass; mint opens once the newest is online", async () => {
+  it("restart: a fresh sequencer recomputes; the old offline gateway goes on the first pass after the newer one is online", async () => {
     const h = harness(); // gateway "1" enrolled
     await h.seq.reconcileAll();
     const [old] = gateways(h);
+    if (!old) throw new Error("no seeded gateway");
+    h.hs.devices.set(old.headscaleDeviceId, { ...old, online: false }); // lost its state
     h.clock.advance(60_000);
     const newest = h.hs.addGateway("mkey:gw2", "nodekey:gw2"); // re-enrolled, still joining
     h.hs.devices.set(newest.headscaleDeviceId, { ...newest, online: false });
     h.restart(); // a new sequencer process: nothing in memory
     await h.release("poly");
+    await h.passes(1);
+    expect(gateways(h)).toHaveLength(2); // no gateway online: nothing is deleted
+    await h.seq.step(h.key("poly"));
+    expect((await h.attempts("poly"))[0]?.error).toBe(
+      "mesh_key_pending: mint_gateway_multiple"
+    );
+    expect(h.payer.createRequests).toHaveLength(0);
+    h.hs.devices.set(newest.headscaleDeviceId, newest); // online
+    h.restart(); // and once more: still no memory needed
     await h.passes(1);
     expect(gateways(h).map((d) => d.headscaleDeviceId)).toEqual([
       newest.headscaleDeviceId,
@@ -1210,14 +1221,31 @@ describe("HR 11: substrate-gw approval over the verified channel, no key compare
     ).toMatchObject({
       outcome: "deleted",
       keptDeviceId: newest.headscaleDeviceId,
-      deletedDeviceIds: [old?.headscaleDeviceId],
+      deletedDeviceIds: [old.headscaleDeviceId],
     });
     await h.seq.step(h.key("poly"));
-    expect((await h.attempts("poly"))[0]?.error).toBe(
-      "mesh_key_pending: mint_gateway_offline"
-    );
-    expect(h.payer.createRequests).toHaveLength(0);
-    h.hs.devices.set(newest.headscaleDeviceId, newest); // online
+    expect((await h.attempts("poly"))[0]?.phase).toBe("active");
+  });
+
+  it("B1: a hand-registered newer online device is deleted as a mismatch; the real gateway keeps serving", async () => {
+    const h = harness(); // gateway "1": the real one, online
+    await h.seq.reconcileAll();
+    const [real] = gateways(h);
+    h.clock.advance(60_000);
+    const forged = h.hs.addGateway("mkey:evil", "nodekey:evil"); // newer, online, never approved
+    await h.passes(1);
+    expect(gateways(h).map((d) => d.headscaleDeviceId)).toEqual([
+      real?.headscaleDeviceId,
+    ]);
+    const alert = meshLogs(h, "node_mesh_substrate_mismatch")[0];
+    expect(alert?.level).toBe("error");
+    expect(alert?.fields).toMatchObject({
+      outcome: "deleted",
+      keptDeviceId: real?.headscaleDeviceId,
+      deletedDeviceIds: [forged.headscaleDeviceId],
+    });
+    expect(meshLogs(h, "node_mesh_substrate_superseded")).toHaveLength(0);
+    await h.release("poly");
     await h.seq.step(h.key("poly"));
     expect((await h.attempts("poly"))[0]?.phase).toBe("active");
   });
