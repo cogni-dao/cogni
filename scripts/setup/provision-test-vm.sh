@@ -111,7 +111,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${CYAN}[STEP]${NC} $1"; }
 
 # ── Prerequisites ──────────────────────────────────────────
-for cmd in tofu ssh-keygen age-keygen openssl; do
+for cmd in tofu ssh-keygen age-keygen openssl jq; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     log_error "Required: $cmd not found. Install it first."
     exit 1
