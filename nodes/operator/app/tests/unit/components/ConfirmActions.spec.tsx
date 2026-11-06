@@ -68,6 +68,7 @@ describe("ConfirmActions", () => {
     const first = new Event("submit", { bubbles: true, cancelable: true });
     Object.defineProperty(first, "submitter", { value: selected });
     fireEvent(gate.form, first);
+    expect(first.defaultPrevented).toBe(false);
     expect(gate.submits()).toBe(1);
     expect(selected).toBeEnabled();
     for (const el of screen.getAllByRole("button")) {
