@@ -5,8 +5,8 @@
 # scripts/ci/lib/mesh-plane.sh — the ONE declaration of the mesh tailnets (task.5428; hub
 # node-service-delivery §1-§2, test-fleet parity) and READ-ONLY derivations over it. Pure functions;
 # no network, no writes. Sourced by render-caddyfile.sh (edge sites) and, in later slices, by the DNS
-# writer; the k8s coordinator and env-plane manifests are pinned equal to this table by
-# tests/ci-invariants/node-deploy-mesh-plane.spec.ts.
+# writer; the k8s coordinator and env-plane manifests (later slices) are pinned equal to this table by
+# their CI invariants (node-deploy-mesh-coordinators.spec.ts, mesh-env-plane.spec.ts).
 #
 # One tailnet per environment, plus the test fleet's own tailnet (test-fleet parity):
 #   tailnet           the tailnet name; its Headscale owner is cogni-mesh-<tailnet>

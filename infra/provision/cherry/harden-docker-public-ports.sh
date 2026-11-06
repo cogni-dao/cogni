@@ -132,14 +132,15 @@ iptables -A DOCKER-USER -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$INTERN
 # Docker-published ports, and the FORWARD order between k3s and Docker chains is not ours to rely on.
 # Drop them in raw PREROUTING, which runs before any NAT. This block runs only AFTER DOCKER-USER is
 # complete (its public DROP included), so a raw-table failure can never leave the substrate ports
-# open: it aborts loudly with DOCKER-USER intact. Same tag, same delete-by-line-number reconcile.
+# open: it aborts loudly with DOCKER-USER intact. Same tag. APPEND THEN DELETE: the new rule is added
+# before the older tagged lines are removed (highest line first, so lower numbers stay valid), so the
+# mesh NodePorts are never unguarded, even if the append fails.
 # ORDER: on each VM, this reconcile must run before the k3s rollout that creates its mesh NodePorts.
-while :; do
-  ln=$(iptables -t raw -L PREROUTING --line-numbers -n 2>/dev/null | awk -v t="$TAG" '!found && $0 ~ t {print $1; found=1}')
-  [ -z "$ln" ] && break
+old_raw_lines=$(iptables -t raw -L PREROUTING --line-numbers -n 2>/dev/null | awk -v t="$TAG" '$0 ~ t {print $1}' | sort -rn)
+iptables -t raw -A PREROUTING -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$MESH_EDGE_ONLY_PORTS" -m comment --comment "$TAG:drop-public-mesh-edge-only" -j DROP
+for ln in $old_raw_lines; do
   iptables -t raw -D PREROUTING "$ln"
 done
-iptables -t raw -A PREROUTING -i "$PUBLIC_IFACE" -p tcp -m multiport --dports "$MESH_EDGE_ONLY_PORTS" -m comment --comment "$TAG:drop-public-mesh-edge-only" -j DROP
 
 # Day-2 flights must not contend with unattended-upgrades when persistence is
 # already installed. Package state alone is insufficient: save can succeed with
@@ -233,3 +234,5 @@ fi
 
 echo "[harden] done. DOCKER-USER rules:"
 iptables -S DOCKER-USER | grep -- "$TAG" || true
+echo "[harden] raw PREROUTING rules:"
+iptables -t raw -S PREROUTING | grep -- "$TAG" || true

@@ -22,9 +22,13 @@
 # site per tailnet (`derp-<tailnet>.<zone>`, in that tailnet's own DNS zone -> its derper NodePort) and one enrollment
 # publish path per tailnet on the VM's DNS-only alias (`/.well-known/cogni-mesh/<tailnet>/...`). These
 # hosts are DNS-only, so each site overrides the global `local_certs` with a publicly trusted ACME
-# issuer; every proxied host keeps `local_certs`. This script is the VM's ONE Caddyfile writer, and it
-# fails if any of this VM's tailnets lacks its relay site or its publish path. The env is the one whose
-# operator domain equals `--domain` (cogni_operator_domain_for_env), or `--env` when given.
+# issuer; every proxied host keeps `local_certs`. It also renders one coordinator site
+# `mesh-<tailnet>.<zone>` per tailnet whose Headscale this env's operator sequencer runs (production: the
+# canonical tailnets; candidate-a: the test operator's own), forwarding only the Tailscale client paths
+# and derper's /verify to that coordinator's NodePort (no /api, /register or /swagger). This script is
+# the VM's ONE Caddyfile writer, and it fails if any tailnet of this env lacks its relay site, its
+# publish path or its coordinator site. The env is the one whose operator domain equals `--domain`
+# (cogni_operator_domain_for_env), or `--env` when given.
 #
 # Usage: render-caddyfile.sh            # write canonical template to stdout
 #        render-caddyfile.sh --check    # diff stdout against the committed file
@@ -124,6 +128,8 @@ emit_mesh_publish_site() {
     cat <<BLOCK
 
   handle /.well-known/cogni-mesh/${tailnet}/substrate-gw.json {
+    @write-${tailnet} not method GET HEAD
+    respond @write-${tailnet} 405
     rewrite * /substrate-gw.json
     reverse_proxy host.docker.internal:${port}
   }
@@ -143,6 +149,45 @@ BLOCK
 BLOCK
 }
 
+# A DNS-only coordinator site: public ACME certificate, only the Tailscale client paths and derper's
+# /verify reach Headscale; every other path (the /api surface included) is refused.
+emit_mesh_control_site() {
+  local host="$1" upstream="$2"
+  cat <<BLOCK
+${host} {
+  tls {
+    issuer acme
+  }
+
+  @mesh path /ts2021 /key /machine/* /verify
+  handle @mesh {
+    reverse_proxy ${upstream}
+  }
+
+  handle {
+    respond 404
+  }
+
+  log {
+    format json
+    output stdout
+  }
+}
+BLOCK
+}
+
+# task.5428 — the coordinator sites this env's edge fronts (see header).
+emit_mesh_control_sites() {
+  local env="$1" tailnet
+  while read -r tailnet; do
+    [ -n "$tailnet" ] || continue
+    echo
+    echo "# ── mesh coordinator ${tailnet} (DNS-only, public ACME) → k3s NodePort $(mesh_tailnet_field "$tailnet" coordinator_np) ──"
+    emit_mesh_control_site "$(mesh_host "$tailnet" control)" \
+      "host.docker.internal:$(mesh_tailnet_field "$tailnet" coordinator_np)"
+  done < <(mesh_coordinator_tailnets "$env")
+}
+
 # The env whose operator domain is DOMAIN under the deployment root, or empty (a fork/local domain).
 env_for_domain() {
   local domain="$1" root candidate
@@ -155,7 +200,8 @@ env_for_domain() {
   done
 }
 
-# task.5428 — the env VM's mesh sites (see header). Nothing is emitted for a VM with no tailnet.
+# task.5428 — every mesh site of this env's edge (see header): relay + publish for the tailnets on this
+# VM, then a coordinator site for each tailnet this env's sequencer runs. Nothing for an env with neither.
 emit_mesh_vm_sites() {
   local env="$1" root slug tailnet pairs=() out
   root="${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}"
@@ -168,13 +214,16 @@ emit_mesh_vm_sites() {
       "host.docker.internal:$(mesh_tailnet_field "$tailnet" relay_np)"
     pairs+=("${tailnet}=$(mesh_tailnet_field "$tailnet" publish_np)")
   done < <(mesh_vm_tailnets "$env")
-  [ "${#pairs[@]}" -gt 0 ] || return 0
-  echo
-  echo "# ── mesh enrollment publish, one path per tailnet (DNS-only VM alias, public ACME) ──"
-  emit_mesh_publish_site "$(cogni_vm_host_for_env "$env" "$root" "$slug")" "${pairs[@]}"
+  if [ "${#pairs[@]}" -gt 0 ]; then
+    echo
+    echo "# ── mesh enrollment publish, one path per tailnet (DNS-only VM alias, public ACME) ──"
+    emit_mesh_publish_site "$(cogni_vm_host_for_env "$env" "$root" "$slug")" "${pairs[@]}"
+  fi
+  emit_mesh_control_sites "$env"
 }
 
-# Fail when any tailnet of ENV's VM lacks its relay site or its publish path (one writer, all routes).
+# Fail when any tailnet of ENV's VM lacks its relay site or its publish path, or any tailnet ENV's
+# sequencer runs lacks its coordinator site (one writer, all routes).
 assert_mesh_vm_sites() {
   local env="$1" rendered="$2" tailnet
   while read -r tailnet; do
@@ -184,6 +233,11 @@ assert_mesh_vm_sites() {
     grep -Fq "handle /.well-known/cogni-mesh/${tailnet}/substrate-gw.json {" <<<"$rendered" \
       || { echo "[ERROR] render-caddyfile: publish path for tailnet '$tailnet' missing" >&2; return 1; }
   done < <(mesh_vm_tailnets "$env")
+  while read -r tailnet; do
+    [ -n "$tailnet" ] || continue
+    grep -Fqx "$(mesh_host "$tailnet" control) {" <<<"$rendered" \
+      || { echo "[ERROR] render-caddyfile: coordinator site for tailnet '$tailnet' missing" >&2; return 1; }
+  done < <(mesh_coordinator_tailnets "$env")
 }
 
 render() {

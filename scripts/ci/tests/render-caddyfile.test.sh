@@ -169,7 +169,7 @@ grep -Fq 'refusing to claim the SA is absent' "$DEPLOY_INFRA" \
   || fail "unknown OpenBao writer SA lookup failures invent absence"
 pass "backup execution is candidate-gated + serialized; OpenBao login and SA lookup retries are bounded and fail-closed"
 
-echo "[8/8] mesh VM sites: one relay + one publish path per tailnet, DNS-only ACME, hardened (task.5428 P2)"
+echo "[8/8] mesh edge sites: relay + publish per VM tailnet, coordinator per sequencer tailnet, DNS-only ACME, hardened (task.5428 P2)"
 # shellcheck source=scripts/ci/lib/mesh-plane.sh
 source "$REPO_ROOT/scripts/ci/lib/mesh-plane.sh"
 # shellcheck source=scripts/setup/lib/cogni-deployment-identity.sh
@@ -211,11 +211,37 @@ fi
 if assert_mesh_vm_sites candidate-a "$(grep -v 'cogni-mesh/candidate-a/' <<<"$CAND")" 2>/dev/null; then
   fail "a missing publish path must fail the render"
 fi
-# Envs without a VM tailnet render no mesh site; the drift-gated template is unchanged.
-for d in cognidao.org preview.cognidao.org; do
-  grep -Eq '^(derp|mesh)-|cogni-mesh/' <<<"$(bash scripts/ci/render-caddyfile.sh --domain "$d")" \
-    && fail "$d must render no mesh VM site yet"
+if assert_mesh_vm_sites candidate-a "$(grep -v '^mesh-test-candidate-a.cogni-testing.org {$' <<<"$CAND")" 2>/dev/null; then
+  fail "a missing coordinator site must fail the render"
+fi
+grep -A3 'cogni-mesh/candidate-a/substrate-gw.json {' <<<"$CAND" | grep -Fq 'respond @write-candidate-a 405' \
+  || fail "the publish path must accept only GET and HEAD"
+# Coordinator sites: each env's edge fronts exactly its sequencer's tailnets, client paths only.
+PROD="$(bash scripts/ci/render-caddyfile.sh --domain cognidao.org)"
+for env in production candidate-a; do
+  rendered="$PROD"; [ "$env" = candidate-a ] && rendered="$CAND"
+  for tailnet in $(mesh_coordinator_tailnets "$env"); do
+    host="$(mesh_host "$tailnet" control)"
+    cb="$(block_of "$host" "$rendered")"
+    [ -n "$cb" ] || fail "$env edge has no coordinator site for $host"
+    grep -Fq 'issuer acme' <<<"$cb" || fail "$host must use a public ACME issuer (DNS-only)"
+    grep -Fq '@mesh path /ts2021 /key /machine/* /verify' <<<"$cb" || fail "$host must route only client paths"
+    grep -Fq "reverse_proxy host.docker.internal:$(mesh_tailnet_field "$tailnet" coordinator_np)" <<<"$cb" \
+      || fail "$host upstream is not its coordinator NodePort"
+    grep -Eq '/api|/register|/swagger|/health' <<<"$cb" && fail "$host exposes a Headscale admin or health path"
+    grep -Fq 'respond 404' <<<"$cb" || fail "$host does not refuse other paths"
+  done
 done
+[ "$(mesh_coordinator_tailnets production | paste -sd' ' -)" = "candidate-a preview production" ] \
+  || fail "production's sequencer must front the canonical tailnets"
+[ "$(mesh_coordinator_tailnets candidate-a | paste -sd' ' -)" = "test-candidate-a" ] \
+  || fail "the candidate-a test operator must front only its own tailnet"
+[ "$(mesh_host test-candidate-a control)" = "mesh-test-candidate-a.cogni-testing.org" ] \
+  || fail "the test coordinator host must be in the test-fleet zone"
+grep -Fq 'mesh-candidate-a.cognidao.org {' <<<"$CAND" && fail "candidate-a edge must not front the canonical candidate-a coordinator"
+grep -Eq '^derp-|cogni-mesh/' <<<"$PROD" && fail "production must render no mesh VM site before slice T1p"
+grep -Eq '^(derp|mesh)-|cogni-mesh/' <<<"$(bash scripts/ci/render-caddyfile.sh --domain preview.cognidao.org)" \
+  && fail "preview edge must render no mesh site"
 grep -Fq 'issuer acme' <<<"$RENDERED" && fail "template render must not carry env-specific mesh sites"
 # Hardener drops exactly the table's edge-only NodePorts, before NAT, only after DOCKER-USER is complete.
 HARDEN="infra/provision/cherry/harden-docker-public-ports.sh"
@@ -243,6 +269,11 @@ grep -Fq 'MESH_UDP' "$HARDEN" && fail "no-op UDP ACCEPT rules must not return"
   || fail "test-operator relay host must be in the test-fleet zone cogni-testing.org"
 [ "$(mesh_host test-candidate-a control)" = "mesh-test-candidate-a.cogni-testing.org" ] \
   || fail "test-operator control host must be in the test-fleet zone cogni-testing.org"
+# Both tailnets on the candidate-a VM own distinct UDP ports (design §1 parity): STUN and WireGuard.
+[ "$(mesh_tailnet_field candidate-a stun_port)/$(mesh_tailnet_field candidate-a wireguard_port)" = "3478/41641" ] \
+  || fail "canonical candidate-a tailnet UDP ports must be 3478/41641"
+[ "$(mesh_tailnet_field test-candidate-a stun_port)/$(mesh_tailnet_field test-candidate-a wireguard_port)" = "3479/41642" ] \
+  || fail "test-candidate-a tailnet UDP ports must be 3479/41642"
 for col in coordinator_np relay_np publish_np stun_port wireguard_port derp_region; do
   vals="$(for t in $(mesh_tailnets); do mesh_tailnet_field "$t" "$col"; done | grep -v '^$')"
   [ "$(sort <<<"$vals" | uniq -d)" = "" ] || fail "duplicate $col in the mesh tailnet table"
@@ -252,6 +283,6 @@ for p in $(mesh_edge_only_nodeports_csv | tr , ' '); do
 done
 # The frozen deploy brain is untouched by the mesh plane.
 grep -Eq 'MESH_|mesh-plane' "$DEPLOY_INFRA" && fail "deploy-infra.sh must carry no mesh-plane logic"
-pass "both candidate-a tailnets' relay + publish routes, one writer with a both-present check, hardened, deploy brain untouched"
+pass "relay + publish routes for both candidate-a tailnets, coordinator sites per sequencer, one writer with an all-present check, hardened, deploy brain untouched"
 
 echo "PASS: render-caddyfile.test.sh"
