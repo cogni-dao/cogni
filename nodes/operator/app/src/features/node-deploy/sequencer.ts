@@ -126,7 +126,11 @@ import {
   readAttemptDevices,
   substrateGateway,
 } from "./mesh-attempt";
-import { type MeshPlane, meshSecretName } from "./mesh-plane";
+import {
+  type MeshPlane,
+  meshSecretName,
+  SUBSTRATE_NODE_KEY_ALERT_MS,
+} from "./mesh-plane";
 import type { NodeSubstrateGrant } from "./mesh-policy";
 import {
   nodeAppEnv,
@@ -247,13 +251,19 @@ export interface NodeAppRuntimeDeps {
  * (`NODE_DEPLOY_SUBSTRATE_TRANSPORTS`); absent = every attempt of the lane uses egress.
  */
 export interface SequencerMeshDeps {
+  /**
+   * `mint`: the lane's transport is mesh. `drain` (the lane was switched back to egress): the pass still
+   * reconciles the policy, approves the gateway, revokes and sweeps, and deletes Secrets until no mesh
+   * attempt is left to clean; it never mints and never rolls (HR 6 for a lane switch-back).
+   */
+  readonly mode: "mint" | "drain";
   /** The env Headscale's seed-and-approval loop over its pod-local socket (task.5429). */
   readonly plane: MeshPlane;
   /** Attempt-key Secrets in the lane's `cogni-node-deploy-<env>` namespace. */
   readonly keys: MeshKeyStorePort;
   /** The env VM's published `substrate-gw` request, read over verified HTTPS. */
   readonly substrateRequests: SubstrateRequestSourcePort;
-  /** `https://mesh-<env>.<zone>`: the env Headscale's `server_url` (TLS on 443 only, HR 22). */
+  /** `https://mesh-<tailnet>.<zone>`: the tailnet Headscale's `server_url` (TLS on 443 only, HR 22). */
   readonly controlUrl: string;
 }
 
@@ -352,6 +362,8 @@ export class NodeDeploySequencer {
   private readonly lastStep = new Map<string, string>();
   /** HR 8 device window per live mesh attempt id: in memory, so a restart rolls nothing. */
   private readonly deviceWatch = new Map<string, DeviceWatchEntry>();
+  /** MESH_WRITES_SERIALIZED: the tail of this lane's Headscale write queue. */
+  private meshLock: Promise<void> = Promise.resolve();
   /** The lane VM host's resolved addresses, read once per mesh pass (task.5432 SHARED_POSTGRES_ONLY). */
   private vmAddresses: readonly string[] | undefined;
 
@@ -376,15 +388,16 @@ export class NodeDeploySequencer {
   /** One reconcile pass (design: every 60 s). The env mesh pass runs first (MESH_PASS_UNDER_THE_LOCK). */
   async reconcileAll(): Promise<void> {
     if (this.d.mesh)
-      await this.meshPass().catch((error: unknown) =>
-        this.meshEvent(
+      await this.meshPass().catch((error: unknown) => {
+        this.deviceWatch.clear(); // a skipped pass breaks the consecutive-read window
+        return this.meshEvent(
           "error",
           "node_mesh_coordinator_health",
           undefined,
           undefined,
           { outcome: "threw", reason: errText(error).slice(0, 300) }
-        )
-      );
+        );
+      });
     const desired = await this.d.store.listDesired(this.d.config.environment);
     await Promise.all(
       desired.map((row) =>
@@ -545,32 +558,37 @@ export class NodeDeploySequencer {
     // STOP_THEN_START (task.5409): blue's provider was the only bidder that could pass screening, so a
     // green beside blue can never be placed. Close blue first (accepted downtime), then create.
     // A useful-work capability requires blue to survive failed or unknown qualification.
-    const stop = release.spec.health?.qualification
-      ? "none"
-      : await this.stopThenStart(key, release, ofRelease, active);
-    if (stop === "unconfirmed") return "close_pending";
-    if (stop === "stopped") blue = undefined;
+    const willStop =
+      !release.spec.health?.qualification &&
+      (await this.stopThenStartVerdict(key, release, ofRelease, active)) ===
+        "eligible";
 
-    // HR 18: `all` still shows the phases from before any stop-then-start, so a blue that was just
+    // HR 18, decided BEFORE any stop (CD6): `all` shows the pre-stop phases, so a blue about to be
     // stopped counts as serving and its replacement keeps the node's served transport.
     const transport =
-      this.d.mesh && nodeApp && deployable.spec.kind === "app"
+      this.d.mesh?.mode === "mint" && nodeApp && deployable.spec.kind === "app"
         ? attemptTransport({
             lane: "mesh",
-            blueRetained: blue !== undefined,
+            blueRetained: active !== undefined && !willStop,
             releaseId: release.id,
             workloadAttempts: all,
             nodeAttempts: await this.nodeAttempts(key),
           })
         : "egress";
     if (transport === "mesh" && !this.d.mesh?.plane.mintAllowed) {
-      // No key can be minted (no matched policy readback or no sweep since the last failed call): no
-      // attempt starts and nothing is paid until the mesh pass opens minting (HR 4, HR 5).
+      // No key can be minted (no matched policy readback or no sweep since the last failed call): blue
+      // keeps serving, no attempt starts and nothing is paid until the mesh pass opens minting (HR 4, 5).
       await this.emit(key, release, undefined, "dependency", "waiting", {
         reason: "mesh_not_ready",
       });
       return "waiting_dependency";
     }
+
+    const stop = willStop
+      ? await this.stopThenStart(key, release, ofRelease, active)
+      : "none";
+    if (stop === "unconfirmed") return "close_pending";
+    if (stop === "stopped") blue = undefined;
     const attempt = await allocateAttempt(transport);
     await this.emit(key, release, attempt, "attempt_planned", "ok", {
       blue: blue?.externalName,
@@ -2541,6 +2559,19 @@ export class NodeDeploySequencer {
     return addresses;
   }
 
+  /** A drain lane has work while any mesh attempt is live or still holds a Secret. */
+  private async meshLeftToDrain(): Promise<boolean> {
+    return (await this.meshRows()).some(({ attempts }) =>
+      attempts.some(
+        (a) =>
+          a.transport === "mesh" &&
+          !!a.mesh &&
+          (MESH_LIVE_PHASES.includes(a.phase) ||
+            (!!a.mesh.headscaleKeyId && !a.mesh.secretDeletedAt))
+      )
+    );
+  }
+
   /** Every desired workload of the env with all its attempts (newest first). */
   private async meshRows(): Promise<MeshRow[]> {
     const desired = await this.d.store.listDesired(this.d.config.environment);
@@ -2567,10 +2598,51 @@ export class NodeDeploySequencer {
         if (a.transport !== "mesh" || !a.mesh) continue;
         if (!MESH_LIVE_PHASES.includes(a.phase)) continue;
         grants.push({ nodeId: key.nodeId, ports: a.mesh.ports });
-        if (a.mesh.headscaleKeyId)
+        // HR 23: only a key of the current coordinator epoch protects an id from the sweep.
+        if (a.mesh.headscaleKeyId && this.keyIsCurrent(a.mesh))
           liveKeyIds.add(headscaleKeyId(a.mesh.headscaleKeyId));
       }
     return { grants, liveKeyIds };
+  }
+
+  /**
+   * HR 23 (COORDINATOR_EPOCH): a stored key id names a key only in the Headscale database generation it
+   * was minted in. After a wipe the ids restart, so an older-epoch id is void: it never revokes, never
+   * protects a key from the sweep and never counts a device.
+   */
+  private keyIsCurrent(m: AttemptMesh): boolean {
+    const epoch = this.d.mesh?.plane.epoch;
+    return (
+      !!m.headscaleKeyId && !!m.headscaleEpoch && m.headscaleEpoch === epoch
+    );
+  }
+
+  private generationOf(m: AttemptMesh) {
+    return {
+      epoch: m.headscaleEpoch ?? "",
+      keyCreatedAt: m.headscaleKeyCreatedAt ?? null,
+    };
+  }
+
+  /** MESH_WRITES_SERIALIZED (CD4): one Headscale writer per lane; the tick's mint and the pass queue here. */
+  private withMeshLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.meshLock.then(fn, fn);
+    this.meshLock = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  /** Clear a void or lost key from the row (and its Secret, which no lease ever used). */
+  private withoutKey(m: AttemptMesh): AttemptMesh {
+    const {
+      headscaleKeyId: _id,
+      headscaleEpoch: _epoch,
+      headscaleKeyCreatedAt: _created,
+      ...rest
+    } = m;
+    return rest;
   }
 
   /** CD3: the release's first mesh attempt fixes its companion digests; a first attempt takes today's. */
@@ -2608,7 +2680,7 @@ export class NodeDeploySequencer {
       }
   > {
     const mesh = this.d.mesh;
-    if (!mesh)
+    if (!mesh || mesh.mode !== "mint")
       return {
         kind: "failed",
         attempt,
@@ -2642,7 +2714,9 @@ export class NodeDeploySequencer {
       error: `${MESH_KEY_PENDING}preparing`,
       mesh: record,
     });
-    const got = await this.ensureAttemptKey(key, release, a, mesh);
+    const got = await this.withMeshLock(() =>
+      this.ensureAttemptKey(key, release, a, mesh)
+    );
     a = got.attempt;
     if (!got.stored) {
       const reason = got.pending ?? "unknown";
@@ -2701,50 +2775,72 @@ export class NodeDeploySequencer {
       if (!row.mesh) throw new Error("mesh attempt has no mesh record");
       return row.mesh;
     };
+    // Reconcile first: it reads the coordinator epoch (HR 23) and opens the mint (HR 4).
+    const view = this.meshView(await this.meshRows());
+    const policy = await mesh.plane.reconcilePolicy(view.grants);
+    if (!policy.ready)
+      return { attempt: a, pending: `policy_${policy.outcome}` };
     let stored: StoredMeshKey | undefined;
     try {
       stored = await mesh.keys.get(secretName);
     } catch {
       return { attempt: a, pending: "key_store_unavailable" };
     }
-    if (stored) {
-      const rowKey = recordOf(a).headscaleKeyId;
-      if (rowKey !== stored.headscaleKeyId) {
-        a = await this.d.store.updateAttempt(a.id, {
-          mesh: { ...recordOf(a), headscaleKeyId: stored.headscaleKeyId },
-        });
-        // Not expected (the row is written first); the sweep also expires it.
-        if (rowKey) await mesh.plane.revokeAttempt(headscaleKeyId(rowKey), now);
-      }
+    const row = recordOf(a);
+    if (
+      stored &&
+      row.headscaleKeyId === stored.headscaleKeyId &&
+      this.keyIsCurrent(row)
+    )
       return { attempt: a, stored };
-    }
-    const unstored = recordOf(a).headscaleKeyId;
-    if (unstored) {
-      const revoked = await mesh.plane.revokeAttempt(
-        headscaleKeyId(unstored),
-        now
-      );
-      if (revoked.outcome !== "revoked")
-        return {
-          attempt: a,
-          pending: `unstored_key_not_revoked:${revoked.reason}`,
-        };
-      const { headscaleKeyId: _expired, ...rest } = recordOf(a);
-      a = await this.d.store.updateAttempt(a.id, { mesh: rest });
-      await this.meshEvent("info", "node_mesh_key_revoked", a, key, {
-        outcome: "unstored",
-        headscaleKeyId: unstored,
+    if (stored) {
+      // The stored key is of an older epoch (a wipe between store and create) or does not match the row:
+      // it never reached a lease (KEY_STORED_BEFORE_PAY). Delete it so the create-once name is free.
+      try {
+        await mesh.keys.delete(secretName);
+      } catch {
+        return { attempt: a, pending: "key_store_unavailable" };
+      }
+      await this.meshEvent("info", "node_mesh_key_void", a, key, {
+        outcome: "stored_key_void",
+        headscaleKeyId: stored.headscaleKeyId,
       });
     }
-    const view = this.meshView(await this.meshRows());
-    const policy = await mesh.plane.reconcilePolicy(view.grants);
-    if (!policy.ready)
-      return { attempt: a, pending: `policy_${policy.outcome}` };
-    const minted = await mesh.plane.mintAttemptKey(ref, view.liveKeyIds, now);
+    if (row.headscaleKeyId) {
+      // A row key id with no usable Secret never reached a lease: expire it if it is ours, then forget it.
+      if (this.keyIsCurrent(row)) {
+        const revoked = await mesh.plane.revokeAttempt(
+          headscaleKeyId(row.headscaleKeyId),
+          now,
+          this.generationOf(row)
+        );
+        if (revoked.outcome !== "revoked" && revoked.outcome !== "void")
+          return {
+            attempt: a,
+            pending: `unstored_key_not_revoked:${revoked.reason}`,
+          };
+      }
+      a = await this.d.store.updateAttempt(a.id, {
+        mesh: this.withoutKey(row),
+      });
+      await this.meshEvent("info", "node_mesh_key_revoked", a, key, {
+        outcome: "unstored",
+        headscaleKeyId: row.headscaleKeyId,
+      });
+    }
+    const live = this.meshView(await this.meshRows()).liveKeyIds;
+    const minted = await mesh.plane.mintAttemptKey(ref, live, now);
     if (minted.outcome !== "minted")
       return { attempt: a, pending: `mint_${minted.reason}` };
     a = await this.d.store.updateAttempt(a.id, {
-      mesh: { ...recordOf(a), headscaleKeyId: minted.headscaleKeyId },
+      mesh: {
+        ...recordOf(a),
+        headscaleKeyId: minted.headscaleKeyId,
+        headscaleEpoch: minted.epoch,
+        ...(minted.keyCreatedAt
+          ? { headscaleKeyCreatedAt: minted.keyCreatedAt }
+          : {}),
+      },
     });
     let saved: StoredMeshKey;
     try {
@@ -2757,10 +2853,10 @@ export class NodeDeploySequencer {
       return { attempt: a, pending: "key_store_unavailable" };
     }
     if (saved.headscaleKeyId !== minted.headscaleKeyId) {
-      a = await this.d.store.updateAttempt(a.id, {
-        mesh: { ...recordOf(a), headscaleKeyId: saved.headscaleKeyId },
-      });
+      // Not expected (one runner per workload): the winner's key has no generation on this row. Void
+      // ours and wait; the next try deletes the foreign Secret and mints again.
       await mesh.plane.revokeAttempt(minted.headscaleKeyId, now);
+      return { attempt: a, pending: "key_store_conflict" };
     }
     await this.meshEvent("info", "node_mesh_key_minted", a, key, {
       outcome: "stored",
@@ -2775,9 +2871,14 @@ export class NodeDeploySequencer {
    * Any failed Headscale call ends the pass: no further mesh write, and the device window resets.
    */
   async meshPass(): Promise<void> {
+    await this.withMeshLock(() => this.meshPassLocked());
+  }
+
+  private async meshPassLocked(): Promise<void> {
     const mesh = this.d.mesh;
     if (!mesh) return;
     const startedAt = this.d.clock.now();
+    if (mesh.mode === "drain" && !(await this.meshLeftToDrain())) return;
     await this.substrateAddresses(true);
     const rows = await this.meshRows();
     const meshAttempts = rows.flatMap(({ key, attempts }) =>
@@ -2840,10 +2941,25 @@ export class NodeDeploySequencer {
       const m = attempt.mesh;
       if (!m?.headscaleKeyId || m.revokedAt) continue;
       if (!MESH_TERMINAL_PHASES.includes(attempt.phase)) continue;
-      const r = await mesh.plane.revokeAttempt(
-        headscaleKeyId(m.headscaleKeyId),
-        this.d.clock.now()
-      );
+      // HR 23: an older-epoch id names nothing of ours; it is void and no Headscale call is made.
+      const r = this.keyIsCurrent(m)
+        ? await mesh.plane.revokeAttempt(
+            headscaleKeyId(m.headscaleKeyId),
+            this.d.clock.now(),
+            this.generationOf(m)
+          )
+        : ({ outcome: "void" } as const);
+      if (r.outcome === "void") {
+        const voided = await this.d.store.updateAttempt(attempt.id, {
+          mesh: { ...m, revokedAt: new Date(this.d.clock.now()).toISOString() },
+        });
+        await this.meshEvent("info", "node_mesh_key_void", voided, key, {
+          outcome: "older_epoch",
+          headscaleKeyId: m.headscaleKeyId,
+          phase: attempt.phase,
+        });
+        continue;
+      }
       if (r.outcome !== "revoked") {
         await this.meshEvent("warn", "node_mesh_revoke_failed", attempt, key, {
           outcome: r.outcome,
@@ -2899,8 +3015,12 @@ export class NodeDeploySequencer {
       });
     }
 
-    // HR 5: expire keys no live attempt stores (older than one pass) and delete their devices.
-    const sweep = await mesh.plane.sweep(view.liveKeyIds, this.d.clock.now());
+    // HR 5: expire keys no live attempt stores (older than one pass) and delete their devices. The live
+    // set is read again here, so a key minted earlier in this pass is never swept.
+    const sweep = await mesh.plane.sweep(
+      this.meshView(await this.meshRows()).liveKeyIds,
+      this.d.clock.now()
+    );
     if (
       sweep.expiredKeys.length > 0 ||
       sweep.deletedDevices.length > 0 ||
@@ -2914,7 +3034,9 @@ export class NodeDeploySequencer {
       });
     if (!sweep.ok) return down("sweep", sweep.reason ?? "other");
 
-    await this.checkDevices(listed.devices, meshAttempts, rows);
+    // A drain lane never rolls: a roll is a new attempt, and this lane no longer runs the mesh.
+    if (mesh.mode === "mint")
+      await this.checkDevices(listed.devices, meshAttempts, rows);
     await this.meshEvent(
       "info",
       "node_mesh_coordinator_health",
@@ -3012,6 +3134,23 @@ export class NodeDeploySequencer {
         undefined,
         { outcome: "verified", headscaleDeviceId: check.headscaleDeviceId }
       );
+    else if (
+      check.outcome === "unknown" &&
+      check.sinceMs >= SUBSTRATE_NODE_KEY_ALERT_MS &&
+      this.throttle(`node_key_unknown/${check.headscaleDeviceId}`)
+    )
+      // Design B19: silence is UNKNOWN, never a delete. It alerts so a person looks at the publisher.
+      await this.meshEvent(
+        "error",
+        "node_mesh_substrate_node_key_unknown",
+        undefined,
+        undefined,
+        {
+          outcome: "unknown",
+          headscaleDeviceId: check.headscaleDeviceId,
+          sinceMs: check.sinceMs,
+        }
+      );
     else if (check.outcome === "mismatch")
       await this.meshEvent(
         "error",
@@ -3042,9 +3181,7 @@ export class NodeDeploySequencer {
     rows: readonly MeshRow[]
   ): Promise<void> {
     const now = this.d.clock.now();
-    const live = meshAttempts.filter(
-      (x) => x.attempt.phase === "active" && x.attempt.mesh?.headscaleKeyId
-    );
+    const live = meshAttempts.filter((x) => x.attempt.phase === "active");
     for (const id of [...this.deviceWatch.keys()])
       if (!live.some((x) => x.attempt.id === id)) this.deviceWatch.delete(id);
     const gateway = substrateGateway(devices);
@@ -3069,9 +3206,11 @@ export class NodeDeploySequencer {
     }[] = [];
     for (const { key, attempt } of live) {
       const before = this.deviceWatch.get(attempt.id);
+      const m = attempt.mesh as AttemptMesh;
       const v = readAttemptDevices({
         entry: before,
-        headscaleKeyId: attempt.mesh?.headscaleKeyId ?? "",
+        // HR 23: devices match by key id only within the key's epoch; an older-epoch key matches none.
+        headscaleKeyId: this.keyIsCurrent(m) ? (m.headscaleKeyId ?? "") : "",
         devices,
         gatewayCreatedAt,
         now,

@@ -31,12 +31,17 @@
  *        `nodeKey` is optional). After `AuthRegister` the device must have tags exactly `[tag:substrate]`
  *        and the published machine key (and the published node key, when one was published), else it is
  *        deleted at once and the result carries `node_mesh_substrate_mismatch`.
- *     2. Node key: on every later re-read (`verifySubstrateNodeKey`), a fresh publish with the gateway's
- *        machine key and a node key must name the device's node key, else the device is deleted with the
- *        same alert. A device approved without a node key that sees no such publish within
- *        `SUBSTRATE_NODE_KEY_BOUND_MS` is deleted too.
+ *     2. Node key (design B19): stage 2 ends on the first fresh publish with the gateway's machine key
+ *        whose node key equals the device's. A fresh verified node key that differs deletes the device
+ *        with the same alert. A missing or stale publish is UNKNOWN: no action; the caller alerts after
+ *        `SUBSTRATE_NODE_KEY_ALERT_MS`.
  *   - ZERO_API_KEYS (HR 12): `checkAdminSurface` passes only when Headscale lists no API key.
  *   - NETWORK_ONLY (HR 13): every id here is a namespaced provider id; none is a Cogni identity key.
+ *   - COORDINATOR_EPOCH (HR 23, task.5431): a wiped Headscale restarts its key and device ids at 1, so a
+ *     stored id alone names nothing. The epoch is the creation time of the env owner `cogni-mesh-<env>`,
+ *     read on every reconcile (a wipe re-creates the owner). A mint returns the epoch and the key's own
+ *     creation time; `revokeAttempt` with that generation is `void` (no call is made) when the epoch or the
+ *     listed key's creation time differs, so a stale id never expires or deletes a newer key or device.
  * Side-effects: IO
  * Links: mesh-policy.ts, ports/node-mesh.port.ts
  * @public
@@ -71,10 +76,10 @@ export const SUBSTRATE_REQUEST_MAX_AGE_MS = 5 * 60_000;
 /** A request "published" further in the future than this is refused too (clock skew bound). */
 export const SUBSTRATE_REQUEST_MAX_SKEW_MS = 60_000;
 /**
- * A gateway approved before its node key was published must publish that node key within this bound
- * (the VM step republishes every 15 s and knows the node key right after approval), else it is deleted.
+ * Design B19: a gateway still in stage 2 (no fresh node key to compare) this long raises an alert. It is
+ * never deleted for silence; only a fresh verified node key that differs deletes it.
  */
-export const SUBSTRATE_NODE_KEY_BOUND_MS = 5 * 60_000;
+export const SUBSTRATE_NODE_KEY_ALERT_MS = 10 * 60_000;
 /** The sweep skips keys newer than one sequencer pass (design section 3). */
 export const DEFAULT_SWEEP_MIN_AGE_MS = 60_000;
 /**
@@ -172,16 +177,17 @@ export type NodeKeyCheckResult =
       readonly outcome: "verified";
       readonly headscaleDeviceId: HeadscaleDeviceId;
     }
-  /** Approved without a node key; still inside `SUBSTRATE_NODE_KEY_BOUND_MS`. */
+  /** No fresh node key to compare yet: no action. Alert once `sinceMs` passes `SUBSTRATE_NODE_KEY_ALERT_MS`. */
   | {
-      readonly outcome: "pending";
+      readonly outcome: "unknown";
       readonly headscaleDeviceId: HeadscaleDeviceId;
+      readonly sinceMs: number;
     }
   | {
       readonly outcome: "mismatch";
       readonly alert: typeof SUBSTRATE_MISMATCH_ALERT;
       readonly headscaleDeviceId: HeadscaleDeviceId;
-      readonly reason: "node_key_mismatch" | "node_key_not_published";
+      readonly reason: "node_key_mismatch";
       /** False when the delete itself failed; the next pass must retry it. */
       readonly deleted: boolean;
     };
@@ -202,13 +208,17 @@ export type MintResult =
       readonly secretName: string;
       /** Unstored keys of this node tag expired before the mint (log them). */
       readonly expiredOrphans: readonly HeadscaleKeyId[];
+      /** COORDINATOR_EPOCH: store both with the key id; revoke passes them back. */
+      readonly epoch: string;
+      readonly keyCreatedAt: string | null;
     }
   | {
       readonly outcome: "refused";
       readonly reason:
         | "policy_not_ready"
         | "sweep_pending"
-        | "node_not_in_policy";
+        | "node_not_in_policy"
+        | "epoch_unknown";
     }
   /** The mint failed or its response was lost. Nothing is stored; the sweep expires any unstored key. */
   | { readonly outcome: "failed"; readonly reason: NodeMeshErrorReason };
@@ -219,6 +229,8 @@ export type RevokeResult =
       readonly deletedDevices: readonly HeadscaleDeviceId[];
     }
   | { readonly outcome: "refused"; readonly reason: "not_a_node_key" }
+  /** The key belongs to an older coordinator epoch (or is gone): nothing of ours to revoke; no call made. */
+  | { readonly outcome: "void" }
   | {
       readonly outcome: "failed";
       /** `expire` failed: nothing was deleted. `delete` or `readback`: the key is already expired. */
@@ -262,8 +274,12 @@ export class MeshPlane {
   private swept = false;
   /** Bumped by every failed call; a sweep or reconcile opens the gate only if it saw no failure. */
   private failures = 0;
-  /** Gateways approved before their node key was published: device id -> approval instant. */
-  private readonly awaitingNodeKey = new Map<HeadscaleDeviceId, number>();
+  /** The owner object's creation time seen by the last reconcile (COORDINATOR_EPOCH); null = unknown. */
+  private epochValue: string | null = null;
+  /** Stage-2 gateways (`<device id>/<machine key>`) -> when stage 2 began in this process. */
+  private readonly nodeKeyStage = new Map<string, number>();
+  /** Gateways whose node key this process verified (stage 2 ended). */
+  private readonly nodeKeyVerified = new Set<string>();
 
   constructor(
     private readonly mesh: NodeMeshPort,
@@ -289,8 +305,15 @@ export class MeshPlane {
   /** Create the env owner object if Headscale has none (a fresh or wiped database). */
   private async ensureOwner(): Promise<void> {
     const users = await this.mesh.listUsers();
-    if (!users.some((u) => u.headscaleUser === this.owner))
-      await this.mesh.createUser(this.owner);
+    const owner =
+      users.find((u) => u.headscaleUser === this.owner) ??
+      (await this.mesh.createUser(this.owner));
+    this.epochValue = owner.createdAt;
+  }
+
+  /** COORDINATOR_EPOCH: the current Headscale database generation, or null before a reconcile read it. */
+  get epoch(): string | null {
+    return this.epochValue;
   }
 
   /**
@@ -377,8 +400,9 @@ export class MeshPlane {
     const nodeKeyMatches =
       !request.nodeKey || device.nodeKey === request.nodeKey;
     if (tagsExact && machineKeyMatches && nodeKeyMatches) {
-      if (!request.nodeKey)
-        this.awaitingNodeKey.set(device.headscaleDeviceId, now);
+      const k = `${device.headscaleDeviceId}/${device.machineKey}`;
+      if (request.nodeKey) this.nodeKeyVerified.add(k);
+      else this.nodeKeyStage.set(k, now);
       return {
         outcome: "approved",
         headscaleDeviceId: device.headscaleDeviceId,
@@ -401,7 +425,6 @@ export class MeshPlane {
 
   /** Delete a refused gateway device; an already absent device counts as deleted. */
   private async deleteGateway(id: HeadscaleDeviceId): Promise<boolean> {
-    this.awaitingNodeKey.delete(id);
     try {
       await this.mesh.deleteNode(id);
       return true;
@@ -413,60 +436,62 @@ export class MeshPlane {
   }
 
   /**
-   * VERIFIED_APPROVAL stage 2, on every re-read. `request` is the latest publish read over the verified
-   * channel (null when none); `devices` the current device list. For each `tag:substrate` device: a fresh
-   * publish with its machine key and a node key must name its node key, else it is deleted. A device
-   * approved without a node key and still unconfirmed after `SUBSTRATE_NODE_KEY_BOUND_MS` is deleted.
-   * Returns the first non-`none` outcome (one gateway per env).
+   * VERIFIED_APPROVAL stage 2 (design B19). Every `tag:substrate` device this process has not yet verified
+   * is in stage 2: one approved here (since its approval), or one first seen after a restart (since then).
+   * `request` is the latest publish read over the verified channel (null when none). Stage 2 ends on the
+   * FIRST fresh publish whose machine key is the device's and whose node key equals the device's. Only a
+   * fresh verified node key that DIFFERS deletes the device (`node_key_mismatch`). No fresh publish, or a
+   * stale one, is `unknown`: no action; the caller alerts after `SUBSTRATE_NODE_KEY_ALERT_MS`.
+   * Devices are matched by id AND machine key, so a recycled device id after a wipe is a new device.
    */
   async verifySubstrateNodeKey(
     request: SubstrateRequest | null,
     devices: readonly MeshDevice[],
     now: number
   ): Promise<NodeKeyCheckResult> {
-    const present = new Set(devices.map((d) => d.headscaleDeviceId));
-    for (const id of [...this.awaitingNodeKey.keys()])
-      if (!present.has(id)) this.awaitingNodeKey.delete(id);
     const fresh =
       request !== null &&
+      request.nodeKey !== "" &&
       Number.isFinite(request.publishedAt) &&
       now - request.publishedAt <= SUBSTRATE_REQUEST_MAX_AGE_MS &&
       request.publishedAt - now <= SUBSTRATE_REQUEST_MAX_SKEW_MS;
-    for (const device of devices) {
-      if (device.tags.length !== 1 || device.tags[0] !== SUBSTRATE_TAG)
-        continue;
+    const gateways = devices.filter(
+      (d) => d.tags.length === 1 && d.tags[0] === SUBSTRATE_TAG
+    );
+    const present = new Set(
+      gateways.map((d) => `${d.headscaleDeviceId}/${d.machineKey}`)
+    );
+    for (const k of [...this.nodeKeyStage.keys()])
+      if (!present.has(k)) this.nodeKeyStage.delete(k);
+    for (const k of [...this.nodeKeyVerified])
+      if (!present.has(k)) this.nodeKeyVerified.delete(k);
+    for (const device of gateways) {
       const id = device.headscaleDeviceId;
-      const approvedAt = this.awaitingNodeKey.get(id);
+      const k = `${id}/${device.machineKey}`;
+      if (this.nodeKeyVerified.has(k)) continue;
+      const since = this.nodeKeyStage.get(k) ?? now;
+      this.nodeKeyStage.set(k, since);
       const comparable =
         fresh &&
-        request.nodeKey !== "" &&
         request.machineKey === device.machineKey &&
-        // A publish read before this approval cannot confirm it.
-        (approvedAt === undefined ||
-          request.publishedAt >= approvedAt - SUBSTRATE_REQUEST_MAX_SKEW_MS);
-      if (comparable) {
-        if (device.nodeKey === request.nodeKey) {
-          this.awaitingNodeKey.delete(id);
-          if (approvedAt !== undefined)
-            return { outcome: "verified", headscaleDeviceId: id };
-          continue;
-        }
+        // A publish from before this device entered stage 2 cannot confirm it.
+        request.publishedAt >= since - SUBSTRATE_REQUEST_MAX_SKEW_MS;
+      if (!comparable)
         return {
-          outcome: "mismatch",
-          alert: SUBSTRATE_MISMATCH_ALERT,
+          outcome: "unknown",
           headscaleDeviceId: id,
-          reason: "node_key_mismatch",
-          deleted: await this.deleteGateway(id),
+          sinceMs: now - since,
         };
+      if (device.nodeKey === request.nodeKey) {
+        this.nodeKeyStage.delete(k);
+        this.nodeKeyVerified.add(k);
+        return { outcome: "verified", headscaleDeviceId: id };
       }
-      if (approvedAt === undefined) continue;
-      if (now - approvedAt <= SUBSTRATE_NODE_KEY_BOUND_MS)
-        return { outcome: "pending", headscaleDeviceId: id };
       return {
         outcome: "mismatch",
         alert: SUBSTRATE_MISMATCH_ALERT,
         headscaleDeviceId: id,
-        reason: "node_key_not_published",
+        reason: "node_key_mismatch",
         deleted: await this.deleteGateway(id),
       };
     }
@@ -488,6 +513,8 @@ export class MeshPlane {
     if (!this.matched)
       return { outcome: "refused", reason: "policy_not_ready" };
     if (!this.swept) return { outcome: "refused", reason: "sweep_pending" };
+    const epoch = this.epochValue;
+    if (!epoch) return { outcome: "refused", reason: "epoch_unknown" };
     const tag = nodeTag(attempt.nodeId);
     if (!policyNodeTags(this.matched).has(tag))
       return { outcome: "refused", reason: "node_not_in_policy" };
@@ -521,6 +548,8 @@ export class MeshPlane {
         key: minted.key,
         secretName,
         expiredOrphans,
+        epoch,
+        keyCreatedAt: minted.createdAt,
       };
     } catch (error) {
       return { outcome: "failed", reason: this.fail(error) };
@@ -565,13 +594,27 @@ export class MeshPlane {
    */
   async revokeAttempt(
     keyId: HeadscaleKeyId,
-    now: number
+    now: number,
+    /** COORDINATOR_EPOCH: the stored generation; a mismatch is `void`. Absent = trust the id (same process). */
+    generation?: {
+      readonly epoch: string;
+      readonly keyCreatedAt: string | null;
+    }
   ): Promise<RevokeResult> {
+    if (generation && generation.epoch !== this.epochValue)
+      return { outcome: "void" };
     let stage: "expire" | "delete" | "readback" = "expire";
     try {
       const key = (await this.mesh.listPreAuthKeys()).find(
         (k) => k.headscaleKeyId === keyId
       );
+      if (
+        generation &&
+        (!key ||
+          (generation.keyCreatedAt !== null &&
+            key.createdAt !== generation.keyCreatedAt))
+      )
+        return { outcome: "void" };
       if (key && !nodeScoped(key.tags))
         return { outcome: "refused", reason: "not_a_node_key" };
       await this.mesh.expirePreAuthKey(keyId);

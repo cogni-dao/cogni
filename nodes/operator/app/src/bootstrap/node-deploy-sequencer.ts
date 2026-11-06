@@ -99,11 +99,11 @@ const CREDENTIAL_DIR = "/var/run/secrets/node-deploy-sequencer";
 const TICK_MS = 5_000;
 const RECONCILE_MS = 60_000;
 /**
- * task.5428: each env Headscale's unix socket, `/var/run/headscale/<env>/headscale.sock`, on a pod-local
- * volume shared by that Headscale container and this one only (`unix_socket` in its config).
+ * task.5428: each tailnet Headscale's unix socket, `/var/run/headscale/<tailnet>/headscale.sock`, on a
+ * pod-local volume shared by that Headscale container and this one only (`unix_socket` in its config).
  */
-const headscaleSocketFor = (env: string): string =>
-  `/var/run/headscale/${env}/headscale.sock`;
+const headscaleSocketFor = (tailnet: string): string =>
+  `/var/run/headscale/${tailnet}/headscale.sock`;
 
 // biome-ignore lint/style/noProcessEnv: dedicated process composition root validates its own minimal env
 const runtimeEnv = process.env;
@@ -254,29 +254,37 @@ async function edgeDnsFor(binding: WorkloadZoneBinding) {
   });
 }
 
-/** MESH_LANES_ONLY: the env tailnet of one mesh lane; undefined for an egress lane. */
+/**
+ * The tailnet of one lane. A mesh lane mints; an egress lane drains (task.5431 B5): it keeps revoking
+ * keys and deleting Secrets of mesh attempts left from a switch-back, and does nothing while none are
+ * left (no Headscale call), so a lane with no coordinator stays quiet.
+ */
 function meshFor(lane: EnvLane) {
-  if (lane.substrateTransport !== "mesh" || !lane.meshControlUrl)
-    return undefined;
+  const mode = lane.substrateTransport === "mesh" ? "mint" : "drain";
+  const tailnet = lane.meshTailnet;
   log.info(
     {
       environment: lane.environment,
+      tailnet,
+      mode,
       controlUrl: lane.meshControlUrl,
-      socket: headscaleSocketFor(lane.environment),
+      socket: headscaleSocketFor(tailnet),
     },
     "node_deploy_sequencer_mesh_lane"
   );
   return {
+    mode,
     plane: new MeshPlane(
-      new HeadscaleSocketAdapter({
-        socketPath: headscaleSocketFor(lane.environment),
-      }),
-      lane.environment
+      new HeadscaleSocketAdapter({ socketPath: headscaleSocketFor(tailnet) }),
+      tailnet
     ),
     keys: new KubernetesMeshKeys(lane.secretsNamespace),
-    substrateRequests: new HttpsSubstrateRequestSource(lane.substrateHost),
-    controlUrl: lane.meshControlUrl,
-  };
+    substrateRequests: new HttpsSubstrateRequestSource(
+      lane.substrateHost,
+      tailnet
+    ),
+    controlUrl: lane.meshControlUrl ?? "",
+  } as const;
 }
 
 // Resolve new-effect authority without disabling the existing paid-effect recovery owner.
@@ -293,7 +301,7 @@ const composed = await composeNodeDeployLanes({
       payer,
       probe,
       images,
-      ...(mesh ? { mesh } : {}),
+      mesh,
       secrets: new KubernetesStatePasswords(
         lane.secretsNamespace,
         lane.environment

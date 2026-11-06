@@ -154,13 +154,16 @@ export function meshDeviceName(input: {
   return `${head}${tail}`;
 }
 
-/** Run `inner` as uid 10001 with no capability (busybox `adduser` + `su`, as proven on real leases). */
+/**
+ * CD9 EXCEPTION (recorded on task.5431 and in PR #3050), the whole of the companions' shell. Native gap:
+ * the Akash SDL has no `runAsUser` or `securityContext`, and the design forbids a custom image (section 4,
+ * "Rejected"). So each container's entrypoint is one line that does exactly three things with the stock
+ * image's own busybox: create uid 10001 (`adduser`), drop to it (`su`), `exec` the stock binary. There is
+ * no retry, branch, loop over state or platform logic. `cogni-substrate` additionally starts one stock
+ * `socat` per derived port and `wait`s, because one socat process listens on one port.
+ */
 const asCompanionUser = (inner: string): string =>
-  [
-    "set -eu",
-    `adduser -D -H -u ${MESH_COMPANION_UID} cogni 2>/dev/null || true`,
-    `exec su -p -s /bin/sh cogni -c '${inner}'`,
-  ].join("\n");
+  `adduser -D -H -u ${MESH_COMPANION_UID} cogni && exec su -p -s /bin/sh cogni -c '${inner}'`;
 
 export type MeshCompanionService = PayerSpec["services"][number];
 
@@ -207,15 +210,13 @@ export function meshCompanionServices(input: {
         HOME: "/tmp",
         // No log upload or support contact with a Tailscale-operated host (HR 21).
         TS_NO_LOGS_NO_SUPPORT: "true",
+        // Not a Kubernetes pod of ours: a container env value wins over the kubelet's injected one, so
+        // containerboot never looks for a kube Secret (no `unset` logic in the entrypoint).
+        KUBERNETES_SERVICE_HOST: "",
+        KUBERNETES_SERVICE_PORT: "",
       },
       command: ["/bin/sh", "-c"],
-      args: [
-        [
-          // Not a Kubernetes pod: containerboot must not look for a kube Secret.
-          "unset KUBERNETES_SERVICE_HOST KUBERNETES_SERVICE_PORT",
-          asCompanionUser("exec /usr/local/bin/containerboot"),
-        ].join("\n"),
-      ],
+      args: [asCompanionUser("exec /usr/local/bin/containerboot")],
       cpuUnits: 0.1,
       memoryMi: 128,
       storageMi: 256,

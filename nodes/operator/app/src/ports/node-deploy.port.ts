@@ -160,6 +160,13 @@ export interface AttemptMesh {
   /** Companion digests, pinned once per release (CD3): every attempt of a release uses the same two. */
   readonly images: { readonly mesh: string; readonly substrate: string };
   readonly headscaleKeyId?: string | undefined;
+  /**
+   * HR 23: the coordinator epoch the key was minted in (the creation time of the tailnet's owner object)
+   * and the key's own creation time. An id from another epoch, or whose listed key has another creation
+   * time, names nothing of ours: it never revokes, protects or counts anything.
+   */
+  readonly headscaleEpoch?: string | undefined;
+  readonly headscaleKeyCreatedAt?: string | undefined;
   /** ISO instant the revoke was read back (key expired, devices gone). */
   readonly revokedAt?: string | undefined;
   /** ISO instant the attempt's Secret was deleted (one pass after the revoke readback). */

@@ -73,6 +73,7 @@ describe("resolveEnvLanes", () => {
         substrateHost: HOSTS.production,
         operatorDomain: "cognidao.org",
         substrateTransport: "egress",
+        meshTailnet: "production",
       },
     ]);
   });
@@ -88,6 +89,7 @@ describe("resolveEnvLanes", () => {
             ? "cognidao.org"
             : `${env === "candidate-a" ? "test" : "preview"}.cognidao.org`,
         substrateTransport: "egress",
+        meshTailnet: env,
       }))
     );
   });
@@ -105,9 +107,27 @@ describe("resolveEnvLanes", () => {
       ["production", "egress", undefined],
     ]);
     expect([...parseSubstrateTransports("preview=mesh")]).toEqual([
-      ["preview", "mesh"],
+      ["preview", { transport: "mesh", tailnet: "preview" }],
     ]);
-    for (const bad of ["candidate-a=wireguard", "staging=mesh", "preview"])
+    // An isolated fleet names its own tailnet: socket, control URL and VM publish path follow it.
+    expect(
+      resolveEnvLanes({
+        ...MULTI,
+        substrateTransports: "candidate-a=mesh:test-candidate-a",
+      })[0]
+    ).toMatchObject({
+      substrateTransport: "mesh",
+      meshTailnet: "test-candidate-a",
+      meshControlUrl: "https://mesh-test-candidate-a.cognidao.org",
+    });
+    for (const bad of [
+      "candidate-a=wireguard",
+      "staging=mesh",
+      "preview",
+      "preview=egress:other",
+      "preview=mesh:Bad_Name",
+      "preview=mesh:a:b",
+    ])
       expect(() =>
         resolveEnvLanes({ ...MULTI, substrateTransports: bad })
       ).toThrow(EnvLaneConfigError);

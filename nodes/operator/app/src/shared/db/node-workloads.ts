@@ -182,6 +182,8 @@ export const nodeWorkloadAttempts = pgTable(
       deviceName: string;
       images: { mesh: string; substrate: string };
       headscaleKeyId?: string | undefined;
+      headscaleEpoch?: string | undefined;
+      headscaleKeyCreatedAt?: string | undefined;
       revokedAt?: string | undefined;
       secretDeletedAt?: string | undefined;
     }>(),

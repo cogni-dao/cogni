@@ -22,9 +22,12 @@
  *     with today's `NODE_DEPLOY_SECRETS_NAMESPACE` / `NODE_DEPLOY_SUBSTRATE_HOST`, byte for byte.
  *   - PER_ENV_FAULT_DOMAIN: a pass that throws in one env never stalls another env's pass.
  *   - TRANSPORT_IS_A_LANE_PROPERTY (task.5431, hub node-service-delivery section 6):
- *     `NODE_DEPLOY_SUBSTRATE_TRANSPORTS` (`env=mesh|egress,...`) sets each lane's substrate transport; an
- *     unlisted env is `egress`. A `mesh` lane needs a valid operator domain root, because its control URL
- *     is `https://mesh-<env>.<root>` (the env Headscale's `server_url`). Never a per-node setting.
+ *     `NODE_DEPLOY_SUBSTRATE_TRANSPORTS` (`env=mesh[:<tailnet>]|egress,...`) sets each lane's substrate
+ *     transport; an unlisted env is `egress`. The lane's tailnet defaults to its env (the canonical fleet);
+ *     an isolated fleet names its own (for example `candidate-a=mesh:test-candidate-a`). The tailnet names
+ *     the Headscale socket, the control URL `https://mesh-<tailnet>.<root>` (its `server_url`, so a mesh
+ *     lane needs a valid domain root) and the VM publish path `/.well-known/cogni-mesh/<tailnet>/`.
+ *     Never a per-node setting.
  * Side-effects: none (the runner calls the sequencers it is handed)
  * Links: bootstrap/node-deploy-sequencer.ts, infra/k8s/base/node-deploy-sequencer/admission-policy.yaml,
  *   hub `node-service-delivery`
@@ -54,7 +57,9 @@ export interface EnvLane {
   readonly operatorDomain: string;
   /** How this lane's node apps reach the substrate (`NODE_DEPLOY_SUBSTRATE_TRANSPORTS`). */
   readonly substrateTransport: SubstrateTransport;
-  /** `https://mesh-<env>.<root>`; set only for a `mesh` lane. */
+  /** The lane's tailnet (default: its env). An egress lane keeps it so it can drain old mesh attempts. */
+  readonly meshTailnet: string;
+  /** `https://mesh-<tailnet>.<root>`; set only for a `mesh` lane. */
   readonly meshControlUrl?: string | undefined;
 }
 
@@ -118,27 +123,37 @@ export function parseSubstrateHosts(
   return out;
 }
 
-/** Parse `env=mesh|egress,...` (whitespace-tolerant); each env at most once. */
+const TAILNET = /^[a-z0-9][a-z0-9-]{0,40}$/;
+
+/** Parse `env=mesh[:<tailnet>]|egress,...` (whitespace-tolerant); each env at most once. */
 export function parseSubstrateTransports(
   raw: string | undefined
-): Map<string, SubstrateTransport> {
-  const out = new Map<string, SubstrateTransport>();
+): Map<string, { transport: SubstrateTransport; tailnet: string }> {
+  const out = new Map<
+    string,
+    { transport: SubstrateTransport; tailnet: string }
+  >();
   for (const part of (raw ?? "").split(",")) {
     const entry = part.trim();
     if (!entry) continue;
     const eq = entry.indexOf("=");
     const env = eq > 0 ? entry.slice(0, eq).trim() : "";
-    const transport = eq > 0 ? entry.slice(eq + 1).trim() : "";
+    const [transport = "", tailnet = env, extra] = (
+      eq > 0 ? entry.slice(eq + 1).trim() : ""
+    ).split(":");
     if (
       !isEnv(env) ||
       (transport !== "mesh" && transport !== "egress") ||
+      (transport === "egress" && tailnet !== env) ||
+      !TAILNET.test(tailnet) ||
+      extra !== undefined ||
       out.has(env)
     )
       throw new EnvLaneConfigError(
         "substrate_transports_invalid",
-        `NODE_DEPLOY_SUBSTRATE_TRANSPORTS entry "${entry}" must be <env>=mesh|egress with env in ${NODE_DEPLOY_ENVS.join("|")}, once each`
+        `NODE_DEPLOY_SUBSTRATE_TRANSPORTS entry "${entry}" must be <env>=mesh[:<tailnet>]|egress with env in ${NODE_DEPLOY_ENVS.join("|")}, once each`
       );
-    out.set(env, transport);
+    out.set(env, { transport, tailnet });
   }
   return out;
 }
@@ -169,16 +184,20 @@ export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
   const transports = parseSubstrateTransports(input.substrateTransports);
   const transportFor = (
     env: string
-  ): Pick<EnvLane, "substrateTransport" | "meshControlUrl"> => {
-    if (transports.get(env) !== "mesh") return { substrateTransport: "egress" };
+  ): Pick<EnvLane, "substrateTransport" | "meshTailnet" | "meshControlUrl"> => {
+    const t = transports.get(env);
+    const tailnet = t?.tailnet ?? env;
+    if (t?.transport !== "mesh")
+      return { substrateTransport: "egress", meshTailnet: tailnet };
     if (!validRoot || !root)
       throw new EnvLaneConfigError(
         "substrate_transports_invalid",
-        `${env}=mesh needs a valid NODE_DEPLOY_OPERATOR_DOMAIN_ROOT (control URL https://mesh-${env}.<root>)`
+        `${env}=mesh needs a valid NODE_DEPLOY_OPERATOR_DOMAIN_ROOT (control URL https://mesh-${tailnet}.<root>)`
       );
     return {
       substrateTransport: "mesh",
-      meshControlUrl: `https://mesh-${env}.${root}`,
+      meshTailnet: tailnet,
+      meshControlUrl: `https://mesh-${tailnet}.${root}`,
     };
   };
   const hostFor = (env: string, own: boolean): string => {

@@ -39,6 +39,7 @@ import {
   type NodeMeshPort,
   type NodeRuntimeSecretsPort,
   type PayerCreateRequest,
+  PayerError,
   type PublishedSubstrateRequest,
   type StoredMeshKey,
   type SubstrateTransport,
@@ -105,7 +106,10 @@ class FakeHeadscale implements NodeMeshPort {
   apiKeys: MeshApiKey[] = [];
   down = false;
   loseNextMintResponse = false;
-  private seq = 100;
+  /** Key and device ids restart at 1 on a wipe, like a fresh Headscale database (the B1 hazard). */
+  private keySeq = 0;
+  private deviceSeq = 0;
+  readonly userCreatedAt = new Map<string, string>();
   constructor(private readonly clock: FakeClock) {}
 
   private enter(method: string): void {
@@ -144,20 +148,22 @@ class FakeHeadscale implements NodeMeshPort {
   async createUser(name: HeadscaleUser): Promise<MeshUser> {
     this.enter("CreateUser");
     this.users.push(name);
-    return { headscaleUser: name, createdAt: null };
+    const createdAt = new Date(this.clock.now()).toISOString();
+    this.userCreatedAt.set(name, createdAt);
+    return { headscaleUser: name, createdAt };
   }
   async listUsers(): Promise<readonly MeshUser[]> {
     this.enter("ListUsers");
     return this.users.map((u) => ({
       headscaleUser: u as HeadscaleUser,
-      createdAt: null,
+      createdAt: this.userCreatedAt.get(u) ?? null,
     }));
   }
   async createPreAuthKey(
     input: CreatePreAuthKeyInput
   ): Promise<MintedPreAuthKey> {
     this.enter("CreatePreAuthKey");
-    const id = String(++this.seq);
+    const id = String(++this.keySeq);
     const k: FakeKey = {
       id,
       tags: [...input.tags],
@@ -212,7 +218,7 @@ class FakeHeadscale implements NodeMeshPort {
 
   // -- test hooks --
   addGateway(machineKey = "mkey:gw", nodeKey = "nodekey:gw"): MeshDevice {
-    const id = String(++this.seq);
+    const id = String(++this.deviceSeq);
     const d: MeshDevice = {
       headscaleDeviceId: headscaleDeviceId(id),
       name: "substrate-gw",
@@ -236,7 +242,7 @@ class FakeHeadscale implements NodeMeshPort {
     if (!k) throw new Error("unknown key");
     if (k.expiration <= this.clock.now())
       throw new NodeMeshError("Register", "unknown", "authkey_expired");
-    const id = String(++this.seq);
+    const id = String(++this.deviceSeq);
     const d: MeshDevice = {
       headscaleDeviceId: headscaleDeviceId(id),
       name,
@@ -265,8 +271,11 @@ class FakeHeadscale implements NodeMeshPort {
   wipe(): void {
     this.policy = null;
     this.users.length = 0;
+    this.userCreatedAt.clear();
     this.keys.clear();
     this.devices.clear();
+    this.keySeq = 0;
+    this.deviceSeq = 0;
   }
 }
 
@@ -364,7 +373,7 @@ function harness(
     WORKLOAD_ZONE,
     edgeHostRegexFor(Object.keys(NODES), WORKLOAD_ZONE)
   );
-  const build = (mesh = true) =>
+  const build = (mesh: "mint" | "drain" | false = "mint") =>
     new NodeDeploySequencer({
       store,
       payer,
@@ -380,6 +389,7 @@ function harness(
       ...(mesh
         ? {
             mesh: {
+              mode: mesh,
               plane: new MeshPlane(hs, ENV),
               keys,
               substrateRequests: { read: async () => published.request },
@@ -446,7 +456,7 @@ function harness(
     get seq() {
       return seq;
     },
-    restart(mesh = true) {
+    restart(mesh: "mint" | "drain" | false = "mint") {
       seq = build(mesh);
     },
     setAutoJoin(on: boolean) {
@@ -566,7 +576,7 @@ describe("HR 18: a lane switch never leaves a node without a serving path", () =
 
   it("a never-meshed node's lost-lease redeploy stays egress after the lane switches; its next release with a blue moves", async () => {
     const h = harness();
-    h.restart(false); // egress lane
+    h.restart(false); // egress lane, no mesh deps
     await h.release("poly");
     await h.seq.step(h.key("poly"));
     const egress = (await h.attempts("poly"))[0];
@@ -574,7 +584,7 @@ describe("HR 18: a lane switch never leaves a node without a serving path", () =
     expect(egress?.transport).toBe("egress");
     expect(meshOf(appCreates(h)[0])).toBeUndefined();
 
-    h.restart(true); // the lane switches to mesh
+    h.restart("mint"); // the lane switches to mesh
     await h.seq.reconcileAll();
     h.payer.byDseq(egress?.externalName ?? "").state = "closed";
     await h.passes(1);
@@ -677,6 +687,11 @@ describe("HR 3, 16, 21: the companions carry exactly the derived ports", () => {
     expect(mesh?.env?.TS_NO_LOGS_NO_SUPPORT).toBe("true");
     expect(mesh?.env?.TS_USERSPACE).toBe("true");
     expect(mesh?.env?.TS_STATE_DIR).toBeUndefined();
+    // CD9: no `unset` logic; the env override keeps containerboot off the kube Secret path.
+    expect(mesh?.env?.KUBERNETES_SERVICE_HOST).toBe("");
+    expect(mesh?.args).toEqual([
+      "adduser -D -H -u 10001 cogni && exec su -p -s /bin/sh cogni -c 'exec /usr/local/bin/containerboot'",
+    ]);
     for (const svc of [mesh, substrate]) {
       expect(svc?.args?.join("\n")).toContain("-u 10001");
       expect(svc?.args?.join("\n")).toContain("exec su -p -s /bin/sh cogni");
@@ -1064,7 +1079,7 @@ describe("HR 11: substrate-gw approval in two stages over the verified channel",
     expect(gateways(h)).toHaveLength(0);
   });
 
-  it("a gateway that never publishes its node key is deleted after the bound", async () => {
+  it("publisher stopped after approval: substrate-gw stays enrolled and an alert fires after 10 minutes (B19)", async () => {
     const h = harness();
     h.hs.devices.clear();
     await h.seq.reconcileAll();
@@ -1079,12 +1094,15 @@ describe("HR 11: substrate-gw approval in two stages over the verified channel",
       publishedAt: h.clock.now(),
     };
     await h.passes(1);
-    h.published.request = null; // the channel goes quiet
-    await h.passes(6);
-    expect(meshLogs(h, "node_mesh_substrate_mismatch")[0]?.fields.reason).toBe(
-      "node_key_not_published"
-    );
-    expect(gateways(h)).toHaveLength(0);
+    h.published.request = null; // the publisher stops
+    await h.passes(8);
+    expect(meshLogs(h, "node_mesh_substrate_node_key_unknown")).toHaveLength(0);
+    await h.passes(3);
+    const alert = meshLogs(h, "node_mesh_substrate_node_key_unknown");
+    expect(alert).toHaveLength(1);
+    expect(alert[0]?.level).toBe("error");
+    expect(meshLogs(h, "node_mesh_substrate_mismatch")).toHaveLength(0);
+    expect(gateways(h)).toHaveLength(1);
   });
 
   it("a forged auth id approves nothing", async () => {
@@ -1162,10 +1180,100 @@ describe("HR 10, 11: a wiped Headscale recovers by derivation, with no person", 
     // healthy gateway, then a fresh key.
     await h.passes(DEVICE_ABSENT_ROLL_MS / 60_000 + 1);
     expect(rolls(h)).toBe(1);
+    // The 5 s tick redeploys BEFORE the next mesh pass (reviewer's B1 scenario).
     await h.seq.step(h.key("poly"));
-    const [next] = await h.attempts("poly");
+    const [next, old] = await h.attempts("poly");
     expect(next?.phase).toBe("active");
-    expect(next?.mesh?.headscaleKeyId).not.toBe(a.mesh?.headscaleKeyId);
+    expect(old?.id).toBe(a.id);
+    // A wiped database restarts ids: the new key may carry the old id, but in a new epoch (HR 23).
+    expect(next?.mesh?.headscaleKeyId).toBe(a.mesh?.headscaleKeyId);
+    expect(next?.mesh?.headscaleEpoch).not.toBe(a.mesh?.headscaleEpoch);
+    await h.passes(2);
+    // The old attempt's id is void: it expired nothing and deleted nothing of the new attempt.
+    expect(h.hs.expired(next?.mesh?.headscaleKeyId)).toBe(false);
     expect(h.hs.devicesOf(next?.mesh?.headscaleKeyId)).toHaveLength(1);
+    const voided = (await h.attempts("poly")).find((x) => x.id === a.id);
+    expect(voided?.mesh?.revokedAt).toBeDefined();
+    expect(
+      meshLogs(h, "node_mesh_key_void").some(
+        (l) => l.fields.outcome === "older_epoch"
+      )
+    ).toBe(true);
+    // The new attempt's device is counted for it, so it is never rolled for absence.
+    await h.passes(15);
+    expect(rolls(h)).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Review #3050: B3 stop-then-start ordering, B4 one Headscale writer, B5 drain after a switch-back
+// ---------------------------------------------------------------------------------------------
+
+describe("review fixes", () => {
+  it("B3: a meshed node whose next create needs stop-then-start keeps blue when no key can be minted", async () => {
+    const h = harness();
+    const blue = await deployed(h, "poly");
+    expect(blue.transport).toBe("mesh");
+    // Release 2's first create: blue's provider was the only bidder screening could pass.
+    h.payer.createFault = (n) =>
+      n === 2
+        ? new PayerError(
+            "provider_rejected",
+            "none passed provider screening [refused: already_tried=1]",
+            false,
+            true
+          )
+        : undefined;
+    await h.release("poly", SHA_2);
+    await h.seq.step(h.key("poly"));
+    expect((await h.attempts("poly"))[0]?.phase).toBe("failed");
+    // A restart: minting is closed until the first mesh pass.
+    h.restart();
+    expect(await h.seq.step(h.key("poly"))).toBe("waiting_dependency");
+    const kept = (await h.attempts("poly")).find((a) => a.id === blue.id);
+    expect(kept?.phase).toBe("active");
+    expect(h.payer.byDseq(blue.externalName ?? "").state).toBe("active");
+    expect(h.log.steps()).not.toContain("stop_then_start:closing_blue");
+    // Once the pass opens minting, stop-then-start runs and the green lands on the mesh.
+    await h.seq.reconcileAll();
+    await h.seq.step(h.key("poly"));
+    expect(h.log.steps()).toContain("stop_then_start:closing_blue");
+    const [green] = await h.attempts("poly");
+    expect(green?.transport).toBe("mesh");
+    expect(green?.phase).toBe("active");
+  });
+
+  it("B4: a concurrent mesh pass and mint serialize; the new key is granted and never swept", async () => {
+    const h = harness();
+    await h.seq.reconcileAll();
+    await h.release("poly");
+    await Promise.all([h.seq.reconcileAll(), h.seq.step(h.key("poly"))]);
+    await h.passes(3);
+    const [a] = await h.attempts("poly");
+    expect(a?.phase).toBe("active");
+    expect(h.hs.expired(a?.mesh?.headscaleKeyId)).toBe(false);
+    expect(h.hs.policy).toContain(`tag:node-${NODES.poly}`);
+    expect(meshLogs(h, "node_mesh_policy_drift")).toHaveLength(0);
+  });
+
+  it("B5: a lane switched back to egress still revokes and deletes leftover mesh keys, then goes quiet", async () => {
+    const h = harness();
+    const meshed = await deployed(h, "poly");
+    h.restart("drain"); // NODE_DEPLOY_SUBSTRATE_TRANSPORTS no longer lists the lane as mesh
+    h.payer.byDseq(meshed.externalName ?? "").state = "closed";
+    await h.passes(1); // lost lease
+    await h.seq.step(h.key("poly"));
+    const [redeploy] = await h.attempts("poly");
+    expect(redeploy?.transport).toBe("egress");
+    await h.passes(2);
+    const drained = (await h.attempts("poly")).find((a) => a.id === meshed.id);
+    expect(drained?.mesh?.revokedAt).toBeDefined();
+    expect(drained?.mesh?.secretDeletedAt).toBeDefined();
+    expect(h.hs.expired(meshed.mesh?.headscaleKeyId)).toBe(true);
+    expect(h.keys.secrets.size).toBe(0);
+    // Nothing left to drain: no Headscale call at all.
+    h.hs.calls.length = 0;
+    await h.passes(2);
+    expect(h.hs.calls).toEqual([]);
   });
 });

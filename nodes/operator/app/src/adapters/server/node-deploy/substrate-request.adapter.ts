@@ -3,9 +3,9 @@
 
 /**
  * Module: `@adapters/server/node-deploy/substrate-request.adapter`
- * Purpose: Read the env VM's published `substrate-gw` enrollment request (task.5431, HR 11) from
- *   `https://<vm_host_for_env>/.well-known/cogni-mesh/substrate-gw.json`, the path task.5428's VM step
- *   publishes behind the VM's DNS-only ACME site (`render-caddyfile.sh`, `substrate-gw.sh`).
+ * Purpose: Read one tailnet's published `substrate-gw` enrollment request (task.5431, HR 11) from
+ *   `https://<vm_host_for_env>/.well-known/cogni-mesh/<tailnet>/substrate-gw.json`, the per-tailnet path
+ *   task.5428's VM step publishes behind the VM's DNS-only ACME site (`render-caddyfile.sh`, #3051).
  * Scope: One HTTPS GET and a strict parse. No approval decision: `MeshPlane.approveSubstrateGateway`
  *   checks age, tags and keys.
  * Invariants:
@@ -24,8 +24,9 @@ import type {
   SubstrateRequestSourcePort,
 } from "@/ports";
 
-export const SUBSTRATE_REQUEST_PATH =
-  "/.well-known/cogni-mesh/substrate-gw.json";
+/** `/.well-known/cogni-mesh/<tailnet>/substrate-gw.json` (one publish path per tailnet on the VM alias). */
+export const substrateRequestPath = (tailnet: string): string =>
+  `/.well-known/cogni-mesh/${tailnet}/substrate-gw.json`;
 const MAX_BYTES = 4096;
 const TIMEOUT_MS = 10_000;
 
@@ -36,11 +37,14 @@ export class HttpsSubstrateRequestSource implements SubstrateRequestSourcePort {
   private readonly url: string;
   constructor(
     vmHost: string,
+    tailnet: string,
     private readonly fetchImpl: typeof fetch = fetch
   ) {
     if (!/^[a-z0-9.-]+$/u.test(vmHost))
       throw new Error(`invalid env VM host: ${vmHost}`);
-    this.url = `https://${vmHost}${SUBSTRATE_REQUEST_PATH}`;
+    if (!/^[a-z0-9][a-z0-9-]{0,40}$/u.test(tailnet))
+      throw new Error(`invalid tailnet: ${tailnet}`);
+    this.url = `https://${vmHost}${substrateRequestPath(tailnet)}`;
   }
 
   async read(): Promise<PublishedSubstrateRequest | null> {

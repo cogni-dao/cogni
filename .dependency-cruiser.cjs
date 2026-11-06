@@ -352,9 +352,35 @@ module.exports = {
         "Exempt: auth.ts (bootstrap), container.ts (trust boundaries), " +
         "graph-executor.factory.ts + agent-discovery.ts (sandbox subpath imports " +
         "to avoid Turbopack bundling dockerode native addon chain), " +
-        "node-deploy-sequencer.ts (the Headscale gRPC client stays out of the " +
-        "@/adapters/server barrel the Next app imports; task.5429/5431), " +
+        "node-deploy-sequencer.ts (narrowed by node-deploy-sequencer-headscale-only), " +
         "allowlisted bootstrap jobs (need serviceDb for advisory locks).",
+    },
+
+    // task.5431: the Headscale gRPC client stays out of the @/adapters/server barrel (the Next app imports
+    // it). The sequencer bootstrap may import exactly that one adapter file by path, and only it may.
+    {
+      name: "node-deploy-sequencer-headscale-only",
+      severity: "error",
+      from: {
+        path: "^nodes/operator/app/src/bootstrap/node-deploy-sequencer\\.ts$",
+      },
+      to: {
+        path: "^nodes/operator/app/src/adapters/server/(?!index\\.ts$)(?!node-deploy/headscale\\.adapter\\.ts$).*\\.ts$",
+      },
+      comment:
+        "The node-deploy sequencer bootstrap imports adapters from @/adapters/server, except the Headscale socket adapter, which stays out of the barrel.",
+    },
+    {
+      name: "headscale-adapter-sequencer-root-only",
+      severity: "error",
+      from: {
+        path: "^nodes/operator/app/src/(?!bootstrap/node-deploy-sequencer\\.ts$)(?!adapters/server/node-deploy/headscale)(?!.*\\.test\\.ts$)",
+      },
+      to: {
+        path: "^nodes/operator/app/src/adapters/server/node-deploy/headscale\\.adapter\\.ts$",
+      },
+      comment:
+        "Only the node-deploy sequencer bootstrap imports the Headscale socket adapter (never the @/adapters/server barrel).",
     },
 
     // adapters/test: must use @/adapters/test (index.ts), not internal files
