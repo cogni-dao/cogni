@@ -53,18 +53,16 @@ spec:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
 ---
-# The forwarders accept only substrate-gw and may send only on their declared target ports (+ DNS
-# to resolve their named targets). Their destinations are fixed by their own command lines.
+# mesh-control-fwd accepts only substrate-gw and may send only TCP 443 (its control host on the
+# production edge, a public address) and DNS to resolve that name.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: mesh-forwarders
+  name: mesh-control-fwd
 spec:
   podSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/name
-        operator: In
-        values: [mesh-control-fwd, substrate-fwd]
+    matchLabels:
+      app.kubernetes.io/name: mesh-control-fwd
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
@@ -74,12 +72,62 @@ spec:
   egress:
     - ports:
         - { protocol: TCP, port: 443 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# substrate-fwd accepts only substrate-gw. NetworkPolicy egress is evaluated AFTER address translation,
+# so it allows the TRANSLATED destinations of the VM-alias targets it dials, not the node address:
+#   node:5432/5435/6379/4000/7233 -> Docker DNAT -> the Compose `internal` bridge (10.100.0.0/24, the
+#     subnet declared in infra/compose/runtime/docker-compose.yml networks.internal; pinned equal by
+#     tests/ci-invariants/node-deploy-mesh-plane.spec.ts) on container ports 5432 (postgres and doltgres
+#     5435->5432), 6379, 4000, 7233;
+#   node:30900 -> kube-proxy NodePort -> the scheduler-worker pod on its container port 9000 (the
+#     namespace is set per env by the overlay);
+#   node:443 -> Docker DNAT -> this VM's edge Caddy on the external `cogni-edge` bridge, whose subnet
+#     Docker assigns at network creation, so 443 is port-scoped only;
+#   cluster DNS to resolve the VM alias.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: substrate-fwd
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: substrate-fwd
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: substrate-gw
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.100.0.0/24
+      ports:
         - { protocol: TCP, port: 5432 }
-        - { protocol: TCP, port: 5435 }
         - { protocol: TCP, port: 6379 }
         - { protocol: TCP, port: 4000 }
         - { protocol: TCP, port: 7233 }
-        - { protocol: TCP, port: 30900 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: replace-env-namespace
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: scheduler-worker
+      ports:
+        - { protocol: TCP, port: 9000 }
+    - ports:
+        - { protocol: TCP, port: 443 }
     - to:
         - namespaceSelector:
             matchLabels:

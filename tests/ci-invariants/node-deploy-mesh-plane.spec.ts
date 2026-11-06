@@ -647,10 +647,99 @@ describe("env VM mesh plane on the env's own k3s (task.5428, B5)", () => {
     for (const p of REGISTRY_PORTS) {
       expect(svcPorts, `substrate-fwd Service ${p}`).toContain(p);
       expect(allowed("substrate-gw"), `substrate-gw egress ${p}`).toContain(p);
-      expect(allowed("mesh-forwarders"), `forwarder egress ${p}`).toContain(p);
       expect(script).toMatch(new RegExp(`for p in [0-9 ]*\\b${p}\\b`));
     }
   });
+
+  it("substrate-fwd egress allows the TRANSLATED destinations (policy is evaluated after DNAT)", () => {
+    interface Peer {
+      ipBlock?: { cidr: string };
+      namespaceSelector?: { matchLabels: Record<string, string> };
+      podSelector?: { matchLabels: Record<string, string> };
+    }
+    interface Rule {
+      to?: Peer[];
+      ports?: { protocol: string; port: number }[];
+    }
+    const np = docs("networkpolicy.yaml").find(
+      (d) => d.metadata.name === "substrate-fwd"
+    ) as unknown as { spec: { egress: Rule[] } };
+    const ports = (r?: Rule) => (r?.ports ?? []).map((p) => p.port).sort();
+    const byCidr = np.spec.egress.find((r) => r.to?.[0]?.ipBlock);
+    const byWorker = np.spec.egress.find(
+      (r) =>
+        r.to?.[0]?.podSelector?.matchLabels["app.kubernetes.io/name"] ===
+        "scheduler-worker"
+    );
+    // Docker DNAT: node:5432/5435/6379/4000/7233 -> the Compose `internal` bridge, container ports.
+    const compose = parse<{
+      services: Record<string, { networks?: string[]; ports?: string[] }>;
+      networks: { internal: { ipam: { config: { subnet: string }[] } } };
+    }>("infra/compose/runtime/docker-compose.yml");
+    expect(byCidr?.to?.[0]?.ipBlock?.cidr).toBe(
+      compose.networks.internal.ipam.config[0]?.subnet
+    );
+    const translated = new Set<number>();
+    for (const svcName of [
+      "postgres",
+      "doltgres",
+      "redis",
+      "litellm",
+      "temporal",
+    ]) {
+      const svc = compose.services[svcName];
+      expect(svc?.networks, svcName).toContain("internal");
+      for (const mapping of svc?.ports ?? []) {
+        const [published, container] = mapping.split(":").slice(-2);
+        if (REGISTRY_PORTS.includes(String(published))) {
+          translated.add(Number(container));
+        }
+      }
+    }
+    expect(ports(byCidr)).toEqual([...translated].sort());
+    // kube-proxy NodePort: node:30900 -> the scheduler-worker pod's container port, in this env.
+    const worker = parse<Workload>(
+      "infra/k8s/base/scheduler-worker/deployment.yaml"
+    );
+    expect(ports(byWorker)).toEqual([
+      worker.spec.template.spec.containers[0]?.ports?.[0]?.containerPort,
+    ]);
+    const workerNs = parse<{ namespace: string }>(
+      "infra/k8s/overlays/candidate-a/scheduler-worker/kustomization.yaml"
+    ).namespace;
+    expect(read(`${CAND_OVERLAY}/kustomization.yaml`)).toContain(
+      `value: ${workerNs}`
+    );
+    // The public-NodePort worker port (30900) maps to that pod port, never allowed as-is.
+    expect(
+      np.spec.egress.flatMap((r) => r.ports ?? []).map((p) => p.port)
+    ).not.toContain(30900);
+  });
+
+  it.skipIf(!kubectlAvailable)(
+    "the rendered overlay scopes the worker-health egress to this env's namespace",
+    () => {
+      const np = render(CAND_OVERLAY).find(
+        (d) =>
+          d?.kind === "NetworkPolicy" && d.metadata.name === "substrate-fwd"
+      ) as unknown as {
+        spec: {
+          egress: {
+            to?: {
+              namespaceSelector?: { matchLabels: Record<string, string> };
+            }[];
+          }[];
+        };
+      };
+      const namespaces = np.spec.egress
+        .flatMap((r) => r.to ?? [])
+        .map(
+          (p) => p.namespaceSelector?.matchLabels["kubernetes.io/metadata.name"]
+        )
+        .filter(Boolean);
+      expect(namespaces.sort()).toEqual(["cogni-candidate-a", "kube-system"]);
+    }
+  );
 
   it("derper is pinned by digest, unprivileged, our relay checking its env coordinator (fail open)", () => {
     const c = derper.spec.template.spec.containers[0];

@@ -23,6 +23,14 @@ configMapGenerator:
       # HR20 bound: 4 h. The short-bound test sets a smaller value here in a reviewed PR, flights it
       # through the control-plane lane, and reverts it the same way.
       - SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS=14400
+patches:
+  # substrate-fwd's translated destination for node:30900 is the scheduler-worker pod in THIS env's
+  # namespace (the namespace of infra/k8s/overlays/candidate-a/scheduler-worker; spec-pinned).
+  - target: { kind: NetworkPolicy, name: substrate-fwd }
+    patch: |
+      - op: replace
+        path: /spec/egress/1/to/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name
+        value: cogni-candidate-a
 replacements:
   - source:
       kind: ConfigMap
