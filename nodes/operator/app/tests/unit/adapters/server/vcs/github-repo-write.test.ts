@@ -2735,6 +2735,136 @@ spec:
     });
   });
 
+  it("routes the candidate-a mesh-plane overlay and env-plane base through the control-plane lane (task.5428)", async () => {
+    routeHandlers = {
+      ...candidateReviewHandlers([
+        "infra/k8s/argocd/control-plane/candidate-a/candidate-a-mesh-plane-application.yaml",
+        "infra/k8s/overlays/candidate-a/mesh-plane/kustomization.yaml",
+        "infra/k8s/overlays/candidate-a/mesh-plane/namespace.yaml",
+        "infra/k8s/base/mesh-env-plane/substrate-gw.yaml",
+        "infra/k8s/base/mesh-env-plane/networkpolicy.yaml",
+        "tests/ci-invariants/node-deploy-mesh-plane.spec.ts",
+      ]),
+      "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": () => ({
+        sha: candidateSourceSha,
+        tree: { sha: "candidate-tree" },
+      }),
+      "GET /repos/{owner}/{repo}/git/ref/{ref}": () => {
+        throw statusError(404, "Not Found");
+      },
+      "POST /repos/{owner}/{repo}/git/refs": () => ({
+        ref: "refs/heads/deploy/candidate-a-control-plane",
+        object: { sha: candidateSourceSha },
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).resolves.toMatchObject({
+      status: "updated",
+      lane: "control_plane",
+      deployRef: "deploy/candidate-a-control-plane",
+    });
+    expect(requests.some((request) => request.route === DISPATCH)).toBe(false);
+  });
+
+  it("dispatches the mesh-plane hardener and derivation lib through the existing Compose lane (task.5428)", async () => {
+    const runId = 34722512028;
+    routeHandlers = {
+      ...candidateReviewHandlers([
+        "infra/provision/cherry/harden-docker-public-ports.sh",
+        "scripts/ci/lib/mesh-plane.sh",
+        "scripts/ci/render-caddyfile.sh",
+        "scripts/ci/tests/render-caddyfile.test.sh",
+      ]),
+      [DISPATCH]: () => ({
+        workflow_run_id: runId,
+        run_url: `https://api.github.com/repos/Cogni-DAO/cogni/actions/runs/${runId}`,
+        html_url: `https://github.com/Cogni-DAO/cogni/actions/runs/${runId}`,
+      }),
+    };
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).resolves.toMatchObject({
+      status: "dispatched",
+      lane: "compose",
+      runId,
+    });
+    expect(requests.some((request) => request.route.includes("git/ref"))).toBe(
+      false
+    );
+  });
+
+  it.each([
+    "infra/k8s/overlays/candidate-a/operator/kustomization.yaml",
+    "infra/k8s/overlays/candidate-a/mesh-plane-extra/kustomization.yaml",
+    "infra/k8s/overlays/production/mesh-plane/kustomization.yaml",
+    "infra/k8s/base/mesh-env-plane-other/kustomization.yaml",
+    "infra/k8s/base/node-deploy-mesh/kustomization.yaml",
+    "infra/provision/cherry/base/bootstrap.yaml",
+    "scripts/ci/lib/appset-paths.sh",
+  ])("still rejects neighboring path %s beside the mesh-plane lane paths (task.5428)", async (path) => {
+    routeHandlers = candidateReviewHandlers([
+      "infra/k8s/base/mesh-env-plane/substrate-gw.yaml",
+      path,
+    ]);
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "candidate_infra_path_rejected",
+      status: 422,
+    });
+    expect(requests.every((request) => request.route.startsWith("GET "))).toBe(
+      true
+    );
+  });
+
+  it.each([
+    "infra/provision/cherry/harden-docker-public-ports.sh",
+    "scripts/ci/lib/mesh-plane.sh",
+  ])("rejects the mesh-plane Compose path %s mixed with the env-plane control-plane tree (task.5428)", async (path) => {
+    routeHandlers = candidateReviewHandlers([
+      path,
+      "infra/k8s/overlays/candidate-a/mesh-plane/kustomization.yaml",
+    ]);
+
+    await expect(
+      makeWriter().reconcileNodeInfra({
+        env: "candidate-a",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        sourceSha: candidateSourceSha,
+      })
+    ).rejects.toMatchObject({
+      code: "candidate_infra_mixed_lanes",
+      status: 422,
+    });
+    expect(requests.every((request) => request.route.startsWith("GET "))).toBe(
+      true
+    );
+  });
+
   it.each([
     "scripts/ci/deploy-infra.sh",
     "infra/images/litellm/cogni_callbacks.py",
