@@ -2815,7 +2815,7 @@ spec:
     "infra/k8s/base/mesh-env-plane-other/kustomization.yaml",
     "infra/k8s/base/node-deploy-mesh/kustomization.yaml",
     "infra/provision/cherry/base/bootstrap.yaml",
-    "scripts/ci/lib/image-tags.sh",
+    "scripts/ci/lib/appset-paths.sh",
   ])("still rejects neighboring path %s beside the mesh-plane lane paths (task.5428)", async (path) => {
     routeHandlers = candidateReviewHandlers([
       "infra/k8s/base/mesh-env-plane/substrate-gw.yaml",
