@@ -21,7 +21,6 @@ configMapGenerator:
       - MESH_CONTROL_HOST=mesh-candidate-a.cognidao.org
       - MESH_RELAY_HOST=derp-candidate-a.cognidao.org
       - MESH_VM_HOST=cogni-candidate-a.vm.cognidao.org
-      - MESH_STUN_PORT=3478
       - MESH_WIREGUARD_PORT=41641
       # HR20 bound: 4 h. The short-bound test sets a smaller value here in a reviewed PR, flights it
       # through the control-plane lane, and reverts it the same way.
@@ -47,27 +46,6 @@ patches:
       - op: replace
         path: /spec/ports/0/nodePort
         value: 32341
-  - target: { kind: Deployment, name: derper }
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/ports/1/containerPort
-        value: 3478
-      - op: replace
-        path: /spec/template/spec/containers/0/ports/1/hostPort
-        value: 3478
-  - target: { kind: Deployment, name: substrate-gw }
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/ports/0/containerPort
-        value: 41641
-      - op: replace
-        path: /spec/template/spec/containers/0/ports/0/hostPort
-        value: 41641
-  - target: { kind: NetworkPolicy, name: substrate-gw }
-    patch: |
-      - op: replace
-        path: /spec/ingress/0/ports/0/port
-        value: 41641
   # substrate-fwd's translated destination for node:30900 is the scheduler-worker pod of this env.
   - target: { kind: NetworkPolicy, name: substrate-fwd }
     patch: |

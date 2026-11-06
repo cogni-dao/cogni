@@ -6,8 +6,8 @@
 # reproducibility exit is task.5435). Holds no secret. It checks clients against its env's
 # Headscale /verify and FAILS OPEN, so the relay keeps working while the coordinator is down (HR9).
 #
-# Exposure: UDP STUN on this tailnet's own port (hostPort: the fixed port its relay map names; the
-# instance overlay sets it from the tailnet table). TCP 3340 = plain-HTTP DERP behind the `derper`
+# Exposure: no UDP and no hostPort. Relay-only makes STUN unneeded, so it is off (-stun=false; the relay
+# map's stunport is -1). TCP 3340 = plain-HTTP DERP behind the `derper`
 # NodePort Service, reached ONLY by this VM's edge Caddy (host.docker.internal:<nodePort>), which serves
 # `derp-<tailnet>.<zone>` (DNS-only) on 443 with a public ACME certificate; the hardener drops the
 # NodePort from the public NIC before NAT.
@@ -20,7 +20,7 @@ metadata:
     app.kubernetes.io/part-of: cogni-mesh
 spec:
   replicas: 1
-  # hostPorts cannot surge on one node.
+  # One relay per tailnet: the old pod stops before the new one starts.
   strategy:
     type: Recreate
   selector:
@@ -50,9 +50,6 @@ spec:
             - name: MESH_RELAY_HOST
               valueFrom:
                 { configMapKeyRef: { name: mesh-env, key: MESH_RELAY_HOST } }
-            - name: MESH_STUN_PORT
-              valueFrom:
-                { configMapKeyRef: { name: mesh-env, key: MESH_STUN_PORT } }
             - name: MESH_CONTROL_HOST
               valueFrom:
                 { configMapKeyRef: { name: mesh-env, key: MESH_CONTROL_HOST } }
@@ -60,13 +57,12 @@ spec:
             - -hostname=$(MESH_RELAY_HOST)
             - -a=:3340
             - -http-port=-1
-            - -stun-port=$(MESH_STUN_PORT)
+            - -stun=false
             - -c=/tmp/derper.json
             - -verify-client-url=https://$(MESH_CONTROL_HOST)/verify
             - -verify-client-url-fail-open=true
           ports:
             - { name: derp-http, containerPort: 3340, protocol: TCP }
-            - { name: stun, containerPort: 3478, hostPort: 3478, protocol: UDP }
           # Guaranteed QoS (B17), right-sized: measured 3.0 MiB idle (stock image, local) -> 12Mi.
           resources:
             requests: { cpu: 50m, memory: 12Mi }

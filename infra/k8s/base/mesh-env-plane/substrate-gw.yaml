@@ -13,9 +13,10 @@
 # substrate-gw never asks a resolver anything: under the NetworkPolicy it has no DNS and no other egress
 # at all (HR21, zero contact).
 #
-# Exposure: UDP 41641 = WireGuard direct path (hostPort: needs a fixed public port). The publisher is
-# reached ONLY by this VM's edge Caddy through the `substrate-gw-publisher` NodePort Service (the
-# proven edge pattern), which the hardener drops from the public NIC.
+# Exposure: RELAY-ONLY (task.5384 decision, inbox 0d01550b commit 22). No WireGuard hostPort and no
+# inbound UDP: every packet to and from the node devices goes through this tailnet's own relay. The
+# publisher is reached ONLY by this VM's edge Caddy through the `substrate-gw-publisher` NodePort
+# Service (the proven edge pattern), which the hardener drops from the public NIC.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,7 +26,7 @@ metadata:
     app.kubernetes.io/part-of: cogni-mesh
 spec:
   replicas: 1
-  # One device per env; RWO state and hostPorts: never two at once.
+  # One device per env; RWO state: never two at once.
   strategy:
     type: Recreate
   selector:
@@ -79,7 +80,7 @@ spec:
             - { name: TS_STATE_DIR, value: /var/lib/tailscale }
             - { name: TS_SOCKET, value: /tmp/tailscaled.sock }
             - { name: TS_HOSTNAME, value: substrate-gw }
-            # This tailnet's WireGuard port (the instance overlay patches the hostPort to the same value).
+            # tailscaled's pod-local UDP port. Not exposed (relay-only): no hostPort, no ingress rule.
             - name: TS_PORT
               valueFrom:
                 {
@@ -89,13 +90,6 @@ spec:
             - { name: HOME, value: /tmp }
             # Not a Kubernetes-aware tailscale: no API discovery, no kube state store.
             - { name: KUBERNETES_SERVICE_HOST, value: "" }
-          ports:
-            - {
-                name: wireguard,
-                containerPort: 41641,
-                hostPort: 41641,
-                protocol: UDP,
-              }
           # Guaranteed QoS (B17).
           # Guaranteed QoS (B17), right-sized: a joined userspace tailscaled measured 41.5 MiB with traffic
           # forced through our relay (local proof) -> 56Mi.

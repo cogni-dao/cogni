@@ -177,7 +177,6 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
       MESH_CONTROL_HOST: `${r.control_label}.${r.zone}`,
       MESH_RELAY_HOST: `${r.relay_label}.${r.zone}`,
       MESH_VM_HOST: `cogni-${r.vm_env}.vm.${VM_ZONE}`,
-      MESH_STUN_PORT: r.stun_port,
       MESH_WIREGUARD_PORT: r.wireguard_port,
       SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS: "14400",
     });
@@ -210,31 +209,18 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         find(docs, "Service", `substrate-gw-publisher${sfx}`)?.spec.ports?.[0]
           ?.nodePort
       ).toBe(Number(r.publish_np));
-      const stun = find(
-        docs,
-        "Deployment",
-        `derper${sfx}`
-      )?.spec.template.spec.containers[0]?.ports?.find(
-        (p) => p.name === "stun"
-      );
-      expect(stun).toMatchObject({
-        containerPort: Number(r.stun_port),
-        hostPort: Number(r.stun_port),
-        protocol: "UDP",
-      });
-      expect(gw?.spec.template.spec.containers[0]?.ports).toEqual([
-        {
-          name: "wireguard",
-          containerPort: Number(r.wireguard_port),
-          hostPort: Number(r.wireguard_port),
-          protocol: "UDP",
-        },
-      ]);
+      // STUN OFF (relay-only makes it unneeded): derper exposes only its plain-HTTP DERP port, no hostPort.
+      expect(
+        find(docs, "Deployment", `derper${sfx}`)?.spec.template.spec
+          .containers[0]?.ports
+      ).toEqual([{ name: "derp-http", containerPort: 3340, protocol: "TCP" }]);
+      // RELAY-ONLY (task.5384 decision, inbox 0d01550b commit 22): substrate-gw exposes no port, no
+      // hostPort, and admits no UDP; every packet goes through this tailnet's own relay.
+      expect(gw?.spec.template.spec.containers[0]?.ports ?? []).toEqual([]);
       const np = find(docs, "NetworkPolicy", `substrate-gw${sfx}`);
-      expect(np?.spec.ingress?.[0]?.ports).toContainEqual({
-        protocol: "UDP",
-        port: Number(r.wireguard_port),
-      });
+      expect(np?.spec.ingress).toEqual([
+        { ports: [{ protocol: "TCP", port: 8080 }] },
+      ]);
       // PriorityClass is per instance (cluster-scoped) and every workload uses its own.
       const pc = docs.find((d) => d.kind === "PriorityClass");
       expect(pc?.metadata.name).toBe(`cogni-mesh-critical${sfx}`);
@@ -295,12 +281,7 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         ).toContain(h);
       }
     }
-    for (const col of [
-      "relay_np",
-      "publish_np",
-      "stun_port",
-      "wireguard_port",
-    ] as const) {
+    for (const col of ["relay_np", "publish_np"] as const) {
       const vals = INSTANCES.map((r) => r[col]);
       expect(new Set(vals).size, col).toBe(vals.length);
     }
@@ -426,7 +407,7 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     expect(script).toContain('"TCP:${MESH_RELAY_HOST}:443"');
   });
 
-  it("every container is Guaranteed, hardened and digest-pinned; exposure is hostPort only for UDP", () => {
+  it("every container is Guaranteed, hardened and digest-pinned; no hostPort (relay-only, STUN off)", () => {
     const workloads = ["derper.yaml", "substrate-gw.yaml", "forwarders.yaml"]
       .flatMap((f) => parseAll<Doc>(`${BASE}/${f}`))
       .filter((d) => d.kind === "Deployment");
@@ -445,7 +426,7 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         expect(c.securityContext?.readOnlyRootFilesystem).toBe(true);
         expect(c.image).toMatch(/@sha256:[0-9a-f]{64}$/);
         for (const p of c.ports ?? []) {
-          if (p.hostPort) expect(p.protocol, `${c.name}/${p.name}`).toBe("UDP");
+          expect(p.hostPort, `${c.name}/${p.name}`).toBeUndefined();
         }
       }
     }
@@ -501,13 +482,15 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     expect(c?.args).toEqual(
       expect.arrayContaining([
         "-hostname=$(MESH_RELAY_HOST)",
-        "-stun-port=$(MESH_STUN_PORT)",
+        "-stun=false",
         "-a=:3340",
         "-http-port=-1",
         "-verify-client-url=https://$(MESH_CONTROL_HOST)/verify",
         "-verify-client-url-fail-open=true",
       ])
     );
+    expect(c?.args?.some((a) => a.startsWith("-stun-port"))).toBe(false);
+    expect(c?.env?.map((e) => e.name)).not.toContain("MESH_STUN_PORT");
   });
 
   it("substrate-gw: stock pinned tailscale, non-root, no key, fail-closed by default, re-enrolls by itself", () => {

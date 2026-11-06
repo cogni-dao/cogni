@@ -9,7 +9,7 @@
 #   - substrate-fwd    :30900 -> scheduler-worker health (reviewed mesh-grantable port, T5)
 # No DNS: every name substrate-gw dials (control host, relay host, `substrate-fwd`) is a hostAlias.
 # Everything else — every Tailscale-operated host, log upload, bootstrap DNS, any resolver — has no path.
-# Ingress: UDP 41641 (WireGuard, hostPort) and TCP 8080 (publisher, behind its NodePort for the edge).
+# Ingress: TCP 8080 only (publisher, behind its NodePort for the edge). Relay-only: no inbound UDP.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -21,7 +21,6 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     - ports:
-        - { protocol: UDP, port: 41641 }
         - { protocol: TCP, port: 8080 }
   egress:
     - to:
