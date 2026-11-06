@@ -313,6 +313,15 @@ const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
       pattern:
         /^(patch\[ConfigMap\/node-app-config\] add \/data\/NODE_DEPLOY_ENVS|patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[(NODE_DEPLOY_ENVS|NODE_DEPLOY_FLEET_OWNER|NODE_DEPLOY_SUBSTRATE_HOSTS)\]\.(name|value)|patch\[ValidatingAdmissionPolicyBinding\/node-deploy-sequencer-externalsecrets\] replace \/spec\/matchResources\/namespaceSelector\/matchExpressions\/0\/values\[[12]\]|resource\[Application\/node-deploy-env-namespaces\]\..+|kustomization\.replacements\[1\]\.(source\.(fieldPath|kind|name)|targets\[0\]\.(fieldPaths\[0\]|select\.kind)))$/,
     },
+    {
+      why:
+        "ONE COORDINATOR PER TAILNET (task.5428, hub node-service-delivery §1): the per-env Headscale " +
+        "containers ride beside their one writer, the production sequencer that serves the canonical " +
+        "candidate-a, preview and production lanes. The candidate-a TEST operator's sequencer must NOT " +
+        "carry them: a second `mesh-candidate-a` coordinator would split that env's tailnet. " +
+        "tests/ci-invariants/node-deploy-mesh-plane.spec.ts pins both sides.",
+      pattern: /^kustomization\.components\[0\]$/,
+    },
   ],
   "scheduler-worker": [
     {
