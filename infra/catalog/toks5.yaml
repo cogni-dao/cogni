@@ -51,6 +51,14 @@ node_id: f66b260b-4633-41e2-8711-b7c1b8449cc1
 # NOTE: the node-birth generator does not yet mint this block (filed at birth of
 # toks5); added by hand-PR pending the generator fix.
 compute_egress_cidrs:
+  - cidr: 184.105.162.170/32
+    comment: "bug.5582 TEMPORARY fleet-shared row (rows union per env). US provider on Akash v0.16.7, one of the only providers bidding on our ACT-priced orders; egress measured inside a probe lease 2026-11-06 (hurricane (akash15tl6…xfmdhk), 2 pods). Exit: the mesh deletion slice (story.5137 / task.5428) deletes every compute_egress_cidrs row."
+  - cidr: 107.161.145.222/32
+    comment: "bug.5582 TEMPORARY fleet-shared row (rows union per env). US provider on Akash v0.16.7, one of the only providers bidding on our ACT-priced orders; egress measured inside a probe lease 2026-11-06 (akash1ggfv…nenj3g, 1 pod). Exit: the mesh deletion slice (story.5137 / task.5428) deletes every compute_egress_cidrs row."
+  - cidr: 64.31.61.234/32
+    comment: "bug.5582 TEMPORARY fleet-shared row (rows union per env). US provider on Akash v0.16.7, one of the only providers bidding on our ACT-priced orders; egress measured inside a probe lease 2026-11-06 (lsn lax (akash1cg7n…5auvvv), 1 pod). Exit: the mesh deletion slice (story.5137 / task.5428) deletes every compute_egress_cidrs row."
+  - cidr: 209.135.147.15/32
+    comment: "bug.5582 TEMPORARY fleet-shared row (rows union per env). US provider on Akash v0.16.7, one of the only providers bidding on our ACT-priced orders; egress measured inside a probe lease 2026-11-06 (akash19zzh…ldshd8, 1 pod). Exit: the mesh deletion slice (story.5137 / task.5428) deletes every compute_egress_cidrs row."
   - cidr: 95.217.30.59/32
     envs: [production]
     ports: [5432, 5435, 6379, 4000, 7233]
