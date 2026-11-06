@@ -558,10 +558,10 @@ export class NodeDeploySequencer {
     // STOP_THEN_START (task.5409): blue's provider was the only bidder that could pass screening, so a
     // green beside blue can never be placed. Close blue first (accepted downtime), then create.
     // A useful-work capability requires blue to survive failed or unknown qualification.
-    const willStop =
-      !release.spec.health?.qualification &&
-      (await this.stopThenStartVerdict(key, release, ofRelease, active)) ===
-        "eligible";
+    const verdict = release.spec.health?.qualification
+      ? "none"
+      : await this.stopThenStartVerdict(key, release, ofRelease, active);
+    const willStop = verdict === "eligible";
 
     // HR 18, decided BEFORE any stop (CD6): `all` shows the pre-stop phases, so a blue about to be
     // stopped counts as serving and its replacement keeps the node's served transport.
@@ -584,9 +584,11 @@ export class NodeDeploySequencer {
       return "waiting_dependency";
     }
 
-    const stop = willStop
-      ? await this.stopThenStart(key, release, ofRelease, active)
-      : "none";
+    // `not_admitted` also goes through stopThenStart: it alerts and keeps blue.
+    const stop =
+      verdict === "none"
+        ? "none"
+        : await this.stopThenStart(key, release, ofRelease, active);
     if (stop === "unconfirmed") return "close_pending";
     if (stop === "stopped") blue = undefined;
     const attempt = await allocateAttempt(transport);
