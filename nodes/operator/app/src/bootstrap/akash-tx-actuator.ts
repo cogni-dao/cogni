@@ -5,10 +5,11 @@
  * Module: `@bootstrap/akash-tx-actuator`
  * Purpose: The composition root task.5095 deliberately omitted — the dedicated process that
  *   binds `AkashTxActuator` over the Akash Console client, the durable allocation ledger and
- *   the serving probe, and serves the four bounded operations on a PRIVATE ClusterIP the
- *   Crossplane XComputeWorkload Composition calls (task.5102).
+ *   the serving probe, and serves the bounded operations on a PRIVATE ClusterIP (task.5102).
+ *   Its live caller is the node-deploy sequencer's `ActuatorPayer` (task.5400); the Crossplane
+ *   Composition it was first built for was deleted (task.5411).
  * Scope: Wiring, minimal env validation and lifecycle only. Every decision about WHEN to
- *   observe/create/update/delete belongs to Crossplane, and every decision about whether a
+ *   observe/create/delete belongs to the caller, and every decision about whether a
  *   transaction is safe belongs to the actuator — neither is re-implemented here. No watches,
  *   no leader election, no reconciliation.
  *
@@ -17,7 +18,7 @@
  *   observes no Kubernetes object and retries nothing. It exists because the one failure a
  *   request-scoped actuator structurally cannot handle is the request's own process dying
  *   mid-transaction, and the receipt that leaves behind holds a WALLET-WIDE slot: without a
- *   sweeper, one dead process stops every node in the environment from leasing. Crossplane
+ *   sweeper, one dead process stops every node in the environment from leasing. A caller
  *   cannot do this job either — it only ever calls about ONE workload, and the wedged receipt
  *   belongs to a different one.
  * Invariants:
@@ -46,23 +47,21 @@
  *     (`akash-tx-actuator-env-secrets` ← cogni/<env>/akash-tx-actuator), which the public
  *     operator app has no path to. Only the ledger DSN is projected from the operator bucket.
  *     The pinned account id is NOT a secret and correctly arrives as plain env config.
- *   - SURGE_IS_SAFE_HERE: unlike the ComputeWorkload controller, correctness does not rest on a
- *     Kubernetes Lease. Two live replicas cannot both spend, because the wallet slot is a
+ *   - SURGE_IS_SAFE_HERE: unlike the retired ComputeWorkload controller, correctness does not
+ *     rest on a Kubernetes Lease. Two live replicas cannot both spend, because the wallet slot is a
  *     partial unique index in Postgres (`akash_tx_allocations_single_writer_idx`) — and since
  *     bug.5187 that slot is keyed on the ACCOUNT, so it serializes the replicas of a writer
  *     that serves several environments just as it serializes two replicas serving one.
  *   - MIGRATION_RUNNER_IS_WIRED_BUT_NEVER_GATES (task.5135): the same
- *     `KubernetesMigrationJobAdapter` the ComputeWorkload controller uses is still wired here,
- *     against the SAME per-digest Job names in this namespace, so the two lanes cannot disagree
- *     about whether a bundle digest has migrated. What changed is WHERE it is consulted: the
+ *     `KubernetesMigrationJobAdapter` the retired ComputeWorkload controller used is still wired
+ *     here, against the same per-digest Job names in this namespace. What changed is WHERE it is consulted: the
  *     RELEASE step on `observe`, never the paid create/update. An actuator built WITHOUT it no
  *     longer refuses every paid transaction — it reports `migration.phase: "unavailable"` and
  *     still mints the lease. Renting compute must not depend on a database being reachable.
  *   - LEAST_KUBERNETES_PRIVILEGE: the ONLY Kubernetes objects this process touches are the
  *     migration Jobs it creates on the release tick and the Pods it reads to classify a Failed
  *     one. Its Role (infra/k8s/base/akash-tx-actuator/rbac.yaml) grants exactly that and
- *     nothing else — no computeworkloads, no leases, no events, no configmaps. Crossplane still
- *     owns every CR. FOLLOW-UP: with the paid path no longer touching Kubernetes at all, this
+ *     nothing else — no computeworkloads, no leases, no events, no configmaps. FOLLOW-UP: with the paid path no longer touching Kubernetes at all, this
  *     runner can be lifted out of the wallet-holding process entirely (see task.5135's PR).
  * Side-effects: IO (HTTP listener; Akash Console transactions; Postgres ledger writes;
  *   Kubernetes migration Job create/read/delete in this namespace)
@@ -71,7 +70,7 @@
  *   @features/compute/akash-tx/akash-tx-migration-step,
  *   @adapters/server/compute/kubernetes-migration-job.adapter,
  *   infra/k8s/base/akash-tx-actuator,
- *   infra/crossplane/xcomputeworkload/composition.yaml, task.5102, story.5016
+ *   infra/crossplane/xcomputeworkload/composition.yaml@37fbd413f1^ (deleted), task.5102, story.5016
  * @internal
  */
 
@@ -137,12 +136,12 @@ import {
 import { DatabaseCellAppliedEvidenceBundleSchema } from "@/shared/secrets/database-cell-placement.data";
 
 /**
- * The port the XComputeWorkload Composition hard-codes in
- * `http://akash-tx-actuator.<ns>.svc.cluster.local:8080`. Changing it is a wire break.
+ * The port every caller dials at `http://akash-tx-actuator:8080` (the node-deploy sequencer's
+ * `ActuatorPayer`, the lease-log pump). Changing it is a wire break.
  */
 const LISTEN_PORT = 8080;
 
-/** Projected Secret volume — one file per key, mirroring the ComputeWorkload controller. */
+/** Projected Secret volume — one file per key. */
 const CREDENTIAL_DIR = "/var/run/secrets/akash-tx";
 
 // biome-ignore lint/style/noProcessEnv: dedicated process composition root validates its own minimal env
@@ -329,8 +328,7 @@ try {
 
 /**
  * One bounded serving proof per observe: exact source SHA on `/version` AND a 2xx `/readyz`,
- * byte-identical to the ComputeWorkload lifecycle adapter's `verifySource`. Never loops —
- * convergence polling is Crossplane's job.
+ * Never loops — convergence polling is the caller's job.
  */
 const probe: AkashTxServingProbe = async ({
   endpoints,

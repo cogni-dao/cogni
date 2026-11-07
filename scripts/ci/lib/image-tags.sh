@@ -184,7 +184,7 @@ deployment_provider_for_target() {
 
 # True when <target> deploys to <env> through the in-cluster k3s/Argo lane, i.e.
 # the env VM owns its address, workload, and substrate. False for an externally
-# placed node (akash), whose ComputeWorkload controller owns those instead.
+# placed node (akash), whose node-deploy sequencer owns those instead.
 #   is_k3s_placed TARGET ENV
 is_k3s_placed() {
   local provider
@@ -468,8 +468,8 @@ deployment_provider_for_target() {
 # bug.5094 — the address a CHERRY-RESIDENT caller must dial to reach a node's app.
 # Placement decides the address, not the caller:
 #   k3s   → the in-cluster Service DNS convention (unchanged; do not regress the fleet)
-#   akash → the node's public canonical URL, i.e. the SAME host the ComputeWorkload
-#           publishes (computeWorkloadPublicHost → hostForNode → host_for_node here),
+#   akash → the node's public canonical URL, i.e. the SAME host the node-deploy
+#           sequencer publishes (hostForNode → host_for_node here),
 #           because a node that left the cluster has no `<slug>-node-app` Service.
 # `domain` is the env's public domain (domain_for_env in scripts/setup/lib/fork-identity.sh);
 # only akash rows need it, so a pure-k3s render may pass "".

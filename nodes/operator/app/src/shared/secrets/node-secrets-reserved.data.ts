@@ -88,8 +88,8 @@ export const SUBSTRATE_RESERVED_KEYS: ReadonlySet<string> = new Set<string>([
   "LITELLM_VIRTUAL_KEY", // Per-node LiteLLM key; materializer owns registration + rotation
   // The private Akash transaction actuator's bearer token (task.5102). It became
   // `source: agent` with a hex generator, so secret-materialize.sh mints and rotates it
-  // into `cogni/<env>/akash-tx-actuator`. A self-serve write would clobber the value the
-  // Crossplane Composition authenticates with and silently wedge every paid mutation.
+  // into `cogni/<env>/akash-tx-actuator`. A self-serve write would clobber the value every
+  // actuator caller authenticates with and silently wedge every paid mutation.
   "AKASH_TX_ACTUATOR_TOKEN",
   "DATABASE_RELIABILITY_PASSWORD", // private actuator database role material
   "DATABASE_RELIABILITY_STATUS_TOKEN", // private actuator status/readback auth
@@ -213,7 +213,8 @@ export const OFF_CLUSTER_WORKLOAD_DENIED_KEYS: ReadonlySet<string> = new Set([
   // it spends every node's budget. A workload gets the node-scoped
   // `LITELLM_VIRTUAL_KEY` instead — the cogni-node-app-v1 runtime profile
   // renames that virtual key to LITELLM_MASTER_KEY inside the container
-  // (now infra/crossplane/xcomputeworkload/composition.yaml), so the real master key never leaves here.
+  // (now the node-deploy sequencer's `nodeAppEnv`, features/node-deploy/node-app-env.ts), so the
+  // real master key never leaves here.
   "LITELLM_MASTER_KEY",
   "OPENROUTER_API_KEY",
   // Fleet-shared DoltHub credentials (`tier: A1, service: _shared`, same shape

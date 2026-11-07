@@ -4,11 +4,11 @@
 /**
  * Module: `@features/compute/lease-closure-verification`
  * Purpose: Make the close PROVABLE (story.5039 PR-B, bug.5189: CLOSE→VERIFY→CLEAR). The env
- *   verb's `present:false` merely authors the git removal; the actual close rides the Argo
- *   prune → Crossplane REMOVE → actuator delete chain. This module answers the question that
- *   chain never answers on its own: did the money actually stop? Classification is a Console
+ *   verb's `present:false` merely authors the git removal; the actual close is the node-deploy
+ *   verb retiring the workload through the actuator's delete. This module answers the question
+ *   that path never answers on its own: did the money actually stop? Classification is a Console
  *   STATUS READ-BACK per receipt — cluster state is never spend truth (bug.5189's lesson: a
- *   deleted XR proves nothing about an escrow that is still draining).
+ *   deleted cluster object proves nothing about an escrow that is still draining).
  * Scope: Pure classification (`classifyReceiptClosure`, `orphanDiff`) + one thin service
  *   (`verifyLeaseClosures`) over an `AkashTxConsolePort`-like status reader. Decides nothing,
  *   settles nothing, deletes nothing — break-glass for a lease this surface flags is

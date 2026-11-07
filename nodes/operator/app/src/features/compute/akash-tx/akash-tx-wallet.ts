@@ -32,8 +32,8 @@
  *     that serves environments other than its own (the north star: one account bills test,
  *     preview and production alike) files every receipt in the one ledger domain that account
  *     actually has. `writer -> envs` is deliberately one-to-many; `account -> writer` must stay
- *     injective, and `tests/ci-invariants/crossplane-dormant-substrate.spec.ts` asserts that
- *     half against git. Console/manual writes stay forbidden: an external writer invalidates
+ *     injective, and `tests/ci-invariants/akash-tx-actuator-runtime.spec.ts` pins each funded
+ *     environment's writer to its own OpenBao credential path in git. Console/manual writes stay forbidden: an external writer invalidates
  *     cursor recovery and must fail deployment proof (ci-cd.md Axiom 26).
  *   - SCOPE_IS_ROTATION_STABLE: the scope is derived from the PUBLIC pinned account id — plain,
  *     git-reviewable Deployment config — never from the secret value, so rotating the credential

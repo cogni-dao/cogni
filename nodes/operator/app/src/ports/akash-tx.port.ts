@@ -8,8 +8,8 @@
  *   and a durable allocation ledger). This is the actuator's interface, NOT a controller:
  *   no watches, timers, finalizers, retry policy, or reconciliation live behind it (task.5095).
  * Scope: Interface + error-code definitions only. Generic reconciliation (retry, backoff,
- *   readiness gating, deletion policy, composition) belongs to Crossplane and is deliberately
- *   absent here.
+ *   readiness gating, deletion policy) belongs to the caller — today the node-deploy sequencer
+ *   (task.5400) — and is deliberately absent here.
  * Invariants:
  *   - KEY_IS_THE_IDEMPOTENCE_BOUNDARY: every mutation carries a caller-owned `cogniKey`;
  *     replaying a key never mints a second paid lease.
@@ -31,8 +31,8 @@
  *     workload with a bad or missing schema fails READINESS (bounded by the composite's boot
  *     SLO) instead of silently never being created — the toks5 failure mode, where a valid XR
  *     with a valid digest never reached the actuator and never existed in any environment.
- *   - REFUSAL_IS_OBSERVABLE: every code here is a stable string safe for logs, Events and
- *     Crossplane conditions — a refusal a caller cannot see is a bug (bug.5115 shape).
+ *   - REFUSAL_IS_OBSERVABLE: every code here is a stable string safe for logs, HTTP bodies and
+ *     release step reasons — a refusal a caller cannot see is a bug (bug.5115 shape).
  * Side-effects: none (types only)
  * Links: features/compute/akash-tx/akash-tx-actuator.ts,
  *   adapters/server/compute/akash-compute.adapter.ts, @shared/db/akash-tx-allocations,
@@ -68,7 +68,7 @@ export interface AkashTxWorkloadIdentity {
   readonly compositeGeneration: number;
 }
 
-/** Stable, redacted failure codes. Safe for HTTP bodies, logs, and XR conditions. */
+/** Stable, redacted failure codes. Safe for HTTP bodies, logs, and release step reasons. */
 export type AkashTxErrorCode =
   /** Another Cogni key holds the wallet-wide allocation slot; retry later. */
   | "wallet_allocation_blocked"
@@ -199,13 +199,13 @@ export interface AkashTxCompositeVerdict {
 
 /**
  * The release-step seam. Structurally satisfied by `ComputeWorkloadMigrationPort`
- * (`KubernetesMigrationJobAdapter`), so the actuator and the frozen controller drive migration
- * currency with ONE implementation — including its `compute_workload_migration_job_infra_retry`
+ * (`KubernetesMigrationJobAdapter`), the ONE migration implementation — including its
+ * `compute_workload_migration_job_infra_retry`
  * reclassification of a `DeadlineExceeded` Job with no failed migrate container.
  */
 export type AkashTxMigrationPort = ComputeWorkloadMigrationPort;
 
-/** Provider-opaque view of one Akash workload. `externalName` is the Crossplane handle. */
+/** Provider-opaque view of one Akash workload. `externalName` is the opaque provider `leaseId`. */
 export interface AkashTxResource {
   readonly externalName: string;
   readonly state: ProvisionState;
@@ -241,7 +241,7 @@ export interface AkashTxCreateResult extends AkashTxResource {
 
 /**
  * The private, typed logical contract. Each method is ONE bounded attempt; the caller
- * (Crossplane) owns retry, backoff, and give-up policy.
+ * (the node-deploy sequencer) owns retry, backoff, and give-up policy.
  */
 /** Recovery references, never caller-supplied workload or money policy. */
 export interface AkashTxDatabaseCellRecoveryInput {
@@ -417,7 +417,7 @@ export interface AkashTxConsolePort {
     onAllocated?: (leaseId: string) => Promise<void>;
     /**
      * Providers to exclude from bid screening — the LEDGER-DERIVED tried set for this
-     * generation's attempt family (task.5153). Crossplane re-invokes create per recovery
+     * generation's attempt family (task.5153). The caller re-invokes create per recovery
      * ordinal, so an in-memory set is empty on every call and re-picks the same dead
      * provider forever; the caller derives this from durable allocation receipts instead.
      */
@@ -667,8 +667,8 @@ export interface AkashTxAllocationLedgerPort {
    * Bounded enumeration of the wallet's LIVE paid leases: `state='allocated' AND
    * external_name IS NOT NULL` — receipts that bound a provider handle and have not been
    * released. Read-only, hard-limited, oldest-touched first — it decides nothing. This is the
-   * money-loop's SEE primitive (story.5039): what the Argo prune → Crossplane REMOVE →
-   * actuator delete chain is expected to close, enumerable BEFORE the close and provable
+   * money-loop's SEE primitive (story.5039): what the node-deploy verb's retire → actuator
+   * delete path is expected to close, enumerable BEFORE the close and provable
    * after (bug.5189: CLOSE→VERIFY→CLEAR; cluster state is never spend truth).
    *
    * `nodeId`/`environment` filters are OPTIONAL by design: the undetectable orphan is a lease
@@ -682,13 +682,10 @@ export interface AkashTxAllocationLedgerPort {
     limit: number;
   }): Promise<readonly AkashTxAllocationRecord[]>;
   /**
-   * Bounded enumeration of receipts in EVERY state for this wallet scope — the generation-
-   * derivation primitive (task.5132). `requiredLeaseGeneration` must see terminal receipts
-   * (`released`/`failed`): a terminal receipt permanently spends its generation for a re-added
-   * env (the recreated composite carries a new UID, so `claim`'s failed-no-handle re-claim can
-   * never match it — bug.5192's escape hatch does not apply across an XR recreation). The
-   * `listAllocated` view above deliberately hides those states; deriving from it made an ADD
-   * re-state a spent generation and the actuator refuse with `akash_tx_identity_conflict`.
+   * Bounded enumeration of receipts in EVERY state for this wallet scope (task.5132). Terminal
+   * receipts (`released`/`failed`) are visible here, unlike the `listAllocated` view above; the
+   * actuator's recovery tried-set and the deploy-state route read them. (The `lease_generation`
+   * derivation this was first built for was deleted with the Crossplane lane, task.5411.)
    * Read-only, hard-limited, oldest-touched first — it decides nothing.
    */
   listReceipts(input: {

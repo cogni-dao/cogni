@@ -18,7 +18,7 @@
 #   - <env>-db-reader   policy + role  (db-provisioner SA, per-env read-only)
 #   - ClusterSecretStore openbao-backend
 #   - argocd-cm         additive merge patch (Argo's `part-of` informer label +
-#                       kustomize --enable-helm + ComputeWorkload health rule)
+#                       kustomize --enable-helm)
 #
 # RENAME (additive, safe): the writer SA is `openbao-writer` (was `openbao-operator`).
 # The <env>-writer role binds BOTH names during transition, so consumers still on
@@ -97,7 +97,7 @@ rm -f /tmp/_vmprobe
 # re-asserts the two data keys, all without touching anything else in the object.
 # Identical call to provision-env-vm.sh Phase 5b.1 via the shared helper, so cold
 # start and day two can never drift. Idempotent — a re-run is a no-op.
-log "merge-patching argocd-cm (part-of label + kustomize buildOptions + ComputeWorkload health)..."
+log "merge-patching argocd-cm (part-of label + kustomize buildOptions)..."
 apply_argocd_cm_runtime_patch "$REPO_ROOT" "$VM_IP" "$SSH_OPTS" || {
   echo "::error::${DEPLOY_ENV}: argocd-cm merge patch failed — Argo may remain wedged (bug.5095)." >&2
   exit 1
@@ -132,8 +132,8 @@ bao_exec "write auth/kubernetes/role/eso-reader \
 # so `production-writer` (the role secret-materialize.sh actually mints) still could not
 # write cogni/data/candidate-a/*, and the first poly candidate-a mint died there.
 #   fleet control -> candidate-a, preview, production (the PAYING cluster custodies every
-#                  lane, because the Composition interpolates each lane's secrets into the
-#                  lease production's Console account is billed for)
+#                  lane, because each lane's secrets go into the lease production's
+#                  Console account is billed for)
 #   preview     -> preview only
 #   candidate-a -> candidate-a only, unless this isolated fleet declares it as control
 # Up-trust is refused forever. This WIDENS AN EXISTING IDENTITY, it does not add one:
@@ -210,8 +210,8 @@ bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-db-reader \
 # mirror nodes/operator/app/src/shared/secrets/secrets-lane-trust.data.ts
 # (SECRETS_LANE_TRUST); the route check is only a fast-fail, THIS is the gate.
 #   production  -> candidate-a, preview, production   (the PAYING cluster custodies every
-#                  lane, because the Crossplane Composition interpolates each lane's
-#                  secrets into the lease production's Console account is billed for)
+#                  lane, because each lane's secrets go into a lease production's
+#                  Console account is billed for)
 #   preview     -> preview only
 #   candidate-a -> candidate-a only
 # Up-trust is refused forever: no pre-prod env gains a production path here. OpenBao is

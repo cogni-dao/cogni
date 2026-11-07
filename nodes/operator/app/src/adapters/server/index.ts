@@ -92,7 +92,6 @@ export {
 } from "./compute/cherry-compute.adapter";
 export { DrizzleComputeCostStore } from "./compute/compute-cost-store.adapter";
 export {
-  DormantComputeWorkloadMigrationAdapter,
   KubernetesMigrationJobAdapter,
   migrationJobName,
 } from "./compute/kubernetes-migration-job.adapter";

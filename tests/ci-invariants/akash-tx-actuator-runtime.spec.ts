@@ -3,10 +3,9 @@
 
 /**
  * Module: `@tests/ci-invariants/akash-tx-actuator-runtime`
- * Purpose: Pin the seams that decide whether Crossplane can REACH the Akash transaction actuator.
- *   Each one is a silent, deploy-time-only failure otherwise: nothing in CI builds these
- *   overlays, and the symptom is a connection error hours later on a manifest that renders
- *   perfectly (task.5102).
+ * Purpose: Pin the seams that let the node-deploy sequencer reach the Akash tx actuator.
+ *   Each is a silent, deploy-time-only failure otherwise: no CI builds these overlays, and the
+ *   symptom is a connection error hours later (task.5102, task.5400).
  * Scope: Static assertions over the actuator's manifests, RBAC and entrypoint wiring; does not
  *   render kustomize, reach a cluster, or touch a provider.
  * Invariants:
@@ -37,7 +36,7 @@
  *   - ONE_REACH_THREE_COPIES: the own-namespace Role, the ArgoCD lane-access manifest and the
  *     workflow-applied render script state the SAME rule set, or one plane silently 403s.
  * Side-effects: IO (reads infra/k8s + scripts/ci, the secrets catalog, and the image manifests)
- * Links: infra/k8s/base/akash-tx-actuator, infra/crossplane/xcomputeworkload/composition.yaml,
+ * Links: infra/k8s/base/akash-tx-actuator, src/adapters/server/node-deploy/actuator-payer.adapter.ts,
  *   nodes/operator/app/src/bootstrap/akash-tx-actuator.ts, task.5102, story.5016
  * @public
  */
@@ -51,7 +50,6 @@ import {
   candidateDeploymentFingerprint,
   resolveDeploymentTargets,
 } from "@/features/compute/node-deployment-targets";
-import { CROSSPLANE_ACTUATOR_WALLET_ENVS } from "@/shared/node-registry/crossplane-control-plane";
 
 /** Every deploy environment with an operator overlay (task.5411: Crossplane control plane deleted). */
 const OPERATOR_ENVIRONMENTS = ["candidate-a", "preview", "production"] as const;
@@ -62,14 +60,12 @@ const read = (relative: string): string =>
 const parse = <T>(relative: string): T => yaml.parse(read(relative)) as T;
 
 /**
- * The exact address `infra/crossplane/xcomputeworkload/composition.yaml` builds from the
- * XR's namespace. It cannot know a kustomize prefix, so these three literals are a wire
- * contract, not a preference.
+ * The exact address every caller dials (`http://akash-tx-actuator:8080`, the
+ * AKASH_TX_ACTUATOR_URL default of the node-deploy sequencer and the lease-log pump). A caller
+ * cannot know a kustomize prefix, so these literals are a wire contract, not a preference.
  */
 const SERVICE_NAME = "akash-tx-actuator";
 const SERVICE_PORT = 8080;
-const AUTH_SECRET_NAME = "akash-tx-actuator-auth";
-const AUTH_SECRET_KEY = "token";
 /** The actuator's dedicated OpenBao service + the k8s Secret its ExternalSecret produces. */
 const OPENBAO_SERVICE = "akash-tx-actuator";
 const ENV_SECRET_NAME = "akash-tx-actuator-env-secrets";
@@ -154,22 +150,20 @@ function roleRules(documents: string): RbacRule[][] {
 }
 /**
  * The FUNDED/writer environments — exactly those whose overlay must ship the actuator base,
- * transformer, and the two actuator ExternalSecrets. Derived from the single source of truth
- * (`CROSSPLANE_ACTUATOR_WALLET_ENVS`), never a duplicate literal, so it can never drift: preview
- * is a dormant/unfunded control plane and must NOT ship the actuator (story.5016).
+ * transformer, and the actuator ExternalSecret. Preview pins no wallet and must NOT ship
+ * the actuator (story.5016). This list was derived from the Crossplane writer map, whose only
+ * runtime consumers were deleted with that lane (task.5411); this spec is now its sole owner
+ * (task.5443). Widening it is a FUNDING decision: one account per writer, one writer per account.
  */
-const ACTUATOR_ENVIRONMENTS = CROSSPLANE_ACTUATOR_WALLET_ENVS;
+const ACTUATOR_ENVIRONMENTS: readonly string[] = ["candidate-a", "production"];
 /**
- * The control-plane environments that are INSTALLED but pin NO wallet — the dormant/unfunded set
- * (CONTROL_PLANE minus WALLET, i.e. preview). Locking these to have NO actuator overlay artifacts
- * mirrors the account-injective guard at the overlay layer: an unfunded env that shipped an
- * actuator would be a second active writer on a shared wallet.
+ * The operator environments that pin NO wallet — the unfunded set (OPERATOR minus WALLET, i.e.
+ * preview). Locking these to have NO actuator overlay artifacts mirrors the account-injective
+ * guard at the overlay layer: an unfunded env that shipped an actuator would be a second active
+ * writer on a shared wallet.
  */
 const DORMANT_CONTROL_PLANE_ENVIRONMENTS = OPERATOR_ENVIRONMENTS.filter(
-  (environment) =>
-    !(CROSSPLANE_ACTUATOR_WALLET_ENVS as readonly string[]).includes(
-      environment
-    )
+  (environment) => !ACTUATOR_ENVIRONMENTS.includes(environment)
 );
 
 interface K8sObject {
@@ -238,21 +232,6 @@ describe("akash-tx-actuator runtime", () => {
       expect(actuatorExternal.spec.dataFrom[0]?.extract.key, environment).toBe(
         `${environment}/${OPENBAO_SERVICE}`
       );
-
-      const authExternal = parse<{
-        spec: {
-          data: { remoteRef: { key: string; property: string } }[];
-        };
-      }>(`${root}/akash-tx-actuator-auth-external-secret.yaml`);
-      expect(authExternal.spec.data, environment).toEqual([
-        {
-          secretKey: AUTH_SECRET_KEY,
-          remoteRef: {
-            key: `${environment}/${OPENBAO_SERVICE}`,
-            property: "AKASH_TX_ACTUATOR_TOKEN",
-          },
-        },
-      ]);
     }
   });
 
@@ -306,7 +285,7 @@ describe("akash-tx-actuator runtime", () => {
     }
   });
 
-  it("serves at the exact address the Composition dials", () => {
+  it("serves at the exact address its callers dial", () => {
     expect(service.metadata.name).toBe(SERVICE_NAME);
     expect(service.spec.type).toBe("ClusterIP");
     expect(service.spec.ports).toEqual([
@@ -319,7 +298,7 @@ describe("akash-tx-actuator runtime", () => {
 
   it("undoes the overlay namePrefix for that Service", () => {
     // Without the post-prefix transformer the object renders as
-    // `operator-akash-tx-actuator` and EVERY Crossplane OBSERVE is connection-refused.
+    // `operator-akash-tx-actuator` and EVERY actuator call is connection-refused.
     expect(overlay.namePrefix).toBe("operator-");
     expect(overlay.resources).toContain(`../../../base/${SERVICE_NAME}`);
     expect(overlay.transformers).toContain(
@@ -666,23 +645,23 @@ describe("akash-tx-actuator runtime", () => {
     ).toThrow(/not configured for candidate-a/);
   });
 
-  it("projects the bearer token under the name the provider-http placeholder dereferences", () => {
-    const external = parse<{
-      spec: {
-        target: { name: string };
-        data: { secretKey: string; remoteRef: { property: string } }[];
-      };
-    }>(`${OVERLAY}/akash-tx-actuator-auth-external-secret.yaml`);
-    expect(external.spec.target.name).toBe(AUTH_SECRET_NAME);
-    expect(external.spec.data).toHaveLength(1);
-    expect(external.spec.data[0]?.secretKey).toBe(AUTH_SECRET_KEY);
-    // Same OpenBao key the pod reads, so the two sides cannot drift.
-    expect(external.spec.data[0]?.remoteRef.property).toBe(
-      "AKASH_TX_ACTUATOR_TOKEN"
-    );
-    expect(overlay.resources).toContain(
-      "./akash-tx-actuator-auth-external-secret.yaml"
-    );
+  it("ships no provider-http auth Secret: its only consumer was the deleted Composition", () => {
+    // task.5443 — the `akash-tx-actuator-auth` ExternalSecret existed only so Crossplane's
+    // provider-http could dereference `{{ akash-tx-actuator-auth:<ns>:token }}`. Every live
+    // caller reads AKASH_TX_ACTUATOR_TOKEN from akash-tx-actuator-env-secrets instead.
+    for (const environment of OPERATOR_ENVIRONMENTS) {
+      const root = `infra/k8s/overlays/${environment}/operator`;
+      expect(
+        existsSync(
+          path.join(
+            REPO_ROOT,
+            root,
+            "akash-tx-actuator-auth-external-secret.yaml"
+          )
+        ),
+        environment
+      ).toBe(false);
+    }
   });
 
   it("runs as its OWN ServiceAccount with only the migration prover's rights", () => {

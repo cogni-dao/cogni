@@ -22,8 +22,8 @@ import {
 } from "@/shared/node-registry/placement";
 
 // Control-env resolution lives in `@shared/node-registry/placement` (dependency-cruiser forbids
-// shared→features, same placement rationale as `crossplane-control-plane`) and is re-exported here
-// for feature-layer consumers of the catalog placement policy.
+// shared→features) and is re-exported here for feature-layer consumers of the catalog placement
+// policy.
 export { controlEnvFor };
 
 export const deploymentEnvironmentSchema = z.enum([

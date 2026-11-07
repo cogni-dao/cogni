@@ -56,7 +56,7 @@
  *   injective while `writer -> envs` is deliberately one-to-many (a per-database index cannot
  *   see another database's ledger). The actuator enforces the converse at construction (see
  *   features/compute/akash-tx/akash-tx-wallet.ts) and the static half is asserted in
- *   tests/ci-invariants/crossplane-dormant-substrate.spec.ts.
+ *   tests/ci-invariants/akash-tx-actuator-runtime.spec.ts.
  * Side-effects: none
  * Links: adapters/server/compute/akash-tx-allocation-ledger.adapter.ts,
  *   features/compute/akash-tx/akash-tx-wallet.ts, docs/spec/databases.md, task.5095,
@@ -118,7 +118,7 @@ export const akashTxAllocations = pgTable(
     cogniKey: text("cogni_key").notNull(),
     /**
      * WHICH NODE CONSUMED THE INFRASTRUCTURE. The immutable repo-spec node UUID, stated by the
-     * caller on the wire (XComputeWorkload `spec.nodeId`, itself `format: uuid` + immutable).
+     * caller on the wire (the node-deploy release's `nodeId`, a `format: uuid` repo-spec id).
      * This is the sole cost-grouping key. Deliberately NOT a foreign key to `nodes`: custody of
      * "we may have paid" must not depend on the registry's lifecycle, and purging a node row
      * must never be able to delete or block the evidence of what it spent.

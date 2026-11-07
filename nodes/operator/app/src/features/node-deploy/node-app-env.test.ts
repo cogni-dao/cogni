@@ -37,7 +37,7 @@ function profileBucket(): Record<string, string> {
 }
 
 /**
- * THE FIXTURE. Rendered by hand from `infra/crossplane/xcomputeworkload/composition.yaml`
+ * THE FIXTURE. Rendered by hand from `infra/crossplane/xcomputeworkload/composition.yaml` at `37fbd413f1^` (deleted by task.5411)
  * (`$isApp` blocks, l.185-284) for these XR inputs:
  *   environment=production, workload.name=poly, publicHost=poly.cognidao.org, services[app].port=3200,
  *   bindHost=0.0.0.0, bundle.source.sha=SHA, runtime.substrateHost=cogni.vm.cognidao.org,
