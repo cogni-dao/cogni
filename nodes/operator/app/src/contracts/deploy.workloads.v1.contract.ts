@@ -129,6 +129,8 @@ export const DeployAttemptViewSchema = z.object({
   createdAt: z.string().nullable(),
   leasedAt: z.string().nullable(),
   updatedAt: z.string().nullable(),
+  /** First entry into phase `active`, write-once (task.5442); absent if never or before the column. */
+  activatedAt: z.string().optional(),
   /** Oldest first, newest 100 kept; empty for attempts that predate the timeline. */
   steps: z.array(DeployAttemptStepSchema),
   /** How the attempt reaches the shared substrate (task.5431, HR 18); absent on older attempts. */

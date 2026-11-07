@@ -133,6 +133,10 @@ export interface AttemptRow {
   readonly createdAt: Date;
   readonly leasedAt: Date | undefined;
   readonly updatedAt: Date;
+  /** First entry into phase `active` (write-once, task.5442). Undefined = never, or before the column. */
+  readonly activatedAt?: Date | undefined;
+  /** First park verdict recorded on this attempt (write-once, task.5442). */
+  readonly parkedAt?: Date | undefined;
   /** Oldest first, at most `MAX_ATTEMPT_STEPS`. Empty for attempts that predate the timeline. */
   readonly steps: readonly AttemptStep[];
   /**
@@ -199,6 +203,13 @@ export interface AttemptPatch {
   error?: string | null;
   unhealthySince?: Date | null;
   leasedAt?: Date;
+  /**
+   * The activation instant (task.5442). Write-once: the store keeps an existing value, so only the
+   * first activation of an attempt is ever recorded.
+   */
+  activatedAt?: Date;
+  /** The park-verdict instant (task.5442). Write-once, like `activatedAt`. */
+  parkedAt?: Date;
   /** Replaces the whole mesh record. */
   mesh?: AttemptMesh;
 }

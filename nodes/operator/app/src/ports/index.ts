@@ -205,6 +205,13 @@ export type {
 } from "./database-containment.port";
 export { DATABASE_CELL_METRIC_LABEL_KEYS } from "./database-containment.port";
 export type {
+  DeliveryKpiSourcePort,
+  DeliveryLaneFacts,
+  DeliveryProbeResult,
+  DeliveryReleaseFacts,
+  DeliveryScope,
+} from "./delivery-kpi.port";
+export type {
   CancelCandidateMaintenanceInput,
   CancelCandidateMaintenanceResult,
   CandidateFlightDispatchResult,
