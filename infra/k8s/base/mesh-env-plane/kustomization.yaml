@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the env VM half of the per-env mesh plane (hub node-service-delivery §1-§2, design
+# refinement B5): the relay (derper), the env's ONE tailnet device (substrate-gw + fail-closed
+# watchdog + enrollment publisher) and its two named forwarders, delivered by Argo to the env VM's
+# OWN k3s (same failure domain as the substrate it fronts), never by Compose and never by production.
+#
+# One INSTANCE per tailnet an env VM serves (hub node-service-delivery, test-fleet parity): the candidate-a
+# VM runs `candidate-a` (canonical; coordinator in the production sequencer) and `test-candidate-a` (the
+# test operator's own). Each instance is an overlay under infra/k8s/overlays/<env>/mesh-plane/<tailnet>/,
+# reconciled by its own Argo Application under infra/k8s/argocd/control-plane/<env>/, with namespace
+# cogni-mesh-<tailnet>, nameSuffix -<tailnet> (renames the cluster-scoped PriorityClass and its references)
+# and its own values from the tailnet table in scripts/ci/lib/mesh-plane.sh, in its `mesh-env` ConfigMap:
+# MESH_CONTROL_HOST (mesh-<tailnet>.<zone>, the same name the DNS writer publishes), MESH_RELAY_HOST
+# (derp-<tailnet>.<zone>), MESH_VM_HOST (vm_host_for_env, the substrate's node address),
+# MESH_WIREGUARD_PORT (pod-local; relay-only) and the watchdog bound. Each overlay patches the
+# instance-unique host-level values (forwarder ClusterIPs, relay/publisher NodePorts) and declares the
+# hostAlias replacements AFTER those patches. No instance opens a hostPort: relay-only, STUN off. Pinned by tests/ci-invariants/mesh-env-plane.spec.ts.
+#
+# HR21 egress rule = NetworkPolicy `substrate-gw` (networkpolicy.yaml): substrate-gw may reach ONLY
+# its two forwarders, with no DNS (every name it dials is a hostAlias). The forwarders hold the named destinations (control host :443,
+# relay + substrate ports on the VM alias); a NetworkPolicy cannot name a host, so the address is
+# resolved from the very DNS record the B6 writer owns — one source, nothing typed.
+#
+# Eviction (B17): every container is Guaranteed (requests == limits) and every pod runs at the
+# `cogni-mesh-critical` PriorityClass, so kubelet memory-pressure eviction reaches them last.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - priorityclass.yaml
+  - pvc.yaml
+  - derper.yaml
+  - substrate-gw.yaml
+  - forwarders.yaml
+  - networkpolicy.yaml
+configMapGenerator:
+  - name: substrate-gw-files
+    files:
+      - substrate-gw.sh
+      - serve.json
