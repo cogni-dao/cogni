@@ -111,7 +111,18 @@ async function stateUp(h: H) {
 
 async function deployApp(h: H, sha: string) {
   await h.release(canaryApp(), sha);
-  return h.seq.step(APP);
+  return stepUntilProved(h);
+}
+
+/** bug.5587: a step probes a proof ONCE; step the workload `pollMs` apart until it leaves `proving`. */
+async function stepUntilProved(h: H, key = APP) {
+  for (let i = 0; i < 10_000; i++) {
+    const outcome = await h.seq.step(key);
+    if ((await h.store.attemptsFor(key))[0]?.phase !== "proving")
+      return outcome;
+    h.clock.advance(h.config.pollMs);
+  }
+  throw new Error(`${key.workload} still proving`);
 }
 
 /**
@@ -321,6 +332,78 @@ describe("app deploy", () => {
     expect(failedAt - leasedAt).toBeGreaterThanOrEqual(h.config.proofMs);
   });
 
+  it("bug.5587: a pending proof does not hold the next tick; another workload converges while it proves, and the proof still fails at its bound", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    h.payer.onLease = (l) => {
+      if (l.env.RELEASE_SHA === SHA_2) l.serveSha = "f".repeat(40); // A's green never proves
+    };
+    // Workload B's release arrives while A proves (A's first proof probe).
+    const DB2 = { ...DB, workload: "canary-db-2" };
+    const probe = h.probe.hostRouted.bind(h.probe);
+    let bRecorded = false;
+    h.probe.hostRouted = async (ingress, host, path) => {
+      if (!bRecorded) {
+        bRecorded = true;
+        await h.release(canaryDb({ name: "canary-db-2" }), SHA_1);
+      }
+      return probe(ingress, host, path);
+    };
+    await h.release(canaryApp(), SHA_2);
+    await h.seq.tick(); // A: create, lease, ONE probe round; B is recorded meanwhile
+    await h.seq.tick(); // B converges on the very next tick
+    const a = (await h.store.attemptsFor(APP))[0];
+    const b = (await h.store.attemptsFor(DB2))[0];
+    expect(b?.phase).toBe("active");
+    expect(a?.phase).toBe("proving");
+    const leasedAt = a?.leasedAt?.getTime() ?? 0;
+    expect(h.clock.now() - leasedAt).toBeLessThan(h.config.proofMs);
+    // A keeps proving tick by tick and still fails proof_timeout at its durable bound.
+    await stepUntilProved(h);
+    const failed = (await h.store.attemptsFor(APP))[0];
+    expect(failed?.id).toBe(a?.id);
+    expect(failed?.error).toMatch(/^proof_timeout: version 200/);
+    expect(
+      (failed?.updatedAt.getTime() ?? 0) - leasedAt
+    ).toBeGreaterThanOrEqual(h.config.proofMs);
+    expect(h.payer.byDseq("1002").state).toBe("active"); // blue serves throughout
+  });
+
+  it("bug.5587: the host_not_routed window survives across ticks and a restart only delays it", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    h.payer.onLease = (l) => {
+      if (l.provider === "provider-3") l.routeStatus = () => 404;
+    };
+    await h.release(canaryApp(), SHA_2);
+    await h.seq.step(APP); // first 404 starts the window
+    h.clock.advance(h.config.hostNotRoutedMs - 1);
+    await h.seq.step(APP);
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("proving");
+    // A restarted sequencer has no window yet: it never strikes early.
+    const restarted = new NodeDeploySequencer({
+      store: h.store,
+      payer: h.payer,
+      edge: new EdgeRouter(h.dns, WORKLOAD_ZONE),
+      probe: h.probe,
+      secrets: h.secrets,
+      chain: h.chain,
+      clock: h.clock,
+      log: h.log,
+      config: h.config,
+    });
+    h.clock.advance(1);
+    await restarted.step(APP); // window restarts here
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("proving");
+    h.clock.advance(h.config.hostNotRoutedMs);
+    await restarted.step(APP);
+    const failed = (await h.store.attemptsFor(APP))[0];
+    expect(failed?.phase).toBe("failed");
+    expect(failed?.error).toMatch(/^host_not_routed: version 404/);
+  });
+
   it("bug.5569: /version 404 for 60s (host not routed) fails host_not_routed fast; green closed, blue and edge untouched; the provider is excluded next", async () => {
     const h = harness();
     await stateUp(h);
@@ -459,8 +542,8 @@ describe("provider exclusion and alert hygiene", () => {
       l.serveSha = "f".repeat(40);
     };
     await h.release(canaryApp(), SHA_1);
-    await h.seq.step(APP);
-    await h.seq.step(APP);
+    await stepUntilProved(h); // bug.5587: a failed proof spans ticks
+    await stepUntilProved(h);
     h.payer.onLease = undefined;
     await deployApp(h, SHA_2);
     const appCreates = h.payer.createRequests.filter(
@@ -840,7 +923,7 @@ describe("provider exclusion and alert hygiene", () => {
       l.serveSha = "f".repeat(40);
     };
     await h.release(canaryApp(), SHA_1);
-    for (let i = 0; i < 3; i++) await h.seq.step(APP);
+    for (let i = 0; i < 3; i++) await stepUntilProved(h); // bug.5587
     for (let i = 0; i < 50; i++) {
       await h.seq.step(APP);
       h.clock.advance(4_000);
@@ -1324,7 +1407,7 @@ describe("keys and parking", () => {
     await h.release(canaryApp(), SHA_1);
     const outcomes: string[] = [];
     for (let i = 0; i < 6; i++) {
-      outcomes.push(await h.seq.step(APP));
+      outcomes.push(await stepUntilProved(h)); // bug.5587: one attempt's proof spans ticks
       h.clock.advance(24 * 3_600_000);
     }
     expect(outcomes).toEqual([

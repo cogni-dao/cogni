@@ -45,6 +45,10 @@
  *   - LOST_MEANS_CHAIN_TRUTH: a lease is lost only when chain/observe say closed or insufficient_funds,
  *     or it fails its proof for `unhealthyLostMs` (15 min) straight. A single miss is not a loss.
  *   - ONE_RUNNER_PER_WORKLOAD: `step` and `reconcile` never overlap for one workload key.
+ *   - STEP_NEVER_WAITS (bug.5587): a step makes ONE bounded lease observe or proof round and returns;
+ *     the next tick resumes it. Every bound is read from durable state (`leasedAt`) or kept in memory
+ *     per attempt, where a restart can only delay a verdict, never bring it early. So one slow proof
+ *     never holds the tick for another workload.
  *   - IMAGE_PINNED_BEFORE_PAY (story.5137): a release recorded before node CI published its image
  *     (`spec.imagePending`) waits as `DependencyNotReady` (no attempt row, nothing paid) until the registry
  *     has `sha-<sha>`; the digest is then pinned WRITE-ONCE on the release, so every attempt deploys one
@@ -377,6 +381,14 @@ export class NodeDeploySequencer {
   private readonly lastGraceLogAt = new Map<string, number>();
   /** Last persisted step signature per attempt, so a poll loop writes one timeline row, not hundreds. */
   private readonly lastStep = new Map<string, string>();
+  /**
+   * bug.5587 STEP_NEVER_WAITS: per proving attempt id, the start of its unbroken `/version` 404 run and
+   * its last progress note. In memory: a restart restarts both, which only delays a strike or a note.
+   */
+  private readonly proofWatch = new Map<
+    string,
+    { notRoutedSince?: number; lastNote: number }
+  >();
   /** HR 8 device window per live mesh attempt id: in memory, so a restart rolls nothing. */
   private readonly deviceWatch = new Map<string, DeviceWatchEntry>();
   /** MESH_WRITES_SERIALIZED: the tail of this lane's Headscale write queue. */
@@ -1680,68 +1692,81 @@ export class NodeDeploySequencer {
 
   // ---- lease ready ----------------------------------------------------------------------------
 
+  /** ONE observe per tick (STEP_NEVER_WAITS): not ready yet = still `created`, observed again next tick. */
   private async awaitLease(
     key: WorkloadKey,
     release: ReleaseRow,
-    attempt: AttemptRow,
+    a: AttemptRow,
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
     const w = release.spec;
     const host = publicHostOf(w);
-    let a = attempt;
     const leasedAt = (a.leasedAt ?? a.createdAt).getTime();
-    for (;;) {
-      let obs: Awaited<ReturnType<PayerPort["observe"]>>;
-      try {
-        obs = await this.d.payer.observe({
-          cogniKey: a.cogniKey,
-          ...(a.externalName ? { externalName: a.externalName } : {}),
-        });
-      } catch (error) {
-        await this.emit(key, release, a, "lease_ready", "observe_error", {
-          error: errText(error),
-        });
-        obs = { found: true };
-      }
-      const r = obs.resource;
-      if (obs.found === false || r?.state === "closed")
-        return this.failAttempt(key, release, a, "lease_closed_before_ready");
-      if (r) {
-        if (
-          blue?.provider &&
-          r.providerAccount &&
-          r.providerAccount === blue.provider
-        ) {
-          // NOT_BLUES_PROVIDER: two leases on one provider ingress cannot both claim one host.
-          await this.strike(key, release, a, "same_provider_as_blue");
-          return this.failAttempt(key, release, a, "same_provider_as_blue");
-        }
-        const usable =
-          w.kind === "app"
-            ? ingressHostOf(r.endpoints, host) !== undefined
-            : tryForwarded(r.endpoints);
-        if (r.state === "active" && usable) {
-          a = await this.d.store.updateAttempt(a.id, {
-            phase: "proving",
-            endpoints: r.endpoints,
-            ...(r.providerAccount ? { provider: r.providerAccount } : {}),
-          });
-          await this.emit(key, release, a, "lease_active", "ok", {
-            endpoints: r.endpoints,
-            provider: r.providerAccount,
-          });
-          return a;
-        }
-      }
-      if (this.d.clock.now() - leasedAt >= this.d.config.leaseReadyMs)
-        return this.failAttempt(key, release, a, "lease_not_ready");
-      await this.d.clock.sleep(this.d.config.pollMs);
+    let obs: Awaited<ReturnType<PayerPort["observe"]>>;
+    try {
+      obs = await this.d.payer.observe({
+        cogniKey: a.cogniKey,
+        ...(a.externalName ? { externalName: a.externalName } : {}),
+      });
+    } catch (error) {
+      await this.emit(key, release, a, "lease_ready", "observe_error", {
+        error: errText(error),
+      });
+      obs = { found: true };
     }
+    const r = obs.resource;
+    if (obs.found === false || r?.state === "closed")
+      return this.failAttempt(key, release, a, "lease_closed_before_ready");
+    if (r) {
+      if (
+        blue?.provider &&
+        r.providerAccount &&
+        r.providerAccount === blue.provider
+      ) {
+        // NOT_BLUES_PROVIDER: two leases on one provider ingress cannot both claim one host.
+        await this.strike(key, release, a, "same_provider_as_blue");
+        return this.failAttempt(key, release, a, "same_provider_as_blue");
+      }
+      const usable =
+        w.kind === "app"
+          ? ingressHostOf(r.endpoints, host) !== undefined
+          : tryForwarded(r.endpoints);
+      if (r.state === "active" && usable) {
+        const next = await this.d.store.updateAttempt(a.id, {
+          phase: "proving",
+          endpoints: r.endpoints,
+          ...(r.providerAccount ? { provider: r.providerAccount } : {}),
+        });
+        await this.emit(key, release, next, "lease_active", "ok", {
+          endpoints: r.endpoints,
+          provider: r.providerAccount,
+        });
+        return next;
+      }
+    }
+    if (this.d.clock.now() - leasedAt >= this.d.config.leaseReadyMs)
+      return this.failAttempt(key, release, a, "lease_not_ready");
+    return a;
   }
 
   // ---- prove ----------------------------------------------------------------------------------
 
+  /** ONE proof round per tick (STEP_NEVER_WAITS); the in-memory watch is dropped once it leaves `proving`. */
   private async prove(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow
+  ): Promise<AttemptRow> {
+    const next = await this.proveOnce(key, release, attempt);
+    if (next.phase !== "proving") this.proofWatch.delete(attempt.id);
+    return next;
+  }
+
+  /**
+   * `/version`, then `/readyz`, then qualify, each bounded by its own port timeout. Not passing yet and
+   * inside its bounds = the attempt is returned still `proving` and the next tick probes again.
+   */
+  private async proveOnce(
     key: WorkloadKey,
     release: ReleaseRow,
     attempt: AttemptRow
@@ -1751,113 +1776,103 @@ export class NodeDeploySequencer {
     const deadline =
       (attempt.leasedAt ?? attempt.createdAt).getTime() + this.d.config.proofMs;
     let last = "no probe yet";
-    let lastNote = this.d.clock.now();
-    // HOST_NOT_ROUTED: start of an unbroken run of `/version` 404s from the provider ingress.
-    let notRoutedSince: number | undefined;
-    for (;;) {
-      if (w.kind === "app") {
-        const ingress = ingressHostOf(attempt.endpoints, host);
-        const health = w.health;
-        if (ingress && host && health) {
-          const v = await this.d.probe.hostRouted(
-            ingress,
-            host,
-            health.version
-          );
-          notRoutedSince =
-            v.status === 404
-              ? (notRoutedSince ?? this.d.clock.now())
-              : undefined;
-          if (v.status === 200 && buildShaOf(v.body) === release.sourceSha) {
-            const r = await this.d.probe.hostRouted(
-              ingress,
-              host,
-              health.ready
-            );
-            if (r.status === 200) {
-              try {
-                attempt = await this.qualify(release, attempt, "qualify");
-              } catch (error) {
-                await this.qualificationDiagnostic(
-                  key,
-                  release,
-                  attempt,
-                  "qualify",
-                  error
-                );
-                return this.failAttempt(
-                  key,
-                  release,
-                  attempt,
-                  "qualification_failed"
-                );
-              }
-              const next = await this.d.store.updateAttempt(attempt.id, {
-                phase: "proven",
-              });
-              await this.emit(key, release, next, "proven", "ok", {
-                ingress,
-                version: release.sourceSha,
-                readyz: r.status,
-              });
-              return next;
-            }
-            last = `readyz ${r.status} ${r.error ?? r.body.slice(0, 80)}`;
-          } else {
-            last = `version ${v.status} sha=${buildShaOf(v.body) ?? "none"} ${v.error ?? ""}`;
-          }
-        }
-      } else {
-        const t = tryForwarded(attempt.endpoints);
-        if (t && (await this.d.probe.tcpTls(t.host, t.port))) {
-          const next = await this.d.store.updateAttempt(attempt.id, {
-            phase: "proven",
-          });
-          await this.emit(key, release, next, "proven", "ok", {
-            endpoint: `${t.host}:${t.port}`,
-          });
-          return next;
-        }
-        last = "tcp tls handshake not answered";
-      }
-      // A closed lease cannot become healthy: stop waiting.
-      const closed = await this.isClosed(attempt);
-      if (closed)
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          "lease_closed_while_proving"
-        );
-      if (
-        notRoutedSince !== undefined &&
-        this.d.clock.now() - notRoutedSince >= this.d.config.hostNotRoutedMs
-      ) {
-        // The provider ingress does not route our host: it can never pass. Close green through the
-        // normal path (blue and the edge are untouched); its provider is excluded for this release.
-        await this.strike(key, release, attempt, "host_not_routed");
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `host_not_routed: ${last.trim()} for ${Math.round((this.d.clock.now() - notRoutedSince) / 1000)}s`
-        );
-      }
-      if (this.d.clock.now() >= deadline) {
-        await this.strike(key, release, attempt, "proof_timeout");
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `proof_timeout: ${last}`
-        );
-      }
-      if (this.d.clock.now() - lastNote >= 60_000) {
-        lastNote = this.d.clock.now();
-        await this.emit(key, release, attempt, "proving", "waiting", { last });
-      }
-      await this.d.clock.sleep(this.d.config.pollMs);
+    // HOST_NOT_ROUTED: `notRoutedSince` starts an unbroken run of `/version` 404s from the provider ingress.
+    let watch = this.proofWatch.get(attempt.id);
+    if (!watch) {
+      if (this.proofWatch.size > 500) this.proofWatch.clear(); // bounded; a reset only delays
+      watch = { lastNote: this.d.clock.now() };
+      this.proofWatch.set(attempt.id, watch);
     }
+    if (w.kind === "app") {
+      const ingress = ingressHostOf(attempt.endpoints, host);
+      const health = w.health;
+      if (ingress && host && health) {
+        const v = await this.d.probe.hostRouted(ingress, host, health.version);
+        watch.notRoutedSince =
+          v.status === 404
+            ? (watch.notRoutedSince ?? this.d.clock.now())
+            : undefined;
+        if (v.status === 200 && buildShaOf(v.body) === release.sourceSha) {
+          const r = await this.d.probe.hostRouted(ingress, host, health.ready);
+          if (r.status === 200) {
+            try {
+              attempt = await this.qualify(release, attempt, "qualify");
+            } catch (error) {
+              await this.qualificationDiagnostic(
+                key,
+                release,
+                attempt,
+                "qualify",
+                error
+              );
+              return this.failAttempt(
+                key,
+                release,
+                attempt,
+                "qualification_failed"
+              );
+            }
+            const next = await this.d.store.updateAttempt(attempt.id, {
+              phase: "proven",
+            });
+            await this.emit(key, release, next, "proven", "ok", {
+              ingress,
+              version: release.sourceSha,
+              readyz: r.status,
+            });
+            return next;
+          }
+          last = `readyz ${r.status} ${r.error ?? r.body.slice(0, 80)}`;
+        } else {
+          last = `version ${v.status} sha=${buildShaOf(v.body) ?? "none"} ${v.error ?? ""}`;
+        }
+      }
+    } else {
+      const t = tryForwarded(attempt.endpoints);
+      if (t && (await this.d.probe.tcpTls(t.host, t.port))) {
+        const next = await this.d.store.updateAttempt(attempt.id, {
+          phase: "proven",
+        });
+        await this.emit(key, release, next, "proven", "ok", {
+          endpoint: `${t.host}:${t.port}`,
+        });
+        return next;
+      }
+      last = "tcp tls handshake not answered";
+    }
+    // A closed lease cannot become healthy: stop waiting.
+    const closed = await this.isClosed(attempt);
+    if (closed)
+      return this.failAttempt(
+        key,
+        release,
+        attempt,
+        "lease_closed_while_proving"
+      );
+    const notRoutedSince = watch.notRoutedSince;
+    if (
+      notRoutedSince !== undefined &&
+      this.d.clock.now() - notRoutedSince >= this.d.config.hostNotRoutedMs
+    ) {
+      // The provider ingress does not route our host: it can never pass. Close green through the
+      // normal path (blue and the edge are untouched); its provider is excluded for this release.
+      await this.strike(key, release, attempt, "host_not_routed");
+      return this.failAttempt(
+        key,
+        release,
+        attempt,
+        `host_not_routed: ${last.trim()} for ${Math.round((this.d.clock.now() - notRoutedSince) / 1000)}s`
+      );
+    }
+    if (this.d.clock.now() >= deadline) {
+      await this.strike(key, release, attempt, "proof_timeout");
+      return this.failAttempt(key, release, attempt, `proof_timeout: ${last}`);
+    }
+    if (this.d.clock.now() - watch.lastNote >= 60_000) {
+      watch.lastNote = this.d.clock.now();
+      await this.emit(key, release, attempt, "proving", "waiting", { last });
+    }
+    return attempt;
   }
 
   // ---- cutover --------------------------------------------------------------------------------
@@ -2270,6 +2285,7 @@ export class NodeDeploySequencer {
     reason: string,
     opts: { createEnded?: boolean } = {}
   ): Promise<AttemptRow> {
+    this.proofWatch.delete(attempt.id); // a superseded proving attempt never reaches `prove` again
     const trimmed = reason.slice(0, ERROR_TEXT_MAX);
     // ORPHAN_GUARD (CD8): an attempt with no bound handle may still own a PAID lease (the create
     // succeeded and its response was lost, or we crashed before binding). Ask the payer by key BEFORE

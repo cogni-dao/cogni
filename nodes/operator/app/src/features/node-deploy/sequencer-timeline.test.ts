@@ -95,6 +95,16 @@ async function stateUp(h: H) {
   await h.seq.step(DB);
 }
 
+/** bug.5587: a step probes a proof ONCE; step `pollMs` apart until the app attempt leaves `proving`. */
+async function stepUntilProved(h: H) {
+  for (let i = 0; i < 10_000; i++) {
+    await h.seq.step(APP);
+    if ((await h.store.attemptsFor(APP))[0]?.phase !== "proving") return;
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.pollMs);
+  }
+  throw new Error("still proving");
+}
+
 describe("persisted step timeline", () => {
   it("every persisted step has its node_deploy_step log twin (one emit helper)", async () => {
     const h = harness();
@@ -163,7 +173,7 @@ describe("persisted step timeline", () => {
       l.serveSha = "f".repeat(40);
     };
     await h.release(canaryApp(), SHA_1);
-    await h.seq.step(APP);
+    await stepUntilProved(h);
     const [attempt] = await h.store.attemptsFor(APP);
     const strike = attempt?.steps.find((s) => s.step === "provider_strike");
     expect(strike).toMatchObject({
@@ -214,7 +224,7 @@ describe("release state on the read model", () => {
     await h.release(canaryApp(), SHA_1);
     const states: string[] = [];
     for (let i = 0; i < 4; i++) {
-      await h.seq.step(APP);
+      await stepUntilProved(h);
       states.push((await view(h)).desired.releaseState);
       h.clock.advance(60_000);
     }

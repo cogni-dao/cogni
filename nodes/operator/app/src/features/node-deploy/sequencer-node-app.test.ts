@@ -1434,6 +1434,11 @@ describe("private release companions", () => {
       capability ? companionSpec() : ordinary
     );
     await h.seq.step(key);
+    // bug.5587: a failed proof spans ticks, one probe round each
+    while (h.store.attempts.at(-1)?.phase === "proving") {
+      h.clock.advance(DEFAULT_SEQUENCER_CONFIG.pollMs);
+      await h.seq.step(key);
+    }
     expect(h.store.attempts.at(-1)?.phase).toBe("failed");
     h.payer.onLease = undefined;
     // Native producer's complete bounded evidence precedes a diagnostic beyond both 2000 caps.
