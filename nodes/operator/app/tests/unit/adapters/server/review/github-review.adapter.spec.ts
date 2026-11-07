@@ -251,7 +251,7 @@ describe("fetchPrContext — review on/off + model (repo-spec driven)", () => {
     });
 
     expect(result.reviewEnabled).toBe(true);
-    expect(result.modelRef.modelId).toBe("gpt-4o-mini");
+    expect(result.modelRef.modelId).toBe("gemini-3.7-flash");
   });
 
   it("propagates review.enabled=false (node opts out)", async () => {
@@ -291,6 +291,60 @@ describe("fetchPrContext — review on/off + model (repo-spec driven)", () => {
     expect(result.modelRef).toEqual({
       providerKey: "platform",
       modelId: "claude-haiku-4-5",
+    });
+  });
+});
+
+describe("story.5102 — pinned review subject + request-bound check", () => {
+  it("reads repo-spec + rules at the pinned baseSha and reports headMoved", async () => {
+    setFetchPrHandlers({
+      changedFiles: ["nodes/poly/app/src/foo.ts"],
+      ruleAvailableAt: "nodes/poly/.cogni/rules/quality.rule.yaml",
+    });
+    const baseSha = "b".repeat(40);
+
+    const moved = await makeAdapter().fetchPrContext({
+      owner: "org",
+      repo: "repo",
+      prNumber: 123,
+      installationId: 1,
+      baseSha,
+      headSha: "c".repeat(40),
+    });
+    expect(moved.headMoved).toBe(true);
+    const contentRefs = requests
+      .filter((r) => r.route === "GET /repos/{owner}/{repo}/contents/{path}")
+      .map((r) => (r.params as { ref: string }).ref);
+    expect(contentRefs.length).toBeGreaterThan(0);
+    expect(contentRefs.every((ref) => ref === baseSha)).toBe(true);
+
+    const pinned = await makeAdapter().fetchPrContext({
+      owner: "org",
+      repo: "repo",
+      prNumber: 123,
+      installationId: 1,
+      baseSha,
+      headSha: "deadbeef",
+    });
+    expect(pinned.headMoved).toBe(false);
+  });
+
+  it("writes the request id as the check run external_id", async () => {
+    routeHandlers = {
+      "POST /repos/{owner}/{repo}/check-runs": () => ({ id: 7 }),
+    };
+    const id = await makeAdapter().createCheckRun({
+      owner: "org",
+      repo: "repo",
+      headSha: "deadbeef",
+      installationId: 1,
+      externalId: "req-1",
+    });
+    expect(id).toBe(7);
+    expect(requests[0]?.params).toMatchObject({
+      name: "Cogni Git PR Review",
+      head_sha: "deadbeef",
+      external_id: "req-1",
     });
   });
 });
