@@ -110,7 +110,7 @@ Receipts appear in `/gov/epoch` within seconds. The seeded open epoch covers the
 
 ## PR Review Bot (optional)
 
-Runs automated AI-powered code review on PRs. Requires the GitHub App from above with `Checks:write` + `Pull requests:write` permissions. See [GitHub App + Webhook Setup](./github-app-webhook-setup.md) for credentials.
+Runs a hub-grounded AI review of one PR when a developer calls `POST /api/v1/vcs/review`. No PR event starts a review. Requires the GitHub App from above with `Checks:write` + `Pull requests:write` permissions. See [GitHub App + Webhook Setup](./github-app-webhook-setup.md) for credentials.
 
 **Environment variables** (`.env.local`):
 
