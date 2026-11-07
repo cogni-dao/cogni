@@ -10,13 +10,14 @@ resources:
   - ../../../base/openfga-external
   # story.5016 step 9, production (mirror of #2212 on candidate-a): the legacy
   # compute-workload-controller is structurally removed so exactly ONE writer — the
-  # Crossplane transaction actuator below — can reach an Akash wallet from this env.
+  # transaction actuator below — can reach an Akash wallet from this env.
   # Its old-account leases are closed (all 12 retired 2026-09-15) and its Console key
   # is dead; the pod was pure reconcile-churn + memory on a full box.
   - external-secret.yaml
   - ../../../base/operator-migration-external-secret
   - ./secrets-writer-sa.yaml
-  # story.5016 production cutover — the private Akash transaction actuator Crossplane calls.
+  # story.5016 production cutover — the private Akash transaction actuator (the node-deploy
+  # sequencer's only paid writer, task.5400).
   # #2234 shipped the two ExternalSecrets deliberately WITHOUT this Deployment because a
   # projected Secret source whose key is absent makes kubelet refuse the mount (FailedMount,
   # Argo app Degraded, invisible to Loki — bug.5142). That ordering constraint is satisfied:
@@ -24,7 +25,6 @@ resources:
   # so the Deployment can land and mount it.
   - ../../../base/akash-tx-actuator
   - ./akash-tx-actuator-external-secret.yaml
-  - ./akash-tx-actuator-auth-external-secret.yaml
   # bug.5240 — the keyless lease-log pump rides beside the actuator BECAUSE custody lives
   # here: this cluster's actuator ledger receipts EVERY env's Akash lane (bug.5206/task.5132),
   # so this one pump tails candidate-a + preview + production leases (UNFILTERED_ENUMERATION;
@@ -55,7 +55,7 @@ components:
   - ../../../base/node-deploy-mesh/tailnets/production
 
 # Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
-# name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
+# name to the bare `akash-tx-actuator` its callers dial. See
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
 transformers:
   - ../../../base/akash-tx-actuator-service-name

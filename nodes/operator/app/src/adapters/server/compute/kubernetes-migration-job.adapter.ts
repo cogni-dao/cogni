@@ -6,7 +6,7 @@
  * Purpose: Prove per-bundle-digest DB migrations for externally placed workloads via one
  *   idempotent Kubernetes Job on the operator substrate (bug.5116). The k3s lane runs the
  *   identical contract as a Deployment initContainer; an Akash-placed node has no Deployment,
- *   so the ComputeWorkload controller runs the same migrator image here before any lease I/O.
+ *   so the akash-tx actuator's migration step runs the same migrator image here before any lease I/O.
  * Scope: BatchV1Api CRUD on `migrate-<slug>-<digest12>` Jobs in the WORKLOAD's namespace
  *   (`input.namespace`, falling back to this adapter's own).
  *   Renders caller-provided phases mechanically — it owns no runtimeProfile path policy.
@@ -23,8 +23,8 @@
  *     lease. Namespace-per-workload is the whole fix; every existing Job name is unchanged and
  *     no already-proven digest re-runs.
  *   - VALUE_FREE: DATABASE_URL reaches the Job only as a secretKeyRef; secret values never
- *     transit the controller. `readReceipt` reads the migrator's stdout, which carries migration
- *     tags/hashes and no DSN; the controller still holds no credential that can read a node DB.
+ *     transit the actuator. `readReceipt` reads the migrator's stdout, which carries migration
+ *     tags/hashes and no DSN; the actuator still holds no credential that can read a node DB.
  *   - RECONCILER_OWNS_POLICY: bounded in-Job retries (backoffLimit 2, safe because the
  *     migrator is idempotent + advisory-locked); terminality decisions belong to the caller.
  *   - SCRIPT_FAILURE_IS_TERMINAL: only a migrate container that actually ran and exited
@@ -56,6 +56,7 @@ import {
 import { withDatabaseCaTrust } from "@/shared/secrets/database-ca-command";
 
 const DIGEST_PATTERN = /^sha256:([0-9a-f]{64})$/;
+// A wire value, not a description: existing Jobs carry this label and GC lists by it. Keep it.
 const MANAGED_BY_LABEL_VALUE = "compute-workload-controller";
 const ACTIVE_DEADLINE_SECONDS = 600;
 /** Receipt reads are bounded: the marker line is printed last, so a short tail is enough. */
@@ -472,18 +473,5 @@ export class KubernetesMigrationJobAdapter
     } catch {
       // GC is advisory; the succeeded verdict for the current digest stands.
     }
-  }
-}
-
-/**
- * A controller with no external-compute credential must surface
- * `ProviderCredentialMissing` from the lifecycle port, not a migration status —
- * and must not burn Jobs it can never act on. Pass-through keeps that honest.
- */
-export class DormantComputeWorkloadMigrationAdapter
-  implements ComputeWorkloadMigrationPort
-{
-  async ensure(): Promise<"succeeded" | "running" | "failed"> {
-    return "succeeded";
   }
 }

@@ -5,10 +5,11 @@
  * Module: `@bootstrap/akash-tx-actuator`
  * Purpose: The composition root task.5095 deliberately omitted — the dedicated process that
  *   binds `AkashTxActuator` over the Akash Console client, the durable allocation ledger and
- *   the serving probe, and serves the four bounded operations on a PRIVATE ClusterIP the
- *   Crossplane XComputeWorkload Composition calls (task.5102).
+ *   the serving probe, and serves the bounded operations on a PRIVATE ClusterIP (task.5102).
+ *   Its live caller is the node-deploy sequencer's `ActuatorPayer` (task.5400); the Crossplane
+ *   Composition it was first built for was deleted (task.5411).
  * Scope: Wiring, minimal env validation and lifecycle only. Every decision about WHEN to
- *   observe/create/update/delete belongs to Crossplane, and every decision about whether a
+ *   observe/create/delete belongs to the caller, and every decision about whether a
  *   transaction is safe belongs to the actuator — neither is re-implemented here. No watches,
  *   no leader election, no reconciliation.
  *
@@ -17,7 +18,7 @@
  *   observes no Kubernetes object and retries nothing. It exists because the one failure a
  *   request-scoped actuator structurally cannot handle is the request's own process dying
  *   mid-transaction, and the receipt that leaves behind holds a WALLET-WIDE slot: without a
- *   sweeper, one dead process stops every node in the environment from leasing. Crossplane
+ *   sweeper, one dead process stops every node in the environment from leasing. A caller
  *   cannot do this job either — it only ever calls about ONE workload, and the wedged receipt
  *   belongs to a different one.
  * Invariants:
@@ -137,12 +138,12 @@ import {
 import { DatabaseCellAppliedEvidenceBundleSchema } from "@/shared/secrets/database-cell-placement.data";
 
 /**
- * The port the XComputeWorkload Composition hard-codes in
- * `http://akash-tx-actuator.<ns>.svc.cluster.local:8080`. Changing it is a wire break.
+ * The port every caller dials at `http://akash-tx-actuator:8080` (the node-deploy sequencer's
+ * `ActuatorPayer`, the lease-log pump). Changing it is a wire break.
  */
 const LISTEN_PORT = 8080;
 
-/** Projected Secret volume — one file per key, mirroring the ComputeWorkload controller. */
+/** Projected Secret volume — one file per key. */
 const CREDENTIAL_DIR = "/var/run/secrets/akash-tx";
 
 // biome-ignore lint/style/noProcessEnv: dedicated process composition root validates its own minimal env
@@ -329,8 +330,7 @@ try {
 
 /**
  * One bounded serving proof per observe: exact source SHA on `/version` AND a 2xx `/readyz`,
- * byte-identical to the ComputeWorkload lifecycle adapter's `verifySource`. Never loops —
- * convergence polling is Crossplane's job.
+ * Never loops — convergence polling is the caller's job.
  */
 const probe: AkashTxServingProbe = async ({
   endpoints,

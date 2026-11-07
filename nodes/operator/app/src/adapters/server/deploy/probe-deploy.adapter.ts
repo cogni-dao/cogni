@@ -21,10 +21,10 @@
  *   - UNKNOWN_IS_NOT_BROKEN, and today that is a GAP (bug.5193, task.5135 follow-up): a node whose
  *     composite is FAILED in the control plane — BootDeadlineExceeded, MigrationFailed, a terminal
  *     actuator refusal — probes exactly like a node that was never deployed. Both render `unknown`.
- *     That is how toks5 stalled in production for 1044 reconciles with no alarm. The substrate now
- *     states the failure (`status.phase` / `status.failure.reason` / `status.migration.phase` on the
- *     XComputeWorkload); NOTHING HERE READS IT. Closing that needs a control-plane-backed source and
- *     a `failed` member on `NodeHealthState` — deliberately out of scope for this probe adapter.
+ *     That is how toks5 stalled in production for 1044 reconciles with no alarm. The node-deploy
+ *     sequencer now records the failure on the release (`parked` + step reasons, GET
+ *     /api/v1/deploy/workloads/releases/{id}); NOTHING HERE READS IT. Closing that needs a
+ *     release-backed source and a `failed` member on `NodeHealthState` — out of scope here.
  * Side-effects: network I/O (via the injected prober)
  * Links: packages/ai-tools/src/capabilities/deploy.ts (the interface),
  *   src/features/nodes/flight-status.ts (hostForEnv/FLIGHT_ENVS), docs/design/operator-managed-deployments.md § SEE

@@ -4,7 +4,8 @@
 /**
  * Module: `@features/compute/akash-tx/akash-tx-http`
  * Purpose: The private ClusterIP surface of the Akash transaction actuator — four typed
- *   logical operations Crossplane's provider-http calls, plus liveness. Pure dispatch over
+ *   logical operations (the node-deploy sequencer's `ActuatorPayer` calls create/observe/delete),
+ *   plus liveness. Pure dispatch over
  *   the actuator; it adds no policy of its own (task.5095).
  * Scope: Request validation, bearer authentication, and stable code→status mapping. Does NOT
  *   retry, queue, schedule, or hold state. The node:http server factory here is a binding

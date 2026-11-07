@@ -119,15 +119,6 @@ export type {
   ComputeResourceCostIdentity,
 } from "./compute-cost.port";
 export { ComputeCostInvariantError } from "./compute-cost.port";
-export type {
-  ComputeWorkloadArtifact,
-  ComputeWorkloadBundle,
-  ComputeWorkloadSecretRef,
-  ComputeWorkloadSource,
-  ComputeWorkloadSpec,
-  DeclaredProvisionServiceSpec,
-  DeclaredProvisionSpec,
-} from "./compute-workload.types";
 export {
   ComputeLifecycleError,
   type ComputeLifecycleFailureKind,

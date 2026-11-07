@@ -500,7 +500,6 @@ function candidateInfraPathLane(
   if (
     path.startsWith("infra/k8s/argocd/control-plane/candidate-a/") ||
     path === CANDIDATE_CONTROL_PLANE_SEED_PATH ||
-    path.startsWith("infra/crossplane/") ||
     CANDIDATE_MESH_PLANE_CONTROL_PLANE_PREFIXES.some((prefix) =>
       path.startsWith(prefix)
     )
@@ -3027,15 +3026,15 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * Individual env membership is independently editable while the non-empty deploy set and singleton
    * activity authority remain valid.
    *
-   * - ADD (`present:true`): fold `env` into `infra/catalog/<slug>.yaml`'s `envs:` line, render the per-env
-   *   overlay + AppSet, and fold the slug into that env's appsets kustomization.
+   * - ADD (`present:true`): fold `env` into `infra/catalog/<slug>.yaml`'s `envs:` line with the
+   *   DERIVED akash + `compute_api: node-deploy` cells (ADD_DERIVES_PLACEMENT), plus the env's
+   *   scheduler-worker routing. No AppSet, overlay, ExternalSecret or `lease_generation` is
+   *   written; see {@link buildEnvDeltaPlan}.
    * - REMOVE (`present:false`): drop `env` from the catalog `envs:` line AND drop that env's
-   *   placement cells (REMOVE_COMPLETES_THE_ROW, story.5039 PR-B), DELETE the overlay + the AppSet at
-   *   its CONTROL-env path (sha:null), regenerate that control env's kustomization without the pair,
-   *   and for an akash lane restore the env's scheduler-worker route to the in-cluster default.
+   *   placement cells (REMOVE_COMPLETES_THE_ROW, story.5039 PR-B), and its routing.
    *   Removing the final env or the current activity authority fails with 422; decommission/cutover
-   *   are separate lifecycle operations. The paid-lease CLOSE itself rides the Argo prune →
-   *   Crossplane REMOVE → actuator delete chain, never this adapter.
+   *   are separate lifecycle operations. Retiring the running workload and closing its paid lease
+   *   is the node-deploy verb's job, never this adapter's.
    *
    * Idempotent: the already-holding state opens no PR (`no_changes`). The DNS reverse/forward reconcile is
    * a flag-gated v0 seam (DNS_REVERSE_RECONCILE, default off) — see the `dnsSeam` call below.

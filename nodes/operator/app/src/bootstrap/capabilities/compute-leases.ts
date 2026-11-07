@@ -56,7 +56,7 @@ export interface LeaseReadCapability {
     environment?: string;
     limit: number;
   }): Promise<readonly AkashTxAllocationRecord[]>;
-  /** Every-state receipt enumeration for generation derivation (task.5132) — see `AkashTxAllocationLedgerPort.listReceipts`. */
+  /** Every-state receipt enumeration (task.5132) — see `AkashTxAllocationLedgerPort.listReceipts`. */
   listReceipts(input: {
     nodeId?: string;
     environment?: string;

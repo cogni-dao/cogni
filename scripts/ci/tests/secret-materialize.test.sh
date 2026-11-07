@@ -482,8 +482,8 @@ if grep -qF "$PLATFORM_TOKEN" "$TMPROOT/out-platform.txt"; then
   exit 1
 fi
 
-# 5. Idempotent: a second owner-leg run must preserve the token (rotating it under a live
-#    Crossplane Composition would break the provider-http placeholder mid-flight).
+# 5. Idempotent: a second owner-leg run must preserve the token (rotating it under live
+#    callers would break every in-flight actuator call).
 env \
   VM_HOST=fake \
   DOMAIN=test.cognidao.org \

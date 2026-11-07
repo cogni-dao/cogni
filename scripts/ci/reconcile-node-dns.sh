@@ -17,8 +17,8 @@
 #
 # PLACEMENT_OWNS_DNS (story.5016): only a node the catalog places on `k3s` for
 # this env lives at the VM IP. A node placed on an external provider (akash) has
-# its host CNAME'd to the provider by the operator's ComputeWorkload DNS
-# reconciler, so this loop SKIPS it — one writer per record. The workflows also
+# its host CNAME'd to the provider by the node-deploy sequencer's DNS
+# adapter, so this loop SKIPS it — one writer per record. The workflows also
 # hand this script a k3s-only catalog projection; the skip makes the script
 # correct on its own (it is a documented manual lever too).
 #
@@ -207,8 +207,8 @@ for node in "${NODE_TARGETS[@]}"; do
   expected="$VM_IP"
   # PLACEMENT_OWNS_DNS (story.5016): this loop maps a node host onto the env VM,
   # which is only true for a k3s-placed node. A node the catalog places on an
-  # external provider has its host CNAME'd to the provider by the operator's
-  # ComputeWorkload DNS reconciler — two writers on one record is a Cloudflare
+  # external provider has its host CNAME'd to the provider by the node-deploy
+  # sequencer's DNS adapter — two writers on one record is a Cloudflare
   # type conflict that hard-fails the whole env's promote. Placement decides the
   # owner; the same reader the flight/promote planner uses decides placement.
   if ! is_k3s_placed "$node" "$DEPLOY_ENV"; then

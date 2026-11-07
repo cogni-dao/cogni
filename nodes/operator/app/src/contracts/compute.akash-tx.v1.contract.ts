@@ -4,7 +4,9 @@
 /**
  * Module: `@contracts/compute.akash-tx.v1`
  * Purpose: Wire contract for the private Akash transaction actuator — the typed workload
- *   contract Crossplane's provider-http posts to for observe/create/update/delete (task.5095).
+ *   contract for observe/create/update/delete (task.5095). Its live caller is the node-deploy
+ *   sequencer's `ActuatorPayer` (create/observe/delete, task.5400); the Crossplane provider-http
+ *   caller it was first written for was deleted (task.5411).
  * Scope: Request/response schemas only. This surface is CLUSTER-PRIVATE: it is never mounted
  *   on the public operator app, and the public compute mutation routes stay tombstoned.
  * Invariants:

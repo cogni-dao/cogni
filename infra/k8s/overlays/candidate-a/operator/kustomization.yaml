@@ -8,20 +8,15 @@ namespace: cogni-candidate-a
 resources:
   - ../../../base/node-app
   - ../../../base/openfga-external
-  # story.5016 step 9 — the legacy ComputeWorkload controller is REMOVED from
-  # candidate-a so exactly ONE writer reaches the Akash wallet here: the private
-  # transaction actuator below, driven by Crossplane. ONE_WALLET_ONE_ACTIVE_WRITER.
-  # Preview installs the same control plane but pins NO wallet (dormant/unfunded),
-  # so candidate-a is the sole active writer on the shared test wallet; production
-  # already carries the rail on its own dedicated wallet. Per-row catalog selection
-  # remains the atomic authority cutover, with no compatibility layer or
-  # dual-writer period.
-  # task.5102 — the private Akash transaction actuator Crossplane calls. Each environment
-  # that HOSTS A WRITER has its own actuator and credential-delivery path; candidate-a holds
-  # the managed test account, preview hosts no writer, and production is isolated on a
-  # dedicated account. The reviewed map is CROSSPLANE_ACTUATOR_WRITERS in
-  # nodes/operator/app/src/shared/node-registry/crossplane-control-plane.ts — `account ->
-  # writer` is injective, `writer -> envs` deliberately is not (bug.5187).
+  # Exactly ONE writer reaches the Akash wallet here: the private transaction actuator
+  # below, called by the node-deploy sequencer (task.5400). ONE_WALLET_ONE_ACTIVE_WRITER.
+  # Preview pins NO wallet, so candidate-a is the sole active writer on the shared test
+  # wallet; production carries the rail on its own dedicated wallet.
+  # task.5102 — each environment that HOSTS A WRITER has its own actuator and
+  # credential-delivery path; candidate-a holds the managed test account, preview hosts no
+  # writer, and production is isolated on a dedicated account. `account -> writer` is
+  # injective (bug.5187); tests/ci-invariants/akash-tx-actuator-runtime.spec.ts pins the
+  # funded set (ACTUATOR_ENVIRONMENTS) and each writer's own OpenBao path.
   - ../../../base/akash-tx-actuator
   - external-secret.yaml
   - ../../../base/operator-migration-external-secret
@@ -30,7 +25,6 @@ resources:
   # SECOND ExternalSecret rather than more keys in external-secret.yaml above: that one is
   # extracted wholesale into the public operator app's envFrom.
   - ./akash-tx-actuator-external-secret.yaml
-  - ./akash-tx-actuator-auth-external-secret.yaml
   # bug.5240 — the keyless lease-log pump rides wherever an actuator runs: it enumerates the
   # actuator's ledger (read-only op) and ships every live lease's logs to Loki.
   - ../../../base/lease-log-pump
@@ -51,7 +45,7 @@ components:
   - ../../../base/node-deploy-mesh/tailnets/test-candidate-a
 
 # Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
-# name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
+# name to the bare `akash-tx-actuator` its callers dial. See
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
 transformers:
   - ../../../base/akash-tx-actuator-service-name
@@ -340,11 +334,10 @@ patches:
         value: "cogni-testing.org"
       # PUBLIC, non-secret Akash account the actuator spends from (same value pinned on the
       # akash-tx-actuator container above). The OPERATOR APP needs it too: the env-membership
-      # verb (`POST /api/v1/nodes/{id}/envs`) derives lease_generation by reading the allocation
-      # ledger through createLeaseReadCapability (compute-leases.ts), which returns undefined —
-      # and the ADD verb 503s `generation_evidence_unavailable` (EVIDENCE_OR_REFUSE, task.5132) —
-      # unless AKASH_ACTUATOR_ACCOUNT_ID is on the app runtime. Without this the whole
-      # env-manager test-org deploy e2e (task.5141/story.5039) is blocked at the verb layer.
+      # verb's remove (`POST /api/v1/nodes/{id}/envs`) and the deploy-state route read the
+      # allocation ledger through createLeaseReadCapability (compute-leases.ts), which returns
+      # undefined unless AKASH_ACTUATOR_ACCOUNT_ID is on the app runtime. (The lease_generation
+      # derivation this was first added for was deleted, task.5411.)
       - op: add
         path: /data/AKASH_ACTUATOR_ACCOUNT_ID
         value: "akash12eh8xgpeyumar3sk6wp94y0tq9uh62mkezxjmt"

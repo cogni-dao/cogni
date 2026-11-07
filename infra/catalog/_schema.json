@@ -309,7 +309,7 @@
     },
     "deployment_provider": {
       "type": "object",
-      "description": "Operator-owned per-environment app placement. Omitted environments preserve the k3s default; akash routes only the node app workload through the off-cluster ComputeWorkload reconciler.",
+      "description": "Operator-owned per-environment app placement. Omitted environments preserve the k3s default; akash routes only the node app workload through the node-deploy sequencer (POST /api/v1/deploy/workloads).",
       "additionalProperties": false,
       "properties": {
         "candidate-a": { "enum": ["k3s", "akash"] },

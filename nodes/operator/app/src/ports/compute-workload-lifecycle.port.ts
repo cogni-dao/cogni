@@ -2,11 +2,10 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Provider-neutral off-cluster workload lifecycle used by the ComputeWorkload controller.
- * Provider vocabulary and manifests are adapter-private; resourceId is always opaque.
+ * Typed, redacted failure for the off-cluster compute path. The only live thrower is the
+ * Kubernetes migration-Job adapter the akash-tx actuator drives; the lifecycle port the retired
+ * ComputeWorkload controller implemented was deleted (task.5443).
  */
-
-import type { ProvisionOutput, ProvisionSpec } from "@cogni/ai-tools";
 
 export type ComputeLifecycleFailureKind =
   | "not_found"
@@ -43,38 +42,4 @@ export class ComputeLifecycleError extends Error {
     super(reason);
     this.name = "ComputeLifecycleError";
   }
-}
-
-export interface ComputeWorkloadLifecyclePort {
-  observe(input: { resourceId: string }): Promise<ProvisionOutput>;
-  create(input: {
-    environment: string;
-    spec: ProvisionSpec;
-    /** Exact source revision the workload must report before it is accepted. */
-    expectedSourceSha: string;
-    /** Durable controller key. Providers may support it; the controller always records it first. */
-    idempotencyKey: string;
-    /** Persist the provider-opaque baseline before POST. */
-    onPrepared(allocationCursor: string): Promise<void>;
-    /** Persist the opaque provider handle immediately after allocation, before convergence. */
-    onAllocated(resource: ProvisionOutput): Promise<void>;
-  }): Promise<ProvisionOutput>;
-  /** Resolve an uncertain create against the durable pre-POST baseline. */
-  recoverCreate(input: {
-    allocationCursor: string;
-  }): Promise<ProvisionOutput | null>;
-  update(input: {
-    resourceId: string;
-    environment: string;
-    spec: ProvisionSpec;
-    /** Exact source revision the workload must report before it is accepted. */
-    expectedSourceSha: string;
-    idempotencyKey: string;
-  }): Promise<ProvisionOutput>;
-  delete(input: { resourceId: string }): Promise<void>;
-  /** Provider-independent serving proof. Ready requires exact source SHA and fixed `/readyz`. */
-  verifySource(input: {
-    endpoints: readonly string[];
-    expectedSourceSha: string;
-  }): Promise<boolean>;
 }

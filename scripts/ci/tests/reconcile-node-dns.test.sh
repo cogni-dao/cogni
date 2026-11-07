@@ -296,7 +296,7 @@ fi
 
 # ── Placement decides DNS ownership (story.5016) ──────────────────────────────
 # A node the catalog places on an EXTERNAL provider has its public host CNAME'd to
-# the provider by the operator's ComputeWorkload DNS reconciler. This loop maps
+# the provider by the node-deploy sequencer's DNS adapter. This loop maps
 # hosts onto the env VM, so it must not touch that record — two writers on one
 # name is a Cloudflare type conflict that hard-fails the whole env's promote.
 FIXTURE_CATALOG="$TMPROOT/catalog"
