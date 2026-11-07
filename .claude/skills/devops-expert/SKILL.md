@@ -35,7 +35,7 @@ When current code differs from a north star, report the gap. Do not weaken the t
 3. **Deploy state is machine-written.** Direct bot commits, never PRs. Code branches never hold deploy state.
 4. **Standard CI is universal.** All PRs get normal CI and build. Review, candidate-a proof and merge follow the hub sequence.
 5. **Affected-only CI.** Never rebuild or retest the world.
-6. **Proof is the served build.** `/version.buildSha` read from outside the cluster is the only proof a deploy landed. A green workflow, a 200 from the verb, a lease or `/readyz` is a supporting signal.
+6. **Proof is the served build.** For a node, the release reaching `active` is the deploy proof. Then read `/version.buildSha` once from outside the cluster to check identity. For the operator, the proof is the run end plus one `/version.buildSha` read. A green workflow alone, a 200 from the verb, a lease or `/readyz` is a supporting signal.
 
 ## Freeze policy (read first for any new platform behavior)
 

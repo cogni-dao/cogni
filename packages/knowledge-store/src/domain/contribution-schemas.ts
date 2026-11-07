@@ -69,6 +69,14 @@ export const KnowledgeEntryInputSchema = z.object({
   evaluateAt: z.string().datetime({ offset: true }).optional(),
   /** Namespaced resolver id on hypothesis rows (`agent`, `metric:<kpi-id>`, …). */
   resolutionStrategy: ResolutionStrategySchema.optional(),
+  /** `metric` row definition; validated by @cogni-dao/metrics at the route boundary. */
+  metricSpec: z.record(z.string(), z.unknown()).nullable().optional(),
+  /** Goal/hypothesis KPI bindings; validated by @cogni-dao/metrics at the route boundary. */
+  kpiBindings: z
+    .array(z.record(z.string(), z.unknown()))
+    .max(20)
+    .nullable()
+    .optional(),
 });
 export type KnowledgeEntryInput = z.infer<typeof KnowledgeEntryInputSchema>;
 

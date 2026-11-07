@@ -34,7 +34,7 @@ You are operating the operator release pipeline. The pipeline is multi-layered (
 | Reconcile preview infra        | `POST /api/v1/deploy/infra-reconcile {nodeId, env:"preview"}`        | `node.manage_envs` → `can_manage_envs` (`env_manager`; `admin` inherits), **operator node only** | `200` dispatched; preview's own app pin preserved          |
 | Preview                        | automatic on node `main`-merge                                       | ungated                                                                                          | no agent endpoint — see Preview below                      |
 
-Need the production grant? Agent files `POST /api/v1/nodes/{id}/access-requests {role:"production_promoter"}`; the node owner approves once with `POST /api/v1/nodes/{id}/developers {agentUserId, decision:"approve", role}`. Result codes: `403 authz_denied` = no grant; `503 authz_unavailable` = the env's OpenFGA store is unbootstrapped (≠ denial); `502 dispatch_failed` = RBAC passed but that env's operator App isn't installed. Full playbook: operator knowledge hub, `infrastructure` domain, entry `cicd-agent-playbook`.
+Need the production grant? Agent files `POST /api/v1/nodes/{id}/access-requests {role:"production_promoter"}`; the node owner approves once with `POST /api/v1/nodes/{id}/developers {agentUserId, decision:"approve", role}`. Result codes: `403 authz_denied` = no grant; `503 authz_unavailable` = the env's OpenFGA store is unbootstrapped (≠ denial); `502 dispatch_failed` = RBAC passed but that env's operator App isn't installed. Full playbook: hub entry [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence).
 
 Endpoints are advertised at `/.well-known/agent.json`. `sourceSha` is **optional** on promote — omit it and the operator resolves the catalog-pinned digest (no manual source-sha picking). The sections below are the **operator-internal mechanics + diagnosis** behind those endpoints; read them when a dispatch silently fails, not to hand-dispatch.
 
@@ -49,39 +49,37 @@ Do NOT use for code review, test fixes, or routine PR work.
 
 - `.github/workflows/flight-preview.yml` — auto preview trigger on `push:main`, manual recovery dispatch
 - `.github/workflows/promote-and-deploy.yml` — does the actual promotion + verification (preview AND production)
-- `.github/workflows/pr-build.yml` — `pull_request` (immutable `pr-{N}-{X}` tags) + `merge_group` (`mq-{N}-{Y}` tags); only the latter feeds preview
+- `.github/workflows/pr-build.yml` — `pull_request`, `merge_group`, `push:main` and operator `workflow_dispatch` (trusted fork) builds. Every event publishes one identity: `sha-<sourceSha>`. Preview uses `sha-<mainSha>`.
 - `scripts/ci/flight-preview.sh` — dispatch the preview flight for the merged SHA (latest-wins; no lease)
-- `scripts/ci/resolve-pr-build-images.sh` — single source of truth for "does the mq-{N}-{sha} image set exist for this PR"
+- `scripts/ci/resolve-pr-build-images.sh` — single source of truth for "does the `sha-<sha>` image set exist for this merge"
 - `scripts/ci/verify-buildsha.sh` — single source of truth for "is this image actually serving"; per-node /version probes + non-Ingress markers
 - `scripts/ci/aggregate-decide-outcome.sh` — closes the silent-success seam (bug.0443)
 - `scripts/ci/aggregate-rollup.sh` — computes `current-sha = merge-base` of per-node deploy-branch tips; merges per-node `source-sha-by-app.json` preserving unaffected entries
 - `scripts/ci/lib/image-tags.sh` — `ALL_TARGETS` / `NODE_TARGETS` from `infra/catalog/*.yaml` (axiom 16, CATALOG_IS_SSOT). Source this; never hardcode target lists.
 - Per-env deploy branches for the operator (operator only). The roster is LIVE STATE: read `GET /api/v1/nodes` and `infra/catalog/*.yaml`, never hardcode.
-- `.promote-state/` files on each deploy branch: `current-sha`, `source-sha-by-app.json`
+- `.promote-state/` files: `deploy/<env>` holds `current-sha` and `source-sha-by-app.json`; `deploy/<env>-operator` and `deploy/<env>-scheduler-worker` hold `source-sha-by-app.json` only
 
-## Hostname rule (per `verify-buildsha.sh`)
+## Hostname rule (operator only)
 
-- `operator` → `https://${DOMAIN}` (root). For preview that's `https://preview.cognidao.org`.
-- Every other node → `https://${node}-${DOMAIN_PREFIX}.${BASE}` when DOMAIN has 2+ dots, else `https://${node}.${DOMAIN}`. Concretely:
-  - every other node preview → `https://<node>-preview.cognidao.org` — derive it; read it live (`GET /api/v1/nodes`, `infra/catalog/*.yaml`, `curl https://<host>/version`) — never hardcode a roster (Dolt `operator-node-catalog`)
-  - production swaps `preview` for the prod hostname (typically `https://www.cognidao.org` for operator + `<node>.cognidao.org` for others — confirm via `vars.DOMAIN` in the production environment).
+- Operator preview → `https://preview.cognidao.org`. Operator production → `https://cognidao.org`.
+- Nodes are not in this flow. A node ships through `POST /api/v1/deploy/workloads`; read its release with `GET /api/v1/deploy/workloads`.
 - scheduler-worker / migrators → no Ingress, no /version. Use `kubectl rollout status` or trust the verify-deploy job's marker emission.
 
 ## Preview promotion (operator only)
 
 **Auto path (default + only path):** a PR merged via merge-queue triggers `flight-preview.yml` on `push:main` → the operator promotes the proven digest. No action, no dispatch. Verify by watching (Monitoring section).
 
-If preview is stuck, it is **not** healed by a hand-dispatch — it is healed by another merge-queue merge (see the two gotchas below). There is no agent-facing preview-promote endpoint; preview rides the trust the node already earned at candidate-a.
+If preview is stuck, it is **not** healed by a hand-dispatch — it is healed by another merge (see the two gotchas below). There is no agent-facing preview-promote endpoint; preview rides the trust the node already earned at candidate-a.
 
 ### Affected-only gotcha (task.0376)
 
-`flight-preview` only retags nodes that `pr-build` actually built (`RESOLVED_TARGETS`). Untouched nodes are skipped. If preview-operator is broken and the merging PR was poly-only, the heal flight retags poly only — preview-operator stays broken. **Fix:** open a follow-up PR that touches the broken node's paths (`nodes/<node>/app/` or its dir-local `AGENTS.md`) and merge via merge-queue. The merge_group rebuild produces the missing `mq-*-{node}` image; the auto-flight on the resulting `push:main` heals.
+`flight-preview` only resolves targets that `pr-build` actually built (`RESOLVED_TARGETS`). Untouched targets are skipped. If preview-operator is broken and the merging PR was scheduler-worker-only, the heal flight resolves scheduler-worker only — preview-operator stays broken. **Fix:** open a follow-up PR that touches the broken node's paths (`nodes/<node>/app/` or its dir-local `AGENTS.md`) and merge it. The build for that merge publishes the missing `sha-<mainSha>` image for that node, and the auto-flight on the resulting `push:main` heals.
 
 > **Migrations amplify this into a silent-success trap.** To land a **DB migration** (registry seed, RLS, backfill) on preview/prod you must deploy the operator image from the commit that CARRIES it — the migrate initContainer only runs migrations baked into the deployed image. Flighting **main head** to heal fails silently when main head is a non-operator change: affected-only skips operator, buildSha never moves, and BOTH workflows report `completed/success`. Find the real target with `git log --oneline <sha> -- nodes/operator/app` and flight THAT commit; verify in the VM Postgres (`SELECT max(id) FROM drizzle."__drizzle_migrations"`), never by workflow conclusion. Seen 2026-08-07: seed `0040` (#1978/`3c4f256`) reached preview+prod only after flighting `3c4f256`, not main head `a5f63fb` (#1980, provision-only). See `/provision-env` gotcha 21.
 
-### Admin-merge gotcha (bug.0443)
+### Merge outside the queue (bug.0443)
 
-Admin-merging bypasses `merge_group` → no `mq-*` images → `flight-preview.yml`'s "Hard-fail when no images found for resolved PR" step fires. Same recovery: ship a follow-up PR through merge-queue. Do NOT try to dispatch a deleted `build-multi-node.yml`.
+A merge outside the queue (admin or direct) has no `merge_group` build. `flight-preview.yml` then waits up to 15 minutes for the `push:main` build of `pr-build.yml` to publish `sha-<mainSha>`. If the step "Hard-fail when no images found for resolved PR" fires, that build did not publish. Read the `pr-build.yml` run for that `push:main` first. Do NOT try to dispatch a deleted `build-multi-node.yml`.
 
 ## Production promotion (operator only)
 
@@ -122,8 +120,8 @@ Every promotion gets a Monitor armed before you walk away. The pattern emits one
 TARGET_SHA=<expected-buildsha-40-chars>
 SHORT=${TARGET_SHA:0:12}
 FLIGHT_ID=<flight-preview-or-promote-deploy-run-id-you-just-dispatched>
-# Derive hosts from the catalog; never hardcode a roster (roster is LIVE STATE — read `GET /api/v1/nodes` / `infra/catalog/*.yaml`, never hardcode; Dolt `operator-node-catalog`)
-HOSTS="https://preview.cognidao.org $(for n in $(yq -r '.name' infra/catalog/*.yaml); do [ "$n" = operator ] || echo "https://$n-preview.cognidao.org"; done | tr "\n" " ")"
+# Operator only. Nodes are not in this flow. For production use https://cognidao.org.
+HOSTS="https://preview.cognidao.org"
 # Self-discover the dispatch time so we can find the chained promote-and-deploy run.
 DISPATCH_AT=$(gh run view "$FLIGHT_ID" --json createdAt --jq .createdAt)
 PD_ID=""
@@ -220,21 +218,21 @@ There is **no preview review-lease** (removed 2026-06-16, `kill-preview-review-l
 
 ## Failure modes — first-step diagnosis
 
-| Symptom                                                                                                                                          | First diagnosis                                                                                                                                                                                                                                                                                                                   |
-| ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| flight-preview red at "Hard-fail when no images found for resolved PR"                                                                           | Admin-merge bypass (bug.0443). Recovery: merge-queue follow-up PR.                                                                                                                                                                                                                                                                |
-| aggregate-preview red, "no cell reported promoted=true"                                                                                          | Same admin-merge cause OR sha has zero images. Verify with `resolve-pr-build-images.sh` (preflight #2).                                                                                                                                                                                                                           |
-| aggregate-production red, "Axiom 19 contradiction: scheduler-worker"                                                                             | bug.0443 fix in `verify-buildsha.sh` is missing/reverted. The `NON_INGRESS_NODES` marker-emission block must be present.                                                                                                                                                                                                          |
-| verify-buildsha timeout 90s                                                                                                                      | Pod cutover incomplete; usually transient. Re-check `/version` directly in 60s. If still wrong, check Argo app revision matches deploy-branch tip.                                                                                                                                                                                |
-| `verify-deploy` green but `/version.buildSha` still old                                                                                          | CDN/edge cache, OR you hit `/readyz` (which the old pod still answers) instead of `/version`. Always use `/version.buildSha` for verification, never `/readyz`.                                                                                                                                                                   |
-| Production "succeeded" but only some nodes advanced                                                                                              | Affected-only — `nodes` input was scoped, or the source sha's image set didn't cover all targets. Verify per-node `current-sha` on each `deploy/production-*`.                                                                                                                                                                    |
-| prod-pd: every `verify-deploy (<node>)` red at `Resolve cell state` with `bash: app-src/scripts/ci/<script>: No such file or directory` exit 127 | `source_sha` predates the verify-deploy script tree. Don't use `deploy/preview:.promote-state/current-sha` — `aggregate-rollup.sh` writes the merge-base of per-node tips, which under affected-only divergence regresses behind script additions. Re-dispatch using preflight #4's picker (newest preview-{node} promotion sha). |
+| Symptom                                                                                                                                          | First diagnosis                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| flight-preview red at "Hard-fail when no images found for resolved PR"                                                                           | The `push:main` build did not publish `sha-<mainSha>` within the 15-minute wait (bug.0443). Read that `pr-build.yml` run.                                                                                                                                                                                                                                           |
+| aggregate-preview red, "no cell reported promoted=true"                                                                                          | Same missing `sha-<mainSha>` build, OR the sha has zero images. Verify with `resolve-pr-build-images.sh` (preflight #2).                                                                                                                                                                                                                                            |
+| aggregate-production red, "Axiom 19 contradiction: scheduler-worker"                                                                             | bug.0443 fix in `verify-buildsha.sh` is missing/reverted. The `NON_INGRESS_NODES` marker-emission block must be present.                                                                                                                                                                                                                                            |
+| verify-buildsha timeout 90s                                                                                                                      | Pod cutover incomplete; usually transient. Re-check `/version` directly in 60s. If still wrong, check Argo app revision matches deploy-branch tip.                                                                                                                                                                                                                  |
+| `verify-deploy` green but `/version.buildSha` still old                                                                                          | CDN/edge cache, OR you hit `/readyz` (which the old pod still answers) instead of `/version`. Always use `/version.buildSha` for verification, never `/readyz`.                                                                                                                                                                                                     |
+| Production "succeeded" but only some targets advanced                                                                                            | Affected-only — the `nodes` input was scoped, or the source sha's image set did not cover all targets. Read `.promote-state/source-sha-by-app.json` on `deploy/production-operator` and `deploy/production-scheduler-worker`; `current-sha` lives only on `deploy/production`. Nodes have no deploy branch; read their release with `GET /api/v1/deploy/workloads`. |
+| prod-pd: every `verify-deploy (<node>)` red at `Resolve cell state` with `bash: app-src/scripts/ci/<script>: No such file or directory` exit 127 | `source_sha` predates the verify-deploy script tree. Don't use `deploy/preview:.promote-state/current-sha` — `aggregate-rollup.sh` writes the merge-base of per-node tips, which under affected-only divergence regresses behind script additions. Re-dispatch using preflight #4's picker (newest preview-{node} promotion sha).                                   |
 
 ## Discipline
 
 - **`/version.buildSha` is the only deploy verification that matters.** CI conclusions can lie. `/readyz` can lie (old pod answers during rolling cutover).
 - **Per-target truth, not per-workflow (operator only).** Check each operator deploy branch's `.promote-state/current-sha` independently. For a node, read `GET /api/v1/deploy/workloads`.
-- **Admin-merge breaks the pipeline.** If you see a CD-affecting PR getting admin-merged, file a bug AND propose a merge-queue follow-up; don't pretend the resulting silent-skip will heal itself.
+- **A merge outside the queue has no `merge_group` build.** Preview then waits on the `push:main` build. If that build fails, file a bug and ship a follow-up merge. Do not assume the gap heals itself.
 - **Don't dispatch without arming a Monitor.** Fire-and-forget is how outages survive shift changes.
 - **Catalog-as-SSOT for target lists.** Source `scripts/ci/lib/image-tags.sh`; never inline a node list. `resy` outlived the node by months precisely because it was inlined here.
 - **Promotion runs as the operator, never personal `gh`.** Flight/promote via the API (`vcs/flight`, `deploy/promote`); the operator GitHub App dispatches. `gh workflow run` of a promote/flight uses a personal credential and is out of bounds. Read-only `gh run view/list` for watching a run is fine.

@@ -6,8 +6,9 @@
  * Purpose: Prove the seed-and-approval loop over a fake Headscale port that follows v0.29.7's observed
  *   rules (task.5429): fail closed before any mint or approval (HR 4), one usable key per attempt across
  *   a lost mint response and a restart (HR 5), expire-then-delete revocation (HR 6), verified substrate
- *   approval with delete-on-mismatch (HR 11), zero API keys (HR 12), and no mesh identifier in
- *   governance, billing or RLS code (HR 13).
+ *   approval with delete-on-mismatch (HR 11), no mint without exactly one online `substrate-gw` in the
+ *   current coordinator epoch (HR 23), zero API keys (HR 12), and no mesh identifier in governance,
+ *   billing or RLS code (HR 13).
  * Scope: MeshPlane over a fake port. Does not reach a real Headscale (see the component contract test).
  * Invariants: every hard requirement named above has at least one falsifying case here.
  * Side-effects: IO (HR 13 reads repository source files)
@@ -43,7 +44,6 @@ import {
   MeshPlane,
   meshSecretName,
   SUBSTRATE_MISMATCH_ALERT,
-  SUBSTRATE_NODE_KEY_ALERT_MS,
   SUBSTRATE_REQUEST_MAX_AGE_MS,
 } from "./mesh-plane";
 import { denyAllPolicy, serializeMeshPolicy } from "./mesh-policy";
@@ -82,15 +82,18 @@ class FakeHeadscale implements NodeMeshPort {
   readonly userCreatedAt = new Map<string, string>();
   readonly keys = new Map<string, FakeKey>();
   readonly devices = new Map<string, MeshDevice>();
-  readonly pending = new Map<
-    string,
-    { machineKey: string; nodeKey: string; tags: string[] }
-  >();
+  /** Pending `substrate-gw` registrations by auth id: the tags the requester advertised. */
+  readonly pending = new Map<string, { tags: string[] }>();
   readonly apiKeys: MeshApiKey[] = [];
   readonly calls: string[] = [];
   private seq = 0;
+  private gatewaySeq = 0;
   /** Test hooks. */
   down = false;
+  /** One shot: the next ListNodes fails. */
+  failNextListNodes = false;
+  /** One shot per id: the next DeleteNode of that id fails (the device stays). */
+  readonly failDelete = new Set<string>();
   loseNextMintResponse = false;
   failExpire = false;
   readbackOverride: string | null = null;
@@ -183,6 +186,10 @@ class FakeHeadscale implements NodeMeshPort {
   }
   async listNodes(): Promise<readonly MeshDevice[]> {
     this.enter("ListNodes");
+    if (this.failNextListNodes) {
+      this.failNextListNodes = false;
+      throw new NodeMeshError("ListNodes", "unavailable", "other");
+    }
     if (this.holdListNodes) {
       const hold = this.holdListNodes;
       this.holdListNodes = null;
@@ -192,6 +199,8 @@ class FakeHeadscale implements NodeMeshPort {
   }
   async deleteNode(id: HeadscaleDeviceId): Promise<void> {
     this.enter(`DeleteNode:${id}`);
+    if (this.failDelete.delete(id))
+      throw new NodeMeshError("DeleteNode", "unavailable", "other");
     if (!this.devices.delete(id))
       throw new NodeMeshError("DeleteNode", "not_found", "node_not_found");
   }
@@ -210,8 +219,8 @@ class FakeHeadscale implements NodeMeshPort {
     this.pending.delete(input.authId);
     return this.addDevice({
       tags: p.tags,
-      machineKey: p.machineKey,
-      nodeKey: p.nodeKey,
+      machineKey: `mkey:${input.authId}`,
+      nodeKey: `nodekey:${input.authId}`,
       keyId: null,
     });
   }
@@ -260,6 +269,32 @@ class FakeHeadscale implements NodeMeshPort {
     return device;
   }
 
+  /**
+   * An enrolled `substrate-gw` (tags exactly `[tag:substrate]`, no key expiry). Its ids are their own
+   * namespace, so seeding one leaves the key and device ids the tests count on unchanged.
+   */
+  addGateway(over: Partial<MeshDevice> = {}): MeshDevice {
+    this.gatewaySeq += 1;
+    const id = headscaleDeviceId(`gw${this.gatewaySeq}`);
+    const device: MeshDevice = {
+      headscaleDeviceId: id,
+      name: "substrate-gw",
+      givenName: "substrate-gw",
+      machineKey: `mkey:${id}`,
+      nodeKey: `nodekey:${id}`,
+      tags: ["tag:substrate"],
+      online: true,
+      headscaleKeyId: null,
+      headscaleUser: null,
+      createdAt: new Date(this.now).toISOString(),
+      lastSeen: null,
+      expiry: null,
+      ...over,
+    };
+    this.devices.set(id, device);
+    return device;
+  }
+
   usableKeys(): FakeKey[] {
     return [...this.keys.values()].filter((k) => k.expiration > this.now);
   }
@@ -276,7 +311,12 @@ const attempt = (releaseId: string, n: number, nodeId = NODE_A) => ({
   attempt: n,
 });
 
-async function readyPlane(fake: FakeHeadscale): Promise<MeshPlane> {
+/** A plane whose mint is open: a matched policy, a sweep and (by default) one online `substrate-gw`. */
+async function readyPlane(
+  fake: FakeHeadscale,
+  opts: { readonly gateway?: boolean } = {}
+): Promise<MeshPlane> {
+  if (opts.gateway ?? true) fake.addGateway();
   const plane = new MeshPlane(fake, "candidate-a");
   expect((await plane.reconcilePolicy(GRANTS)).ready).toBe(true);
   expect((await plane.sweep(new Set(), fake.now)).ok).toBe(true);
@@ -297,7 +337,7 @@ describe("HR 4 — one derived policy, fail closed before any mint or approval",
     });
     expect(
       await plane.approveSubstrateGateway(
-        { authId: "a", machineKey: "m", nodeKey: "n", publishedAt: fake.now },
+        { authId: "a", publishedAt: fake.now },
         fake.now
       )
     ).toEqual({ outcome: "refused", reason: "policy_not_ready" });
@@ -453,7 +493,8 @@ describe("HR 5 — a fresh key per release and attempt, and a lost mint response
 
     // Sequencer restart: a new process, nothing stored (no Secret exists for the attempt).
     fake.now += 5_000;
-    const after = await readyPlane(fake); // its sweep skips the orphan: newer than one pass
+    // Same Headscale, so the same enrolled substrate-gw. Its sweep skips the orphan: newer than one pass.
+    const after = await readyPlane(fake, { gateway: false });
     const stored = new Set<HeadscaleKeyId>();
     const minted = await after.mintAttemptKey(
       attempt(RELEASE_1, 1),
@@ -627,12 +668,7 @@ describe("HR 6 — revocation expires the key first, then deletes its devices", 
     const d1 = fake.join(a.key);
     const d2 = fake.join(a.key); // a companion restart: a second ephemeral device, same key
     const other = fake.join(b.key);
-    const gw = fake.addDevice({
-      tags: ["tag:substrate"],
-      machineKey: "m",
-      nodeKey: "n",
-      keyId: null,
-    });
+    const gw = headscaleDeviceId("gw1"); // the seeded substrate-gw
     fake.calls.length = 0;
 
     const revoked = await plane.revokeAttempt(a.headscaleKeyId, fake.now);
@@ -650,7 +686,7 @@ describe("HR 6 — revocation expires the key first, then deletes its devices", 
     expect(firstExpire).toBeLessThan(firstDelete);
     expect(() => fake.join(a.key)).toThrow("authkey expired");
     expect([...fake.devices.keys()].sort()).toEqual(
-      [other.headscaleDeviceId, gw.headscaleDeviceId].sort()
+      [other.headscaleDeviceId, gw].sort()
     );
   });
 
@@ -672,7 +708,7 @@ describe("HR 6 — revocation expires the key first, then deletes its devices", 
       reason: "other",
     });
     expect(fake.calls.some((c) => c.startsWith("DeleteNode:"))).toBe(false);
-    expect(fake.devices.size).toBe(1);
+    expect(fake.devices.size).toBe(2); // the companion and the seeded substrate-gw
   });
 
   it("never revokes a key outside tag:node-*", async () => {
@@ -720,12 +756,7 @@ describe("HR 6 — revocation expires the key first, then deletes its devices", 
       expiration: ATTEMPT_KEY_EXPIRATION,
     });
     const foreignDevice = fake.join(foreign.key);
-    const gw = fake.addDevice({
-      tags: ["tag:substrate"],
-      machineKey: "m",
-      nodeKey: "n",
-      keyId: null,
-    });
+    const gw = headscaleDeviceId("gw1"); // the seeded substrate-gw
     // A node-tagged device with no key is anomalous: skipped and counted, never deleted.
     const unkeyed = fake.addDevice({
       tags: [`tag:node-${NODE_B}`],
@@ -746,7 +777,7 @@ describe("HR 6 — revocation expires the key first, then deletes its devices", 
       [
         keptDevice.headscaleDeviceId,
         foreignDevice.headscaleDeviceId,
-        gw.headscaleDeviceId,
+        gw,
         unkeyed.headscaleDeviceId,
       ].sort()
     );
@@ -766,34 +797,32 @@ describe("HR 6 — revocation expires the key first, then deletes its devices", 
 });
 
 describe("HR 11 — substrate-gw approval over the verified channel", () => {
+  /** The VM publishes `{authId, publishedAt}`; the requester advertised `tags`. */
   const publish = (fake: FakeHeadscale, tags = ["tag:substrate"]) => {
-    fake.pending.set("auth-1", {
-      machineKey: "mkey:gw",
-      nodeKey: "nodekey:gw",
-      tags,
-    });
-    return {
-      authId: "auth-1",
-      machineKey: "mkey:gw",
-      nodeKey: "nodekey:gw",
-      publishedAt: fake.now,
-    };
+    fake.pending.set("auth-1", { tags });
+    return { authId: "auth-1", publishedAt: fake.now };
   };
+  const unseeded = (fake: FakeHeadscale) =>
+    readyPlane(fake, { gateway: false });
 
-  it("approves a fresh published request whose registered device is exactly tag:substrate with the published keys", async () => {
+  it("approves a fresh published auth id whose device is exactly [tag:substrate] and the tailnet's only one", async () => {
     const fake = new FakeHeadscale();
-    const plane = await readyPlane(fake);
+    const plane = await unseeded(fake);
     const result = await plane.approveSubstrateGateway(
       publish(fake),
       fake.now + 30_000
     );
     expect(result).toMatchObject({ outcome: "approved", expiryDisabled: true });
     expect(fake.devices.size).toBe(1);
+    // No key compare and no second stage: one AuthRegister, one device read, done.
+    expect(fake.calls.filter((c) => c === "AuthRegister")).toHaveLength(1);
+    expect(plane.approvedAuthId("auth-1")).toBe(true);
+    expect(plane.approvedAuthId("auth-2")).toBe(false);
   });
 
   it("ignores a request published more than 5 minutes ago or in the future, without calling AuthRegister", async () => {
     const fake = new FakeHeadscale();
-    const plane = await readyPlane(fake);
+    const plane = await unseeded(fake);
     const req = publish(fake);
     expect(
       await plane.approveSubstrateGateway(
@@ -812,7 +841,7 @@ describe("HR 11 — substrate-gw approval over the verified channel", () => {
 
   it("deletes at once and alerts when the registered tags are not exactly [tag:substrate]", async () => {
     const fake = new FakeHeadscale();
-    const plane = await readyPlane(fake);
+    const plane = await unseeded(fake);
     const result = await plane.approveSubstrateGateway(
       publish(fake, ["tag:substrate", `tag:node-${NODE_A}`]),
       fake.now
@@ -820,195 +849,177 @@ describe("HR 11 — substrate-gw approval over the verified channel", () => {
     expect(result).toMatchObject({
       outcome: "mismatch",
       alert: SUBSTRATE_MISMATCH_ALERT,
-      tagsExact: false,
-      machineKeyMatches: true,
-      nodeKeyMatches: true,
+      reason: "tags",
       deleted: true,
     });
     expect(fake.devices.size).toBe(0);
   });
 
-  it("deletes at once and alerts when the published key pair does not match the request", async () => {
+  it("a verified approval this pass is kept when two gateways are online; the other online one goes as a mismatch", async () => {
     const fake = new FakeHeadscale();
-    const plane = await readyPlane(fake);
-    const req = publish(fake);
-    const result = await plane.approveSubstrateGateway(
-      { ...req, nodeKey: "nodekey:attacker" },
-      fake.now
+    const plane = await readyPlane(fake); // gw1 is enrolled and online
+    fake.now += 30_000;
+    const result = await plane.approveSubstrateGateway(publish(fake), fake.now);
+    if (result.outcome !== "approved") throw new Error(result.outcome);
+    expect(result.supersede).toMatchObject({
+      ok: true,
+      kept: result.headscaleDeviceId,
+      superseded: [],
+      mismatched: ["gw1"],
+      failed: [],
+    });
+    expect([...fake.devices.keys()]).toEqual([result.headscaleDeviceId]);
+  });
+
+  it("B1: a hand-registered newer online device never evicts the real online gateway; it is deleted as a mismatch", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake); // gw1: the real gateway, online
+    fake.now += 30_000;
+    const forged = fake.addGateway(); // gw2: newer, online, not approved by this pass
+    expect(await plane.supersedeGateways()).toEqual({
+      ok: true,
+      kept: "gw1",
+      superseded: [],
+      mismatched: [forged.headscaleDeviceId],
+      failed: [],
+    });
+    expect([...fake.devices.keys()]).toEqual(["gw1"]);
+  });
+
+  it("the only online gateway is never deleted: a newer offline one stays and the mint waits", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake); // gw1 online
+    fake.now += 30_000;
+    fake.addGateway({ online: false }); // gw2 newer, offline
+    expect(await plane.supersedeGateways()).toMatchObject({
+      kept: "gw1",
+      superseded: [],
+      mismatched: [],
+    });
+    expect(fake.devices.size).toBe(2);
+    expect(
+      await plane.mintAttemptKey(attempt(RELEASE_1, 1), new Set(), fake.now)
+    ).toEqual({ outcome: "refused", reason: "gateway_multiple" });
+  });
+
+  it("state loss: an old offline gateway and a new verified request -> new approved, old deleted, mint allowed", async () => {
+    const fake = new FakeHeadscale();
+    fake.addGateway({ online: false }); // the VM lost its tailscaled state; gw1 never expires
+    const plane = await readyPlane(fake, { gateway: false });
+    const mint = () =>
+      plane.mintAttemptKey(attempt(RELEASE_1, 1), new Set(), fake.now);
+    expect(await mint()).toEqual({
+      outcome: "refused",
+      reason: "gateway_offline",
+    });
+    fake.now += 30_000;
+    const result = await plane.approveSubstrateGateway(publish(fake), fake.now);
+    if (result.outcome !== "approved") throw new Error(result.outcome);
+    expect(result.supersede.superseded).toEqual(["gw1"]);
+    expect([...fake.devices.keys()]).toEqual([result.headscaleDeviceId]);
+    expect((await mint()).outcome).toBe("minted"); // the new device is online
+  });
+
+  it("a failed supersede delete keeps the approved device; the next pass recomputes and deletes the older one", async () => {
+    const fake = new FakeHeadscale();
+    fake.addGateway({ online: false });
+    const plane = await readyPlane(fake, { gateway: false });
+    fake.now += 30_000;
+    fake.failDelete.add("gw1");
+    const result = await plane.approveSubstrateGateway(publish(fake), fake.now);
+    if (result.outcome !== "approved") throw new Error(result.outcome);
+    expect(result.supersede).toMatchObject({
+      ok: false,
+      kept: result.headscaleDeviceId,
+      superseded: [],
+      failed: ["gw1"],
+      reason: "other",
+    });
+    expect([...fake.devices.keys()].sort()).toEqual(
+      ["gw1", result.headscaleDeviceId].sort()
     );
-    expect(result).toMatchObject({
-      outcome: "mismatch",
-      alert: "node_mesh_substrate_mismatch",
-      tagsExact: true,
-      nodeKeyMatches: false,
-      deleted: true,
+    // Next pass, no stored intent: the rule is recomputed from the device list.
+    expect(await plane.supersedeGateways()).toMatchObject({
+      ok: true,
+      kept: result.headscaleDeviceId,
+      superseded: ["gw1"],
     });
+    expect([...fake.devices.keys()]).toEqual([result.headscaleDeviceId]);
+  });
+
+  it("restart: a fresh plane recomputes; an old offline gateway goes once the newer one is online, then the mint opens", async () => {
+    const fake = new FakeHeadscale();
+    const old = fake.addGateway({ online: false }); // gw1: lost its state
+    fake.now += 30_000;
+    const newest = fake.addGateway({ online: false }); // gw2: re-enrolled, still joining
+    const plane = new MeshPlane(fake, "candidate-a"); // a restarted sequencer: no memory
+    expect((await plane.reconcilePolicy(GRANTS)).ready).toBe(true);
+    // No gateway online: nothing is deleted.
+    expect(await plane.supersedeGateways()).toEqual({
+      ok: true,
+      kept: null,
+      superseded: [],
+      mismatched: [],
+      failed: [],
+    });
+    expect((await plane.sweep(new Set(), fake.now)).ok).toBe(true);
+    const mint = () =>
+      plane.mintAttemptKey(attempt(RELEASE_1, 1), new Set(), fake.now);
+    expect(await mint()).toEqual({
+      outcome: "refused",
+      reason: "gateway_multiple",
+    });
+    fake.devices.set(newest.headscaleDeviceId, { ...newest, online: true });
+    expect(await plane.supersedeGateways()).toEqual({
+      ok: true,
+      kept: newest.headscaleDeviceId,
+      superseded: [old.headscaleDeviceId],
+      mismatched: [],
+      failed: [],
+    });
+    expect((await mint()).outcome).toBe("minted");
+  });
+
+  it("the pass deletes a tag:substrate device with another tag as a mismatch, and keeps the exact gateway", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake); // gw1
+    fake.now += 30_000;
+    const wrong = fake.addGateway({ tags: ["tag:substrate", "tag:other"] });
+    expect(await plane.supersedeGateways()).toEqual({
+      ok: true,
+      kept: "gw1",
+      superseded: [],
+      mismatched: [wrong.headscaleDeviceId],
+      failed: [],
+    });
+    expect([...fake.devices.keys()]).toEqual(["gw1"]);
+  });
+
+  it("an auth id with no pending request approves nothing (a forged id)", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await unseeded(fake);
+    expect(
+      await plane.approveSubstrateGateway(
+        { authId: "nope", publishedAt: fake.now },
+        fake.now
+      )
+    ).toEqual({ outcome: "refused", reason: "registration_not_found" });
     expect(fake.devices.size).toBe(0);
   });
 
-  it("an auth id with no pending request approves nothing (a forged id, with or without a node key)", async () => {
-    // A failed AuthRegister closes approval until the next reconcile, so each case gets a ready plane.
-    for (const nodeKey of ["n", ""]) {
-      const fake = new FakeHeadscale();
-      const plane = await readyPlane(fake);
-      expect(
-        await plane.approveSubstrateGateway(
-          { authId: "nope", machineKey: "m", nodeKey, publishedAt: fake.now },
-          fake.now
-        )
-      ).toEqual({ outcome: "refused", reason: "registration_not_found" });
-      expect(fake.devices.size).toBe(0);
-    }
-  });
-
-  it("refuses a request with no auth id or no machine key without calling AuthRegister", async () => {
+  it("refuses a request with no auth id or no publish time without calling AuthRegister", async () => {
     const fake = new FakeHeadscale();
-    const plane = await readyPlane(fake);
+    const plane = await unseeded(fake);
     const req = publish(fake);
     for (const bad of [
       { ...req, authId: "" },
-      { ...req, machineKey: "" },
+      { ...req, publishedAt: Number.NaN },
     ])
       expect(await plane.approveSubstrateGateway(bad, fake.now)).toEqual({
         outcome: "refused",
         reason: "malformed",
       });
     expect(fake.calls).not.toContain("AuthRegister");
-  });
-
-  describe("two stages: the node key is published only after approval (task.5428 substrate-gw.sh)", () => {
-    /** The VM's publish before approval: auth id + machine key, no node key yet. */
-    const beforeApproval = (fake: FakeHeadscale) => ({
-      ...publish(fake),
-      nodeKey: "",
-    });
-    /** The VM's publish after approval: no auth id, the node key the device now knows. */
-    const afterApproval = (fake: FakeHeadscale, nodeKey = "nodekey:gw") => ({
-      authId: "",
-      machineKey: "mkey:gw",
-      nodeKey,
-      publishedAt: fake.now,
-    });
-    const listed = async (fake: FakeHeadscale) => fake.listNodes();
-
-    it("approves on tags + machine key, then verifies the node key on the next re-read", async () => {
-      const fake = new FakeHeadscale();
-      const plane = await readyPlane(fake);
-      const approved = await plane.approveSubstrateGateway(
-        beforeApproval(fake),
-        fake.now
-      );
-      expect(approved).toMatchObject({
-        outcome: "approved",
-        nodeKeyVerified: false,
-      });
-      // Before the VM republishes, the node key is UNKNOWN: no action.
-      expect(
-        await plane.verifySubstrateNodeKey(
-          beforeApproval(fake),
-          await listed(fake),
-          fake.now + 15_000
-        )
-      ).toMatchObject({ outcome: "unknown", sinceMs: 15_000 });
-      fake.now += 30_000;
-      expect(
-        await plane.verifySubstrateNodeKey(
-          afterApproval(fake),
-          await listed(fake),
-          fake.now
-        )
-      ).toMatchObject({ outcome: "verified" });
-      expect(fake.devices.size).toBe(1);
-      // Stage 2 ended on the first fresh match (B19): later publishes change nothing.
-      for (const nodeKey of ["nodekey:gw", "nodekey:other"])
-        expect(
-          await plane.verifySubstrateNodeKey(
-            afterApproval(fake, nodeKey),
-            await listed(fake),
-            fake.now
-          )
-        ).toEqual({ outcome: "none" });
-      expect(fake.devices.size).toBe(1);
-    });
-
-    it("a mismatched machine key at approval deletes the device and alerts", async () => {
-      const fake = new FakeHeadscale();
-      const plane = await readyPlane(fake);
-      const result = await plane.approveSubstrateGateway(
-        { ...beforeApproval(fake), machineKey: "mkey:attacker" },
-        fake.now
-      );
-      expect(result).toMatchObject({
-        outcome: "mismatch",
-        alert: SUBSTRATE_MISMATCH_ALERT,
-        tagsExact: true,
-        machineKeyMatches: false,
-        deleted: true,
-      });
-      expect(fake.devices.size).toBe(0);
-    });
-
-    it("a late node key that differs from the device's deletes it and alerts", async () => {
-      const fake = new FakeHeadscale();
-      const plane = await readyPlane(fake);
-      await plane.approveSubstrateGateway(beforeApproval(fake), fake.now);
-      fake.now += 30_000;
-      expect(
-        await plane.verifySubstrateNodeKey(
-          afterApproval(fake, "nodekey:attacker"),
-          await listed(fake),
-          fake.now
-        )
-      ).toMatchObject({
-        outcome: "mismatch",
-        alert: SUBSTRATE_MISMATCH_ALERT,
-        reason: "node_key_mismatch",
-        deleted: true,
-      });
-      expect(fake.devices.size).toBe(0);
-    });
-
-    it("a stopped or stale publisher is UNKNOWN: the gateway stays enrolled and the age grows (B19)", async () => {
-      const fake = new FakeHeadscale();
-      const plane = await readyPlane(fake);
-      const approvedAt = fake.now;
-      await plane.approveSubstrateGateway(beforeApproval(fake), approvedAt);
-      const stale = {
-        ...afterApproval(fake, "nodekey:attacker"),
-        publishedAt: approvedAt - SUBSTRATE_REQUEST_MAX_AGE_MS,
-      };
-      for (const request of [null, stale])
-        expect(
-          await plane.verifySubstrateNodeKey(
-            request,
-            await listed(fake),
-            approvedAt + SUBSTRATE_NODE_KEY_ALERT_MS + 1
-          )
-        ).toMatchObject({
-          outcome: "unknown",
-          sinceMs: SUBSTRATE_NODE_KEY_ALERT_MS + 1,
-        });
-      expect(fake.devices.size).toBe(1);
-    });
-
-    it("a gateway first seen after a restart enters stage 2: a fresh different node key deletes it", async () => {
-      const fake = new FakeHeadscale();
-      const plane = await readyPlane(fake);
-      fake.addDevice({
-        tags: ["tag:substrate"],
-        machineKey: "mkey:gw",
-        nodeKey: "nodekey:gw",
-        keyId: null,
-      });
-      expect(
-        await plane.verifySubstrateNodeKey(
-          afterApproval(fake, "nodekey:other"),
-          await listed(fake),
-          fake.now
-        )
-      ).toMatchObject({ outcome: "mismatch", reason: "node_key_mismatch" });
-      expect(fake.devices.size).toBe(0);
-    });
   });
 
   describe("HR 23: a stored key id is void outside its coordinator epoch", () => {
@@ -1045,6 +1056,79 @@ describe("HR 11 — substrate-gw approval over the verified channel", () => {
         })
       ).toMatchObject({ outcome: "revoked" });
     });
+  });
+});
+
+describe("HR 23 — no attempt key without exactly one online substrate-gw in the current epoch", () => {
+  const mint = (plane: MeshPlane, fake: FakeHeadscale) =>
+    plane.mintAttemptKey(attempt(RELEASE_1, 1), new Set(), fake.now);
+  const refusedWith = async (
+    fake: FakeHeadscale,
+    plane: MeshPlane,
+    reason: string
+  ) => {
+    fake.calls.length = 0;
+    expect(await mint(plane, fake)).toEqual({ outcome: "refused", reason });
+    // Refused before any write: nothing is expired and nothing is minted.
+    expect(fake.mutations()).toEqual([]);
+    expect(fake.keys.size).toBe(0);
+  };
+
+  it("no substrate-gw: refused, nothing minted", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake, { gateway: false });
+    await refusedWith(fake, plane, "gateway_absent");
+  });
+
+  it("an offline substrate-gw: refused, nothing minted", async () => {
+    const fake = new FakeHeadscale();
+    fake.addGateway({ online: false });
+    const plane = await readyPlane(fake, { gateway: false });
+    await refusedWith(fake, plane, "gateway_offline");
+  });
+
+  it("two tag:substrate devices, even both online: refused, nothing minted", async () => {
+    const fake = new FakeHeadscale();
+    fake.addGateway();
+    const plane = await readyPlane(fake);
+    await refusedWith(fake, plane, "gateway_multiple");
+  });
+
+  it("a substrate device with another tag: refused, nothing minted", async () => {
+    const fake = new FakeHeadscale();
+    fake.addGateway({ tags: ["tag:substrate", "tag:other"] });
+    const plane = await readyPlane(fake, { gateway: false });
+    await refusedWith(fake, plane, "gateway_tags");
+  });
+
+  it("the coordinator epoch changed since the reconcile (a wipe): refused, nothing minted", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake);
+    // A wipe re-creates the owner with a new creation time; the plane has not reconciled since.
+    fake.now += 60_000;
+    fake.userCreatedAt.set(
+      "cogni-mesh-candidate-a",
+      new Date(fake.now).toISOString()
+    );
+    await refusedWith(fake, plane, "epoch_changed");
+  });
+
+  it("a failed device read is a failed mint and closes minting", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake);
+    fake.failNextListNodes = true;
+    expect(await mint(plane, fake)).toEqual({
+      outcome: "failed",
+      reason: "other",
+    });
+    expect(fake.calls).not.toContain("CreatePreAuthKey");
+    expect(plane.mintAllowed).toBe(false);
+  });
+
+  it("exactly one online, exact-tag substrate-gw: the key is minted", async () => {
+    const fake = new FakeHeadscale();
+    const plane = await readyPlane(fake);
+    expect((await mint(plane, fake)).outcome).toBe("minted");
   });
 });
 

@@ -125,6 +125,8 @@ function rowToKnowledge(row: Record<string, unknown>): Knowledge {
     tags: row.tags as string[] | null,
     evaluateAt: row.evaluate_at ? new Date(row.evaluate_at as string) : null,
     resolutionStrategy: (row.resolution_strategy as string) ?? null,
+    metricSpec: (row.metric_spec as Record<string, unknown>) ?? null,
+    kpiBindings: (row.kpi_bindings as Record<string, unknown>[]) ?? null,
     createdAt: row.created_at ? new Date(row.created_at as string) : undefined,
   };
 }
@@ -160,6 +162,8 @@ function knowledgeInsertColumns(entry: NewKnowledge): SqlColumnValue[] {
     { column: "source_ref", value: entry.sourceRef ?? undefined },
     { column: "tags", value: entry.tags ?? undefined },
     { column: "evaluate_at", value: entry.evaluateAt ?? undefined },
+    { column: "metric_spec", value: entry.metricSpec ?? undefined },
+    { column: "kpi_bindings", value: entry.kpiBindings ?? undefined },
     {
       column: "resolution_strategy",
       value: entry.resolutionStrategy ?? undefined,
@@ -199,6 +203,8 @@ function knowledgeUpdateColumns(
   push("tags", "tags");
   push("evaluate_at", "evaluateAt");
   push("resolution_strategy", "resolutionStrategy");
+  push("metric_spec", "metricSpec");
+  push("kpi_bindings", "kpiBindings");
   return columns;
 }
 

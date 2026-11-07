@@ -19,8 +19,7 @@
 #   coordinator_np    k3s NodePort of the Headscale client port on coordinator_env's VM
 #   relay_np          k3s NodePort of derper's plain-HTTP DERP port on vm_env's VM
 #   publish_np        k3s NodePort of the enrollment publisher on vm_env's VM
-#   stun_port         UDP hostPort of this tailnet's STUN (named only in its relay map)
-#   wireguard_port    UDP hostPort of this tailnet's substrate-gw direct path
+#   wireguard_port    substrate-gw's pod-local tailscaled UDP port (TS_PORT). Never exposed: relay-only
 #   derp_region       this tailnet's relay region id (its relay map has only this region)
 #   zone              the DNS zone of this tailnet's control and relay hosts. Canonical tailnets live in
 #                     the production zone; the test operator's tailnet lives in the isolated test-fleet
@@ -31,13 +30,13 @@
 # Intentionally no `set -euo pipefail` — meant to be sourced; callers own shell options.
 
 MESH_TAILNETS_TABLE='
-candidate-a|candidate-a|production|mesh-candidate-a|derp-candidate-a|32441|32340|32341|3478|41641|901|cognidao.org
-preview||production|mesh-preview|derp-preview|32442|||||902|cognidao.org
-production||production|mesh-production|derp-production|32443|||||903|cognidao.org
-test-candidate-a|candidate-a|candidate-a|mesh-test-candidate-a|derp-test-candidate-a|32444|32342|32343|3479|41642|904|cogni-testing.org
+candidate-a|candidate-a|production|mesh-candidate-a|derp-candidate-a|32441|32340|32341|41641|901|cognidao.org
+preview||production|mesh-preview|derp-preview|32442||||902|cognidao.org
+production|production|production|mesh-production|derp-production|32443|32344|32345|41641|903|cognidao.org
+test-candidate-a|candidate-a|candidate-a|mesh-test-candidate-a|derp-test-candidate-a|32444|32342|32343|41642|904|cogni-testing.org
 '
 
-_mesh_plane_fields=(tailnet vm_env coordinator_env control_label relay_label coordinator_np relay_np publish_np stun_port wireguard_port derp_region zone)
+_mesh_plane_fields=(tailnet vm_env coordinator_env control_label relay_label coordinator_np relay_np publish_np wireguard_port derp_region zone)
 
 # Every tailnet name, in table order.
 mesh_tailnets() {

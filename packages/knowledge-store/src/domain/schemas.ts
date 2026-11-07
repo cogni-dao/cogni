@@ -200,6 +200,10 @@ export const KnowledgeSchema = z.object({
   tags: z.array(z.string()).nullable().optional(),
   evaluateAt: z.date().nullable().optional(),
   resolutionStrategy: z.string().nullable().optional(),
+  // Goal metrics (@cogni-dao/metrics): a `metric` row's spec and a goal/hypothesis's KPI bindings.
+  // Shapes are validated by the metrics package at the node boundary, never here.
+  metricSpec: z.record(z.string(), z.unknown()).nullable().optional(),
+  kpiBindings: z.array(z.record(z.string(), z.unknown())).nullable().optional(),
   createdAt: z.date().optional(),
 });
 

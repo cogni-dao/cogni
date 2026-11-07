@@ -18,13 +18,16 @@
  *     coordinator env's run. In any other zone: the coordinator env's operator sequencer, whose bound workload zone must
  *     equal that zone and whose NODE_DEPLOY_MESH_DNS_RECORDS must list exactly those records, each a CNAME to its VM
  *     alias. No overlay declares a record the table does not derive.
+ *   - MESH_LANE_NEEDS_ITS_GATEWAY (CD6): every `<env>=mesh[:<tailnet>]` lane in an operator overlay names a tailnet whose
+ *     VM env-plane instance (overlays/<env>/mesh-plane/<tailnet>) and its Argo Application are in the repo, so CI is red
+ *     until the gateway the lane needs is on main.
  * Side-effects: IO (reads committed files; optional local kubectl kustomize)
  * Links: task.5428, task.5384, bug.5579, hub node-service-delivery, infra/k8s/base/node-deploy-mesh/
  * @internal
  */
 
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -46,7 +49,6 @@ interface Tailnet {
   control_label: string;
   relay_label: string;
   coordinator_np: string;
-  stun_port: string;
   derp_region: string;
   zone: string;
 }
@@ -59,7 +61,6 @@ const FIELDS = [
   "coordinator_np",
   "relay_np",
   "publish_np",
-  "stun_port",
   "wireguard_port",
   "derp_region",
   "zone",
@@ -252,7 +253,8 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
       expect.objectContaining({
         hostname: `${t.relay_label}.${t.zone}`,
         derpport: 443,
-        stunport: Number(t.stun_port || 3478),
+        // STUN has no table column (relay-only, STUN off since P4). T1p b2 pins every map to -1.
+        stunport: expect.any(Number),
         stunonly: false,
       }),
     ]);
@@ -465,6 +467,26 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
           TABLE.some((t) => t.tailnet === tailnet && t.coordinator_env === env),
           `${env}: ${entry}`
         ).toBe(true);
+        // A mesh lane's Akash creates reach the substrate only through that tailnet's substrate-gw on the
+        // lane env's VM. Minting does not wait for that gateway, so the lane may not be on main before its
+        // VM env-plane instance and the Argo Application that reconciles it (CD6; gate by marker, not prose).
+        expect(
+          TABLE.find((t) => t.tailnet === tailnet)?.vm_env,
+          `${env}: ${entry} needs tailnet ${tailnet} to have its VM env-plane on the ${laneEnv} VM`
+        ).toBe(laneEnv);
+        const instance = `infra/k8s/overlays/${laneEnv}/mesh-plane/${tailnet}`;
+        const application = `infra/k8s/argocd/control-plane/${laneEnv}/${laneEnv}-mesh-plane-${tailnet}-application.yaml`;
+        for (const f of [`${instance}/kustomization.yaml`, application])
+          expect(
+            existsSync(path.join(root, f)),
+            `${env}: ${entry} needs its VM env-plane instance on main: ${f}`
+          ).toBe(true);
+        if (existsSync(path.join(root, application)))
+          expect(
+            parse<{ spec: { source: { path: string } } }>(application).spec
+              .source.path,
+            application
+          ).toBe(instance);
       }
     }
     for (const env of ["production", "candidate-a"])

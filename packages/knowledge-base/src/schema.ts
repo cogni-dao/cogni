@@ -114,6 +114,10 @@ export const knowledge = pgTable(
     // automation (cron skips). v0 non-null value: 'agent'. Future kinds
     // (market:<id>, metric:<query>, http:<url>, deadline) add new values.
     resolutionStrategy: text("resolution_strategy"),
+    // Goal metrics (@cogni-dao/metrics 0.3.0): a `metric` row's definition and a
+    // goal/hypothesis's KPI bindings. Shapes are owned by the metrics package.
+    metricSpec: jsonb("metric_spec").$type<Record<string, unknown>>(),
+    kpiBindings: jsonb("kpi_bindings").$type<Record<string, unknown>[]>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

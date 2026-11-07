@@ -16,6 +16,12 @@
  *     An ambiguous create is RESOLVED through `observe(cogniKey)`, never blindly repeated.
  *   - PARK_AFTER_3: after 3 consecutive failed attempts of one release no further paid create happens
  *     until a new release arrives. No clock resets that count.
+ *   - WALLET_WAIT_IS_NOT_AN_ATTEMPT (bug.5585): a create refused `wallet_allocation_blocked` claimed nothing.
+ *     Its attempt stays `planned` and unpaid and retries every tick: it never fails or parks, so a wait
+ *     never advances PARK_AFTER_3, and it lands on the same attempt once the wallet frees. The wait is
+ *     timed from the FIRST busy reply, stamped durably in the marker (`unpaid: wallet_busy@<ms>`); past
+ *     `walletWaitMs` it raises a throttled `alert/wallet_wait_exceeded` and keeps waiting. A newer
+ *     release still supersedes the waiting attempt.
  *   - TERMINAL_ADMISSION: refusal fences every resumed phase before proof/cutover. Old paid effects
  *     keep observation/adoption and confirmed stateless cleanup; retained state keeps custody.
  *   - PROVE_BEFORE_CUTOVER: the edge never moves until the green lease serves the exact sha
@@ -39,6 +45,12 @@
  *   - LOST_MEANS_CHAIN_TRUTH: a lease is lost only when chain/observe say closed or insufficient_funds,
  *     or it fails its proof for `unhealthyLostMs` (15 min) straight. A single miss is not a loss.
  *   - ONE_RUNNER_PER_WORKLOAD: `step` and `reconcile` never overlap for one workload key.
+ *   - STEP_NEVER_WAITS (bug.5587): a step makes ONE bounded lease observe, proof round, public
+ *     readback or close confirm read and returns; the next tick resumes it. Every bound is read from
+ *     durable state (`leasedAt`, the phase timestamp) or kept in memory per attempt, where a restart can
+ *     only delay a verdict, never bring it early. So one slow proof, readback or close never holds the
+ *     tick for another workload. A proven attempt stays `proven` until its readback streak completes
+ *     (activate) or fails (edge restored to blue, green closed), exactly as before.
  *   - IMAGE_PINNED_BEFORE_PAY (story.5137): a release recorded before node CI published its image
  *     (`spec.imagePending`) waits as `DependencyNotReady` (no attempt row, nothing paid) until the registry
  *     has `sha-<sha>`; the digest is then pinned WRITE-ONCE on the release, so every attempt deploys one
@@ -57,8 +69,14 @@
  *     any point makes no second usable key and no second paid create; a row key id with no Secret is
  *     expired before a fresh mint. While no key can be minted the attempt waits (`mesh_key_pending`),
  *     unpaid, and is never observed or failed for it.
+ *   - NO_GATEWAY_NO_PAY (HR 23): the mint is refused unless the tailnet has exactly one online
+ *     `tag:substrate` device in the current coordinator epoch (`MeshPlane` GATEWAY_BEFORE_MINT). The
+ *     attempt then waits unpaid and `node_mesh_mint_refused` names the reason, so a release with no
+ *     gateway never pays for a lease that cannot reach its substrate.
  *   - MESH_PASS_UNDER_THE_LOCK (HR 4, 5, 6, 8): each reconcile pass, under the leader lock, first runs the
- *     env mesh pass: reconcile the derived policy (fail closed), approve the published `substrate-gw`,
+ *     env mesh pass: reconcile the derived policy (fail closed), recompute the one gateway (stateless:
+ *     an offline older gateway goes once a newer one is online; surplus online ones go as a mismatch),
+ *     approve the published `substrate-gw` (fresh verified auth id; exactly `[tag:substrate]`, else deleted),
  *     revoke every terminal attempt's key (expire, then delete its devices; a retiring blue only after it
  *     retires), delete a revoked attempt's Secret one pass later, sweep unstored keys, then the device
  *     check. A failed Headscale call stops every mesh write for that pass and resets the device window.
@@ -109,6 +127,7 @@ import {
   type EdgeRouter,
   HOST_ENVS,
   hostOwnedBy,
+  sameHostname,
   workerHostRefusal,
 } from "./edge";
 import {
@@ -126,11 +145,7 @@ import {
   readAttemptDevices,
   substrateGateway,
 } from "./mesh-attempt";
-import {
-  type MeshPlane,
-  meshSecretName,
-  SUBSTRATE_NODE_KEY_ALERT_MS,
-} from "./mesh-plane";
+import { type MeshPlane, meshSecretName } from "./mesh-plane";
 import type { NodeSubstrateGrant } from "./mesh-policy";
 import {
   nodeAppEnv,
@@ -161,6 +176,13 @@ export interface SequencerConfig {
   readonly environment: string;
   /** Lease must report active + an endpoint within this of lease creation. */
   readonly leaseReadyMs: number;
+  /**
+   * WALLET_WAIT_IS_NOT_AN_ATTEMPT (bug.5585): after one attempt has waited this long (from its first busy
+   * reply), unpaid, for a busy wallet slot, it raises `alert/wallet_wait_exceeded` (throttled) and keeps
+   * waiting, like `imageAlertMs`. 30 min: longer than one slot can legitimately be held (the payer's
+   * 10 min create timeout plus the 15 min `inflightGraceMs` before a lost create is settled).
+   */
+  readonly walletWaitMs: number;
   /** Proof deadline, counted from lease creation (design: 10 min). */
   readonly proofMs: number;
   /**
@@ -170,13 +192,13 @@ export interface SequencerConfig {
    * the full `proofMs` window.
    */
   readonly hostNotRoutedMs: number;
-  /** Bound on the public cutover read-back loop. */
+  /** Bound on the public cutover readback, from the edge move (one read per tick). */
   readonly publicMs: number;
-  /** Consecutive exact-sha public reads that make a cutover (design: 8). */
+  /** Consecutive exact-sha public reads, one per tick, that make a cutover (design: 8). */
   readonly publicStreak: number;
   /** How long blue is retained after cutover (design: 10 min; 2 min in tests). */
   readonly retainMs: number;
-  /** One close-confirm poll window inside a single call. */
+  /** A close is re-sent this often while unconfirmed; unconfirmed this long = `close_unconfirmed`. */
   readonly closeConfirmMs: number;
   /** After this long unconfirmed, a close raises an alert. */
   readonly closeAlertMs: number;
@@ -218,6 +240,7 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
   "namespace" | "environment"
 > = {
   leaseReadyMs: 240_000,
+  walletWaitMs: 1_800_000,
   proofMs: 600_000,
   hostNotRoutedMs: 60_000,
   publicMs: 300_000,
@@ -322,7 +345,10 @@ const MAX_EXCLUDED_PROVIDERS = 16;
 const STRIKE_MEMORY_MS = 24 * 60 * 60_000;
 /** LANE_MEMORY: a provider is excluded by memory after this many remembered strikes. */
 const STRIKE_MEMORY_MIN = 2;
-/** LANE_MEMORY: the struck-after-bind failures (`strike` + `failAttempt` write this error prefix). */
+/**
+ * LANE_MEMORY: the per-lane struck-after-bind failures (`strike` + `failAttempt` write this error prefix).
+ * A CONFIRMED `host_not_routed` also counts fleet-wide after one strike (FLEET_HOST_MEMORY, bug.5586).
+ */
 const STRIKE_MEMORY_ERROR = /^(proof_timeout|host_not_routed):/;
 /** LANE_MEMORY: phases of an attempt that served the lane. Memory never names such a provider (no lockout). */
 const SERVED_PHASES: readonly AttemptPhase[] = [
@@ -339,6 +365,21 @@ interface MeshRow {
   readonly key: WorkloadKey;
   readonly attempts: readonly AttemptRow[];
 }
+
+/** One proven attempt's public readback after THIS runner moved the edge to it (bug.5587). */
+interface CutoverWatch {
+  readonly movedAt: number;
+  streak: number;
+  firstAt: string;
+  last: string;
+  fallbackLogged: boolean;
+}
+
+/**
+ * bug.5587: a decided cutover rollback, written to the attempt's `error` BEFORE the edge restore (green
+ * stays `proven`). Every tick and every restarted runner then retries only the restore, never the cutover.
+ */
+const ROLLBACK_PENDING = "rollback_pending: ";
 
 class DependencyNotReady extends Error {}
 class InvalidArtifactSet extends Error {}
@@ -360,6 +401,25 @@ export class NodeDeploySequencer {
   private readonly lastGraceLogAt = new Map<string, number>();
   /** Last persisted step signature per attempt, so a poll loop writes one timeline row, not hundreds. */
   private readonly lastStep = new Map<string, string>();
+  /**
+   * bug.5587 STEP_NEVER_WAITS: per proving attempt id, the start of its unbroken `/version` 404 run and
+   * its last progress note. In memory: a restart restarts both, which only delays a strike or a note.
+   */
+  private readonly proofWatch = new Map<
+    string,
+    { notRoutedSince?: number | undefined; lastNote: number }
+  >();
+  /** bug.5587: per proven attempt id, its public readback once this runner moved the edge. */
+  private readonly cutoverWatch = new Map<string, CutoverWatch>();
+  /**
+   * bug.5587: per attempt id, when this runner first and last sent its close (`delete`). It is re-sent
+   * once per `closeConfirmMs`, as the old in-step window did; a restart re-sends at once (idempotent)
+   * and restarts `closeOverdue`, which only delays an alert.
+   */
+  private readonly closeSentAt = new Map<
+    string,
+    { firstAt: number; lastAt: number }
+  >();
   /** HR 8 device window per live mesh attempt id: in memory, so a restart rolls nothing. */
   private readonly deviceWatch = new Map<string, DeviceWatchEntry>();
   /** MESH_WRITES_SERIALIZED: the tail of this lane's Headscale write queue. */
@@ -886,6 +946,12 @@ export class NodeDeploySequencer {
               "ambiguous create resolved to nothing; next ordinal"
             );
             return;
+          } else if (a.unhealthySince) {
+            // A healthy observe ends an `observe_unavailable` run: a later blip starts a new one, so
+            // blips spread over a long unpaid wait never add up to `orphan_suspect` (bug.5585).
+            a = await this.d.store.updateAttempt(a.id, {
+              unhealthySince: null,
+            });
           }
         } catch (error) {
           a = await this.observeUnavailable(
@@ -1140,15 +1206,21 @@ export class NodeDeploySequencer {
    * the provider of every earlier attempt of THIS release that failed or was lost AFTER binding a lease
    * (proof_timeout, failed proof, lease lost): a provider whose egress is not admitted must not be
    * retried (bug.5569). A refused create bound no provider, so it adds none. Also with `withFailedTries`,
-   * the LANE MEMORY (story.5137): see `rememberedStrikes`. Deduped, blue first, capped at the wire's 16.
-   * `remembered` names which entries came from the lane memory (for the one log line).
+   * the FLEET_HOST_MEMORY (bug.5586) and the LANE MEMORY (story.5137): see `rememberedStrikes`. Deduped,
+   * blue first, capped at the wire's 16. `fleet` and `remembered` name which entries came from each memory
+   * and `fleetConfirmedBy` maps each fleet entry to the release that confirmed it (for the one log line).
    */
   private async exclusion(
     key: WorkloadKey,
     release: ReleaseRow,
     blue: AttemptRow | undefined,
     withFailedTries: boolean
-  ): Promise<{ providers: string[]; remembered: string[] }> {
+  ): Promise<{
+    providers: string[];
+    remembered: string[];
+    fleet: string[];
+    fleetConfirmedBy: Record<string, string>;
+  }> {
     const w = release.spec;
     const providers: (string | undefined)[] = [blue?.provider];
     for (const stateName of new Set(w.bindings.map((b) => b.workload))) {
@@ -1169,39 +1241,77 @@ export class NodeDeploySequencer {
     const base = [
       ...new Set(providers.filter((p): p is string => Boolean(p))),
     ].slice(0, MAX_EXCLUDED_PROVIDERS);
-    if (!withFailedTries) return { providers: base, remembered: [] };
+    if (!withFailedTries)
+      return {
+        providers: base,
+        remembered: [],
+        fleet: [],
+        fleetConfirmedBy: {},
+      };
     const admitted =
       w.kind === "app"
         ? (this.d.config.appProviders ?? []).slice(0, MAX_ALLOWED_PROVIDERS)
         : [];
-    const remembered = this.rememberedStrikes(lane, base, admitted).slice(
-      0,
+    const since = this.d.clock.now() - STRIKE_MEMORY_MS;
+    // A state workload is reached by forwarded port, never by host: host routing says nothing about it.
+    const fleetStruck =
+      w.kind === "app"
+        ? await this.d.store.hostNotRoutedProviders(
+            new Date(since),
+            MAX_EXCLUDED_PROVIDERS
+          )
+        : [];
+    // Fleet first (a host the provider does not route can never prove), newest strike first; the lane's
+    // memory only fills what is left under the wire's 16.
+    const { fleet, remembered } = this.rememberedStrikes(
+      lane,
+      base,
+      admitted,
+      since,
+      fleetStruck.map((s) => s.provider),
       MAX_EXCLUDED_PROVIDERS - base.length
     );
-    return { providers: [...base, ...remembered], remembered };
+    const fleetConfirmedBy: Record<string, string> = {};
+    for (const s of fleetStruck)
+      if (fleet.includes(s.provider))
+        fleetConfirmedBy[s.provider] = s.confirmingReleaseId;
+    return {
+      providers: [...base, ...fleet, ...remembered],
+      remembered,
+      fleet,
+      fleetConfirmedBy,
+    };
   }
 
   /**
-   * LANE_MEMORY (story.5137): a provider that bound a lease on THIS lane (node + env + workload) and was
-   * struck `proof_timeout` or `host_not_routed` at least `STRIKE_MEMORY_MIN` times in the last
-   * `STRIKE_MEMORY_MS`, across releases, is excluded from a new create. Without it every release re-tries
-   * the same dead provider (candidate-a 2026-11-05: one provider burned 10 minutes of proof_timeout on
-   * every release). It reads the attempts store: a struck attempt keeps its provider and its error.
-   * NO LOCKOUT: a `proof_timeout` can be the app's own fault, so memory never names
+   * Provider memory for a new create. Two sources, read from the attempts store (a struck attempt keeps
+   * its provider and its error):
+   *  - FLEET_HOST_MEMORY (bug.5586): `fleetStruck`, every provider that failed `host_not_routed` on ANY
+   *    lane of this store (every node, env and workload) since `since`, after ONE strike, but only when
+   *    the strike is CONFIRMED: the same release served on a different provider, so the app serves its
+   *    host and the 404 was that provider's ingress (2026-11-06: one provider won the auction and burned
+   *    attempt 1 on every node). An unconfirmed strike (a broken build 404s on every provider) never
+   *    leaves its lane.
+   *  - LANE_MEMORY (story.5137): a provider struck `proof_timeout` or `host_not_routed` on THIS lane
+   *    (node + env + workload) at least `STRIKE_MEMORY_MIN` times since `since`, across releases. Without
+   *    it every release re-tries the same dead provider (candidate-a 2026-11-05).
+   * NO LOCKOUT: neither memory ever names
    *  - the lane's most recent served provider (newest active, retiring, retired or lost attempt: blue, or
-   *    or the blue a lost lease left behind), so HAIRPIN_RULE alone decides blue;
+   *    the blue a lost lease left behind), so HAIRPIN_RULE alone decides blue;
    *  - any provider that served this lane (same phases) in the window;
-   *  - the last admitted provider (`appProviders`) not already excluded: memory alone never empties an
-   *    admitted pool. With no allowlist the open market is the pool; memory cannot see bids, so that case
-   *    rests on the two rules above.
-   * Entries already excluded are not repeated; the caller caps the total at the wire's 16.
+   *  - the last admitted provider (`appProviders`) not already excluded: with an allowlist, memory alone
+   *    never empties it. With NO allowlist (production today: open market) there is no such floor; memory
+   *    cannot see bids, so that case rests on the two rules above and, for the fleet, on confirmation.
+   * Entries already excluded are not repeated. At most `room` entries, fleet first in the order given.
    */
   private rememberedStrikes(
     lane: readonly AttemptRow[],
     already: readonly string[],
-    admitted: readonly string[]
-  ): string[] {
-    const since = this.d.clock.now() - STRIKE_MEMORY_MS;
+    admitted: readonly string[],
+    since: number,
+    fleetStruck: readonly string[],
+    room: number
+  ): { fleet: string[]; remembered: string[] } {
     const servedPhase = (a: AttemptRow) => SERVED_PHASES.includes(a.phase);
     const served = new Set<string>();
     const newestServed = lane.find(servedPhase)?.provider;
@@ -1218,17 +1328,24 @@ export class NodeDeploySequencer {
       )
         counts.set(a.provider, (counts.get(a.provider) ?? 0) + 1);
     const open = new Set(admitted.filter((p) => !already.includes(p)));
-    const out: string[] = [];
-    for (const [p, n] of counts) {
-      if (n < STRIKE_MEMORY_MIN || served.has(p) || already.includes(p))
-        continue;
+    const taken = new Set<string>();
+    const take = (p: string): boolean => {
+      if (taken.size >= room || served.has(p) || already.includes(p))
+        return false;
+      if (taken.has(p)) return false;
       if (open.has(p)) {
-        if (open.size === 1) continue; // the last admitted candidate stays open
+        if (open.size === 1) return false; // the last admitted candidate stays open
         open.delete(p);
       }
-      out.push(p);
-    }
-    return out;
+      taken.add(p);
+      return true;
+    };
+    const fleet = fleetStruck.filter(take);
+    const remembered = [...counts]
+      .filter(([, n]) => n >= STRIKE_MEMORY_MIN)
+      .map(([p]) => p)
+      .filter(take);
+    return { fleet, remembered };
   }
 
   /** New effects use current fleet authority; recorded hosts are never retargeted. */
@@ -1289,6 +1406,9 @@ export class NodeDeploySequencer {
     attempt: AttemptRow,
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
+    // WALLET_WAIT_IS_NOT_AN_ATTEMPT: read the wallet wait start before any writer (mesh prep, the
+    // dispatch marker) replaces the error; the busy branch below writes it back.
+    const busySince = walletBusySince(attempt);
     const refusal = this.d.httpAdmissionRefusal;
     if (release.spec.kind === "app" && refusal) {
       await this.emit(key, release, attempt, "dependency", "waiting", {
@@ -1342,18 +1462,26 @@ export class NodeDeploySequencer {
       meshCompanions = prepared.services;
     }
 
-    const { providers: excludeProviders, remembered } = await this.exclusion(
-      key,
-      release,
-      blue,
-      true
-    );
+    const {
+      providers: excludeProviders,
+      remembered,
+      fleet,
+      fleetConfirmedBy,
+    } = await this.exclusion(key, release, blue, true);
+    // Repeated on every create retry (a busy wallet retries each tick): one line per minute per attempt.
     if (excludeProviders.length > 0)
-      await this.emit(key, release, attempt, "providers_excluded", "ok", {
+      await this.emitGrace(key, release, attempt, "providers_excluded", "ok", {
         providers: excludeProviders,
         remembered,
+        fleetExcluded: fleet,
+        fleetConfirmedBy,
         reason:
           excludeProviders.join(",") +
+          (fleet.length > 0
+            ? ` (fleet host_not_routed: ${fleet
+                .map((p) => `${p} confirmed by release ${fleetConfirmedBy[p]}`)
+                .join(",")})`
+            : "") +
           (remembered.length > 0 ? ` (memory: ${remembered.join(",")})` : ""),
       });
     // Placement for APPS only: the interim egress-admitted provider set and the node's catalog
@@ -1365,10 +1493,17 @@ export class NodeDeploySequencer {
     const requiredCountryCodes =
       w.kind === "app" ? runtime.requiredCountryCodes : [];
     if (allowProviders.length > 0 || requiredCountryCodes.length > 0)
-      await this.emit(key, release, attempt, "placement_constrained", "ok", {
-        providers: allowProviders,
-        reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
-      });
+      await this.emitGrace(
+        key,
+        release,
+        attempt,
+        "placement_constrained",
+        "ok",
+        {
+          providers: allowProviders,
+          reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
+        }
+      );
     // Durable before native IO: runner loss cannot make a paid call look never-paid. The actuator can
     // outlive this sequencer process, so the marker opens the same in-flight grace as a transport failure.
     attempt = await this.d.store.updateAttempt(attempt.id, {
@@ -1396,21 +1531,24 @@ export class NodeDeploySequencer {
     } catch (error) {
       if (error instanceof PayerError) {
         if (error.code === "wallet_allocation_blocked") {
-          // The slot was busy and this key claimed nothing: safe to try again on the next tick,
-          // until the attempt is older than a lease is allowed to take.
-          if (
-            this.d.clock.now() - attempt.createdAt.getTime() <
-            this.d.config.leaseReadyMs
-          ) {
-            await this.emit(key, release, attempt, "create", "wallet_busy");
-            return this.d.store.updateAttempt(attempt.id, {
-              error: "unpaid: wallet_busy",
-            });
-          }
-          attempt = await this.d.store.updateAttempt(attempt.id, {
-            error: "unpaid: wallet_busy",
+          // WALLET_WAIT_IS_NOT_AN_ATTEMPT: the slot was busy and this key claimed nothing. The attempt
+          // waits unpaid and retries next tick; a wait never fails or parks it. The wait start is the
+          // first busy reply, kept in the marker so a restart does not reset it.
+          const now = this.d.clock.now();
+          const since = busySince ?? now;
+          const waitedMs = now - since;
+          const waiting = await this.d.store.updateAttempt(attempt.id, {
+            error: `${WALLET_BUSY_PREFIX}${since}`,
           });
-          return this.failAttempt(key, release, attempt, "wallet_busy_timeout");
+          await this.emitGrace(key, release, waiting, "create", "wallet_busy", {
+            waitedMs,
+          });
+          if (waitedMs >= this.d.config.walletWaitMs)
+            await this.alert(key, release, waiting, "wallet_wait_exceeded", {
+              waitedMs,
+              reason: error.message,
+            });
+          return waiting;
         }
         if (error.ambiguous) {
           const marked = await this.d.store.updateAttempt(attempt.id, {
@@ -1585,68 +1723,81 @@ export class NodeDeploySequencer {
 
   // ---- lease ready ----------------------------------------------------------------------------
 
+  /** ONE observe per tick (STEP_NEVER_WAITS): not ready yet = still `created`, observed again next tick. */
   private async awaitLease(
     key: WorkloadKey,
     release: ReleaseRow,
-    attempt: AttemptRow,
+    a: AttemptRow,
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
     const w = release.spec;
     const host = publicHostOf(w);
-    let a = attempt;
     const leasedAt = (a.leasedAt ?? a.createdAt).getTime();
-    for (;;) {
-      let obs: Awaited<ReturnType<PayerPort["observe"]>>;
-      try {
-        obs = await this.d.payer.observe({
-          cogniKey: a.cogniKey,
-          ...(a.externalName ? { externalName: a.externalName } : {}),
-        });
-      } catch (error) {
-        await this.emit(key, release, a, "lease_ready", "observe_error", {
-          error: errText(error),
-        });
-        obs = { found: true };
-      }
-      const r = obs.resource;
-      if (obs.found === false || r?.state === "closed")
-        return this.failAttempt(key, release, a, "lease_closed_before_ready");
-      if (r) {
-        if (
-          blue?.provider &&
-          r.providerAccount &&
-          r.providerAccount === blue.provider
-        ) {
-          // NOT_BLUES_PROVIDER: two leases on one provider ingress cannot both claim one host.
-          await this.strike(key, release, a, "same_provider_as_blue");
-          return this.failAttempt(key, release, a, "same_provider_as_blue");
-        }
-        const usable =
-          w.kind === "app"
-            ? ingressHostOf(r.endpoints, host) !== undefined
-            : tryForwarded(r.endpoints);
-        if (r.state === "active" && usable) {
-          a = await this.d.store.updateAttempt(a.id, {
-            phase: "proving",
-            endpoints: r.endpoints,
-            ...(r.providerAccount ? { provider: r.providerAccount } : {}),
-          });
-          await this.emit(key, release, a, "lease_active", "ok", {
-            endpoints: r.endpoints,
-            provider: r.providerAccount,
-          });
-          return a;
-        }
-      }
-      if (this.d.clock.now() - leasedAt >= this.d.config.leaseReadyMs)
-        return this.failAttempt(key, release, a, "lease_not_ready");
-      await this.d.clock.sleep(this.d.config.pollMs);
+    let obs: Awaited<ReturnType<PayerPort["observe"]>>;
+    try {
+      obs = await this.d.payer.observe({
+        cogniKey: a.cogniKey,
+        ...(a.externalName ? { externalName: a.externalName } : {}),
+      });
+    } catch (error) {
+      await this.emit(key, release, a, "lease_ready", "observe_error", {
+        error: errText(error),
+      });
+      obs = { found: true };
     }
+    const r = obs.resource;
+    if (obs.found === false || r?.state === "closed")
+      return this.failAttempt(key, release, a, "lease_closed_before_ready");
+    if (r) {
+      if (
+        blue?.provider &&
+        r.providerAccount &&
+        r.providerAccount === blue.provider
+      ) {
+        // NOT_BLUES_PROVIDER: two leases on one provider ingress cannot both claim one host.
+        await this.strike(key, release, a, "same_provider_as_blue");
+        return this.failAttempt(key, release, a, "same_provider_as_blue");
+      }
+      const usable =
+        w.kind === "app"
+          ? ingressHostOf(r.endpoints, host) !== undefined
+          : tryForwarded(r.endpoints);
+      if (r.state === "active" && usable) {
+        const next = await this.d.store.updateAttempt(a.id, {
+          phase: "proving",
+          endpoints: r.endpoints,
+          ...(r.providerAccount ? { provider: r.providerAccount } : {}),
+        });
+        await this.emit(key, release, next, "lease_active", "ok", {
+          endpoints: r.endpoints,
+          provider: r.providerAccount,
+        });
+        return next;
+      }
+    }
+    if (this.d.clock.now() - leasedAt >= this.d.config.leaseReadyMs)
+      return this.failAttempt(key, release, a, "lease_not_ready");
+    return a;
   }
 
   // ---- prove ----------------------------------------------------------------------------------
 
+  /** ONE proof round per tick (STEP_NEVER_WAITS); the in-memory watch is dropped once it leaves `proving`. */
   private async prove(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow
+  ): Promise<AttemptRow> {
+    const next = await this.proveOnce(key, release, attempt);
+    if (next.phase !== "proving") this.proofWatch.delete(attempt.id);
+    return next;
+  }
+
+  /**
+   * `/version`, then `/readyz`, then qualify, each bounded by its own port timeout. Not passing yet and
+   * inside its bounds = the attempt is returned still `proving` and the next tick probes again.
+   */
+  private async proveOnce(
     key: WorkloadKey,
     release: ReleaseRow,
     attempt: AttemptRow
@@ -1656,113 +1807,103 @@ export class NodeDeploySequencer {
     const deadline =
       (attempt.leasedAt ?? attempt.createdAt).getTime() + this.d.config.proofMs;
     let last = "no probe yet";
-    let lastNote = this.d.clock.now();
-    // HOST_NOT_ROUTED: start of an unbroken run of `/version` 404s from the provider ingress.
-    let notRoutedSince: number | undefined;
-    for (;;) {
-      if (w.kind === "app") {
-        const ingress = ingressHostOf(attempt.endpoints, host);
-        const health = w.health;
-        if (ingress && host && health) {
-          const v = await this.d.probe.hostRouted(
-            ingress,
-            host,
-            health.version
-          );
-          notRoutedSince =
-            v.status === 404
-              ? (notRoutedSince ?? this.d.clock.now())
-              : undefined;
-          if (v.status === 200 && buildShaOf(v.body) === release.sourceSha) {
-            const r = await this.d.probe.hostRouted(
-              ingress,
-              host,
-              health.ready
-            );
-            if (r.status === 200) {
-              try {
-                attempt = await this.qualify(release, attempt, "qualify");
-              } catch (error) {
-                await this.qualificationDiagnostic(
-                  key,
-                  release,
-                  attempt,
-                  "qualify",
-                  error
-                );
-                return this.failAttempt(
-                  key,
-                  release,
-                  attempt,
-                  "qualification_failed"
-                );
-              }
-              const next = await this.d.store.updateAttempt(attempt.id, {
-                phase: "proven",
-              });
-              await this.emit(key, release, next, "proven", "ok", {
-                ingress,
-                version: release.sourceSha,
-                readyz: r.status,
-              });
-              return next;
-            }
-            last = `readyz ${r.status} ${r.error ?? r.body.slice(0, 80)}`;
-          } else {
-            last = `version ${v.status} sha=${buildShaOf(v.body) ?? "none"} ${v.error ?? ""}`;
-          }
-        }
-      } else {
-        const t = tryForwarded(attempt.endpoints);
-        if (t && (await this.d.probe.tcpTls(t.host, t.port))) {
-          const next = await this.d.store.updateAttempt(attempt.id, {
-            phase: "proven",
-          });
-          await this.emit(key, release, next, "proven", "ok", {
-            endpoint: `${t.host}:${t.port}`,
-          });
-          return next;
-        }
-        last = "tcp tls handshake not answered";
-      }
-      // A closed lease cannot become healthy: stop waiting.
-      const closed = await this.isClosed(attempt);
-      if (closed)
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          "lease_closed_while_proving"
-        );
-      if (
-        notRoutedSince !== undefined &&
-        this.d.clock.now() - notRoutedSince >= this.d.config.hostNotRoutedMs
-      ) {
-        // The provider ingress does not route our host: it can never pass. Close green through the
-        // normal path (blue and the edge are untouched); its provider is excluded for this release.
-        await this.strike(key, release, attempt, "host_not_routed");
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `host_not_routed: ${last.trim()} for ${Math.round((this.d.clock.now() - notRoutedSince) / 1000)}s`
-        );
-      }
-      if (this.d.clock.now() >= deadline) {
-        await this.strike(key, release, attempt, "proof_timeout");
-        return this.failAttempt(
-          key,
-          release,
-          attempt,
-          `proof_timeout: ${last}`
-        );
-      }
-      if (this.d.clock.now() - lastNote >= 60_000) {
-        lastNote = this.d.clock.now();
-        await this.emit(key, release, attempt, "proving", "waiting", { last });
-      }
-      await this.d.clock.sleep(this.d.config.pollMs);
+    // HOST_NOT_ROUTED: `notRoutedSince` starts an unbroken run of `/version` 404s from the provider ingress.
+    let watch = this.proofWatch.get(attempt.id);
+    if (!watch) {
+      if (this.proofWatch.size > 500) this.proofWatch.clear(); // bounded; a reset only delays
+      watch = { lastNote: this.d.clock.now() };
+      this.proofWatch.set(attempt.id, watch);
     }
+    if (w.kind === "app") {
+      const ingress = ingressHostOf(attempt.endpoints, host);
+      const health = w.health;
+      if (ingress && host && health) {
+        const v = await this.d.probe.hostRouted(ingress, host, health.version);
+        watch.notRoutedSince =
+          v.status === 404
+            ? (watch.notRoutedSince ?? this.d.clock.now())
+            : undefined;
+        if (v.status === 200 && buildShaOf(v.body) === release.sourceSha) {
+          const r = await this.d.probe.hostRouted(ingress, host, health.ready);
+          if (r.status === 200) {
+            try {
+              attempt = await this.qualify(release, attempt, "qualify");
+            } catch (error) {
+              await this.qualificationDiagnostic(
+                key,
+                release,
+                attempt,
+                "qualify",
+                error
+              );
+              return this.failAttempt(
+                key,
+                release,
+                attempt,
+                "qualification_failed"
+              );
+            }
+            const next = await this.d.store.updateAttempt(attempt.id, {
+              phase: "proven",
+            });
+            await this.emit(key, release, next, "proven", "ok", {
+              ingress,
+              version: release.sourceSha,
+              readyz: r.status,
+            });
+            return next;
+          }
+          last = `readyz ${r.status} ${r.error ?? r.body.slice(0, 80)}`;
+        } else {
+          last = `version ${v.status} sha=${buildShaOf(v.body) ?? "none"} ${v.error ?? ""}`;
+        }
+      }
+    } else {
+      const t = tryForwarded(attempt.endpoints);
+      if (t && (await this.d.probe.tcpTls(t.host, t.port))) {
+        const next = await this.d.store.updateAttempt(attempt.id, {
+          phase: "proven",
+        });
+        await this.emit(key, release, next, "proven", "ok", {
+          endpoint: `${t.host}:${t.port}`,
+        });
+        return next;
+      }
+      last = "tcp tls handshake not answered";
+    }
+    // A closed lease cannot become healthy: stop waiting.
+    const closed = await this.isClosed(attempt);
+    if (closed)
+      return this.failAttempt(
+        key,
+        release,
+        attempt,
+        "lease_closed_while_proving"
+      );
+    const notRoutedSince = watch.notRoutedSince;
+    if (
+      notRoutedSince !== undefined &&
+      this.d.clock.now() - notRoutedSince >= this.d.config.hostNotRoutedMs
+    ) {
+      // The provider ingress does not route our host: it can never pass. Close green through the
+      // normal path (blue and the edge are untouched); its provider is excluded for this release.
+      await this.strike(key, release, attempt, "host_not_routed");
+      return this.failAttempt(
+        key,
+        release,
+        attempt,
+        `host_not_routed: ${last.trim()} for ${Math.round((this.d.clock.now() - notRoutedSince) / 1000)}s`
+      );
+    }
+    if (this.d.clock.now() >= deadline) {
+      await this.strike(key, release, attempt, "proof_timeout");
+      return this.failAttempt(key, release, attempt, `proof_timeout: ${last}`);
+    }
+    if (this.d.clock.now() - watch.lastNote >= 60_000) {
+      watch.lastNote = this.d.clock.now();
+      await this.emit(key, release, attempt, "proving", "waiting", { last });
+    }
+    return attempt;
   }
 
   // ---- cutover --------------------------------------------------------------------------------
@@ -1789,18 +1930,44 @@ export class NodeDeploySequencer {
         await this.failAttempt(key, release, attempt, "edge_not_configured");
         return;
       }
-      let touched = false;
-      let qualified = false;
+      // STEP_NEVER_WAITS: a watch means THIS runner already moved the edge to green; a restart has none,
+      // so it qualifies and points again (idempotent) and restarts the readback window (only a delay).
+      // Whether the edge points at green is never taken from this memory: `rollBack` reads the edge.
+      if (attempt.error?.startsWith(ROLLBACK_PENDING)) {
+        // A decided rollback (durable) whose restore failed: retry only the restore, never the cutover.
+        await this.rollBack(
+          key,
+          release,
+          attempt,
+          blue,
+          host,
+          ingress,
+          attempt.error.slice(ROLLBACK_PENDING.length)
+        );
+        return;
+      }
+      let watch = this.cutoverWatch.get(attempt.id);
+      let qualified = watch !== undefined;
       try {
-        await this.qualify(release, attempt, "readback");
-        qualified = true;
-        const rec = await edge.point(host, ingress);
-        touched = true;
-        await this.emit(key, release, attempt, "edge_moved", "ok", {
-          record: rec.id,
-          target: rec.content,
-        });
-        const firstAt = await this.awaitPublic(
+        if (!watch) {
+          await this.qualify(release, attempt, "readback");
+          qualified = true;
+          const rec = await edge.point(host, ingress);
+          watch = {
+            movedAt: this.d.clock.now(),
+            streak: 0,
+            firstAt: "",
+            last: "",
+            fallbackLogged: false,
+          };
+          // Every exit below deletes it (a restart loses it: that only delays, see `rollBack`).
+          this.cutoverWatch.set(attempt.id, watch);
+          await this.emit(key, release, attempt, "edge_moved", "ok", {
+            record: rec.id,
+            target: rec.content,
+          });
+        }
+        const firstAt = await this.readPublicOnce(
           host,
           release.sourceSha,
           w.health?.version ?? "/version",
@@ -1810,8 +1977,11 @@ export class NodeDeploySequencer {
             workload: key.workload,
             releaseId: release.id,
             attempt: attempt.id,
-          }
+          },
+          watch
         );
+        if (firstAt === undefined) return; // not yet: the next tick reads again; activation waits
+        this.cutoverWatch.delete(attempt.id);
         await this.emit(key, release, attempt, "public_readback", "ok", {
           host,
           consecutive: this.d.config.publicStreak,
@@ -1828,28 +1998,13 @@ export class NodeDeploySequencer {
             "readback",
             readback
           );
-        // Restore the edge to blue when we moved it (a re-point, NOT a withdrawal), then close green.
-        const blueIngress = blue
-          ? ingressHostOf(blue.endpoints, host)
-          : undefined;
-        if (touched && blueIngress) {
-          await edge
-            .point(host, blueIngress)
-            .then(() =>
-              this.emit(key, release, attempt, "edge_restored", "ok", {
-                target: blueIngress,
-              })
-            )
-            .catch((e: unknown) =>
-              this.alert(key, release, attempt, "edge_restore_failed", {
-                error: errText(e),
-              })
-            );
-        }
-        await this.failAttempt(
+        await this.rollBack(
           key,
           release,
           attempt,
+          blue,
+          host,
+          ingress,
           `cutover_failed: ${readback ? readback.message : errText(error)}`
         );
         return;
@@ -1874,6 +2029,55 @@ export class NodeDeploySequencer {
         retainMs: this.d.config.retainMs,
       });
     }
+  }
+
+  /**
+   * Close green after a failed cutover, but NEVER while the edge may still point at it (bug.5587).
+   * Whether it does is read from the edge record itself, not runner memory, so a restarted runner sees
+   * what its predecessor wrote; an unreadable edge counts as pointing at green. Such an edge is pointed
+   * back to blue first (a re-point, NOT a withdrawal). The decision is written to the attempt first
+   * (`ROLLBACK_PENDING`), so no runner re-points the edge at this green again. A failed restore raises
+   * `edge_restore_failed` and keeps green `proven`; every later tick retries only the restore. With no
+   * blue to return to, green is closed as before.
+   */
+  private async rollBack(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    blue: AttemptRow | undefined,
+    host: string,
+    ingress: string,
+    reason: string
+  ): Promise<void> {
+    const edge = this.d.edge;
+    const blueIngress = blue ? ingressHostOf(blue.endpoints, host) : undefined;
+    if (edge && blueIngress) {
+      // The durable decision first; only then drop the in-memory readback (a failed write keeps it).
+      if (!attempt.error?.startsWith(ROLLBACK_PENDING))
+        attempt = await this.d.store.updateAttempt(attempt.id, {
+          error: `${ROLLBACK_PENDING}${reason}`.slice(0, ERROR_TEXT_MAX),
+        });
+      this.cutoverWatch.delete(attempt.id);
+      const onGreen = await edge.current(host).then(
+        (rec) => rec !== undefined && sameHostname(rec.content, ingress),
+        () => true
+      );
+      if (onGreen) {
+        try {
+          await edge.point(host, blueIngress);
+        } catch (e) {
+          await this.alert(key, release, attempt, "edge_restore_failed", {
+            error: errText(e),
+            reason,
+          });
+          return;
+        }
+        await this.emit(key, release, attempt, "edge_restored", "ok", {
+          target: blueIngress,
+        });
+      }
+    }
+    await this.failAttempt(key, release, attempt, reason);
   }
 
   /** Persist before proven; read the current subject again before any edge mutation. */
@@ -2113,52 +2317,46 @@ export class NodeDeploySequencer {
     }
   }
 
-  /** Poll the PUBLIC host until `publicStreak` consecutive reads return the exact sha. */
-  private async awaitPublic(
+  /**
+   * ONE read of the PUBLIC host (STEP_NEVER_WAITS). Returns the first exact-sha read's time once
+   * `publicStreak` consecutive reads (one per tick) returned the exact sha; `undefined` = not yet.
+   * Throws once no streak is running and `publicMs` has passed since this runner moved the edge.
+   */
+  private async readPublicOnce(
     host: string,
     sha: string,
     versionPath: string,
-    fields: Record<string, unknown>
-  ): Promise<string> {
+    fields: Record<string, unknown>,
+    watch: CutoverWatch
+  ): Promise<string | undefined> {
     const { clock, probe, config } = this.d;
-    const deadline = clock.now() + config.publicMs;
-    let streak = 0;
-    let firstAt = "";
-    let last = "";
-    let fallbackLogged = false;
-    for (;;) {
-      const v = await probe.publicRead(
-        host,
-        `${versionPath}?cb=${clock.now()}`
+    const v = await probe.publicRead(host, `${versionPath}?cb=${clock.now()}`);
+    // Once per host per release: the authoritative path failed and this read used DoH.
+    if (v.fallback && !watch.fallbackLogged) {
+      watch.fallbackLogged = true;
+      this.d.log.warn(
+        {
+          component: "node-deploy-sequencer",
+          ...fields,
+          host,
+          reason: v.fallback,
+        },
+        "node_deploy_public_read_fallback"
       );
-      // Once per host per release: the authoritative path failed and this read used DoH.
-      if (v.fallback && !fallbackLogged) {
-        fallbackLogged = true;
-        this.d.log.warn(
-          {
-            component: "node-deploy-sequencer",
-            ...fields,
-            host,
-            reason: v.fallback,
-          },
-          "node_deploy_public_read_fallback"
-        );
-      }
-      if (v.status === 200 && buildShaOf(v.body) === sha) {
-        if (streak === 0) firstAt = new Date(clock.now()).toISOString();
-        streak++;
-        if (streak >= config.publicStreak) return firstAt;
-        await clock.sleep(1_000);
-        continue;
-      }
-      streak = 0;
-      last = `${v.status} ${v.error ?? v.body.slice(0, 80)}`;
-      if (clock.now() >= deadline)
-        throw new Error(
-          `public host ${host} never served ${sha} for ${config.publicStreak} consecutive reads (last ${last})`
-        );
-      await clock.sleep(1_500);
     }
+    if (v.status === 200 && buildShaOf(v.body) === sha) {
+      if (watch.streak === 0)
+        watch.firstAt = new Date(clock.now()).toISOString();
+      watch.streak++;
+      return watch.streak >= config.publicStreak ? watch.firstAt : undefined;
+    }
+    watch.streak = 0;
+    watch.last = `${v.status} ${v.error ?? v.body.slice(0, 80)}`;
+    if (clock.now() - watch.movedAt >= config.publicMs)
+      throw new Error(
+        `public host ${host} never served ${sha} for ${config.publicStreak} consecutive reads (last ${watch.last})`
+      );
+    return undefined;
   }
 
   // ---- failure / close ------------------------------------------------------------------------
@@ -2175,6 +2373,8 @@ export class NodeDeploySequencer {
     reason: string,
     opts: { createEnded?: boolean } = {}
   ): Promise<AttemptRow> {
+    this.proofWatch.delete(attempt.id); // a superseded proving attempt never reaches `prove` again
+    this.cutoverWatch.delete(attempt.id);
     const trimmed = reason.slice(0, ERROR_TEXT_MAX);
     // ORPHAN_GUARD (CD8): an attempt with no bound handle may still own a PAID lease (the create
     // succeeded and its response was lost, or we crashed before binding). Ask the payer by key BEFORE
@@ -2254,9 +2454,11 @@ export class NodeDeploySequencer {
     });
     const confirmed = await this.closeAndConfirm(closing);
     if (!confirmed) {
-      await this.alert(key, release, closing, "close_unconfirmed", {
-        reason: trimmed,
-      });
+      // The janitor re-reads it on a later tick (STEP_NEVER_WAITS); `close_pending` holds new creates.
+      if (this.closeOverdue(closing))
+        await this.alert(key, release, closing, "close_unconfirmed", {
+          reason: trimmed,
+        });
       return closing;
     }
     const failed = await this.d.store.updateAttempt(attempt.id, {
@@ -2268,32 +2470,56 @@ export class NodeDeploySequencer {
     return failed;
   }
 
-  /** delete, then require observe AND chain truth (when wired) to say closed. */
+  /**
+   * Send the close (`delete`, at most once per `closeConfirmMs`), then ONE confirm read: observe AND
+   * chain truth (when wired) say closed (STEP_NEVER_WAITS). `false` = not confirmed yet: the caller
+   * retries on a later tick and alerts only once `closeOverdue`.
+   */
   private async closeAndConfirm(a: AttemptRow): Promise<boolean> {
-    if (!a.externalName) return true;
-    try {
-      await this.d.payer.delete({
-        cogniKey: a.cogniKey,
-        externalName: a.externalName,
+    const externalName = a.externalName;
+    if (!externalName) return true;
+    const now = this.d.clock.now();
+    const sent = this.closeSentAt.get(a.id);
+    if (!sent || now - sent.lastAt >= this.d.config.closeConfirmMs) {
+      if (!sent && this.closeSentAt.size > 500) this.closeSentAt.clear(); // bounded; a reset only delays
+      this.closeSentAt.set(a.id, {
+        firstAt: sent?.firstAt ?? now,
+        lastAt: now,
       });
+      await this.sendClose(a.cogniKey, externalName);
+    }
+    if (!(await this.isClosed(a, true))) return false;
+    this.closeSentAt.delete(a.id);
+    return true;
+  }
+
+  /** True once this runner sent `a`'s close at least `closeConfirmMs` ago and it is still unconfirmed. */
+  private closeOverdue(a: AttemptRow): boolean {
+    const sent = this.closeSentAt.get(a.id);
+    return (
+      sent !== undefined &&
+      this.d.clock.now() - sent.firstAt >= this.d.config.closeConfirmMs
+    );
+  }
+
+  private async sendClose(
+    cogniKey: string,
+    externalName: string
+  ): Promise<void> {
+    try {
+      await this.d.payer.delete({ cogniKey, externalName });
     } catch (error) {
       if (!(error instanceof PayerError && error.code === "not_found")) {
         this.d.log.warn(
           {
             component: "node-deploy-sequencer",
-            cogniKey: a.cogniKey,
-            dseq: a.externalName,
+            cogniKey,
+            dseq: externalName,
             error: errText(error),
           },
           "node_deploy_close_delete_failed"
         );
       }
-    }
-    const deadline = this.d.clock.now() + this.d.config.closeConfirmMs;
-    for (;;) {
-      if (await this.isClosed(a, true)) return true;
-      if (this.d.clock.now() >= deadline) return false;
-      await this.d.clock.sleep(this.d.config.pollMs);
     }
   }
 
@@ -2355,7 +2581,7 @@ export class NodeDeploySequencer {
               dseq: failed.externalName,
               verified: true,
             });
-        } else if (release) {
+        } else if (release && this.closeOverdue(a)) {
           await this.alert(key, release, a, "close_unconfirmed");
         }
       }
@@ -2671,8 +2897,20 @@ export class NodeDeploySequencer {
     }
     const live = this.meshView(await this.meshRows()).liveKeyIds;
     const minted = await mesh.plane.mintAttemptKey(ref, live, now);
-    if (minted.outcome !== "minted")
+    if (minted.outcome !== "minted") {
+      if (
+        minted.outcome === "refused" &&
+        (minted.reason.startsWith("gateway_") ||
+          minted.reason === "epoch_changed") &&
+        this.throttle(`mint_refused/${a.id}/${minted.reason}`)
+      )
+        // NO_GATEWAY_NO_PAY: the attempt waits unpaid; its lease would not reach the substrate.
+        await this.meshEvent("warn", "node_mesh_mint_refused", a, key, {
+          outcome: "refused",
+          reason: minted.reason,
+        });
       return { attempt: a, pending: `mint_${minted.reason}` };
+    }
     a = await this.d.store.updateAttempt(a.id, {
       mesh: {
         ...recordOf(a),
@@ -2773,8 +3011,13 @@ export class NodeDeploySequencer {
     const listed = await mesh.plane.listDevices();
     if (!listed.ok) return down("devices", listed.reason);
 
+    // ONE_GATEWAY_RECOMPUTED every pass with no state: a restart or a failed delete is retried here.
+    const sup = await mesh.plane.supersedeGateways();
+    await this.logSupersede(sup);
+    if (!sup.ok && sup.reason) return down("substrate_supersede", sup.reason);
+
     // HR 11: approve the env VM's published `substrate-gw` request, verified after the fact.
-    await this.approveGateway(mesh, listed.devices, startedAt);
+    await this.approveGateway(mesh, startedAt);
 
     // HR 6: a terminal attempt's key is expired, then its devices are deleted; read back. A retiring blue
     // is live (it still serves) and is revoked only after it retires.
@@ -2892,14 +3135,12 @@ export class NodeDeploySequencer {
   }
 
   /**
-   * HR 11 over the verified channel, both stages. Stage 1 approves a fresh published `authId` whose
-   * registered device has tags exactly `[tag:substrate]` and the published machine key. Stage 2 runs on
-   * every pass: the published node key must equal the gateway's, and a gateway approved before its node
-   * key was published must show it within the bound; otherwise it is deleted (`node_mesh_substrate_mismatch`).
+   * HR 11 over the verified channel. Approve a fresh published `authId` this process has not approved yet.
+   * The new device must be exactly `[tag:substrate]` (else deleted, `node_mesh_substrate_mismatch`); it then
+   * supersedes every older `tag:substrate` device (`node_mesh_substrate_superseded`). No key compare.
    */
   private async approveGateway(
     mesh: SequencerMeshDeps,
-    devices: readonly MeshDevice[],
     now: number
   ): Promise<void> {
     let request: Awaited<ReturnType<SubstrateRequestSourcePort["read"]>>;
@@ -2913,96 +3154,74 @@ export class NodeDeploySequencer {
         undefined,
         { outcome: "unreadable", reason: errText(error).slice(0, 200) }
       );
-      // An unreadable channel confirms nothing; the bound still runs.
-      request = null;
+      return; // an unreadable channel approves nothing
     }
-    const gateway = substrateGateway(devices);
-    // Stage 1. Already registered with this machine key: the publish lags a few seconds; nothing to do.
-    if (
-      request?.authId &&
-      !(gateway && gateway.machineKey === request.machineKey)
-    ) {
-      const r = await mesh.plane.approveSubstrateGateway(request, now);
-      if (r.outcome === "approved")
-        await this.meshEvent(
-          "info",
-          "node_mesh_substrate_approved",
-          undefined,
-          undefined,
-          {
-            outcome: "approved",
-            headscaleDeviceId: r.headscaleDeviceId,
-            expiryDisabled: r.expiryDisabled,
-            nodeKeyVerified: r.nodeKeyVerified,
-          }
-        );
-      else if (r.outcome === "mismatch")
-        await this.meshEvent(
-          "error",
-          "node_mesh_substrate_mismatch",
-          undefined,
-          undefined,
-          {
-            outcome: r.deleted ? "deleted" : "delete_failed",
-            stage: "approve",
-            headscaleDeviceId: r.headscaleDeviceId,
-            tagsExact: r.tagsExact,
-            machineKeyMatches: r.machineKeyMatches,
-            nodeKeyMatches: r.nodeKeyMatches,
-          }
-        );
-      else
-        await this.meshEvent(
-          "warn",
-          "node_mesh_substrate_refused",
-          undefined,
-          undefined,
-          { outcome: "refused", reason: r.reason }
-        );
-      return; // stage 2 runs on the next re-read, against the device list it lists then
-    }
-    // Stage 2.
-    const check = await mesh.plane.verifySubstrateNodeKey(
-      request,
-      devices,
-      now
-    );
-    if (check.outcome === "verified")
+    // Nothing pending, or a publish that still names an auth id we approved (it lags a few seconds).
+    if (!request?.authId || mesh.plane.approvedAuthId(request.authId)) return;
+    const r = await mesh.plane.approveSubstrateGateway(request, now);
+    if (r.outcome === "approved") {
       await this.meshEvent(
         "info",
-        "node_mesh_substrate_node_key_verified",
-        undefined,
-        undefined,
-        { outcome: "verified", headscaleDeviceId: check.headscaleDeviceId }
-      );
-    else if (
-      check.outcome === "unknown" &&
-      check.sinceMs >= SUBSTRATE_NODE_KEY_ALERT_MS &&
-      this.throttle(`node_key_unknown/${check.headscaleDeviceId}`)
-    )
-      // Design B19: silence is UNKNOWN, never a delete. It alerts so a person looks at the publisher.
-      await this.meshEvent(
-        "error",
-        "node_mesh_substrate_node_key_unknown",
+        "node_mesh_substrate_approved",
         undefined,
         undefined,
         {
-          outcome: "unknown",
-          headscaleDeviceId: check.headscaleDeviceId,
-          sinceMs: check.sinceMs,
+          outcome: "approved",
+          headscaleDeviceId: r.headscaleDeviceId,
+          expiryDisabled: r.expiryDisabled,
         }
       );
-    else if (check.outcome === "mismatch")
+      await this.logSupersede(r.supersede);
+    } else if (r.outcome === "mismatch")
       await this.meshEvent(
         "error",
         "node_mesh_substrate_mismatch",
         undefined,
         undefined,
         {
-          outcome: check.deleted ? "deleted" : "delete_failed",
-          stage: "node_key",
-          reason: check.reason,
-          headscaleDeviceId: check.headscaleDeviceId,
+          outcome: r.deleted ? "deleted" : "delete_failed",
+          reason: r.reason,
+          headscaleDeviceId: r.headscaleDeviceId,
+        }
+      );
+    else
+      await this.meshEvent(
+        "warn",
+        "node_mesh_substrate_refused",
+        undefined,
+        undefined,
+        { outcome: "refused", reason: r.reason }
+      );
+  }
+
+  /** One ONE_GATEWAY_RECOMPUTED outcome: superseded offline gateways and mismatch deletes (each only when non-empty). */
+  private async logSupersede(
+    sup: Awaited<ReturnType<MeshPlane["supersedeGateways"]>>
+  ): Promise<void> {
+    if (sup.superseded.length > 0 || sup.failed.length > 0)
+      await this.meshEvent(
+        "warn",
+        "node_mesh_substrate_superseded",
+        undefined,
+        undefined,
+        {
+          outcome: sup.failed.length > 0 ? "delete_failed" : "deleted",
+          keptDeviceId: sup.kept,
+          deletedDeviceIds: sup.superseded,
+          failedDeviceIds: sup.failed,
+          ...(sup.reason ? { reason: sup.reason } : {}),
+        }
+      );
+    if (sup.mismatched.length > 0)
+      await this.meshEvent(
+        "error",
+        "node_mesh_substrate_mismatch",
+        undefined,
+        undefined,
+        {
+          outcome: "deleted",
+          keptDeviceId: sup.kept,
+          deletedDeviceIds: sup.mismatched,
         }
       );
   }
@@ -3111,9 +3330,11 @@ export class NodeDeploySequencer {
         headscaleKeyId: cur.mesh?.headscaleKeyId,
       });
       if (!(await this.closeAndConfirm(cur))) {
-        await this.alert(key, release, cur, "close_unconfirmed", {
-          why: MESH_DEVICE_ABSENT,
-        });
+        // Still `active`: a later pass rolls it again and re-reads the close (STEP_NEVER_WAITS).
+        if (this.closeOverdue(cur))
+          await this.alert(key, release, cur, "close_unconfirmed", {
+            why: MESH_DEVICE_ABSENT,
+          });
         return false;
       }
       await this.handleLost(key, release, cur, MESH_DEVICE_ABSENT);
@@ -3258,9 +3479,11 @@ export class NodeDeploySequencer {
         // lease_bad: /version fails too. A failing but LIVE lease is closed and confirmed before anything replaces it.
         if (await this.closeAndConfirm(active))
           return this.handleLost(key, release, active, "proof_failed_15m");
-        await this.alert(key, release, active, "close_unconfirmed", {
-          why: "proof_failed_15m",
-        });
+        // The next reconcile pass re-reads the close (STEP_NEVER_WAITS).
+        if (this.closeOverdue(active))
+          await this.alert(key, release, active, "close_unconfirmed", {
+            why: "proof_failed_15m",
+          });
         return "unhealthy_waiting";
       }
       return "unhealthy_waiting";
@@ -3506,6 +3729,9 @@ export class NodeDeploySequencer {
 /** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
 const REFUSED_PREFIX = "create refused: ";
 
+/** WALLET_WAIT_IS_NOT_AN_ATTEMPT: an unpaid attempt waiting for the wallet, stamped with its first busy reply. */
+const WALLET_BUSY_PREFIX = "unpaid: wallet_busy@";
+
 /**
  * KEY_STORED_BEFORE_PAY: a mesh attempt waiting for its key (`mesh_key_pending: <reason>`). Written only
  * before the dispatch marker, so an attempt carrying it never reached a paid call.
@@ -3523,6 +3749,12 @@ function ambiguousMarker(code: string, now: number): string {
   return code === "network"
     ? `ambiguous: network@${now}`
     : `ambiguous: ${code}`;
+}
+
+/** When this attempt first met a busy wallet (its marker stamp); undefined when it is not waiting. */
+function walletBusySince(attempt: AttemptRow): number | undefined {
+  const m = /^unpaid: wallet_busy@(\d+)$/u.exec(attempt.error ?? "");
+  return m ? Number(m[1]) : undefined;
 }
 
 /** When a create entered native IO or failed in transit (stamp, else legacy createdAt). */
