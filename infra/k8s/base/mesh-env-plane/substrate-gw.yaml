@@ -99,9 +99,11 @@ spec:
             #   so a past connect is never remembered, and ANY dial error asks the built-in Tailscale DERP
             #   map for other IPs (net/dnscache/dnscache.go#L483-L497). The one failing dial was the
             #   plaintext port-80 try (mesh-control-fwd serves 443 only: "connection refused"); the 443 dial
-            #   always connects to the socat forwarder, even while Headscale is down (502 over TLS, not a
+            #   connects whenever mesh-control-fwd serves, even while Headscale is down (502 over TLS, not a
             #   dial error). TS_FORCE_NOISE_443 skips the port-80 try (control/controlhttp/client.go#L181,
-            #   #L291), so no control dial fails and no fallback runs. It also makes HR22 strict: 443 only.
+            #   #L291), so a Headscale restart no longer starts the fallback. It also makes HR22 strict: 443
+            #   only. RESIDUAL: while mesh-control-fwd is down, the refused 443 dial still starts bootstrap
+            #   DNS; the NetworkPolicy drops those packets. Tracked as a follow-up of bug.5588.
             - { name: TS_FORCE_NOISE_443, value: "true" }
             # - No captive-portal probes (built-in Tailscale DERP IPs before the first map, and always
             #   controlplane/login.tailscale.com: net/captivedetection/endpoints.go#L87, #L124-L125) and no

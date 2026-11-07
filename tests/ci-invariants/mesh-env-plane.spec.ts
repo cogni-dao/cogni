@@ -574,7 +574,7 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
 
   it("substrate-gw tailscaled carries every HR21 zero-contact knob, base and rendered (bug.5588)", () => {
     // Each knob is proven at tailscale v1.104.4 (cited in substrate-gw.yaml). TS_FORCE_NOISE_443 is the
-    // bootstrap-DNS fix: no port-80 try, so no failed control dial asks derp*.tailscale.com for IPs.
+    // bootstrap-DNS fix for Headscale restarts: no refused port-80 try, so no fallback to derp*.tailscale.com.
     const KNOBS = [
       { name: "TS_NO_LOGS_NO_SUPPORT", value: "true" },
       { name: "TS_FORCE_NOISE_443", value: "true" },

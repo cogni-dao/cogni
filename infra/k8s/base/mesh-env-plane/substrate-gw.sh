@@ -10,7 +10,7 @@
 #   1. RUN   tailscaled in userspace (no TUN, no capabilities), state on the env VM's local-path PVC,
 #            no log upload, our control URL only, control over TLS 443 only. tailscaled inherits the
 #            HR21 knobs from the container env (substrate-gw.yaml, bug.5588): TS_NO_LOGS_NO_SUPPORT,
-#            TS_FORCE_NOISE_443 (no port-80 try, so no failed dial starts bootstrap DNS to
+#            TS_FORCE_NOISE_443 (no refused port-80 try, so a Headscale restart starts no bootstrap DNS to
 #            derp*.tailscale.com), TS_DISABLE_FEATURE=captiveportal,clientupdate and the
 #            TS_PANIC_IF_HIT_MAIN_CONTROL tripwire. The state dir is a SUBDIRECTORY of the volume that
 #            this uid creates and owns (mode 0700): the local-path volume root is root-owned 0777 and
