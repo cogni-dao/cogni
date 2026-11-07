@@ -104,6 +104,15 @@ export interface PostRoutingDiagnosticInput {
   checkRunId?: number;
   owningNode: OwningNode;
   changedFiles: readonly string[];
+  /**
+   * Dev-triggered review only (story.5102). When set, the refusal honours `failOnError`
+   * (failure + COULD NOT EVALUATE, reason routing_conflict / routing_miss) and the summary ends
+   * with the machine block. Absent on the legacy replay path, which stays neutral.
+   */
+  requestId?: string;
+  model?: string;
+  operatorBuildSha?: string | null;
+  failOnError?: boolean;
 }
 
 export interface PostReviewResultInput {
@@ -377,6 +386,39 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
       title = "No recognizable scope";
     }
 
+    // COULD_NOT_EVALUATE_IS_NOT_NEUTRAL on the dev-triggered path: a routing refusal is a
+    // non-evaluation, so fail_on_error turns it into a failure (legacy path: unchanged).
+    const reason =
+      input.owningNode.kind === "conflict"
+        ? "routing_conflict"
+        : "routing_miss";
+    const devTriggered = input.requestId !== undefined;
+    const failed = devTriggered && input.failOnError === true;
+    if (devTriggered) {
+      logger.warn(
+        {
+          event: WORKER_EVENT_NAMES.REVIEW_COULD_NOT_EVALUATE,
+          reason,
+          failOnError: input.failOnError === true,
+          requestId: input.requestId,
+          prNumber: input.prNumber,
+          headSha: input.headSha,
+        },
+        WORKER_EVENT_NAMES.REVIEW_COULD_NOT_EVALUATE
+      );
+    }
+    const summary = devTriggered
+      ? composeCheckSummary(body, {
+          requestId: input.requestId ?? "",
+          buildSha: input.operatorBuildSha ?? null,
+          model: input.model ?? "unknown",
+          conclusion: failed ? "failure" : "neutral",
+          couldNotEvaluate: reason,
+          citations: [],
+          evidence: { files: [], entries: [] },
+        })
+      : body;
+
     if (input.checkRunId) {
       try {
         await reviewClient.updateCheckRun({
@@ -384,9 +426,11 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
           repo: input.repo,
           installationId: input.installationId,
           checkRunId: input.checkRunId,
-          conclusion: "neutral",
-          title: `PR Review: ${title}`,
-          summary: body,
+          conclusion: failed ? "failure" : "neutral",
+          title: failed
+            ? "PR Review: COULD NOT EVALUATE"
+            : `PR Review: ${title}`,
+          summary,
         });
       } catch (error) {
         logger.warn(

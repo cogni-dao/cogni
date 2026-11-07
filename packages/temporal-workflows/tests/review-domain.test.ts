@@ -15,7 +15,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   aggregateGateStatuses,
+  CHECK_SUMMARY_MAX_CHARS,
   collectCitations,
+  composeCheckSummary,
   evaluateCriteria,
   findRequirement,
   formatCheckRunSummary,
@@ -339,5 +341,87 @@ describe("review result block (CHECK_IS_REQUEST_BOUND, story.5102)", () => {
     });
     expect(summary).toContain("COULD NOT EVALUATE");
     expect(summary).toContain("graph_failed");
+  });
+});
+
+describe("composeCheckSummary — bounded machine block (story.5102 J4)", () => {
+  const parseBlock = (summary: string) => {
+    const marker = "<!-- cogni-review-result v1 -->";
+    const after = summary.slice(summary.lastIndexOf(marker) + marker.length);
+    const json = after.match(/```json\n([\s\S]*?)\n```/)?.[1];
+    return JSON.parse(json ?? "null") as {
+      citations: string[];
+      evidence: { files: string[]; entries: string[] };
+      requestId: string;
+    };
+  };
+  // Quote/backslash-heavy strings roughly double in size when JSON-escaped.
+  const nasty = (i: number) => `${'"\\'.repeat(140)}-${i}`;
+  const many = Array.from({ length: 500 }, (_, i) => nasty(i));
+  const block = {
+    requestId: "req-1",
+    buildSha: "b".repeat(40),
+    model: "m",
+    conclusion: "failure" as const,
+    couldNotEvaluate: null,
+    citations: many,
+    evidence: { files: many, entries: many },
+  };
+
+  it("keeps the whole summary under GitHub's limit and the block valid JSON", () => {
+    const summary = composeCheckSummary("x".repeat(80_000), block);
+    expect(summary.length).toBeLessThanOrEqual(CHECK_SUMMARY_MAX_CHARS);
+    const parsed = parseBlock(summary);
+    expect(parsed.requestId).toBe("req-1");
+    expect(parsed.citations.length).toBeLessThan(50);
+    expect(parsed.citations[0]).toBe(nasty(0));
+  });
+
+  it("shrinks the block's lists when the block alone would exceed a tight limit", () => {
+    const summary = composeCheckSummary("prose", block, 4_000);
+    expect(summary.length).toBeLessThanOrEqual(4_000);
+    const parsed = parseBlock(summary);
+    expect(parsed.evidence.files.length).toBe(parsed.citations.length);
+    expect(parsed.citations.every((c, i) => c === nasty(i))).toBe(true);
+  });
+
+  it("keeps a small block whole with up to 50 items per list", () => {
+    const small = {
+      ...block,
+      citations: Array.from({ length: 80 }, (_, i) => `rule-${i}`),
+      evidence: { files: ["a.ts"], entries: ["rule-0"] },
+    };
+    const parsed = parseBlock(composeCheckSummary("ok", small));
+    expect(parsed.citations).toHaveLength(50);
+  });
+});
+
+describe("composeCheckSummary — cited-and-read ids survive the cap (story.5102)", () => {
+  it("leads entries and citations with ids that are both cited and read", () => {
+    const filler = Array.from({ length: 120 }, (_, i) => `entry-${i}`);
+    const summary = composeCheckSummary("p", {
+      requestId: "r",
+      buildSha: null,
+      model: "m",
+      conclusion: "failure",
+      couldNotEvaluate: null,
+      citations: [
+        ...Array.from({ length: 80 }, (_, i) => `cited-${i}`),
+        "md-to-hub-design",
+      ],
+      evidence: { files: ["a.ts"], entries: [...filler, "md-to-hub-design"] },
+    });
+    const json = summary.slice(
+      summary.lastIndexOf("```json\n") + 8,
+      summary.lastIndexOf("\n```")
+    );
+    const block = JSON.parse(json) as {
+      citations: string[];
+      evidence: { entries: string[] };
+    };
+    expect(block.evidence.entries).toHaveLength(50);
+    expect(block.evidence.entries[0]).toBe("md-to-hub-design");
+    expect(block.citations).toHaveLength(50);
+    expect(block.citations[0]).toBe("md-to-hub-design");
   });
 });

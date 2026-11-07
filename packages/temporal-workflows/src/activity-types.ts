@@ -150,6 +150,11 @@ export interface ReviewActivities {
     checkRunId?: number;
     owningNode: OwningNode;
     changedFiles: readonly string[];
+    /** Dev-triggered only (story.5102): honour fail_on_error + machine block. */
+    requestId?: string;
+    model?: string;
+    operatorBuildSha?: string | null;
+    failOnError?: boolean;
   }): Promise<void>;
 }
 

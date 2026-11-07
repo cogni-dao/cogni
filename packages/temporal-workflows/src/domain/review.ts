@@ -132,31 +132,65 @@ export function formatReviewResultBlock(block: ReviewResultBlock): string {
 export const CHECK_SUMMARY_MAX_CHARS = 65_535;
 /** Each machine-block list is capped so the block itself stays small. */
 export const REVIEW_BLOCK_LIST_CAP = 50;
+/** The machine block never exceeds this many characters; its lists shrink until it fits. */
+export const REVIEW_BLOCK_MAX_CHARS = 16_384;
 
 /**
- * Compose a check summary that fits GitHub's limit: the machine block is capped (each list to
- * REVIEW_BLOCK_LIST_CAP items, strings to 300 chars) and kept intact at the end; the prose is
- * truncated first.
+ * Render the machine block within REVIEW_BLOCK_MAX_CHARS (or `maxChars`, if smaller). Strings are
+ * capped at 300 chars and lists at REVIEW_BLOCK_LIST_CAP, then the lists are halved until the
+ * block fits. Items are dropped whole, never cut mid-string, so the block is always valid JSON.
+ */
+function boundedReviewBlock(
+  block: ReviewResultBlock,
+  maxChars: number
+): string {
+  const budget = Math.min(REVIEW_BLOCK_MAX_CHARS, maxChars);
+  const str = (x: string) => x.slice(0, 300);
+  // CITED_AND_READ_FIRST: ids that are both cited and read lead both lists, so no cap can
+  // drop the evidence a grader checks.
+  const read = new Set(block.evidence.entries);
+  const cited = new Set(block.citations);
+  const lead = (xs: readonly string[], keep: Set<string>) => [
+    ...xs.filter((x) => keep.has(x)),
+    ...xs.filter((x) => !keep.has(x)),
+  ];
+  const citations = lead(block.citations, read);
+  const entries = lead(block.evidence.entries, cited);
+  const render = (cap: number) => {
+    const list = (xs: readonly string[]) => xs.slice(0, cap).map(str);
+    return formatReviewResultBlock({
+      requestId: str(block.requestId),
+      buildSha: block.buildSha === null ? null : str(block.buildSha),
+      model: str(block.model),
+      conclusion: block.conclusion,
+      couldNotEvaluate:
+        block.couldNotEvaluate === null ? null : str(block.couldNotEvaluate),
+      citations: list(citations),
+      evidence: {
+        files: list(block.evidence.files),
+        entries: list(entries),
+      },
+    });
+  };
+  let cap = REVIEW_BLOCK_LIST_CAP;
+  let tail = render(cap);
+  while (tail.length > budget && cap > 0) {
+    cap = Math.floor(cap / 2);
+    tail = render(cap);
+  }
+  return tail;
+}
+
+/**
+ * Compose a check summary that fits GitHub's limit: the machine block is bounded
+ * (boundedReviewBlock) and kept intact at the end; the prose is truncated first.
  */
 export function composeCheckSummary(
   prose: string,
   block: ReviewResultBlock | undefined,
   maxChars: number = CHECK_SUMMARY_MAX_CHARS
 ): string {
-  const cap = (xs: readonly string[]) =>
-    xs.slice(0, REVIEW_BLOCK_LIST_CAP).map((x) => x.slice(0, 300));
-  const tail = block
-    ? formatReviewResultBlock({
-        ...block,
-        model: block.model.slice(0, 200),
-        couldNotEvaluate: block.couldNotEvaluate?.slice(0, 200) ?? null,
-        citations: cap(block.citations),
-        evidence: {
-          files: cap(block.evidence.files),
-          entries: cap(block.evidence.entries),
-        },
-      })
-    : "";
+  const tail = block ? boundedReviewBlock(block, maxChars) : "";
   const room = maxChars - tail.length;
   if (prose.length <= room) return prose + tail;
   const marker = "\n\n… (summary truncated)\n";

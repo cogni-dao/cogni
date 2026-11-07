@@ -15,8 +15,9 @@
  *   - RECURSION_GOES_TO_VERDICT: a GraphRecursionError during gather proceeds to the verdict with
  *     what was read (as `cogni` does).
  *   - EVIDENCE_FROM_OWN_TOOL_RESULTS: finalize pairs each tool call with its ToolMessage by
- *     tool_call_id. `evidence.entries` counts ONLY entries whose bodies came back from
- *     core__knowledge_read (and core__work_item_read items) — never index/search id lists.
+ *     tool_call_id. `evidence.entries` counts ONLY entries whose bodies came back from a
+ *     single-entry core__knowledge_read (mode "get") and core__work_item_read items — never
+ *     index/search id lists or domain listings.
  *     `evidence.files` counts only files read with content.
  *   - NO_VERDICT_WITHOUT_CODE: a run that read no file with content sets `noCodeRead: true`; the
  *     worker reports that as "could not evaluate" (`no_code_read`), so a verdict never passes
@@ -164,7 +165,12 @@ export function collectReviewEvidence(
     if (!name) continue; // not a tool call this run made
     const v = parseJson(textOf(m));
     if (!v || typeof v.error === "string") continue;
-    if (name === KNOWLEDGE_READ_NAME && Array.isArray(v.entries)) {
+    // Only single-entry body reads (mode "get") count; a domain listing is discovery.
+    if (
+      name === KNOWLEDGE_READ_NAME &&
+      v.mode === "get" &&
+      Array.isArray(v.entries)
+    ) {
       for (const e of v.entries as Array<Record<string, unknown>>) {
         if (
           typeof e?.id === "string" &&
