@@ -151,6 +151,10 @@ export class EdgeGuardError extends Error {
 
 const norm = (s: string): string => s.trim().toLowerCase().replace(/\.$/, "");
 
+/** Two DNS hostnames name the same host (case and a trailing dot ignored), as the edge writes them. */
+export const sameHostname = (a: string, b: string): boolean =>
+  norm(a) === norm(b);
+
 export class EdgeRouter {
   private readonly hostRegex: RegExp;
   constructor(

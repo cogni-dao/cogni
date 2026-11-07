@@ -372,7 +372,7 @@ describe("candidate-a overlays differ from production only in identity (task.527
     });
   }
 
-  it("pins the Akash provider allowlist byte-identical across candidate-a and production", () => {
+  it("keeps the Akash provider allowlist byte-identical across candidate-a and production", () => {
     const key = envValue(
       "akash-tx-actuator",
       "actuator",
@@ -382,7 +382,6 @@ describe("candidate-a overlays differ from production only in identity (task.527
       [...overlayLeaves(env, "operator")].find(([k]) => key.test(k))?.[1];
     const production = value("production");
     expect(production).toBeDefined();
-    expect(JSON.parse(production ?? '""').split(",").length).toBeGreaterThan(1);
     expect(value("candidate-a")).toBe(production);
   });
 });

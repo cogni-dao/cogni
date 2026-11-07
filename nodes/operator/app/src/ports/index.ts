@@ -325,6 +325,7 @@ export type {
   DnsRecord,
   DnsRecordInput,
   DnsRecordsPort,
+  HostNotRoutedStrike,
   HttpResult,
   NodeWorkloadSpec,
   PayerCreateRequest,
@@ -351,6 +352,7 @@ export {
   keyString,
   MAX_ATTEMPT_STEPS,
   PayerError,
+  SERVED_ATTEMPT_PHASES,
   withResolvedImage,
 } from "./node-deploy.port";
 export type {

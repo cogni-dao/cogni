@@ -14,6 +14,7 @@
 #
 # Source events (operator node-deploy sequencer, Loki {env,service="sequencer"}):
 #   msg="node_deploy_alert"           outcome=release_parked (re-logged every 10m while parked)
+#   msg="node_deploy_alert"           outcome=edge_restore_failed (re-logged every 10m while the restore fails)
 #   msg="node_deploy_provider_strike" outcome=proof_timeout | same_provider_as_blue
 #   msg="node_deploy_sequencer_leader"            acquisition + a 1/min heartbeat {heartbeat:true}
 #   msg="node_deploy_sequencer_leadership_lost"   fatal; the process exits
@@ -139,5 +140,37 @@ groups:
         annotations:
           summary: "Provider {{ $labels.provider }} won 3+ node-deploy creates in 1h that never served the release sha within the proof deadline. Read the attempts' step timelines (GET /api/v1/deploy/workloads) and exclude the provider or fix the image."
         labels: { severity: warning, plane: node-deploy }
+        noDataState: OK
+        execErrState: Alerting
+
+      # A failed cutover could not point the edge back to blue (bug.5587). The sequencer never closes green
+      # while the edge may point at it: green stays `proven`, the restore is retried every tick, and the
+      # lane (this workload's later releases) is held until it lands. A short DNS fault heals by itself;
+      # a lasting one (duplicate or protected record at the host, zone token, Cloudflare down) needs a human.
+      # Re-logged every 10m while it lasts, so a 15m window keeps it firing until the restore succeeds.
+      - uid: node-deploy-edge-restore-failed
+        title: Node deploy edge restore FAILED — public host may still point at a failed green
+        condition: THRESHOLD
+        for: 0s
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'sum by (env, nodeId, workload) (count_over_time({env="production",service="sequencer"} | json | msg="node_deploy_alert" | outcome="edge_restore_failed" [15m]))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+              refId: THRESHOLD
+        annotations:
+          summary: "Node {{ $labels.nodeId }} workload {{ $labels.workload }} ({{ $labels.env }}): a failed cutover cannot point its public host back to blue, so the host may still serve the failed green and the lane is held. Read the node_deploy_alert line (error, reason) and the edge record for the host (duplicate/protected record, zone token, Cloudflare). Once the edge write works the sequencer restores blue and closes green on its own."
+        labels: { severity: critical, plane: node-deploy }
         noDataState: OK
         execErrState: Alerting

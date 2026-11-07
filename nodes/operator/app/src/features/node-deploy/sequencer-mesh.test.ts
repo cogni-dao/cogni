@@ -405,6 +405,7 @@ function harness(
         namespace: "cogni-production",
         environment: ENV,
         retainMs: 120_000,
+        publicStreak: 1, // bug.5587: one public read per tick; sequencer.test.ts tests the 8-read streak
       },
     });
   let seq = build();
@@ -475,6 +476,16 @@ const appCreates = (h: H) =>
 const meshLogs = (h: H, msg: string) =>
   h.log.lines.filter((l) => l.msg === msg);
 
+/** bug.5587: a step probes a proof ONCE; step `pollMs` apart until the attempt leaves `proving`. */
+async function stepUntilProved(h: H, slug: Slug): Promise<void> {
+  for (let i = 0; i < 10_000; i++) {
+    await h.seq.step(h.key(slug));
+    if ((await h.attempts(slug))[0]?.phase !== "proving") return;
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.pollMs);
+  }
+  throw new Error(`${slug} still proving`);
+}
+
 /** Open minting (first pass), then deploy one release of `slug` to active. */
 async function deployed(h: H, slug: Slug, sha = SHA_1): Promise<AttemptRow> {
   await h.seq.reconcileAll();
@@ -540,7 +551,7 @@ describe("HR 18: a lane switch never leaves a node without a serving path", () =
     expect(t({ workloadAttempts: [failed], nodeAttempts: [failed] })).toBe(
       "mesh"
     );
-    // stop-then-start: blue served at decision time but is not retained -> the served transport (egress)
+    // blue served but is not retained -> the served transport (egress)
     expect(t({ workloadAttempts: [blue], nodeAttempts: [blue] })).toBe(
       "egress"
     );
@@ -727,7 +738,7 @@ describe("HR 3, 16, 21: the companions carry exactly the derived ports", () => {
       l.notReady = true; // attempt 1 fails its proof
     };
     await h.release("poly");
-    await h.seq.step(h.key("poly"));
+    await stepUntilProved(h, "poly");
     const [first] = await h.attempts("poly");
     expect(first?.phase).toBe("failed");
     const pinned = {
@@ -871,7 +882,7 @@ describe("HR 6: revoke on close; a blue is revoked only after it retires", () =>
       l.notReady = true;
     };
     await h.release("poly");
-    await h.seq.step(h.key("poly"));
+    await stepUntilProved(h, "poly");
     const [failed] = await h.attempts("poly");
     expect(failed?.phase).toBe("failed");
     const keyId = failed?.mesh?.headscaleKeyId;
@@ -1206,43 +1217,40 @@ describe("HR 10, 11: a wiped Headscale recovers by derivation, with no person", 
 });
 
 // ---------------------------------------------------------------------------------------------
-// Review #3050: B3 stop-then-start ordering, B4 one Headscale writer, B5 drain after a switch-back
+// Review #3050: B4 one Headscale writer, B5 drain after a switch-back
 // ---------------------------------------------------------------------------------------------
 
-describe("review fixes", () => {
-  it("B3: a meshed node whose next create needs stop-then-start keeps blue when no key can be minted", async () => {
+describe("bug.5585: a busy wallet keeps its wait start across mesh prep", () => {
+  it("a mesh attempt waits on a busy wallet, alerts at walletWaitMs, then lands on the same attempt", async () => {
     const h = harness();
-    const blue = await deployed(h, "poly");
-    expect(blue.transport).toBe("mesh");
-    // Release 2's first create: blue's provider was the only bidder screening could pass.
-    h.payer.createFault = (n) =>
-      n === 2
-        ? new PayerError(
-            "provider_rejected",
-            "none passed provider screening [refused: already_tried=1]",
-            false,
-            true
-          )
-        : undefined;
-    await h.release("poly", SHA_2);
-    await h.seq.step(h.key("poly"));
-    expect((await h.attempts("poly"))[0]?.phase).toBe("failed");
-    // A restart: minting is closed until the first mesh pass.
-    h.restart();
-    expect(await h.seq.step(h.key("poly"))).toBe("waiting_dependency");
-    const kept = (await h.attempts("poly")).find((a) => a.id === blue.id);
-    expect(kept?.phase).toBe("active");
-    expect(h.payer.byDseq(blue.externalName ?? "").state).toBe("active");
-    expect(h.log.steps()).not.toContain("stop_then_start:closing_blue");
-    // Once the pass opens minting, stop-then-start runs and the green lands on the mesh.
     await h.seq.reconcileAll();
+    let walletBusy = true;
+    h.payer.createFault = () =>
+      walletBusy
+        ? new PayerError("wallet_allocation_blocked", "busy", false)
+        : undefined;
+    await h.release("poly");
+    const since = h.clock.now();
+    for (let i = 0; i < 18; i++) {
+      await h.seq.step(h.key("poly"));
+      h.clock.advance(120_000);
+    }
+    const waiting = await h.attempts("poly");
+    expect(
+      waiting.map((a) => [a.attempt, a.phase, a.transport, a.error])
+    ).toEqual([[1, "planned", "mesh", `unpaid: wallet_busy@${since}`]]);
+    expect(
+      h.log.alerts().filter((a) => a === "wallet_wait_exceeded")
+    ).toHaveLength(1);
+    walletBusy = false;
     await h.seq.step(h.key("poly"));
-    expect(h.log.steps()).toContain("stop_then_start:closing_blue");
-    const [green] = await h.attempts("poly");
-    expect(green?.transport).toBe("mesh");
-    expect(green?.phase).toBe("active");
+    expect((await h.attempts("poly")).map((a) => [a.attempt, a.phase])).toEqual(
+      [[1, "active"]]
+    );
   });
+});
 
+describe("review fixes", () => {
   it("B4: a concurrent mesh pass and mint serialize; the new key is granted and never swept", async () => {
     const h = harness();
     await h.seq.reconcileAll();

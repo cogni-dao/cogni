@@ -46,7 +46,6 @@ interface Tailnet {
   control_label: string;
   relay_label: string;
   coordinator_np: string;
-  stun_port: string;
   derp_region: string;
   zone: string;
 }
@@ -59,7 +58,6 @@ const FIELDS = [
   "coordinator_np",
   "relay_np",
   "publish_np",
-  "stun_port",
   "wireguard_port",
   "derp_region",
   "zone",
@@ -252,7 +250,8 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
       expect.objectContaining({
         hostname: `${t.relay_label}.${t.zone}`,
         derpport: 443,
-        stunport: Number(t.stun_port || 3478),
+        // STUN has no table column (relay-only, STUN off since P4). T1p b2 pins every map to -1.
+        stunport: expect.any(Number),
         stunonly: false,
       }),
     ]);

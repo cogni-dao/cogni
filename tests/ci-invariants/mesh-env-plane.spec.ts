@@ -51,7 +51,6 @@ const FIELDS = [
   "coordinator_np",
   "relay_np",
   "publish_np",
-  "stun_port",
   "wireguard_port",
   "derp_region",
   "zone",
@@ -67,7 +66,16 @@ const TABLE: Row[] = (
   .map(
     (r) => Object.fromEntries(r.split("|").map((v, i) => [FIELDS[i], v])) as Row
   );
-const INSTANCES = TABLE.filter((r) => r.vm_env !== "");
+// CD6 (qualify before exposure): a VM row's edge site and hardener drop ship and reach the VM BEFORE the
+// instance that opens its NodePorts. A tailnet listed here has its VM row (edge + firewall, T1p b1) but no
+// instance yet; the instance PR (T1p b2) removes it from this list in the same change that adds the overlay.
+const EDGE_BEFORE_INSTANCE = new Set(["production"]);
+const INSTANCES = TABLE.filter(
+  (r) => r.vm_env !== "" && !EDGE_BEFORE_INSTANCE.has(r.tailnet)
+);
+const PENDING = TABLE.filter(
+  (r) => r.vm_env !== "" && EDGE_BEFORE_INSTANCE.has(r.tailnet)
+);
 const REGISTRY_PORTS = ["30900", "4000", "5432", "5435", "6379", "7233"];
 
 interface Port {
@@ -295,13 +303,48 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     }
   });
 
+  it.each(
+    PENDING.map((r) => [r.tailnet, r] as const)
+  )("edge before instance %s: a firewall-only VM row; no instance and no manifest opens its NodePorts yet (CD6)", (name, r) => {
+    expect(r.relay_np).not.toBe("");
+    expect(r.publish_np).not.toBe("");
+    const exists = (rel: string): boolean => {
+      try {
+        readFileSync(path.join(root, rel));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(exists(`${overlayDir(r)}/kustomization.yaml`)).toBe(false);
+    expect(
+      exists(
+        `infra/k8s/argocd/control-plane/${r.vm_env}/${r.vm_env}-mesh-plane-${name}-application.yaml`
+      )
+    ).toBe(false);
+    for (const port of [r.relay_np, r.publish_np]) {
+      // git grep exits 1 when nothing matches: that is the passing case.
+      let hits = "";
+      try {
+        hits = execFileSync(
+          "git",
+          ["grep", "-l", "-w", "-e", port, "--", "infra/k8s"],
+          { cwd: root, encoding: "utf8" }
+        ).trim();
+      } catch (e) {
+        if ((e as { status?: number }).status !== 1) throw e;
+      }
+      expect(hits, port).toBe("");
+    }
+  });
+
   it("NodePort preflight: every mesh NodePort is distinct and claimed by no other manifest in the repo", () => {
     const owners: [string, string[]][] = TABLE.flatMap((r) => [
       [
         r.coordinator_np,
         [`infra/k8s/base/node-deploy-mesh/tailnets/${r.tailnet}/service.yaml`],
       ],
-      ...(r.vm_env
+      ...(r.vm_env && !EDGE_BEFORE_INSTANCE.has(r.tailnet)
         ? ([
             [
               r.relay_np,
@@ -527,6 +570,34 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     expect(sh).toContain("--advertise-tags=tag:substrate");
     expect(sh).toContain('request_enrollment "not_joined_no_pending_request"');
     expect(sh).not.toMatch(/--auth-?key|TS_AUTHKEY/);
+  });
+
+  it("substrate-gw tailscaled carries every HR21 zero-contact knob, base and rendered (bug.5588)", () => {
+    // Each knob is proven at tailscale v1.104.4 (cited in substrate-gw.yaml). TS_FORCE_NOISE_443 is the
+    // bootstrap-DNS fix for Headscale restarts: no refused port-80 try, so no fallback to derp*.tailscale.com.
+    const KNOBS = [
+      { name: "TS_NO_LOGS_NO_SUPPORT", value: "true" },
+      { name: "TS_FORCE_NOISE_443", value: "true" },
+      { name: "TS_DISABLE_FEATURE", value: "captiveportal,clientupdate" },
+      { name: "TS_PANIC_IF_HIT_MAIN_CONTROL", value: "true" },
+    ];
+    const gwEnv = (docs: Doc[], name: string) =>
+      docs
+        .find((d) => d.kind === "Deployment" && d.metadata.name === name)
+        ?.spec.template.spec.containers.find((x) => x.name === "substrate-gw")
+        ?.env;
+    expect(
+      gwEnv(parseAll<Doc>(`${BASE}/substrate-gw.yaml`), "substrate-gw")
+    ).toEqual(expect.arrayContaining(KNOBS));
+    if (kubectlAvailable) {
+      for (const r of INSTANCES) {
+        const env = gwEnv(renderInstance(r), `substrate-gw-${r.tailnet}`);
+        expect(env, r.tailnet).toEqual(expect.arrayContaining(KNOBS));
+      }
+    }
+    const sh = read(`${BASE}/substrate-gw.sh`);
+    expect(sh).toMatch(/tailscaled [^\n]*\\\n[^\n]*--no-logs-no-support/);
+    expect(sh).toContain("--login-server=");
   });
 
   it("substrate-gw state dir is a subdirectory it owns, never the root-owned volume root (P4 NoState)", () => {
