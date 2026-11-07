@@ -452,6 +452,83 @@ describe("app deploy", () => {
     ).toMatch(/^cutover_failed: dns write down/);
   });
 
+  it("bug.5587 re-review N1: a decided rollback is durable; a restarted runner never re-points the edge at the failed green", async () => {
+    const h = harness({ publicStreak: 8, publicMs: 20_000 });
+    await stateUp(h);
+    await deployApp(h, SHA_1); // blue: lease 1002
+    const blueTarget = "ingress-1002.provider-2.example";
+    const greenTarget = "ingress-1003.provider-3.example";
+    h.probe.publicStaleReads = 1_000;
+    h.probe.stale = "ingress-9999.nowhere.example"; // the public host never serves green's sha
+    await h.release(canaryApp(), SHA_2);
+    await h.seq.step(APP); // green proven, edge moved
+    const green = (await h.store.attemptsFor(APP))[0];
+    expect([...h.dns.records.values()][0]?.content).toBe(greenTarget);
+    // DNS writes fail from now on; every attempted target is recorded.
+    const update = h.dns.update.bind(h.dns);
+    const writes: string[] = [];
+    let dnsDown = true;
+    h.dns.update = async (id, input) => {
+      writes.push(input.content);
+      if (dnsDown) throw new Error("dns write down");
+      return update(id, input);
+    };
+    const greenRow = async () =>
+      (await h.store.attemptsFor(APP)).find((a) => a.id === green?.id);
+    for (let i = 0; i < 20; i++) {
+      h.clock.advance(h.config.pollMs);
+      await h.seq.step(APP);
+      if ((await greenRow())?.error?.startsWith("rollback_pending: ")) break;
+    }
+    // The readback window passed: rollback decided on the attempt, restore failed, green kept.
+    expect((await greenRow())?.phase).toBe("proven");
+    expect((await greenRow())?.error).toMatch(
+      /^rollback_pending: cutover_failed: public host/
+    );
+    expect(h.payer.byDseq("1003").state).toBe("active");
+    expect(h.log.alerts()).toContain("edge_restore_failed");
+    // A new runner (no memory) retries ONLY the restore: it never writes green's target again.
+    writes.length = 0;
+    const restarted = restart(h);
+    await restarted.step(APP);
+    expect(writes).toEqual([blueTarget]);
+    expect((await greenRow())?.phase).toBe("proven");
+    dnsDown = false;
+    await restarted.step(APP);
+    expect(writes).toEqual([blueTarget, blueTarget]);
+    expect([...h.dns.records.values()][0]?.content).toBe(blueTarget);
+    expect((await greenRow())?.phase).toBe("failed");
+    expect((await greenRow())?.error).toMatch(/^cutover_failed: public host/);
+    expect(h.payer.byDseq("1003").state).toBe("closed");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+  });
+
+  it("bug.5587 re-review N3: after a restart an unreadable edge counts as pointing at green; blue is restored before green closes", async () => {
+    const h = harness({ publicStreak: 8 });
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    const blueTarget = "ingress-1002.provider-2.example";
+    await h.release(canaryApp(), SHA_2);
+    await h.seq.step(APP); // green proven, edge moved
+    const green = (await h.store.attemptsFor(APP))[0];
+    // The edge cannot be read twice: the restarted re-point's read, then rollBack's own read.
+    const find = h.dns.findByName.bind(h.dns);
+    let unreadable = 2;
+    h.dns.findByName = async (name) => {
+      if (unreadable-- > 0) throw new Error("edge read down");
+      return find(name);
+    };
+    await restart(h).step(APP);
+    expect([...h.dns.records.values()][0]?.content).toBe(blueTarget);
+    const row = (await h.store.attemptsFor(APP)).find(
+      (a) => a.id === green?.id
+    );
+    expect(row?.phase).toBe("failed");
+    expect(row?.error).toMatch(/^cutover_failed: edge read down/);
+    expect(h.payer.byDseq("1003").state).toBe("closed");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+  });
+
   it("bug.5587: an unconfirmed close does not hold the next tick", async () => {
     const h = harness();
     await stateUp(h);

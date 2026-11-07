@@ -121,6 +121,7 @@ import {
   type EdgeRouter,
   HOST_ENVS,
   hostOwnedBy,
+  sameHostname,
   workerHostRefusal,
 } from "./edge";
 import {
@@ -370,9 +371,13 @@ interface CutoverWatch {
   firstAt: string;
   last: string;
   fallbackLogged: boolean;
-  /** A decided rollback whose edge restore failed: the `failAttempt` reason, retried each tick. */
-  rollback?: string;
 }
+
+/**
+ * bug.5587: a decided cutover rollback, written to the attempt's `error` BEFORE the edge restore (green
+ * stays `proven`). Every tick and every restarted runner then retries only the restore, never the cutover.
+ */
+const ROLLBACK_PENDING = "rollback_pending: ";
 
 class DependencyNotReady extends Error {}
 class InvalidArtifactSet extends Error {}
@@ -400,7 +405,7 @@ export class NodeDeploySequencer {
    */
   private readonly proofWatch = new Map<
     string,
-    { notRoutedSince?: number; lastNote: number }
+    { notRoutedSince?: number | undefined; lastNote: number }
   >();
   /** bug.5587: per proven attempt id, its public readback once this runner moved the edge. */
   private readonly cutoverWatch = new Map<string, CutoverWatch>();
@@ -1926,9 +1931,8 @@ export class NodeDeploySequencer {
       // STEP_NEVER_WAITS: a watch means THIS runner already moved the edge to green; a restart has none,
       // so it qualifies and points again (idempotent) and restarts the readback window (only a delay).
       // Whether the edge points at green is never taken from this memory: `rollBack` reads the edge.
-      let watch = this.cutoverWatch.get(attempt.id);
-      if (watch?.rollback) {
-        // A decided rollback whose restore failed: retry only the restore, never the cutover.
+      if (attempt.error?.startsWith(ROLLBACK_PENDING)) {
+        // A decided rollback (durable) whose restore failed: retry only the restore, never the cutover.
         await this.rollBack(
           key,
           release,
@@ -1936,10 +1940,11 @@ export class NodeDeploySequencer {
           blue,
           host,
           ingress,
-          watch.rollback
+          attempt.error.slice(ROLLBACK_PENDING.length)
         );
         return;
       }
+      let watch = this.cutoverWatch.get(attempt.id);
       let qualified = watch !== undefined;
       try {
         if (!watch) {
@@ -2028,9 +2033,10 @@ export class NodeDeploySequencer {
    * Close green after a failed cutover, but NEVER while the edge may still point at it (bug.5587).
    * Whether it does is read from the edge record itself, not runner memory, so a restarted runner sees
    * what its predecessor wrote; an unreadable edge counts as pointing at green. Such an edge is pointed
-   * back to blue first (a re-point, NOT a withdrawal). A failed restore raises `edge_restore_failed` and
-   * keeps green `proven`; the next tick retries only the restore. With no blue to return to, green is
-   * closed as before.
+   * back to blue first (a re-point, NOT a withdrawal). The decision is written to the attempt first
+   * (`ROLLBACK_PENDING`), so no runner re-points the edge at this green again. A failed restore raises
+   * `edge_restore_failed` and keeps green `proven`; every later tick retries only the restore. With no
+   * blue to return to, green is closed as before.
    */
   private async rollBack(
     key: WorkloadKey,
@@ -2044,11 +2050,13 @@ export class NodeDeploySequencer {
     const edge = this.d.edge;
     const blueIngress = blue ? ingressHostOf(blue.endpoints, host) : undefined;
     if (edge && blueIngress) {
-      const same = (a: string, b: string) =>
-        a.trim().toLowerCase().replace(/\.$/, "") ===
-        b.trim().toLowerCase().replace(/\.$/, "");
+      this.cutoverWatch.delete(attempt.id);
+      if (!attempt.error?.startsWith(ROLLBACK_PENDING))
+        attempt = await this.d.store.updateAttempt(attempt.id, {
+          error: `${ROLLBACK_PENDING}${reason}`.slice(0, ERROR_TEXT_MAX),
+        });
       const onGreen = await edge.current(host).then(
-        (rec) => rec !== undefined && same(rec.content, ingress),
+        (rec) => rec !== undefined && sameHostname(rec.content, ingress),
         () => true
       );
       if (onGreen) {
@@ -2058,14 +2066,6 @@ export class NodeDeploySequencer {
           await this.alert(key, release, attempt, "edge_restore_failed", {
             error: errText(e),
             reason,
-          });
-          this.cutoverWatch.set(attempt.id, {
-            movedAt: this.d.clock.now(),
-            streak: 0,
-            firstAt: "",
-            last: "",
-            fallbackLogged: false,
-            rollback: reason,
           });
           return;
         }

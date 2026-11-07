@@ -1408,6 +1408,51 @@ async function companionRelease(h: H, spec = companionSpec()) {
 }
 
 describe("private release companions", () => {
+  it("bug.5587 re-review N3: after a restart between the edge move and the readback, a failed re-qualify restores blue before green closes", async () => {
+    const h = harness({ environment: "preview", publicStreak: 8 });
+    installBundle(h);
+    let failReadback = false;
+    proofResponder(h, (body, mode) => {
+      if (failReadback && mode === "readback") body.status = "failed";
+    });
+    const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+    await companionRelease(
+      h,
+      canaryApp({
+        bindings: [],
+        expose: { http: { host: "poly-preview.cognidao.org" } },
+      })
+    );
+    for (
+      let i = 0;
+      i < 20 && h.store.attempts.at(-1)?.phase !== "active";
+      i++
+    ) {
+      await h.seq.step(key);
+      h.clock.advance(DEFAULT_SEQUENCER_CONFIG.pollMs);
+    }
+    const blue = requiredFixture(h.store.attempts.at(-1));
+    expect(blue.phase).toBe("active");
+    const blueTarget = [...h.dns.records.values()][0]?.content;
+    await companionRelease(h);
+    await h.seq.step(key); // green proven, edge moved, 1 of 8 public reads
+    const green = requiredFixture(h.store.attempts.at(-1));
+    expect(green.phase).toBe("proven");
+    expect([...h.dns.records.values()][0]?.content).not.toBe(blueTarget);
+    // A new runner (no memory) re-qualifies; the readback qualification now fails.
+    failReadback = true;
+    await h.newSequencer(h.store).step(key);
+    expect([...h.dns.records.values()][0]?.content).toBe(blueTarget);
+    const failed = requiredFixture(
+      h.store.attempts.find((a) => a.id === green.id)
+    );
+    expect(failed.phase).toBe("failed");
+    expect(failed.error).toMatch(/^cutover_failed: /);
+    expect(h.store.attempts.find((a) => a.id === blue.id)?.phase).toBe(
+      "active"
+    );
+  });
+
   it.each([
     false,
     true,
