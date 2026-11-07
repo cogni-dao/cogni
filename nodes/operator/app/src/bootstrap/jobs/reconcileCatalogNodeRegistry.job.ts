@@ -4,7 +4,8 @@
 /**
  * Module: `@bootstrap/jobs/reconcileCatalogNodeRegistry.job`
  * Purpose: Reconcile deployed git catalog intent into this environment's node registry and OpenFGA store.
- * Scope: Acquires a single-writer lock, App-reads the exact deployed parent revision, delegates DB projection,
+ * Scope: Acquires a single-writer lock, reads the exact deployed parent revision (App, or anonymous for a public
+ *   catalog repo the App is not installed on — bug.5596), delegates DB projection,
  *   then ensures node-admin ownership relations. Does not schedule epochs or deliver webhooks.
  * Invariants:
  *   - APP_READS_DEPLOYED_GIT: runtime disk contents are never treated as registry intent; candidate
@@ -21,7 +22,7 @@ import type { AuthorizationPort } from "@cogni/authorization-core";
 
 import { DrizzleCatalogNodeRegistryAdapter } from "@/adapters/server";
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
-import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
+import { createCatalogNodeLister } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { getContainer } from "@/bootstrap/container";
 import type { CatalogNodeOwnerProjection } from "@/ports";
 import { serverEnv } from "@/shared/env/server-env";
@@ -76,7 +77,7 @@ export async function runCatalogNodeRegistryReconcileJob(): Promise<CatalogNodeR
       },
       "Starting catalog node registry reconcile"
     );
-    const definitions = await createOperatorDeployPlane(env).listCatalogNodes({
+    const definitions = await createCatalogNodeLister(env).listCatalogNodes({
       parentOwner,
       parentRepo,
       sourceRef,

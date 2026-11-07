@@ -258,6 +258,7 @@ export {
   type ForkFromTemplateInput,
   GitHubRepoWriter,
   type GitHubRepoWriterConfig,
+  listCatalogNodesVia,
   type OpenNodeAppPrInput,
   type OpenNodeAppPrResult,
   type PackageImageTagExistsInput,
