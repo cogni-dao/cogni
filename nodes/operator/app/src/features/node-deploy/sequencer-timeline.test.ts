@@ -95,11 +95,15 @@ async function stateUp(h: H) {
   await h.seq.step(DB);
 }
 
-/** bug.5587: a step probes a proof ONCE; step `pollMs` apart until the app attempt leaves `proving`. */
-async function stepUntilProved(h: H) {
+/**
+ * bug.5587: a step makes ONE proof round or public read; step `pollMs` apart (a tick) until the app
+ * attempt leaves `proving` / `proven`.
+ */
+async function stepUntilSettled(h: H) {
   for (let i = 0; i < 10_000; i++) {
-    await h.seq.step(APP);
-    if ((await h.store.attemptsFor(APP))[0]?.phase !== "proving") return;
+    const outcome = await h.seq.step(APP);
+    const phase = (await h.store.attemptsFor(APP))[0]?.phase;
+    if (phase !== "proving" && phase !== "proven") return outcome;
     h.clock.advance(DEFAULT_SEQUENCER_CONFIG.pollMs);
   }
   throw new Error("still proving");
@@ -110,7 +114,7 @@ describe("persisted step timeline", () => {
     const h = harness();
     await stateUp(h);
     await h.release(canaryApp(), SHA_1);
-    await h.seq.step(APP);
+    await stepUntilSettled(h);
     const [attempt] = await h.store.attemptsFor(APP);
     expect(attempt?.steps.map((s) => s.step)).toEqual([
       "attempt_planned",
@@ -155,7 +159,7 @@ describe("persisted step timeline", () => {
     await stateUp(h);
     h.store.failStepAppends = true;
     await h.release(canaryApp(), SHA_1);
-    expect(await h.seq.step(APP)).toBe("driven");
+    expect(await stepUntilSettled(h)).toBe("driven");
     const [attempt] = await h.store.attemptsFor(APP);
     expect(attempt?.phase).toBe("active");
     expect(attempt?.steps).toEqual([]);
@@ -173,7 +177,7 @@ describe("persisted step timeline", () => {
       l.serveSha = "f".repeat(40);
     };
     await h.release(canaryApp(), SHA_1);
-    await stepUntilProved(h);
+    await stepUntilSettled(h);
     const [attempt] = await h.store.attemptsFor(APP);
     const strike = attempt?.steps.find((s) => s.step === "provider_strike");
     expect(strike).toMatchObject({
@@ -205,7 +209,7 @@ describe("release state on the read model", () => {
       activatedAt: null,
       leadTimeMs: null,
     });
-    await h.seq.step(APP);
+    await stepUntilSettled(h);
     const done = await view(h);
     expect(done.desired.releaseState).toBe("active");
     expect(done.desired.activatedAt).not.toBeNull();
@@ -224,7 +228,7 @@ describe("release state on the read model", () => {
     await h.release(canaryApp(), SHA_1);
     const states: string[] = [];
     for (let i = 0; i < 4; i++) {
-      await stepUntilProved(h);
+      await stepUntilSettled(h);
       states.push((await view(h)).desired.releaseState);
       h.clock.advance(60_000);
     }
@@ -250,10 +254,10 @@ describe("release state on the read model", () => {
     const h = harness();
     await stateUp(h);
     await h.release(canaryApp(), SHA_1);
-    await h.seq.step(APP);
+    await stepUntilSettled(h);
     const first = (await h.store.getDesired(APP))?.releaseId ?? "";
     await h.release(canaryApp(), SHA_2);
-    await h.seq.step(APP);
+    await stepUntilSettled(h);
     const desired = await h.store.getDesired(APP);
     const release = await h.store.getRelease(first);
     if (!release) throw new Error("missing release");

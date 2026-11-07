@@ -214,6 +214,7 @@ function harness(
         namespace: "cogni-production",
         environment: ENV,
         retainMs: 120_000,
+        publicStreak: 1, // bug.5587: one public read per tick; sequencer.test.ts tests the 8-read streak
         appProviders: ALLOWED,
         ...cfg,
       } as SequencerConfig,
@@ -2334,6 +2335,7 @@ describe("review repair digest and companion gates", () => {
     );
     expect(green.state).toBe("active");
     h.payer.failDelete = false;
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.closeConfirmMs); // bug.5587: the close is re-sent once per window
     await restarted.step(key);
     const recovered = requiredFixture(
       restored.attempts.find((a) => a.id === prior.id)

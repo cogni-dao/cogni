@@ -59,6 +59,7 @@ function harness(
     namespace: "cogni-production",
     environment: ENV,
     retainMs: 120_000,
+    publicStreak: 1, // bug.5587: one public read per tick; sequencer.test.ts tests the 8-read streak
     ...cfg,
   };
   const deps = {
@@ -111,15 +112,18 @@ async function stateUp(h: H) {
 
 async function deployApp(h: H, sha: string) {
   await h.release(canaryApp(), sha);
-  return stepUntilProved(h);
+  return stepUntilSettled(h);
 }
 
-/** bug.5587: a step probes a proof ONCE; step the workload `pollMs` apart until it leaves `proving`. */
-async function stepUntilProved(h: H, key = APP) {
+/**
+ * bug.5587: a step makes ONE proof round or public read; step the workload `pollMs` apart (a tick) until
+ * its newest attempt leaves `proving` / `proven`.
+ */
+async function stepUntilSettled(h: H, key = APP) {
   for (let i = 0; i < 10_000; i++) {
     const outcome = await h.seq.step(key);
-    if ((await h.store.attemptsFor(key))[0]?.phase !== "proving")
-      return outcome;
+    const phase = (await h.store.attemptsFor(key))[0]?.phase;
+    if (phase !== "proving" && phase !== "proven") return outcome;
     h.clock.advance(h.config.pollMs);
   }
   throw new Error(`${key.workload} still proving`);
@@ -229,7 +233,7 @@ describe("app deploy", () => {
   });
 
   it("first deploy: binding + RELEASE_SHA injected, host accepted, edge moved, public readback, active", async () => {
-    const h = harness();
+    const h = harness({ publicStreak: 8 });
     await stateUp(h);
     expect(await deployApp(h, SHA_1)).toBe("driven");
     const req = h.payer.createRequests.at(-1);
@@ -360,7 +364,7 @@ describe("app deploy", () => {
     const leasedAt = a?.leasedAt?.getTime() ?? 0;
     expect(h.clock.now() - leasedAt).toBeLessThan(h.config.proofMs);
     // A keeps proving tick by tick and still fails proof_timeout at its durable bound.
-    await stepUntilProved(h);
+    await stepUntilSettled(h);
     const failed = (await h.store.attemptsFor(APP))[0];
     expect(failed?.id).toBe(a?.id);
     expect(failed?.error).toMatch(/^proof_timeout: version 200/);
@@ -368,6 +372,60 @@ describe("app deploy", () => {
       (failed?.updatedAt.getTime() ?? 0) - leasedAt
     ).toBeGreaterThanOrEqual(h.config.proofMs);
     expect(h.payer.byDseq("1002").state).toBe("active"); // blue serves throughout
+  });
+
+  it("bug.5587: a pending public readback does not hold the next tick; activation still waits for the full streak", async () => {
+    const h = harness({ publicStreak: 8 });
+    await stateUp(h);
+    await deployApp(h, SHA_1); // blue: lease 1002
+    h.probe.publicReads.length = 0;
+    h.probe.publicStaleReads = 5;
+    h.probe.stale = "ingress-1002.provider-2.example"; // blue still answers the public host
+    await h.release(canaryApp(), SHA_2);
+    const start = h.clock.now();
+    await h.seq.tick(); // A: create, prove, edge moved, ONE public read
+    const DB2 = { ...DB, workload: "canary-db-2" };
+    await h.release(canaryDb({ name: "canary-db-2" }), SHA_1);
+    await h.seq.tick(); // B converges on the next tick while A's readback is pending
+    expect((await h.store.attemptsFor(DB2))[0]?.phase).toBe("active");
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("proven");
+    expect([...h.dns.records.values()][0]?.content).toBe(
+      "ingress-1003.provider-3.example"
+    );
+    expect(h.payer.byDseq("1002").state).toBe("active"); // blue not retired before the streak
+    expect(h.clock.now() - start).toBeLessThan(h.config.publicMs);
+    await stepUntilSettled(h);
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
+    expect(h.probe.publicReads).toHaveLength(5 + 8); // stale reads, then 8 consecutive exact reads
+  });
+
+  it("bug.5587: an unconfirmed close does not hold the next tick", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    h.payer.onLease = (l) => {
+      if (l.env.RELEASE_SHA === SHA_2) l.serveSha = "f".repeat(40);
+    };
+    h.payer.failDelete = true;
+    await deployApp(h, SHA_2); // A's green fails its proof and its close is not confirmed
+    const a = (await h.store.attemptsFor(APP))[0];
+    expect(a?.phase).toBe("closing");
+    const DB2 = { ...DB, workload: "canary-db-2" };
+    await h.release(canaryDb({ name: "canary-db-2" }), SHA_1);
+    const start = h.clock.now();
+    await h.seq.tick();
+    expect((await h.store.attemptsFor(DB2))[0]?.phase).toBe("active");
+    expect(
+      (await h.store.attemptsFor(APP)).find((x) => x.id === a?.id)?.phase
+    ).toBe("closing");
+    expect(h.clock.now()).toBe(start); // no in-step close window ran
+    h.payer.failDelete = false;
+    h.clock.advance(h.config.closeConfirmMs); // the close is re-sent once per window
+    await h.seq.step(APP);
+    expect(
+      (await h.store.attemptsFor(APP)).find((x) => x.id === a?.id)?.phase
+    ).toBe("failed");
+    expect(h.payer.byDseq("1003").state).toBe("closed");
   });
 
   it("bug.5587: the host_not_routed window survives across ticks and a restart only delays it", async () => {
@@ -501,7 +559,7 @@ describe("app deploy", () => {
   });
 
   it("an unchanged streak requirement: one stale read mid-streak resets it", async () => {
-    const h = harness();
+    const h = harness({ publicStreak: 8 });
     await stateUp(h);
     await deployApp(h, SHA_1);
     h.probe.publicReads.length = 0;
@@ -542,8 +600,8 @@ describe("provider exclusion and alert hygiene", () => {
       l.serveSha = "f".repeat(40);
     };
     await h.release(canaryApp(), SHA_1);
-    await stepUntilProved(h); // bug.5587: a failed proof spans ticks
-    await stepUntilProved(h);
+    await stepUntilSettled(h); // bug.5587: a failed proof spans ticks
+    await stepUntilSettled(h);
     h.payer.onLease = undefined;
     await deployApp(h, SHA_2);
     const appCreates = h.payer.createRequests.filter(
@@ -923,7 +981,7 @@ describe("provider exclusion and alert hygiene", () => {
       l.serveSha = "f".repeat(40);
     };
     await h.release(canaryApp(), SHA_1);
-    for (let i = 0; i < 3; i++) await stepUntilProved(h); // bug.5587
+    for (let i = 0; i < 3; i++) await stepUntilSettled(h); // bug.5587
     for (let i = 0; i < 50; i++) {
       await h.seq.step(APP);
       h.clock.advance(4_000);
@@ -1407,7 +1465,7 @@ describe("keys and parking", () => {
     await h.release(canaryApp(), SHA_1);
     const outcomes: string[] = [];
     for (let i = 0; i < 6; i++) {
-      outcomes.push(await stepUntilProved(h)); // bug.5587: one attempt's proof spans ticks
+      outcomes.push(await stepUntilSettled(h)); // bug.5587: one attempt's proof spans ticks
       h.clock.advance(24 * 3_600_000);
     }
     expect(outcomes).toEqual([
@@ -1821,12 +1879,16 @@ describe("crash safety", () => {
     h.payer.failDelete = true;
     await deployApp(h, SHA_1);
     expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("closing");
-    expect(h.log.alerts()).toContain("close_unconfirmed");
+    // bug.5587: one confirm read per tick; the alert waits for a full closeConfirmMs window
+    expect(h.log.alerts()).not.toContain("close_unconfirmed");
+    h.clock.advance(h.config.closeConfirmMs);
     expect(await h.seq.step(APP)).toBe("close_pending");
+    expect(h.log.alerts()).toContain("close_unconfirmed");
     expect(
       h.payer.createRequests.filter((r) => r.spec.name === "canary")
     ).toHaveLength(1);
     h.payer.failDelete = false;
+    h.clock.advance(h.config.closeConfirmMs); // bug.5587: the close is re-sent once per window
     expect(await h.seq.step(APP)).toBe("driven"); // janitor confirmed, a fresh attempt follows
   });
 

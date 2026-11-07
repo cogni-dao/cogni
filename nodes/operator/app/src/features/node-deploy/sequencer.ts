@@ -45,10 +45,12 @@
  *   - LOST_MEANS_CHAIN_TRUTH: a lease is lost only when chain/observe say closed or insufficient_funds,
  *     or it fails its proof for `unhealthyLostMs` (15 min) straight. A single miss is not a loss.
  *   - ONE_RUNNER_PER_WORKLOAD: `step` and `reconcile` never overlap for one workload key.
- *   - STEP_NEVER_WAITS (bug.5587): a step makes ONE bounded lease observe or proof round and returns;
- *     the next tick resumes it. Every bound is read from durable state (`leasedAt`) or kept in memory
- *     per attempt, where a restart can only delay a verdict, never bring it early. So one slow proof
- *     never holds the tick for another workload.
+ *   - STEP_NEVER_WAITS (bug.5587): a step makes ONE bounded lease observe, proof round, public
+ *     readback or close confirm read and returns; the next tick resumes it. Every bound is read from
+ *     durable state (`leasedAt`, the phase timestamp) or kept in memory per attempt, where a restart can
+ *     only delay a verdict, never bring it early. So one slow proof, readback or close never holds the
+ *     tick for another workload. A proven attempt stays `proven` until its readback streak completes
+ *     (activate) or fails (edge restored to blue, green closed), exactly as before.
  *   - IMAGE_PINNED_BEFORE_PAY (story.5137): a release recorded before node CI published its image
  *     (`spec.imagePending`) waits as `DependencyNotReady` (no attempt row, nothing paid) until the registry
  *     has `sha-<sha>`; the digest is then pinned WRITE-ONCE on the release, so every attempt deploys one
@@ -187,13 +189,13 @@ export interface SequencerConfig {
    * the full `proofMs` window.
    */
   readonly hostNotRoutedMs: number;
-  /** Bound on the public cutover read-back loop. */
+  /** Bound on the public cutover readback, from the edge move (one read per tick). */
   readonly publicMs: number;
-  /** Consecutive exact-sha public reads that make a cutover (design: 8). */
+  /** Consecutive exact-sha public reads, one per tick, that make a cutover (design: 8). */
   readonly publicStreak: number;
   /** How long blue is retained after cutover (design: 10 min; 2 min in tests). */
   readonly retainMs: number;
-  /** One close-confirm poll window inside a single call. */
+  /** A close is re-sent this often while unconfirmed; unconfirmed this long = `close_unconfirmed`. */
   readonly closeConfirmMs: number;
   /** After this long unconfirmed, a close raises an alert. */
   readonly closeAlertMs: number;
@@ -361,6 +363,15 @@ interface MeshRow {
   readonly attempts: readonly AttemptRow[];
 }
 
+/** One proven attempt's public readback after THIS runner moved the edge to it (bug.5587). */
+interface CutoverWatch {
+  readonly movedAt: number;
+  streak: number;
+  firstAt: string;
+  last: string;
+  fallbackLogged: boolean;
+}
+
 class DependencyNotReady extends Error {}
 class InvalidArtifactSet extends Error {}
 
@@ -388,6 +399,17 @@ export class NodeDeploySequencer {
   private readonly proofWatch = new Map<
     string,
     { notRoutedSince?: number; lastNote: number }
+  >();
+  /** bug.5587: per proven attempt id, its public readback once this runner moved the edge. */
+  private readonly cutoverWatch = new Map<string, CutoverWatch>();
+  /**
+   * bug.5587: per attempt id, when this runner first and last sent its close (`delete`). It is re-sent
+   * once per `closeConfirmMs`, as the old in-step window did; a restart re-sends at once (idempotent)
+   * and restarts `closeOverdue`, which only delays an alert.
+   */
+  private readonly closeSentAt = new Map<
+    string,
+    { firstAt: number; lastAt: number }
   >();
   /** HR 8 device window per live mesh attempt id: in memory, so a restart rolls nothing. */
   private readonly deviceWatch = new Map<string, DeviceWatchEntry>();
@@ -1899,18 +1921,32 @@ export class NodeDeploySequencer {
         await this.failAttempt(key, release, attempt, "edge_not_configured");
         return;
       }
-      let touched = false;
-      let qualified = false;
+      // STEP_NEVER_WAITS: a watch means THIS runner already moved the edge to green; a restart has none,
+      // so it qualifies and points again (idempotent) and restarts the readback window (only a delay).
+      let watch = this.cutoverWatch.get(attempt.id);
+      let touched = watch !== undefined;
+      let qualified = touched;
       try {
-        await this.qualify(release, attempt, "readback");
-        qualified = true;
-        const rec = await edge.point(host, ingress);
-        touched = true;
-        await this.emit(key, release, attempt, "edge_moved", "ok", {
-          record: rec.id,
-          target: rec.content,
-        });
-        const firstAt = await this.awaitPublic(
+        if (!watch) {
+          await this.qualify(release, attempt, "readback");
+          qualified = true;
+          const rec = await edge.point(host, ingress);
+          touched = true;
+          watch = {
+            movedAt: this.d.clock.now(),
+            streak: 0,
+            firstAt: "",
+            last: "",
+            fallbackLogged: false,
+          };
+          // Never cleared in bulk: losing a watch would lose `touched`. Every exit below deletes it.
+          this.cutoverWatch.set(attempt.id, watch);
+          await this.emit(key, release, attempt, "edge_moved", "ok", {
+            record: rec.id,
+            target: rec.content,
+          });
+        }
+        const firstAt = await this.readPublicOnce(
           host,
           release.sourceSha,
           w.health?.version ?? "/version",
@@ -1920,8 +1956,11 @@ export class NodeDeploySequencer {
             workload: key.workload,
             releaseId: release.id,
             attempt: attempt.id,
-          }
+          },
+          watch
         );
+        if (firstAt === undefined) return; // not yet: the next tick reads again; activation waits
+        this.cutoverWatch.delete(attempt.id);
         await this.emit(key, release, attempt, "public_readback", "ok", {
           host,
           consecutive: this.d.config.publicStreak,
@@ -2223,52 +2262,46 @@ export class NodeDeploySequencer {
     }
   }
 
-  /** Poll the PUBLIC host until `publicStreak` consecutive reads return the exact sha. */
-  private async awaitPublic(
+  /**
+   * ONE read of the PUBLIC host (STEP_NEVER_WAITS). Returns the first exact-sha read's time once
+   * `publicStreak` consecutive reads (one per tick) returned the exact sha; `undefined` = not yet.
+   * Throws once no streak is running and `publicMs` has passed since this runner moved the edge.
+   */
+  private async readPublicOnce(
     host: string,
     sha: string,
     versionPath: string,
-    fields: Record<string, unknown>
-  ): Promise<string> {
+    fields: Record<string, unknown>,
+    watch: CutoverWatch
+  ): Promise<string | undefined> {
     const { clock, probe, config } = this.d;
-    const deadline = clock.now() + config.publicMs;
-    let streak = 0;
-    let firstAt = "";
-    let last = "";
-    let fallbackLogged = false;
-    for (;;) {
-      const v = await probe.publicRead(
-        host,
-        `${versionPath}?cb=${clock.now()}`
+    const v = await probe.publicRead(host, `${versionPath}?cb=${clock.now()}`);
+    // Once per host per release: the authoritative path failed and this read used DoH.
+    if (v.fallback && !watch.fallbackLogged) {
+      watch.fallbackLogged = true;
+      this.d.log.warn(
+        {
+          component: "node-deploy-sequencer",
+          ...fields,
+          host,
+          reason: v.fallback,
+        },
+        "node_deploy_public_read_fallback"
       );
-      // Once per host per release: the authoritative path failed and this read used DoH.
-      if (v.fallback && !fallbackLogged) {
-        fallbackLogged = true;
-        this.d.log.warn(
-          {
-            component: "node-deploy-sequencer",
-            ...fields,
-            host,
-            reason: v.fallback,
-          },
-          "node_deploy_public_read_fallback"
-        );
-      }
-      if (v.status === 200 && buildShaOf(v.body) === sha) {
-        if (streak === 0) firstAt = new Date(clock.now()).toISOString();
-        streak++;
-        if (streak >= config.publicStreak) return firstAt;
-        await clock.sleep(1_000);
-        continue;
-      }
-      streak = 0;
-      last = `${v.status} ${v.error ?? v.body.slice(0, 80)}`;
-      if (clock.now() >= deadline)
-        throw new Error(
-          `public host ${host} never served ${sha} for ${config.publicStreak} consecutive reads (last ${last})`
-        );
-      await clock.sleep(1_500);
     }
+    if (v.status === 200 && buildShaOf(v.body) === sha) {
+      if (watch.streak === 0)
+        watch.firstAt = new Date(clock.now()).toISOString();
+      watch.streak++;
+      return watch.streak >= config.publicStreak ? watch.firstAt : undefined;
+    }
+    watch.streak = 0;
+    watch.last = `${v.status} ${v.error ?? v.body.slice(0, 80)}`;
+    if (clock.now() - watch.movedAt >= config.publicMs)
+      throw new Error(
+        `public host ${host} never served ${sha} for ${config.publicStreak} consecutive reads (last ${watch.last})`
+      );
+    return undefined;
   }
 
   // ---- failure / close ------------------------------------------------------------------------
@@ -2286,6 +2319,7 @@ export class NodeDeploySequencer {
     opts: { createEnded?: boolean } = {}
   ): Promise<AttemptRow> {
     this.proofWatch.delete(attempt.id); // a superseded proving attempt never reaches `prove` again
+    this.cutoverWatch.delete(attempt.id);
     const trimmed = reason.slice(0, ERROR_TEXT_MAX);
     // ORPHAN_GUARD (CD8): an attempt with no bound handle may still own a PAID lease (the create
     // succeeded and its response was lost, or we crashed before binding). Ask the payer by key BEFORE
@@ -2365,9 +2399,11 @@ export class NodeDeploySequencer {
     });
     const confirmed = await this.closeAndConfirm(closing);
     if (!confirmed) {
-      await this.alert(key, release, closing, "close_unconfirmed", {
-        reason: trimmed,
-      });
+      // The janitor re-reads it on a later tick (STEP_NEVER_WAITS); `close_pending` holds new creates.
+      if (this.closeOverdue(closing))
+        await this.alert(key, release, closing, "close_unconfirmed", {
+          reason: trimmed,
+        });
       return closing;
     }
     const failed = await this.d.store.updateAttempt(attempt.id, {
@@ -2379,32 +2415,56 @@ export class NodeDeploySequencer {
     return failed;
   }
 
-  /** delete, then require observe AND chain truth (when wired) to say closed. */
+  /**
+   * Send the close (`delete`, at most once per `closeConfirmMs`), then ONE confirm read: observe AND
+   * chain truth (when wired) say closed (STEP_NEVER_WAITS). `false` = not confirmed yet: the caller
+   * retries on a later tick and alerts only once `closeOverdue`.
+   */
   private async closeAndConfirm(a: AttemptRow): Promise<boolean> {
-    if (!a.externalName) return true;
-    try {
-      await this.d.payer.delete({
-        cogniKey: a.cogniKey,
-        externalName: a.externalName,
+    const externalName = a.externalName;
+    if (!externalName) return true;
+    const now = this.d.clock.now();
+    const sent = this.closeSentAt.get(a.id);
+    if (!sent || now - sent.lastAt >= this.d.config.closeConfirmMs) {
+      if (!sent && this.closeSentAt.size > 500) this.closeSentAt.clear(); // bounded; a reset only delays
+      this.closeSentAt.set(a.id, {
+        firstAt: sent?.firstAt ?? now,
+        lastAt: now,
       });
+      await this.sendClose(a.cogniKey, externalName);
+    }
+    if (!(await this.isClosed(a, true))) return false;
+    this.closeSentAt.delete(a.id);
+    return true;
+  }
+
+  /** True once this runner sent `a`'s close at least `closeConfirmMs` ago and it is still unconfirmed. */
+  private closeOverdue(a: AttemptRow): boolean {
+    const sent = this.closeSentAt.get(a.id);
+    return (
+      sent !== undefined &&
+      this.d.clock.now() - sent.firstAt >= this.d.config.closeConfirmMs
+    );
+  }
+
+  private async sendClose(
+    cogniKey: string,
+    externalName: string
+  ): Promise<void> {
+    try {
+      await this.d.payer.delete({ cogniKey, externalName });
     } catch (error) {
       if (!(error instanceof PayerError && error.code === "not_found")) {
         this.d.log.warn(
           {
             component: "node-deploy-sequencer",
-            cogniKey: a.cogniKey,
-            dseq: a.externalName,
+            cogniKey,
+            dseq: externalName,
             error: errText(error),
           },
           "node_deploy_close_delete_failed"
         );
       }
-    }
-    const deadline = this.d.clock.now() + this.d.config.closeConfirmMs;
-    for (;;) {
-      if (await this.isClosed(a, true)) return true;
-      if (this.d.clock.now() >= deadline) return false;
-      await this.d.clock.sleep(this.d.config.pollMs);
     }
   }
 
@@ -2466,7 +2526,7 @@ export class NodeDeploySequencer {
               dseq: failed.externalName,
               verified: true,
             });
-        } else if (release) {
+        } else if (release && this.closeOverdue(a)) {
           await this.alert(key, release, a, "close_unconfirmed");
         }
       }
@@ -3222,9 +3282,11 @@ export class NodeDeploySequencer {
         headscaleKeyId: cur.mesh?.headscaleKeyId,
       });
       if (!(await this.closeAndConfirm(cur))) {
-        await this.alert(key, release, cur, "close_unconfirmed", {
-          why: MESH_DEVICE_ABSENT,
-        });
+        // Still `active`: a later pass rolls it again and re-reads the close (STEP_NEVER_WAITS).
+        if (this.closeOverdue(cur))
+          await this.alert(key, release, cur, "close_unconfirmed", {
+            why: MESH_DEVICE_ABSENT,
+          });
         return false;
       }
       await this.handleLost(key, release, cur, MESH_DEVICE_ABSENT);
@@ -3369,9 +3431,11 @@ export class NodeDeploySequencer {
         // lease_bad: /version fails too. A failing but LIVE lease is closed and confirmed before anything replaces it.
         if (await this.closeAndConfirm(active))
           return this.handleLost(key, release, active, "proof_failed_15m");
-        await this.alert(key, release, active, "close_unconfirmed", {
-          why: "proof_failed_15m",
-        });
+        // The next reconcile pass re-reads the close (STEP_NEVER_WAITS).
+        if (this.closeOverdue(active))
+          await this.alert(key, release, active, "close_unconfirmed", {
+            why: "proof_failed_15m",
+          });
         return "unhealthy_waiting";
       }
       return "unhealthy_waiting";
