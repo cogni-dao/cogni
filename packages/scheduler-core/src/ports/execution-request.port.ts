@@ -36,6 +36,11 @@ export interface ExecutionRequest {
   readonly ok: boolean | null;
   /** AiExecutionErrorCode if ok=false, null if ok=true or pending */
   readonly errorCode: AiExecutionErrorCode | null;
+  /**
+   * VERDICT_SURVIVES_REPLAY (story.5102): structured output written at finalize (≤64 KB JSON);
+   * null when the graph produced none, was too large, or the request is pending.
+   */
+  readonly structuredOutput?: Record<string, unknown> | null;
 }
 
 /**
@@ -61,6 +66,8 @@ export interface ExecutionOutcome {
   readonly ok: boolean;
   /** AiExecutionErrorCode if ok=false */
   readonly errorCode: AiExecutionErrorCode | null;
+  /** Bounded structured output to persist for cached replays (story.5102). */
+  readonly structuredOutput?: Record<string, unknown> | null;
 }
 
 /**

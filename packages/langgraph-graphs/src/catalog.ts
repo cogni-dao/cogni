@@ -62,6 +62,7 @@ import { PR_MANAGER_TOOL_IDS } from "./graphs/pr-manager/tools";
 import {
   createPrReviewGraph,
   PR_REVIEW_GRAPH_NAME,
+  PR_REVIEW_TOOL_IDS,
 } from "./graphs/pr-review/graph";
 import {
   createResearchGraph,
@@ -94,6 +95,11 @@ export interface CatalogEntry {
    * stream as one GRAPH_REPORT_OPEN…GRAPH_REPORT_CLOSE text delta.
    */
   readonly report?: { readonly event: string };
+  /**
+   * REVIEW_SUBJECT_IS_HOST_BOUND (story.5102): the graph may receive a host-validated code
+   * subject (repo + commits) on its run scope. Graphs without this flag never receive one.
+   */
+  readonly codeSubject?: true;
 }
 
 /** Delimiters of a catalog-declared run report on the run stream (CatalogEntry.report). */
@@ -189,18 +195,6 @@ export const NODE_LANGGRAPH_CATALOG = {
   },
 
   /**
-   * PR Review graph - single-call structured output for PR evaluation.
-   * No tools — evidence is pre-fetched and passed as message content.
-   */
-  [PR_REVIEW_GRAPH_NAME]: {
-    displayName: "PR Review",
-    description:
-      "Evaluates pull requests against declarative rules with structured scoring",
-    toolIds: [],
-    graphFactory: createPrReviewGraph,
-  },
-
-  /**
    * Browser graph - web browsing agent via Playwright MCP.
    * No native tools — all tools come from MCP servers.
    */
@@ -245,6 +239,19 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     toolIds: PR_MANAGER_TOOL_IDS as readonly string[],
     graphFactory: createOperatorGraph,
     systemPrompt: PR_MANAGER_PROMPT,
+  },
+
+  /**
+   * Grounded PR review (story.5102): gather (hub + PR-head code, read-only) → structured verdict
+   * → finalize with host evidence. Started only by POST /api/v1/vcs/review via PrReviewWorkflow.
+   */
+  [PR_REVIEW_GRAPH_NAME]: {
+    displayName: "PR Review",
+    description:
+      "Reviews a pull request against its rules and the governing hub, reading the PR-head code",
+    toolIds: PR_REVIEW_TOOL_IDS as readonly string[],
+    graphFactory: createPrReviewGraph,
+    codeSubject: true,
   },
 
   [GIT_REVIEWER_GRAPH_NAME]: {
@@ -310,7 +317,6 @@ export const NODE_LANGGRAPH_GRAPH_IDS = {
   poet: `${LANGGRAPH_PROVIDER_ID}:${POET_GRAPH_NAME}`,
   ponderer: `${LANGGRAPH_PROVIDER_ID}:${PONDERER_GRAPH_NAME}`,
   research: `${LANGGRAPH_PROVIDER_ID}:${RESEARCH_GRAPH_NAME}`,
-  "pr-review": `${LANGGRAPH_PROVIDER_ID}:${PR_REVIEW_GRAPH_NAME}`,
   browser: `${LANGGRAPH_PROVIDER_ID}:${BROWSER_GRAPH_NAME}`,
   "frontend-tester": `${LANGGRAPH_PROVIDER_ID}:${FRONTEND_TESTER_GRAPH_NAME}`,
 } as const;
@@ -319,6 +325,7 @@ export const OPERATOR_LANGGRAPH_GRAPH_IDS = {
   cogni: `${LANGGRAPH_PROVIDER_ID}:cogni`,
   ...NODE_LANGGRAPH_GRAPH_IDS,
   "operating-review": `${LANGGRAPH_PROVIDER_ID}:${OPERATING_REVIEW_GRAPH_NAME}`,
+  "pr-review": `${LANGGRAPH_PROVIDER_ID}:${PR_REVIEW_GRAPH_NAME}`,
   "pr-manager": `${LANGGRAPH_PROVIDER_ID}:${PR_MANAGER_GRAPH_NAME}`,
   "git-reviewer": `${LANGGRAPH_PROVIDER_ID}:${GIT_REVIEWER_GRAPH_NAME}`,
   "work-prioritizer": `${LANGGRAPH_PROVIDER_ID}:${WORK_PRIORITIZER_GRAPH_NAME}`,

@@ -6,7 +6,9 @@
  * Purpose: DrizzleExecutionRequestAdapter for execution request idempotency.
  * Scope: Implements ExecutionRequestPort with Drizzle ORM. Does not contain scheduling logic.
  * Invariants:
- *   - Per EXECUTION_IDEMPOTENCY_PERSISTED: Persists idempotency key → {ok, runId, traceId, errorCode}
+ *   - Per EXECUTION_IDEMPOTENCY_PERSISTED: Persists idempotency key → {ok, runId, traceId, errorCode, structuredOutput}
+ *   - VERDICT_SURVIVES_REPLAY (story.5102): finalize writes the caller-bounded structured output;
+ *     cached reads return it.
  *   - Lifecycle: pending (ok=null) → finalized (ok=true/false)
  *   - Stores BOTH success and error outcomes - retries return cached outcome
  *   - idempotencyKey uniqueness enforced at DB level (primary key)
@@ -235,6 +237,7 @@ export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
       .set({
         ok: outcome.ok,
         errorCode: outcome.errorCode,
+        structuredOutput: outcome.structuredOutput ?? null,
         updatedAt: new Date(),
         leaseExpiresAt: null,
       })
@@ -292,6 +295,7 @@ export class DrizzleExecutionRequestAdapter implements ExecutionRequestPort {
       traceId: row.traceId,
       ok: row.ok,
       errorCode,
+      structuredOutput: row.structuredOutput ?? null,
     };
   }
 }
