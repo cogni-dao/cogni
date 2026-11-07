@@ -22,7 +22,19 @@
 
 import type { Database } from "@cogni/db-client";
 import { nodeWorkloadSpecSchema } from "@cogni/repo-spec";
-import { and, desc, eq, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  exists,
+  gte,
+  inArray,
+  isNotNull,
+  like,
+  ne,
+  sql,
+} from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
 import type {
@@ -30,13 +42,18 @@ import type {
   AttemptRow,
   AttemptStep,
   DesiredRow,
+  HostNotRoutedStrike,
   RecordReleaseInput,
   ReleaseRow,
   StorePort,
   SubstrateTransport,
   WorkloadKey,
 } from "@/ports";
-import { MAX_ATTEMPT_STEPS, withResolvedImage } from "@/ports";
+import {
+  MAX_ATTEMPT_STEPS,
+  SERVED_ATTEMPT_PHASES,
+  withResolvedImage,
+} from "@/ports";
 import {
   nodeWorkloadAttempts,
   nodeWorkloadDesired,
@@ -375,6 +392,59 @@ export class PostgresNodeDeployStore implements StorePort {
       )
       .limit(200);
     return rows.map((r) => toAttempt(r.a));
+  }
+
+  async hostNotRoutedProviders(
+    since: Date,
+    limit: number
+  ): Promise<readonly HostNotRoutedStrike[]> {
+    const struck = nodeWorkloadAttempts;
+    const served = alias(nodeWorkloadAttempts, "served");
+    const lastStruckAt = sql<Date>`max(${struck.updatedAt})`;
+    const rows = await this.db
+      .select({
+        provider: struck.provider,
+        lastStruckAt,
+        confirmingReleaseId: sql<string>`(array_agg(${struck.releaseId} order by ${struck.updatedAt} desc))[1]::text`,
+      })
+      .from(struck)
+      .where(
+        and(
+          // node_workload_attempts_phase_idx; a struck attempt is `closing` until its close is confirmed
+          inArray(struck.phase, ["closing", "failed"]),
+          gte(struck.updatedAt, since),
+          isNotNull(struck.provider),
+          like(struck.error, "host_not_routed:%"),
+          // CONFIRMED: the same release served on another provider (release_id leads the unique index)
+          exists(
+            this.db
+              .select({ one: sql`1` })
+              .from(served)
+              .where(
+                and(
+                  eq(served.releaseId, struck.releaseId),
+                  inArray(served.phase, [...SERVED_ATTEMPT_PHASES]),
+                  isNotNull(served.provider),
+                  ne(served.provider, struck.provider)
+                )
+              )
+          )
+        )
+      )
+      .groupBy(struck.provider)
+      .orderBy(desc(lastStruckAt))
+      .limit(limit);
+    return rows.flatMap((r) =>
+      r.provider
+        ? [
+            {
+              provider: r.provider,
+              lastStruckAt: new Date(r.lastStruckAt),
+              confirmingReleaseId: r.confirmingReleaseId,
+            },
+          ]
+        : []
+    );
   }
 
   async insertAttempt(

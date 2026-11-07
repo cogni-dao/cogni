@@ -118,12 +118,13 @@ async function pastStrike(
   h: H,
   provider: string,
   error = "proof_timeout: version 503",
-  workload = "canary"
+  workload = "canary",
+  lane: { nodeId?: string; env?: string } = {}
 ) {
   const desired = new Map(h.store.desired);
   const { release } = await h.store.recordRelease({
-    nodeId: NODE_ID,
-    env: ENV,
+    nodeId: lane.nodeId ?? NODE_ID,
+    env: lane.env ?? ENV,
     workload,
     sourceSha: SHA_2,
     spec: canaryApp(),
@@ -140,6 +141,27 @@ async function pastStrike(
     externalName: `past-${a.id}`,
     provider,
     error,
+  });
+  return release.id;
+}
+
+/** bug.5586: one more attempt of an existing past release, on `provider`, in `phase`. */
+async function pastAttempt(
+  h: H,
+  releaseId: string,
+  provider: string,
+  phase: "retired" | "active" | "failed",
+  error?: string
+) {
+  const a = await h.store.insertAttempt(
+    releaseId,
+    (n) => `past:${releaseId}:${n}`
+  );
+  await h.store.updateAttempt(a.id, {
+    phase,
+    externalName: `past-${a.id}`,
+    provider,
+    ...(error ? { error } : {}),
   });
 }
 
@@ -653,6 +675,157 @@ describe("provider exclusion and alert hygiene", () => {
       );
       expect(admitted).toHaveLength(1);
       expect(line?.fields.remembered).toEqual(admitted);
+    });
+
+    describe("bug.5586: FLEET_HOST_MEMORY excludes a CONFIRMED host_not_routed provider from every lane after ONE strike", () => {
+      const OTHER_NODE = "11111111-2222-4333-8444-555555555555";
+      const HNR = "host_not_routed: version 404 for 60s";
+
+      /** A host_not_routed strike on `lane`, CONFIRMED: the same release later served on `confirmOn`. */
+      async function confirmedStrike(
+        h: H,
+        provider: string,
+        lane: { nodeId?: string; env?: string } = { nodeId: OTHER_NODE },
+        confirmOn = "provider-ok"
+      ) {
+        const releaseId = await pastStrike(h, provider, HNR, "app", lane);
+        await pastAttempt(h, releaseId, confirmOn, "retired");
+        return releaseId;
+      }
+
+      for (const [name, lane] of [
+        ["ANOTHER node's lane", { nodeId: OTHER_NODE }],
+        ["ANOTHER env of this node", { env: "preview" }],
+      ] as const)
+        it(`a confirmed strike on ${name}: this lane's first create excludes it, logged as fleet with the confirming release`, async () => {
+          const h = harness();
+          let releaseId = "";
+          const { exclude, line } = await newReleaseAfter(h, async () => {
+            releaseId = await confirmedStrike(h, "provider-aes", lane);
+          });
+          expect(exclude).toEqual(["provider-2", "provider-1", "provider-aes"]);
+          expect(line?.fields.fleetExcluded).toEqual(["provider-aes"]);
+          expect(line?.fields.fleetConfirmedBy).toEqual({
+            "provider-aes": releaseId,
+          });
+          expect(line?.fields.remembered).toEqual([]);
+          expect(String(line?.fields.reason)).toContain(
+            `fleet host_not_routed: provider-aes confirmed by release ${releaseId}`
+          );
+        });
+
+      it("an UNCONFIRMED strike (its release never served elsewhere) does not cross lanes", async () => {
+        const h = harness();
+        const { exclude, line } = await newReleaseAfter(h, async () => {
+          await pastStrike(h, "provider-aes", HNR, "app", {
+            nodeId: OTHER_NODE,
+            env: "preview",
+          });
+        });
+        expect(exclude).not.toContain("provider-aes");
+        expect(line?.fields.fleetExcluded).toEqual([]);
+      });
+
+      it("a broken flight (one release 404s on 2 providers and never proves) excludes nothing fleet-wide", async () => {
+        const h = harness();
+        const { exclude, line } = await newReleaseAfter(h, async () => {
+          const releaseId = await pastStrike(h, "provider-a", HNR, "app", {
+            nodeId: OTHER_NODE,
+            env: "candidate-a",
+          });
+          await pastAttempt(h, releaseId, "provider-b", "failed", HNR);
+        });
+        expect(exclude).not.toContain("provider-a");
+        expect(exclude).not.toContain("provider-b");
+        expect(line?.fields.fleetExcluded).toEqual([]);
+      });
+
+      it("a confirming attempt on the SAME provider does not confirm", async () => {
+        const h = harness();
+        const { exclude } = await newReleaseAfter(h, async () => {
+          await confirmedStrike(
+            h,
+            "provider-aes",
+            { nodeId: OTHER_NODE },
+            "provider-aes"
+          );
+        });
+        expect(exclude).not.toContain("provider-aes");
+      });
+
+      it("proof_timeout keeps its per-lane rule; a confirmed strike older than 24h is forgotten", async () => {
+        const h = harness();
+        const { exclude, line } = await newReleaseAfter(h, async () => {
+          await confirmedStrike(h, "provider-old");
+          h.clock.advance(25 * 60 * 60_000);
+          for (let i = 0; i < 2; i++)
+            await pastStrike(h, "provider-slow", undefined, "app", {
+              nodeId: OTHER_NODE,
+            });
+        });
+        expect(exclude).not.toContain("provider-old");
+        expect(exclude).not.toContain("provider-slow");
+        expect(line?.fields.fleetExcluded).toEqual([]);
+      });
+
+      it("NO LOCKOUT: a provider that served THIS lane is never excluded by a fleet strike (retired, and lost with no blue)", async () => {
+        const h = harness();
+        await stateUp(h); // provider-1
+        await deployApp(h, SHA_1); // provider-2
+        await deployApp(h, SHA_2); // provider-3 active, provider-2 retired
+        for (const p of ["provider-2", "provider-3"])
+          await confirmedStrike(h, p);
+        const blue = (await h.store.attemptsFor(APP)).find(
+          (a) => a.phase === "active"
+        );
+        await h.store.updateAttempt(blue?.id ?? "", { phase: "lost" }); // no blue now
+        const before = h.payer.createRequests.length;
+        await deployApp(h, SHA_3);
+        expect(h.payer.createRequests[before]?.excludeProviders).toEqual([
+          "provider-1",
+        ]);
+      });
+
+      it("NO LOCKOUT: fleet memory never excludes the last admitted provider (appProviders)", async () => {
+        const h = harness({ appProviders: ["provider-x", "provider-y"] });
+        const { exclude, line } = await newReleaseAfter(h, async () => {
+          for (const p of ["provider-x", "provider-y"])
+            await confirmedStrike(h, p);
+        });
+        const admitted = exclude.filter(
+          (p) => p === "provider-x" || p === "provider-y"
+        );
+        expect(admitted).toHaveLength(1);
+        expect(line?.fields.fleetExcluded).toEqual(admitted);
+      });
+
+      it("wire cap 16: blue and hairpin first, then the newest fleet strikes; lane memory is dropped first", async () => {
+        const h = harness();
+        const { exclude, line } = await newReleaseAfter(h, async () => {
+          for (let i = 0; i < 2; i++) await pastStrike(h, "provider-lane"); // proof_timeout x2 on this lane
+          for (let i = 0; i < 20; i++) {
+            h.clock.advance(1_000);
+            await confirmedStrike(h, `provider-f${i}`);
+          }
+        });
+        expect(exclude).toHaveLength(16);
+        expect(exclude.slice(0, 2)).toEqual(["provider-2", "provider-1"]);
+        expect(exclude[2]).toBe("provider-f19"); // newest strike first
+        expect(exclude).not.toContain("provider-f0"); // oldest dropped
+        expect(exclude).not.toContain("provider-lane");
+        expect(line?.fields.fleetExcluded).toHaveLength(14);
+        expect(line?.fields.remembered).toEqual([]);
+      });
+
+      it("a state workload is not touched by fleet host memory (it is not routed by host)", async () => {
+        const h = harness();
+        await confirmedStrike(h, "provider-aes");
+        await stateUp(h);
+        expect(
+          h.payer.createRequests.find((r) => r.spec.name === "canary-db")
+            ?.excludeProviders
+        ).toBeUndefined();
+      });
     });
   });
 
