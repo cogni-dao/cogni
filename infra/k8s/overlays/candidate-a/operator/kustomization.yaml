@@ -302,8 +302,8 @@ patches:
                   # task.5428 — the test operator's candidate-a lane reaches the substrate over its OWN tailnet
                   # (test-fleet parity): its node apps get a per-attempt mesh key, the socket
                   # /var/run/headscale/test-candidate-a/headscale.sock and the control URL
-                  # https://mesh-test-candidate-a.cogni-testing.org (env-lanes.ts). Production's lanes stay
-                  # egress until their own lane flip (T6b).
+                  # https://mesh-test-candidate-a.cogni-testing.org (env-lanes.ts). The production operator's
+                  # canonical lanes flip in its own overlay.
                   - name: NODE_DEPLOY_SUBSTRATE_TRANSPORTS
                     value: candidate-a=mesh:test-candidate-a
   - target:
