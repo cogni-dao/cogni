@@ -247,3 +247,207 @@ describe("postReviewResultActivity", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// story.5102 — COULD_NOT_EVALUATE_IS_NOT_NEUTRAL + CHECK_IS_REQUEST_BOUND
+// ---------------------------------------------------------------------------
+
+const HUB_RULE = {
+  id: "hub-rule-compliance",
+  schema_version: "0.3",
+  blocking: true,
+  evaluations: [
+    { "complies-with-governing-hub-rules": "Complies with hub rules." },
+  ],
+  success_criteria: {
+    neutral_on_missing_metrics: false,
+    require: [{ metric: "complies-with-governing-hub-rules", gte: 0.7 }],
+  },
+} as unknown as import("@cogni/repo-spec").Rule;
+
+function reviewInput(
+  graphResult: { ok: boolean; runId: string; structuredOutput?: unknown },
+  failOnError = true
+) {
+  return {
+    owner: "org",
+    repo: "repo",
+    prNumber: 9,
+    headSha: "a".repeat(40),
+    installationId: 1,
+    checkRunId: 77,
+    requestId: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+    model: "gemini-3.7-flash",
+    operatorBuildSha: "c".repeat(40),
+    graphResult,
+    gatesConfig: {
+      gates: [
+        { type: "ai-rule", with: { rule_file: "hub-rule-compliance.yaml" } },
+      ],
+      failOnError,
+    },
+    rules: { "hub-rule-compliance.yaml": HUB_RULE },
+  };
+}
+
+function machineBlock(summary: string): Record<string, unknown> {
+  const marker = "<!-- cogni-review-result v1 -->";
+  const after = summary.slice(summary.indexOf(marker) + marker.length);
+  const json = after.match(/```json\n([\s\S]*?)\n```/)?.[1];
+  return JSON.parse(json ?? "null");
+}
+
+describe("postReviewResultActivity — honest failure (story.5102)", () => {
+  it.each([
+    ["graph_failed", { ok: false, runId: "r1" }],
+    ["no_structured_output", { ok: true, runId: "r2" }],
+    [
+      "uncited",
+      {
+        ok: true,
+        runId: "r3",
+        structuredOutput: {
+          metrics: [
+            {
+              metric: "complies-with-governing-hub-rules",
+              value: 0.2,
+              observations: ["breaks a rule"],
+              citations: [],
+            },
+          ],
+          summary: "s",
+          uncited: true,
+          evidence: { files: [], entries: [] },
+        },
+      },
+    ],
+  ])("maps %s to failure + COULD NOT EVALUATE under fail_on_error", async (reason, graphResult) => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity(reviewInput(graphResult));
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+      title: string;
+      summary: string;
+    };
+    expect(call.conclusion).toBe("failure");
+    expect(call.title).toBe("PR Review: COULD NOT EVALUATE");
+    expect(machineBlock(call.summary)).toMatchObject({
+      couldNotEvaluate: reason,
+      conclusion: "failure",
+    });
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "review.could_not_evaluate", reason }),
+      "review.could_not_evaluate"
+    );
+  });
+
+  it("maps a missing rule file to failure under fail_on_error", async () => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity({
+      ...reviewInput({
+        ok: true,
+        runId: "r4",
+        structuredOutput: { metrics: [], summary: "" },
+      }),
+      rules: {},
+    });
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+      summary: string;
+    };
+    expect(call.conclusion).toBe("failure");
+    expect(machineBlock(call.summary).couldNotEvaluate).toBe("missing_rule");
+  });
+
+  it("keeps a non-evaluation neutral when fail_on_error is false", async () => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity(
+      reviewInput({ ok: false, runId: "r5" }, false)
+    );
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+      title: string;
+    };
+    expect(call.conclusion).toBe("neutral");
+    expect(call.title).toBe("PR Review: NEUTRAL");
+  });
+
+  it("maps a workflow-reported head_moved to failure", async () => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity({
+      ...reviewInput({ ok: true, runId: "r6" }),
+      graphResult: undefined,
+      couldNotEvaluate: "head_moved",
+    });
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+      summary: string;
+    };
+    expect(call.conclusion).toBe("failure");
+    expect(machineBlock(call.summary).couldNotEvaluate).toBe("head_moved");
+  });
+
+  it("an evaluated cited verdict ends the summary with the request-bound block", async () => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity(
+      reviewInput({
+        ok: true,
+        runId: "r7",
+        structuredOutput: {
+          metrics: [
+            {
+              metric: "complies-with-governing-hub-rules",
+              value: 0.1,
+              observations: ["writes secrets to logs"],
+              citations: ["no-secrets-in-logs"],
+            },
+          ],
+          summary: "breaks no-secrets-in-logs",
+          uncited: false,
+          buildSha: "b".repeat(40),
+          evidence: {
+            files: ["nodes/operator/app/src/x.ts"],
+            entries: ["no-secrets-in-logs"],
+          },
+        },
+      })
+    );
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+      title: string;
+      summary: string;
+    };
+    expect(call.conclusion).toBe("failure");
+    expect(call.title).toBe("PR Review: FAIL");
+    expect(machineBlock(call.summary)).toEqual({
+      requestId: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      buildSha: "b".repeat(40),
+      model: "gemini-3.7-flash",
+      conclusion: "failure",
+      couldNotEvaluate: null,
+      citations: ["no-secrets-in-logs"],
+      evidence: {
+        files: ["nodes/operator/app/src/x.ts"],
+        entries: ["no-secrets-in-logs"],
+      },
+    });
+    expect(mockLogger.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "review.could_not_evaluate" }),
+      expect.anything()
+    );
+  });
+
+  it("passes the request id through as the check run external_id", async () => {
+    const acts = makeActivities();
+    await acts.createCheckRunActivity({
+      owner: "org",
+      repo: "repo",
+      headSha: "deadbeef",
+      installationId: 1,
+      externalId: "req-1",
+    });
+    expect(client.createCheckRun).toHaveBeenCalledWith(
+      expect.objectContaining({ externalId: "req-1" })
+    );
+  });
+});

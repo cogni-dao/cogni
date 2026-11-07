@@ -9,17 +9,37 @@
  *   - SINGLE_INPUT_CONTRACT: schema is the single source of truth (see Purpose).
  *   - DISPATCH_FAIL_FAST: producers parse with this schema before `workflowClient.start(...)`.
  * Side-effects: none
- * Links: task.0419, PR #1067 (modelRef-shape regression — the regression class this schema closes).
+ * Links: task.0419, PR #1067 (modelRef-shape regression — the regression class this schema closes), story.5102.
  * @public
  */
 
 import { z } from "zod";
 
+const Sha40 = z.string().regex(/^[a-f0-9]{40}$/);
+
+/**
+ * Host-bound code subject of a review (story.5102 REVIEW_SUBJECT_IS_HOST_BOUND). The verb resolves
+ * it from the reviewed node; the operator graph route re-validates owner/repo against
+ * `resolveNodeRepo(nodeId)` before binding it to the run's code reader.
+ */
+export const ReviewCodeSubjectSchema = z
+  .object({
+    /** Reviewed node (UUID). v0: the operator only. */
+    nodeId: z.string().uuid(),
+    owner: z.string().min(1),
+    repo: z.string().min(1),
+    baseSha: Sha40,
+    headSha: Sha40,
+  })
+  .strict();
+export type ReviewCodeSubject = z.infer<typeof ReviewCodeSubjectSchema>;
+
 /**
  * Workflow input contract for `PrReviewWorkflow`.
  *
- * Source-of-truth Zod schema. Both the producer (`dispatchPrReview` in
- * `nodes/operator/app/src/app/_facades/review/dispatch.server.ts`) and the
+ * Source-of-truth Zod schema. Both the producer (`startPrReview` in
+ * `nodes/operator/app/src/app/_facades/review/request.server.ts`, called only by
+ * `POST /api/v1/vcs/review`) and the
  * consumer (`PrReviewWorkflow` + activities in `services/scheduler-worker`)
  * consume the inferred type via `z.infer<typeof PrReviewWorkflowInputSchema>`.
  *
@@ -33,7 +53,10 @@ import { z } from "zod";
  */
 export const PrReviewWorkflowInputSchema = z
   .object({
-    /** Originating node ID from repo-spec (UUID). Routes execution to correct node. */
+    /**
+     * Node that EXECUTES the review graph (the operator, from repo-spec). Routes execution.
+     * The reviewed node lives only in `codeSubject.nodeId` (two nodes, kept apart).
+     */
     nodeId: z.string().uuid(),
     /** GitHub repo owner (login). */
     owner: z.string().min(1),
@@ -41,16 +64,24 @@ export const PrReviewWorkflowInputSchema = z
     repo: z.string().min(1),
     /** Pull request number. */
     prNumber: z.number().int().positive(),
-    /** PR head SHA — 40-char hex (Git SHA-1). Keys workflow idempotency + identifies the build. */
-    headSha: z.string().regex(/^[a-f0-9]{40}$/),
+    /** PR head SHA pinned by the verb — keys workflow identity and the code reads. */
+    headSha: Sha40,
+    /** PR base SHA pinned by the verb — repo-spec and rules are read here. */
+    baseSha: Sha40,
     /** GitHub App installation ID for this repo. */
     installationId: z.number().int().positive(),
-    /** System principal user ID (UUID). COGNI_SYSTEM_PRINCIPAL_USER_ID from @cogni/ids constants. */
+    /** Requesting developer (UUID). ONE_ACTOR_ONE_ACCOUNT: the run actor. */
     actorUserId: z.string().uuid(),
-    /** System billing account ID (UUID). Resolved by webhook handler from DB. */
+    /** Requesting developer's own billing account (UUID). ONE_ACTOR_ONE_ACCOUNT: the payer. */
     billingAccountId: z.string().uuid(),
-    /** System virtual key ID. Resolved by webhook handler from DB. */
+    /** The developer billing account's default virtual key. */
     virtualKeyId: z.string().min(1),
+    /** Unique id of this review request; the check run carries it as `external_id`. */
+    requestId: z.string().uuid(),
+    /** User id that requested the review (audit; equals actorUserId). */
+    requestedBy: z.string().uuid(),
+    /** Repository and commits the review graph may read. */
+    codeSubject: ReviewCodeSubjectSchema,
   })
   .strict();
 // .strict() mode: typo'd field names (`virtualKeyld` with lowercase L,

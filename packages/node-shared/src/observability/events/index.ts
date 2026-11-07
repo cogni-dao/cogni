@@ -96,6 +96,7 @@ export const EVENT_NAMES = {
   NODE_OPERATIONS_READ_COMPLETE: "feature.node_operations_read.complete",
   VCS_FLIGHT_REQUEST_COMPLETE: "feature.vcs_flight.request_complete",
   VCS_MERGE_REQUEST_COMPLETE: "feature.vcs_merge.request_complete",
+  VCS_REVIEW_REQUEST_COMPLETE: "feature.vcs_review.request_complete",
   VCS_RUN_CI_REQUEST_COMPLETE: "feature.vcs_run_ci.request_complete",
 
   // Adapter Events

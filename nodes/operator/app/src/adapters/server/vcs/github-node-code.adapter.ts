@@ -6,6 +6,11 @@
  * Purpose: Bounded immutable Git-tree/blob evidence for the owning node.
  * Scope: Git object reads only, with host-owned identity and admitted source paths. Does not perform source mutations.
  * Invariants: No Contents symlink following; no raw-404 absence; reject secret paths before IO.
+ *   ADMISSION_POLICY_IS_INJECTED (story.5102): path admission + file-size bound come from a
+ *   `NodeCodeAdmissionPolicy`. The default is the binding's roots/manifests policy (serving code);
+ *   `REVIEW_NODE_CODE_POLICY` admits every top-level root, dot-dirs except `.git`, any UTF-8 text
+ *   file ≤256 KB, and refuses only real secret material (`.env`/`.env.*` except `*.example`,
+ *   `*.pem`, `*.key`, `id_rsa*`, `*.p12`).
  * Side-effects: IO (injected GitHub App read transport).
  * Links: https://cognidao.org/work/items/subtask.5027
  * @internal
@@ -63,6 +68,69 @@ const SECRET =
 
 class SourceError extends Error {}
 
+/** Path admission + size bound for one reader. Never widened after construction. */
+export interface NodeCodeAdmissionPolicy {
+  /** True when `path` (file, or directory when `directory`) may be read/listed. */
+  admits(path: string, directory: boolean): boolean;
+  /** Largest file (bytes) a read may return. */
+  readonly maxFileBytes: number;
+}
+
+/** Shape checks every policy shares: no traversal, encoding tricks, control chars or empty parts. */
+function safePathShape(path: string): string[] | null {
+  const parts = path.split("/");
+  if (
+    path.length > 512 ||
+    parts.length > 16 ||
+    /[\\%]/.test(path) ||
+    [...path].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) ||
+    parts.some((p) => !p || p === "." || p === "..")
+  )
+    return null;
+  return parts;
+}
+
+const REVIEW_MAX_FILE_BYTES = 262_144;
+
+/** Real secret material only; secret-handling code and specs stay readable. */
+export function isReviewSecretFile(name: string): boolean {
+  if (name === ".env") return true;
+  if (name.startsWith(".env.")) return !name.endsWith(".example");
+  return (
+    /\.pem$/i.test(name) ||
+    /\.key$/i.test(name) ||
+    /\.p12$/i.test(name) ||
+    /^id_rsa/i.test(name)
+  );
+}
+
+/**
+ * Review policy (story.5102): the reviewer reads everything it judges at the PR head — every
+ * top-level root, dot-directories except `.git`, any text file up to 256 KB (UTF-8 is enforced
+ * at read) — and refuses only real secret files. Refusals are named in the tool result.
+ */
+export const REVIEW_NODE_CODE_POLICY: NodeCodeAdmissionPolicy = {
+  maxFileBytes: REVIEW_MAX_FILE_BYTES,
+  admits(path: string, directory: boolean): boolean {
+    if (directory && path === "") return true;
+    const parts = safePathShape(path);
+    if (!parts) return false;
+    if (parts.some((p) => p === ".git")) return false;
+    const name = parts[parts.length - 1] ?? "";
+    return directory || !isReviewSecretFile(name);
+  },
+};
+
+/** Default policy: the binding's admitted roots + manifests (serving-code reader). */
+export function bindingAdmissionPolicy(
+  binding: Pick<NodeCodeBinding, "roots" | "manifests">
+): NodeCodeAdmissionPolicy {
+  return {
+    maxFileBytes: MAX_FILE_BYTES,
+    admits: (path, directory) => admittedNodeCodePath(binding, path, directory),
+  };
+}
+
 /** No normalization may turn an unsafe argument into a different admitted path. */
 export function admittedNodeCodePath(
   binding: Pick<NodeCodeBinding, "roots" | "manifests">,
@@ -93,13 +161,15 @@ export function admittedNodeCodePath(
 
 export class GitHubNodeCodeAdapter implements NodeCodeCapability {
   private readonly binding: NodeCodeBinding;
+  private readonly policy: NodeCodeAdmissionPolicy;
   constructor(
     binding: NodeCodeBinding,
     private readonly request: NodeCodeGitRequest,
     private readonly log: {
       info(fields: Record<string, unknown>): void;
       warn(fields: Record<string, unknown>): void;
-    }
+    },
+    policy?: NodeCodeAdmissionPolicy
   ) {
     // Capture immutable host policy; later caller mutations cannot widen a live reader.
     this.binding = {
@@ -107,6 +177,7 @@ export class GitHubNodeCodeAdapter implements NodeCodeCapability {
       roots: [...binding.roots],
       manifests: [...binding.manifests],
     };
+    this.policy = policy ?? bindingAdmissionPolicy(this.binding);
     if (
       !/^[0-9a-f]{40}$/.test(binding.commitSha) ||
       !binding.nodeId ||
@@ -229,7 +300,7 @@ export class GitHubNodeCodeAdapter implements NodeCodeCapability {
       totalLines: null,
       fileComplete: false,
     };
-    if (!admittedNodeCodePath(this.binding, input.path))
+    if (!this.policy.admits(input.path, false))
       return { ...base, reason: "node_code_path_denied" };
     const start = input.lineStart ?? 1;
     const end = input.lineEnd ?? start + MAX_RANGE_LINES - 1;
@@ -254,7 +325,7 @@ export class GitHubNodeCodeAdapter implements NodeCodeCapability {
         };
       if (entry.type !== "blob" || !["100644", "100755"].includes(entry.mode))
         throw new SourceError("node_code_not_regular_file");
-      if (entry.size === undefined || entry.size > MAX_FILE_BYTES)
+      if (entry.size === undefined || entry.size > this.policy.maxFileBytes)
         throw new SourceError("node_code_file_incomplete");
       const parsed = blobSchema.safeParse(
         await this.object(
@@ -270,7 +341,10 @@ export class GitHubNodeCodeAdapter implements NodeCodeCapability {
       )
         throw new SourceError("node_code_blob_invalid");
       const blob = parsed.data;
-      if (blob.content.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 + 4096)
+      if (
+        blob.content.length >
+        Math.ceil(this.policy.maxFileBytes / 3) * 4 + 4096
+      )
         throw new SourceError("node_code_file_incomplete");
       const bytes = Buffer.from(blob.content, "base64");
       if (bytes.length !== blob.size || bytes.includes(0))
@@ -321,7 +395,7 @@ export class GitHubNodeCodeAdapter implements NodeCodeCapability {
   async list(input: { path: string }): Promise<NodeCodeListResult> {
     const path = input.path === "." ? "" : input.path;
     const base = { ...this.source(path), entries: [] };
-    if (!admittedNodeCodePath(this.binding, path, true))
+    if (!this.policy.admits(path, true))
       return { ...base, reason: "node_code_path_denied" };
     const begun = Date.now();
     try {
@@ -348,14 +422,11 @@ export class GitHubNodeCodeAdapter implements NodeCodeCapability {
         if (
           !directory &&
           !file &&
-          (admittedNodeCodePath(this.binding, childPath, true) ||
-            admittedNodeCodePath(this.binding, childPath))
+          (this.policy.admits(childPath, true) ||
+            this.policy.admits(childPath, false))
         )
           throw new SourceError("node_code_listing_incomplete");
-        if (
-          (directory || file) &&
-          admittedNodeCodePath(this.binding, childPath, directory)
-        )
+        if ((directory || file) && this.policy.admits(childPath, directory))
           entries.push({
             path: childPath,
             type: directory ? "directory" : "file",

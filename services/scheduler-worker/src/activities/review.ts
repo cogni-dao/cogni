@@ -20,8 +20,15 @@
  *   - `postRoutingDiagnosticActivity` handles `conflict` + `miss` with a pure
  *     formatter + neutral check run — no AI tokens, no GraphRunWorkflow child.
  *   - Domain logic (criteria evaluation, formatting) in domain/review.ts, not here.
+ *   - COULD_NOT_EVALUATE_IS_NOT_NEUTRAL (story.5102): with repo-spec `fail_on_error: true`, any
+ *     run that did not evaluate (graph failed, no structured output, missing rule, uncited
+ *     verdict, head moved) concludes `failure` titled `PR Review: COULD NOT EVALUATE` and logs
+ *     `review.could_not_evaluate {reason}`. With `fail_on_error: false` it stays neutral.
+ *   - CHECK_IS_REQUEST_BOUND: a request-bound review's check summary ends with one machine block
+ *     (requestId, operator buildSha, model, citations, evidence). The buildSha is the serving
+ *     operator's (graph host field, else the pr-context build) — never this worker's.
  * Side-effects: IO (HTTP to operator review plane)
- * Links: bug.5000, task.0191, task.0410, task.0280, docs/spec/unified-graph-launch.md,
+ * Links: bug.5000, task.0191, task.0410, task.0280, story.5102, docs/spec/unified-graph-launch.md,
  *   services/scheduler-worker/src/adapters/review-http.ts
  * @internal
  */
@@ -39,6 +46,7 @@ import {
 import type { GraphRunResult } from "@cogni/temporal-workflows";
 import {
   aggregateGateStatuses,
+  collectCitations,
   type EvaluationOutput,
   type EvidenceBundle,
   evaluateCriteria,
@@ -47,10 +55,12 @@ import {
   formatCrossDomainRefusal,
   formatNoScopeNeutral,
   formatPrComment,
+  formatReviewResultBlock,
   type GateResult,
   type GateStatus,
   type ReviewResult,
 } from "@cogni/temporal-workflows";
+import { WORKER_EVENT_NAMES } from "../observability/events.js";
 import type { Logger } from "../observability/logger.js";
 import type { ReviewHttpClient } from "../ports/index.js";
 import { translateHttpError } from "./index.js";
@@ -70,6 +80,8 @@ export interface CreateCheckRunInput {
   repo: string;
   headSha: string;
   installationId: number;
+  /** Review request id → check run `external_id`. */
+  externalId?: string;
 }
 
 export interface FetchPrContextInput {
@@ -77,6 +89,10 @@ export interface FetchPrContextInput {
   repo: string;
   prNumber: number;
   installationId: number;
+  /** Pinned head SHA (story.5102). */
+  headSha?: string;
+  /** Pinned base SHA (story.5102). */
+  baseSha?: string;
 }
 
 export interface PostRoutingDiagnosticInput {
@@ -108,6 +124,14 @@ export interface PostReviewResultInput {
   evidence?: EvidenceBundle;
   /** Raw repo-spec YAML for DAO config extraction */
   repoSpecYaml?: string;
+  /** Review request id (story.5102). When set, the summary ends with the machine block. */
+  requestId?: string;
+  /** Model id the review ran with (machine block). */
+  model?: string;
+  /** Serving operator build from pr-context; fallback when the graph produced none. */
+  operatorBuildSha?: string | null;
+  /** The workflow already knows the run cannot evaluate (e.g. `head_moved`). */
+  couldNotEvaluate?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +151,7 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
         repo: input.repo,
         headSha: input.headSha,
         installationId: input.installationId,
+        ...(input.externalId ? { externalId: input.externalId } : {}),
       });
     } catch (err) {
       // Mirror run-http: permanent 4xx → nonRetryable; transient/5xx bubble.
@@ -145,6 +170,8 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
         repo: input.repo,
         prNumber: input.prNumber,
         installationId: input.installationId,
+        ...(input.headSha ? { headSha: input.headSha } : {}),
+        ...(input.baseSha ? { baseSha: input.baseSha } : {}),
       });
     } catch (err) {
       translateHttpError(err, "fetchPrContextActivity");
@@ -178,9 +205,15 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
   ): Promise<void> {
     let conclusion: GateStatus;
     let gateResults: readonly GateResult[];
+    let couldNotEvaluate: string | undefined = input.couldNotEvaluate;
+    const failOnError = input.gatesConfig?.failOnError === true;
 
     if (input.noGatesConfigured) {
       conclusion = "pass";
+      gateResults = [];
+      couldNotEvaluate = undefined;
+    } else if (couldNotEvaluate) {
+      conclusion = failOnError ? "fail" : "neutral";
       gateResults = [];
     } else if (input.graphResult && input.gatesConfig && input.rules) {
       const evaluated = evaluateGraphResult(
@@ -191,12 +224,31 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
       );
       conclusion = evaluated.conclusion;
       gateResults = evaluated.gateResults;
+      couldNotEvaluate = evaluated.couldNotEvaluate;
     } else {
       conclusion = input.conclusion ?? "neutral";
       gateResults = input.gateResults ?? [];
     }
 
-    const reviewResult: ReviewResult = { conclusion, gateResults };
+    if (couldNotEvaluate) {
+      logger.warn(
+        {
+          event: WORKER_EVENT_NAMES.REVIEW_COULD_NOT_EVALUATE,
+          reason: couldNotEvaluate,
+          failOnError,
+          requestId: input.requestId,
+          prNumber: input.prNumber,
+          headSha: input.headSha,
+        },
+        WORKER_EVENT_NAMES.REVIEW_COULD_NOT_EVALUATE
+      );
+    }
+
+    const reviewResult: ReviewResult = {
+      conclusion,
+      gateResults,
+      ...(couldNotEvaluate ? { couldNotEvaluate } : {}),
+    };
 
     // Build DAO deep link from repo-spec (for Check Run "View Details" page)
     let daoBaseUrl: string | undefined;
@@ -225,7 +277,26 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
       }
     }
 
-    const checkRunSummary = formatCheckRunSummary(reviewResult, { daoBaseUrl });
+    const structured =
+      input.graphResult?.ok && input.graphResult.structuredOutput
+        ? (input.graphResult.structuredOutput as EvaluationOutput)
+        : undefined;
+    const checkRunSummary =
+      formatCheckRunSummary(reviewResult, { daoBaseUrl }) +
+      (input.requestId
+        ? formatReviewResultBlock({
+            requestId: input.requestId,
+            buildSha: structured?.buildSha ?? input.operatorBuildSha ?? null,
+            model: input.model ?? "unknown",
+            conclusion: mapConclusion(conclusion),
+            couldNotEvaluate: couldNotEvaluate ?? null,
+            citations: collectCitations(structured),
+            evidence: {
+              files: structured?.evidence?.files ?? [],
+              entries: structured?.evidence?.entries ?? [],
+            },
+          })
+        : "");
 
     const checkRunUrl = input.checkRunId
       ? `https://github.com/${input.owner}/${input.repo}/runs/${input.checkRunId}`
@@ -245,7 +316,10 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
           installationId: input.installationId,
           checkRunId: input.checkRunId,
           conclusion: mapConclusion(conclusion),
-          title: `PR Review: ${conclusion.toUpperCase()}`,
+          title:
+            couldNotEvaluate && failOnError
+              ? "PR Review: COULD NOT EVALUATE"
+              : `PR Review: ${conclusion.toUpperCase()}`,
           summary: checkRunSummary,
         });
       } catch (error) {
@@ -362,14 +436,21 @@ type GateLike = {
 /**
  * Evaluate graph structured output against all gate criteria.
  * Domain logic from domain/review.ts — bridges graph output to gate results.
+ * Returns `couldNotEvaluate` (first reason) when any ai-rule gate could not be judged.
+ * @internal Exported for tests.
  */
-function evaluateGraphResult(
+export function evaluateGraphResult(
   graphResult: GraphRunResult,
   gatesConfig: { gates: unknown[]; failOnError: boolean },
   rules: Record<string, Rule>,
   evidence?: EvidenceBundle
 ): ReviewResult {
   const gateResults: GateResult[] = [];
+  let couldNotEvaluate: string | undefined;
+  // COULD_NOT_EVALUATE_IS_NOT_NEUTRAL: with fail_on_error a non-evaluation fails the gate.
+  const notEvaluatedStatus: GateStatus = gatesConfig.failOnError
+    ? "fail"
+    : "neutral";
 
   for (const rawGate of gatesConfig.gates) {
     const gate = rawGate as GateLike;
@@ -378,19 +459,29 @@ function evaluateGraphResult(
     } else if (gate.type === "ai-rule") {
       const ruleFile = gate.with?.rule_file as string | undefined;
       const rule = ruleFile ? rules[ruleFile] : undefined;
-      if (!rule || !graphResult.ok || !graphResult.structuredOutput) {
+      const structured = graphResult.structuredOutput as
+        | EvaluationOutput
+        | undefined;
+      const reason = !rule
+        ? "missing_rule"
+        : !graphResult.ok
+          ? "graph_failed"
+          : !structured
+            ? "no_structured_output"
+            : structured.uncited === true
+              ? "uncited"
+              : undefined;
+      if (reason || !rule || !structured) {
+        couldNotEvaluate ??= reason;
         gateResults.push({
-          gateId: rule?.id ?? gate.type,
+          gateId: rule?.id ?? ruleFile ?? gate.type,
           gateType: "ai-rule",
-          status: "neutral",
-          summary: graphResult.ok
-            ? "No structured output from graph"
-            : `Graph execution failed`,
+          status: notEvaluatedStatus,
+          summary: `Could not evaluate: ${reason}`,
         });
         continue;
       }
 
-      const structured = graphResult.structuredOutput as EvaluationOutput;
       const evaluations = rule.evaluations.map((entry) => {
         const entries = Object.entries(entry);
         return entries[0] as [string, string];
@@ -410,11 +501,14 @@ function evaluateGraphResult(
           if (metricNames.includes(entry.metric)) {
             scores.set(entry.metric, entry.value);
             const req = findRequirement(entry.metric, rule.success_criteria);
+            const cited = entry.citations?.length
+              ? ` [cites: ${entry.citations.join(", ")}]`
+              : "";
             metrics.push({
               metric: entry.metric,
               score: entry.value,
               ...(req != null ? { requirement: req } : {}),
-              observation: entry.observations.join("; "),
+              observation: `${entry.observations.join("; ")}${cited}`,
             });
           }
         }
@@ -437,7 +531,11 @@ function evaluateGraphResult(
   }
 
   const conclusion = aggregateGateStatuses(gateResults.map((r) => r.status));
-  return { conclusion, gateResults };
+  return {
+    conclusion,
+    gateResults,
+    ...(couldNotEvaluate ? { couldNotEvaluate } : {}),
+  };
 }
 
 /** Evaluate review-limits gate (pure deterministic, no LLM). */
@@ -489,7 +587,9 @@ function evaluateReviewLimitsGate(
   };
 }
 
-function mapConclusion(status: string): ReviewCheckRunConclusion {
+function mapConclusion(
+  status: string
+): Extract<ReviewCheckRunConclusion, "success" | "failure" | "neutral"> {
   switch (status) {
     case "pass":
       return "success";

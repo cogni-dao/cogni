@@ -34,7 +34,10 @@ import type {
 } from "@cogni/ai-tools";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
-import { GitHubNodeCodeAdapter } from "./github-node-code.adapter";
+import {
+  GitHubNodeCodeAdapter,
+  type NodeCodeAdmissionPolicy,
+} from "./github-node-code.adapter";
 import { resolveReviewedWorkflowRef } from "./reviewed-workflow-ref";
 
 // ---------------------------------------------------------------------------
@@ -69,7 +72,9 @@ export class GitHubVcsAdapter implements VcsCapability {
     log: {
       info(fields: Record<string, unknown>): void;
       warn(fields: Record<string, unknown>): void;
-    }
+    },
+    /** Admission policy; defaults to the binding's roots/manifests (story.5102 injects review). */
+    policy?: NodeCodeAdmissionPolicy
   ): NodeCodeCapability {
     const { owner, repo } = binding;
     const readAuth = createAppAuth({
@@ -120,7 +125,8 @@ export class GitHubVcsAdapter implements VcsCapability {
         return (await client.request(route, { ...common, file_sha: objectSha }))
           .data;
       },
-      log
+      log,
+      policy
     );
   }
 

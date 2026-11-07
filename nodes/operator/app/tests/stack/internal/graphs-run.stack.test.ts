@@ -345,6 +345,67 @@ describe("[internal] POST /api/internal/graphs/{graphId}/runs", () => {
       expect(run?.status).toBe("success");
     });
 
+    it("a replay after a timed-out first attempt returns the persisted structured output (story.5102)", async () => {
+      // The first attempt finished after the worker's socket gave up: the row is finalized with
+      // a verdict. The retried attempt must read the SAME verdict (VERDICT_SURVIVES_REPLAY).
+      const idempotencyKey = `api:${randomUUID()}`;
+      const runId = randomUUID();
+      const body = {
+        executionGrantId: grantId,
+        input: {
+          messages: [{ role: "user", content: "Review" }],
+          modelRef: { providerKey: "platform", modelId: TEST_MODEL_ID },
+        },
+        runId,
+      };
+      const verdict = {
+        metrics: [
+          {
+            metric: "complies-with-governing-hub-rules",
+            value: 0.1,
+            observations: ["logs a token"],
+            citations: ["no-secrets-in-logs"],
+          },
+        ],
+        summary: "breaks no-secrets-in-logs",
+        evidence: { files: ["a.ts"], entries: ["no-secrets-in-logs"] },
+        uncited: false,
+      };
+      const db = getSeedDb();
+      const container = getContainer();
+      await container.graphRunRepository.createRun(SYSTEM_ACTOR, {
+        runId,
+        graphId: TEST_GRAPH_ID,
+        runKind: "user_immediate",
+        triggerSource: "api:vcs_review",
+        requestedBy: testActor.user.id,
+      });
+      await db.insert(executionRequests).values({
+        idempotencyKey,
+        requestHash: requestHash(TEST_GRAPH_ID, body),
+        runId,
+        traceId: "first-attempt-trace",
+        ok: true,
+        structuredOutput: verdict,
+      });
+
+      const response = await POST(
+        createRequest(TEST_GRAPH_ID, body, {
+          token: SCHEDULER_TOKEN,
+          idempotencyKey,
+        }),
+        { params: Promise.resolve({ graphId: TEST_GRAPH_ID }) }
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        ok: true,
+        runId,
+        traceId: "first-attempt-trace",
+        structuredOutput: verdict,
+      });
+    });
+
     it("atomically selects one claimant for concurrent first delivery", async () => {
       const idempotencyKey = randomUUID();
       const requestHashValue = randomUUID();

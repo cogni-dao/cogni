@@ -1,0 +1,24 @@
+id: hub-rule-compliance
+schema_version: "0.3"
+blocking: true
+workflow_id: goal-evaluations
+
+# Hub-grounded rule compliance (story.5102). The reviewer reads this node's governing index
+# (host-owned grounding), reads the full body of every rule that fits the change with
+# core__knowledge_read, and reads the PR-head code it judges. A low score must cite the broken
+# rule by its exact hub entry id; a failing score that cites nothing the run read is treated as
+# "could not evaluate" (VERDICT_CITES_WHAT_IT_READ), never as a pass or a neutral.
+# Missing the metric fails the gate (neutral_on_missing_metrics: false).
+evaluations:
+  - complies-with-governing-hub-rules: >
+      This PR complies with every governing hub rule that applies to the change. Read the
+      governing-index entries whose use-when fits this change, read each full body with
+      core__knowledge_read, and read the changed code and the code it affects at the PR head.
+      Score 1.0 when no applicable rule is broken. Score below 0.7 only when the change breaks
+      a rule you read; put that rule's exact entry id in this metric's citations.
+
+success_criteria:
+  neutral_on_missing_metrics: false
+  require:
+    - metric: complies-with-governing-hub-rules
+      gte: 0.7

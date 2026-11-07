@@ -3,11 +3,16 @@
 
 /**
  * Module: `@cogni/temporal-workflows/workflows/pr-review`
- * Purpose: Temporal parent workflow for webhook-triggered PR review.
+ * Purpose: Temporal parent workflow for developer-requested PR review (POST /api/v1/vcs/review).
  * Scope: Deterministic orchestration only. Does not perform I/O — all external calls in Activities, LLM in GraphRunWorkflow child.
  * Invariants:
  *   - Per TEMPORAL_DETERMINISM: No I/O in workflow code
- *   - Per NORMATIVE_WEBHOOK_PATTERN: webhook starts workflow, exits immediately
+ *   - REVIEW_IS_DEV_TRIGGERED (story.5102): only the POST /api/v1/vcs/review verb starts this
+ *     workflow, with the stable id pr-review:{owner}/{repo}/{pr}/{headSha}. No event starts one.
+ *   - ONE_ACTOR_ONE_ACCOUNT: the requesting developer is the graph run actor and the payer.
+ *   - CHECK_IS_REQUEST_BOUND: the check run's external_id is the request id.
+ *   - DEV_TRIGGERED_REVIEW_PATCH: story.5102 changes are gated by patched() so in-flight
+ *     histories started by the retired webhook trigger replay unchanged.
  *   - Per NODE_REVIEW_OPT_OUT: context is fetched BEFORE the Check Run so a node
  *     that sets repo-spec `review.enabled: false` gets a fully silent skip (no
  *     Check Run, no comment, no AI tokens). Model is node-selected via
@@ -24,11 +29,17 @@
  *     interfaces. Producers parse with `PrReviewWorkflowInputSchema` before
  *     `workflowClient.start(...)`.
  * Side-effects: none (deterministic orchestration only)
- * Links: docs/spec/temporal-patterns.md, docs/spec/node-ci-cd-contract.md#single-domain-scope, task.0191, task.0410, task.0419
+ * Links: docs/spec/temporal-patterns.md, docs/spec/node-ci-cd-contract.md#single-domain-scope, task.0191, task.0410, task.0419, story.5102
  * @public
  */
 
-import { executeChild, proxyActivities, uuid4 } from "@temporalio/workflow";
+import {
+  executeChild,
+  patched,
+  proxyActivities,
+  uuid4,
+  workflowInfo,
+} from "@temporalio/workflow";
 import { EXTERNAL_API_ACTIVITY_OPTIONS } from "../activity-profiles.js";
 import type { ReviewActivities } from "../activity-types.js";
 import type { GraphRunResult } from "./graph-run.workflow.js";
@@ -52,6 +63,9 @@ export {
   PrReviewWorkflowInputSchema,
 } from "./pr-review.schema.js";
 
+/** story.5102: dev-triggered, request-bound, developer-billed review with a code subject. */
+const DEV_TRIGGERED_REVIEW_PATCH = "story.5102-dev-triggered-review-v1";
+
 /**
  * PrReviewWorkflow — Temporal parent workflow for PR review.
  *
@@ -65,6 +79,151 @@ export {
  * Retries on the same headSha produce the same external result (idempotent check run + comment).
  */
 export async function PrReviewWorkflow(
+  input: PrReviewWorkflowInput
+): Promise<void> {
+  if (patched(DEV_TRIGGERED_REVIEW_PATCH)) {
+    return devTriggeredReview(input);
+  }
+  return legacyWebhookReview(input);
+}
+
+/**
+ * story.5102 flow. Context (pinned base) → check run (external_id = requestId) → head-moved /
+ * routing / no-gates short-circuits → GraphRunWorkflow child (developer actor + payer, code
+ * subject) → post result with the request-bound machine block.
+ */
+async function devTriggeredReview(input: PrReviewWorkflowInput): Promise<void> {
+  const {
+    nodeId,
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    baseSha,
+    installationId,
+    actorUserId,
+    billingAccountId,
+    virtualKeyId,
+    requestId,
+    requestedBy,
+    codeSubject,
+  } = input;
+
+  const context = await fetchPrContextActivity({
+    owner,
+    repo,
+    prNumber,
+    installationId,
+    headSha,
+    baseSha,
+  });
+
+  if (context.reviewEnabled === false) {
+    return;
+  }
+
+  let checkRunId: number | undefined;
+  try {
+    checkRunId = await createCheckRunActivity({
+      owner,
+      repo,
+      headSha,
+      installationId,
+      externalId: requestId,
+    });
+  } catch {
+    // Continue without check run — non-fatal
+  }
+
+  const resultBase = {
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    installationId,
+    checkRunId,
+    requestId,
+    model: context.modelRef.modelId,
+    operatorBuildSha: context.operatorBuildSha ?? null,
+    gatesConfig: context.gatesConfig,
+    rules: context.rules,
+    evidence: context.evidence,
+    repoSpecYaml: context.repoSpecYaml,
+  };
+
+  // The PR moved after the verb pinned it: the fetched diff is a different commit.
+  if (context.headMoved) {
+    await postReviewResultActivity({
+      ...resultBase,
+      couldNotEvaluate: "head_moved",
+    });
+    return;
+  }
+
+  if (context.owningNode.kind !== "single") {
+    await postRoutingDiagnosticActivity({
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      installationId,
+      checkRunId,
+      owningNode: context.owningNode,
+      changedFiles: context.changedFiles,
+    });
+    return;
+  }
+
+  if (context.gatesConfig.gates.length === 0) {
+    await postReviewResultActivity({
+      ...resultBase,
+      conclusion: "pass",
+      gateResults: [],
+      noGatesConfigured: true,
+    });
+    return;
+  }
+
+  const runId = uuid4();
+  let graphResult: GraphRunResult;
+  try {
+    graphResult = await executeChild("GraphRunWorkflow", {
+      // Unique per parent run: a re-run of the same SHA starts a fresh child.
+      workflowId: `graph-run:pr-review:${owner}/${repo}/${prNumber}/${headSha}:${workflowInfo().runId}`,
+      args: [
+        {
+          nodeId,
+          graphId: `langgraph:pr-review`,
+          executionGrantId: null,
+          input: {
+            messages: context.graphMessages,
+            modelRef: context.modelRef,
+            responseFormat: context.responseFormat,
+            actorUserId,
+            billingAccountId,
+            virtualKeyId,
+            codeSubject,
+          },
+          runKind: "user_immediate" as const,
+          triggerSource: "api:vcs_review",
+          triggerRef: `pr-review:${requestId}`,
+          requestedBy,
+          runId,
+        },
+      ],
+    });
+  } catch {
+    graphResult = { ok: false, runId };
+  }
+
+  await postReviewResultActivity({ ...resultBase, graphResult });
+}
+
+/**
+ * Pre-story.5102 webhook flow, kept byte-for-byte for replay of in-flight histories only.
+ * Nothing starts this path any more (the webhook trigger is deleted).
+ */
+async function legacyWebhookReview(
   input: PrReviewWorkflowInput
 ): Promise<void> {
   const {

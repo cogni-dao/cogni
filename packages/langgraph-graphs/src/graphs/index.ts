@@ -30,12 +30,24 @@ export {
   createFrontendTesterGraph,
   FRONTEND_TESTER_GRAPH_NAME,
 } from "./frontend-tester/graph";
+// Shared host-owned grounding preamble (cogni + pr-review, story.5102)
+export {
+  buildHostPreamble,
+  buildHostPreambleText,
+  type HostPreambleInput,
+} from "./host-preamble";
 // Poet graph (poetic AI assistant)
 export { createPoetGraph, POET_GRAPH_NAME } from "./poet/graph";
 // Ponderer graph (philosophical thinker)
 export { createPondererGraph, PONDERER_GRAPH_NAME } from "./ponderer/graph";
-// PR Review graph (single-call structured output, no tools)
-export { createPrReviewGraph, PR_REVIEW_GRAPH_NAME } from "./pr-review/graph";
+// PR Review graph (grounded gather → structured verdict → host evidence, story.5102)
+export {
+  createPrReviewGraph,
+  HUB_RULE_METRIC,
+  HUB_RULE_THRESHOLD,
+  PR_REVIEW_GRAPH_NAME,
+  PR_REVIEW_TOOL_IDS,
+} from "./pr-review/graph";
 export { buildReviewUserMessage } from "./pr-review/prompts";
 // Research graph (deep research with web search)
 export { createResearchGraph, RESEARCH_GRAPH_NAME } from "./research/graph";

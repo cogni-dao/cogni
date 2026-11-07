@@ -15,8 +15,14 @@
  *   - TOKEN_SHORT_LIVED: tokens are never persisted.
  *   - Owning-domain resolution mirrors the CI single-node-scope gate; `conflict`
  *     and `miss` short-circuit upstream in the workflow.
+ *   - PINNED_REVIEW_SUBJECT (story.5102): `resolvePullRequest` pins head + base SHAs for the
+ *     dev-triggered verb; `fetchPrContext` reads repo-spec + rules at the pinned base and compares
+ *     the PR head to the pinned head once (`headMoved`).
+ *   - CHECK_IS_REQUEST_BOUND: `createCheckRun` writes the request id as the check `external_id`.
+ *   - SERVED_DEFAULT_MODEL: the default review model is `gemini-3.7-flash` (served + paid);
+ *     a node may override it with repo-spec `review.model`.
  * Side-effects: IO (GitHub REST API)
- * Links: bug.5000, docs/spec/node-ci-cd-contract.md#single-domain-scope,
+ * Links: bug.5000, story.5102, docs/spec/node-ci-cd-contract.md#single-domain-scope,
  *   services/scheduler-worker/src/adapters/review-http.ts, github-auth.ts
  * @internal
  */
@@ -45,6 +51,7 @@ import {
   buildReviewUserMessage,
   type EvidenceBundle,
 } from "@cogni/temporal-workflows";
+import { createAppAuth } from "@octokit/auth-app";
 import type { Octokit } from "@octokit/core";
 import type { Logger } from "pino";
 import { parse as parseYaml } from "yaml";
@@ -55,9 +62,10 @@ import { createInstallationOctokit } from "./github-auth";
 // ---------------------------------------------------------------------------
 
 const CHECK_RUN_NAME = "Cogni Git PR Review";
-const DEFAULT_REVIEW_MODELREF = {
+/** Served, paid, 1M-context model with reliable tool calls (hub `model-pricing-registry`). */
+export const DEFAULT_REVIEW_MODELREF = {
   providerKey: "platform",
-  modelId: "gpt-4o-mini",
+  modelId: "gemini-3.7-flash",
 } as const;
 const MAX_PATCH_BYTES_PER_FILE = 100_000;
 const MAX_TOTAL_PATCH_BYTES = 500_000;
@@ -73,6 +81,16 @@ export interface GithubReviewAdapterDeps {
   /** Base64-encoded PEM private key (GH_REVIEW_APP_PRIVATE_KEY_BASE64). */
   privateKeyBase64: string;
   logger: Logger;
+  /** Serving operator build (APP_BUILD_SHA) stamped on the context; null when unversioned. */
+  buildSha?: string | null;
+}
+
+/** A PR pinned for review by the dev-triggered verb. */
+export interface PinnedPullRequest {
+  readonly installationId: number;
+  readonly headSha: string;
+  readonly baseSha: string;
+  readonly state: string;
 }
 
 /** Full review context returned to the worker. JSON-serializable. */
@@ -88,6 +106,10 @@ export interface PrReviewContext {
   repoSpecYaml?: string;
   changedFiles: string[];
   owningNode: OwningNode;
+  /** The PR head differs from the pinned head the request was made for. */
+  headMoved: boolean;
+  /** Serving operator build that produced this context. */
+  operatorBuildSha: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,8 +149,55 @@ async function fetchRepoFile(
 export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
   const { appId, privateKeyBase64, logger } = deps;
 
+  const operatorBuildSha = deps.buildSha ?? null;
+
   function octokitFor(installationId: number): Octokit {
     return createInstallationOctokit(installationId, appId, privateKeyBase64);
+  }
+
+  /**
+   * Pin a PR for the dev-triggered review verb: resolve the review App's installation on the
+   * repo (App JWT), then read the PR head + base SHAs once. Throws on a missing installation or
+   * PR (callers map the HTTP status).
+   */
+  async function resolvePullRequest(target: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+  }): Promise<PinnedPullRequest> {
+    const appAuth = createAppAuth({
+      appId,
+      privateKey: Buffer.from(privateKeyBase64, "base64").toString("utf-8"),
+    });
+    const { token } = await appAuth({ type: "app" });
+    const response = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/installation`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+        },
+      }
+    );
+    if (!response.ok) {
+      throw Object.assign(
+        new Error(
+          `review App not installed on ${target.owner}/${target.repo} (HTTP ${response.status})`
+        ),
+        { status: response.status, code: "review_app_not_installed" }
+      );
+    }
+    const installationId = ((await response.json()) as { id: number }).id;
+    const pr = await octokitFor(installationId).request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+      { owner: target.owner, repo: target.repo, pull_number: target.prNumber }
+    );
+    return {
+      installationId,
+      headSha: pr.data.head.sha,
+      baseSha: pr.data.base.sha,
+      state: pr.data.state,
+    };
   }
 
   /** Create a Check Run in "in_progress" state. Returns its id. */
@@ -145,6 +214,7 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
         head_sha: target.headSha,
         status: "in_progress",
         started_at: new Date().toISOString(),
+        ...(target.externalId ? { external_id: target.externalId } : {}),
       }
     );
     return response.data.id;
@@ -275,8 +345,12 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
     };
 
     const changedFiles = files.map((f) => f.filename);
+    // PINNED_REVIEW_SUBJECT: read config at the pinned base commit; compare the head once.
+    const configRef = target.baseSha ?? pr.base.ref;
+    const headMoved =
+      target.headSha !== undefined && pr.head.sha !== target.headSha;
 
-    // Fetch repo-spec from target repo (base branch)
+    // Fetch repo-spec from target repo (pinned base commit, else base branch)
     let repoSpecYaml: string;
     try {
       repoSpecYaml = await fetchRepoFile(
@@ -284,7 +358,7 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
         owner,
         repo,
         ".cogni/repo-spec.yaml",
-        pr.base.ref
+        configRef
       );
     } catch {
       // No repo-spec — empty gates; routing no-ops (miss).
@@ -298,6 +372,8 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
         modelRef: DEFAULT_REVIEW_MODELREF,
         changedFiles,
         owningNode: { kind: "miss" },
+        headMoved,
+        operatorBuildSha,
       };
     }
 
@@ -388,7 +464,7 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
               owner,
               repo,
               `${ruleBasePath}/${ruleFile}`,
-              pr.base.ref
+              configRef
             );
             rules[ruleFile] = parseRule(ruleYaml);
           } catch (error) {
@@ -431,8 +507,9 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
 
     const responseFormat = {
       prompt:
-        "Respond with a JSON object containing a `metrics` array and a `summary` string. " +
-        "Each metric entry must have: `metric` (name), `value` (0.0-1.0), `observations` (string array).",
+        "Respond with a JSON object containing a `metrics` array, a `summary` string and an optional `insufficientEvidence` boolean. " +
+        "Each metric entry must have: `metric` (name), `value` (0.0-1.0), `observations` (string array) and `citations` " +
+        "(string array of the exact hub entry ids you read with core__knowledge_read that the score rests on; empty when none).",
       schemaId: "evaluation-output",
     };
 
@@ -449,10 +526,18 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
       repoSpecYaml,
       changedFiles,
       owningNode,
+      headMoved,
+      operatorBuildSha,
     };
   }
 
-  return { createCheckRun, updateCheckRun, postPrComment, fetchPrContext };
+  return {
+    createCheckRun,
+    updateCheckRun,
+    postPrComment,
+    fetchPrContext,
+    resolvePullRequest,
+  };
 }
 
 export type GithubReviewAdapter = ReturnType<typeof createGithubReviewAdapter>;

@@ -9,24 +9,34 @@
  *   - SINGLE_INPUT_CONTRACT: A canonical fixture representing a real dispatch payload validates without error.
  *   - DISPATCH_FAIL_FAST: Misshapen fixtures (missing field, wrong type, empty string, typo'd name) reject at parse time.
  * Side-effects: none
- * Links: task.0419, packages/temporal-workflows/src/workflows/pr-review.schema.ts
+ * Links: task.0419, story.5102, packages/temporal-workflows/src/workflows/pr-review.schema.ts
  * @internal
  */
 
 import { describe, expect, it } from "vitest";
 import { PrReviewWorkflowInputSchema } from "../src/workflows/pr-review.schema.js";
 
-/** Canonical valid fixture — mirrors what `dispatchPrReview` produces today. */
+/** Canonical valid fixture — mirrors what `startPrReview` (POST /api/v1/vcs/review) produces. */
 const validFixture = {
   nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
   owner: "Cogni-DAO",
   repo: "test-repo",
   prNumber: 920,
   headSha: "ebc27a9d9d65bf05ad26c107328c5576b7614333",
+  baseSha: "1111111111111111111111111111111111111111",
   installationId: 12345678,
   actorUserId: "5d6f6e6c-7e8f-4a9b-bcde-1234567890ab",
   billingAccountId: "1a2b3c4d-5e6f-4789-9abc-def012345678",
-  virtualKeyId: "vk_system_default",
+  virtualKeyId: "vk_developer_default",
+  requestId: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  requestedBy: "5d6f6e6c-7e8f-4a9b-bcde-1234567890ab",
+  codeSubject: {
+    nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
+    owner: "Cogni-DAO",
+    repo: "test-repo",
+    baseSha: "1111111111111111111111111111111111111111",
+    headSha: "ebc27a9d9d65bf05ad26c107328c5576b7614333",
+  },
 };
 
 describe("PrReviewWorkflowInputSchema", () => {
@@ -36,27 +46,23 @@ describe("PrReviewWorkflowInputSchema", () => {
       expect(parsed).toEqual(validFixture);
     });
 
-    /**
-     * Synthetic mirror of what `dispatchPrReview → startPrReviewWorkflow` builds.
-     * If the dispatch facade adds/removes/renames a field without updating the
-     * schema, this test fails — the modelRef-shape regression class is closed
-     * by construction.
-     */
-    it("a payload built from synthetic GitHub webhook + billing context parses cleanly", () => {
-      const dispatchPayload = {
-        nodeId: "11111111-2222-4333-8444-555555555555",
-        owner: "Cogni-DAO",
-        repo: "test-repo",
-        prNumber: 1,
-        headSha: "0123456789abcdef0123456789abcdef01234567",
-        installationId: 1,
-        actorUserId: "aaaaaaaa-bbbb-4ccc-9ddd-eeeeeeeeeeee",
-        billingAccountId: "ffffffff-1111-4222-9333-444444444444",
-        virtualKeyId: "vk_test",
-      };
-      expect(() =>
-        PrReviewWorkflowInputSchema.parse(dispatchPayload)
-      ).not.toThrow();
+    it("rejects the retired system-tenant webhook shape (no requestId / codeSubject)", () => {
+      const {
+        requestId: _r,
+        requestedBy: _b,
+        codeSubject: _c,
+        baseSha: _s,
+        ...legacy
+      } = validFixture;
+      expect(PrReviewWorkflowInputSchema.safeParse(legacy).success).toBe(false);
+    });
+
+    it("rejects a codeSubject with an unknown field (host-bound subject is strict)", () => {
+      const result = PrReviewWorkflowInputSchema.safeParse({
+        ...validFixture,
+        codeSubject: { ...validFixture.codeSubject, path: "/etc" },
+      });
+      expect(result.success).toBe(false);
     });
   });
 
