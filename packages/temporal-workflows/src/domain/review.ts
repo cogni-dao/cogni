@@ -95,6 +95,8 @@ export interface EvaluationOutput {
   uncited?: boolean;
   /** Host: the run read no file with content (a verdict without code is not an evaluation). */
   noCodeRead?: boolean;
+  /** Host: the run read no hub entry body (a verdict without a rule read is not an evaluation). */
+  noHubRead?: boolean;
   /** Host: serving operator build that ran the graph. */
   buildSha?: string | null;
 }

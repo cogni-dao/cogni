@@ -11,7 +11,7 @@
  * Invariants:
  *   - REQUEST_BOUND_WAIT: the check is matched by external_id === requestId, never by name alone.
  *   - BOUNDED_WAIT: at most 15 minutes per case (EVAL_TIMEOUT_MS); a timeout is unscorable.
- *   - PREFLIGHT_OR_UNSCORABLE: the eval account must have credits (`unfunded_eval_account`) and
+ *   - PREFLIGHT_OR_UNSCORABLE: the eval account balance must not be negative (`unfunded_eval_account`) and
  *     the breaks-rule id must be in the candidate's governing index; a refused verb (401/403) is
  *     unscorable, never a fail. Preflight runs before any review call.
  *   - EXIT_CODE_IS_VERDICT: 0 = both cases pass; 1 = a fail; 3 = unscorable; 2 = bad config.
@@ -126,8 +126,9 @@ async function ruleInGoverningIndex(ruleId: string): Promise<string | null> {
 }
 
 /**
- * PREFLIGHT_OR_UNSCORABLE: the requester pays, so an unfunded eval account can only produce
- * "could not evaluate". Refuse before any review call.
+ * PREFLIGHT_OR_UNSCORABLE: the requester pays. The default review model is free (estimate 0), so a
+ * zero balance passes the credit preflight; a negative balance refuses every run and can only
+ * produce "could not evaluate". Refuse that before any review call.
  */
 async function evalAccountFunded(): Promise<string | null> {
   const res = await cogni<{ balanceCredits?: number }>(
@@ -136,7 +137,7 @@ async function evalAccountFunded(): Promise<string | null> {
   );
   if (res.status !== 200 || typeof res.json?.balanceCredits !== "number")
     return `credits_unavailable:${res.status}`;
-  return res.json.balanceCredits > 0 ? null : "unfunded_eval_account";
+  return res.json.balanceCredits >= 0 ? null : "unfunded_eval_account";
 }
 
 interface CheckRun {

@@ -623,3 +623,67 @@ describe("postRoutingDiagnosticActivity — dev-triggered honours fail_on_error 
     expect(legacy?.summary).not.toContain("cogni-review-result");
   });
 });
+
+describe("postReviewResultActivity — no hub entry read (story.5102)", () => {
+  it("a passing verdict that read code but no hub rule is no_hub_read under fail_on_error", async () => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity(
+      reviewInput({
+        ok: true,
+        runId: "h1",
+        structuredOutput: {
+          metrics: [
+            {
+              metric: "complies-with-governing-hub-rules",
+              value: 1,
+              observations: [],
+              citations: [],
+            },
+          ],
+          summary: "s",
+          uncited: false,
+          noCodeRead: false,
+          noHubRead: true,
+          evidence: { files: ["a.ts"], entries: [] },
+        },
+      })
+    );
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+      title: string;
+      summary: string;
+    };
+    expect(call.conclusion).toBe("failure");
+    expect(call.title).toBe("PR Review: COULD NOT EVALUATE");
+    expect(machineBlock(call.summary).couldNotEvaluate).toBe("no_hub_read");
+  });
+
+  it("stays neutral (not a pass) when fail_on_error is false", async () => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity(
+      reviewInput(
+        {
+          ok: true,
+          runId: "h2",
+          structuredOutput: {
+            metrics: [
+              {
+                metric: "complies-with-governing-hub-rules",
+                value: 1,
+                observations: [],
+              },
+            ],
+            summary: "s",
+            noHubRead: true,
+            evidence: { files: ["a.ts"], entries: [] },
+          },
+        },
+        false
+      )
+    );
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+    };
+    expect(call.conclusion).toBe("neutral");
+  });
+});

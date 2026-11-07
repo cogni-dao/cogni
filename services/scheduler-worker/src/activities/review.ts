@@ -22,7 +22,7 @@
  *   - Domain logic (criteria evaluation, formatting) in domain/review.ts, not here.
  *   - COULD_NOT_EVALUATE_IS_NOT_NEUTRAL (story.5102): with repo-spec `fail_on_error: true`, any
  *     run that did not evaluate (graph failed, no structured output, missing rule, missing
- *     metric, no code read, uncited verdict, head moved) concludes `failure` titled `PR Review: COULD NOT EVALUATE` and logs
+ *     metric, no code read, no hub entry read, uncited verdict, head moved) concludes `failure` titled `PR Review: COULD NOT EVALUATE` and logs
  *     `review.could_not_evaluate {reason}`. With `fail_on_error: false` it stays neutral.
  *   - CHECK_IS_REQUEST_BOUND: a request-bound review's check summary ends with one machine block
  *     (requestId, operator buildSha, model, citations, evidence). The buildSha is the serving
@@ -516,9 +516,11 @@ export function evaluateGraphResult(
             ? "no_structured_output"
             : structured.noCodeRead === true
               ? "no_code_read"
-              : structured.uncited === true
-                ? "uncited"
-                : missingMetric(rule, structured);
+              : structured.noHubRead === true
+                ? "no_hub_read"
+                : structured.uncited === true
+                  ? "uncited"
+                  : missingMetric(rule, structured);
       if (reason || !rule || !structured) {
         couldNotEvaluate ??= reason;
         gateResults.push({

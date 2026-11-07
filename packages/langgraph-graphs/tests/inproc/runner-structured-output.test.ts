@@ -108,6 +108,8 @@ describe("runner + pr-review graph with responseFormat", () => {
       uncited: false,
       // NO_VERDICT_WITHOUT_CODE: nothing was read, so the worker reports no_code_read.
       noCodeRead: true,
+      // NO_VERDICT_WITHOUT_HUB_READ: no rule body read either.
+      noHubRead: true,
       buildSha: "b".repeat(40),
     });
   });
@@ -271,6 +273,7 @@ describe("runner + pr-review graph with responseFormat", () => {
       evidence: { files: [], entries: ["no-secrets-in-logs"] },
       uncited: false,
       noCodeRead: true,
+      noHubRead: false,
     });
   });
 
@@ -343,6 +346,7 @@ describe("runner + pr-review graph with responseFormat", () => {
     expect(result.structuredOutput).toMatchObject({
       evidence: { files: ["src/ready.ts"] },
       noCodeRead: false,
+      noHubRead: true,
     });
   });
 });

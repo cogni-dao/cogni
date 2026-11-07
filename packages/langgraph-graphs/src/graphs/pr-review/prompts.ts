@@ -22,7 +22,7 @@ Scoring guidelines (0.0-1.0): 0.0 = clearly fails the criterion; 0.5 = partially
 
 /** Gather coverage instruction — rendered last in the host-owned preamble. */
 export const PR_REVIEW_COVERAGE = `Before you judge, gather systematically and read full bodies (never judge from a list or a search hit alone):
-1. Rules: pick the governing-index entries whose use-when fits this change (rules first), and read each full body with core__knowledge_read. Use core__knowledge_index and core__knowledge_search only to find ids.
+1. Rules (REQUIRED before any verdict, pass or fail): read with core__knowledge_read {id} — one exact id per call — EVERY governing-index entry whose use-when fits the paths and kind of change this PR touches, and at least one. If none clearly fits, read the closest one and say in your observations why it does not apply. A verdict that read no hub entry is not a review. Use core__knowledge_index and core__knowledge_search only to find ids; a domain listing is not a read.
 2. Code: read the changed files at the PR head with core__node_code_read, and read the code around the change that it affects — callers, tests, specs, configs — including files outside the diff (core__node_code_list to find them). The repository and commit are host-bound; you cannot choose another.
 3. Work: read any work item the PR names with core__work_item_read.
 On authz_denied or authz_unavailable, do not retry that read.`;
@@ -30,7 +30,7 @@ On authz_denied or authz_unavailable, do not retry that read.`;
 /** Verdict instruction — the structured-output turn (no tools). */
 export const PR_REVIEW_VERDICT_INSTRUCTION = `You have gathered the evidence. Now return the verdict for every metric in the evaluation criteria.
 For each metric give: metric (exact name), value (0.0-1.0), observations (short strings), citations (the exact hub entry ids you READ with core__knowledge_read this run that the score rests on; [] when none).
-A low score on complies-with-governing-hub-rules MUST cite the rule it breaks. Never cite an id you did not read.
+A low score on complies-with-governing-hub-rules MUST cite the rule it breaks; a high score cites the rules you read and checked. Never cite an id you did not read.
 If you could not read the evidence you needed to judge, set insufficientEvidence to true.`;
 
 /**
