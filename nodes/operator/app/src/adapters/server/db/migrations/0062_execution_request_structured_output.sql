@@ -1,1 +1,1 @@
-ALTER TABLE "execution_requests" ADD COLUMN "structured_output" jsonb;
+ALTER TABLE "execution_requests" ADD COLUMN IF NOT EXISTS "structured_output" jsonb;
