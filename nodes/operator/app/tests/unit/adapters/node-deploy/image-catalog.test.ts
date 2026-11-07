@@ -17,7 +17,10 @@ import { describe, expect, it } from "vitest";
 
 import { ImageCatalogNodes } from "@/adapters/server";
 import { edgeHostRegexFor } from "@/features/node-deploy/edge";
-import { nodeCatalogPolicy } from "@/features/node-deploy/node-catalog-policy";
+import {
+  catalogDeclaresPlacement,
+  nodeCatalogPolicy,
+} from "@/features/node-deploy/node-catalog-policy";
 import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 
 const POLY = "4b06359a-0000-4000-8000-0000000000aa";
@@ -68,7 +71,7 @@ describe("ImageCatalogNodes", () => {
     ).toEqual([]);
   });
 
-  it("REAL catalog: the operator resolves via its repo-spec, poly via node_id, and poly's policy is the Polymarket-permitted set with its pool limits", async () => {
+  it("REAL catalog: the operator resolves via its repo-spec, poly via node_id, and poly holds no catalog countries (its manifest owns them, story.5141) but keeps its pool limits", async () => {
     const repoRoot = resolve(__dirname, "../../../../../../..");
     const catalog = new ImageCatalogNodes({ root: repoRoot });
     expect(
@@ -77,7 +80,14 @@ describe("ImageCatalogNodes", () => {
     const poly = await catalog.entryFor("4b06359a-a859-4399-888e-a8c7a6696f7e");
     expect(poly?.slug).toBe("poly");
     const production = nodeCatalogPolicy(poly?.row, "production");
-    expect(production.requiredCountryCodes).toEqual(["FI", "NL", "PT", "UA"]);
+    // ONE_PLACEMENT_WRITER (CD4): Poly's set lives in its own manifest, so its catalog row must name no
+    // country in ANY env; a cell here would make every Poly manifest release a 409 two-writer refusal.
+    for (const env of ["candidate-a", "preview", "production"]) {
+      expect(nodeCatalogPolicy(poly?.row, env).requiredCountryCodes).toEqual(
+        []
+      );
+      expect(catalogDeclaresPlacement(poly?.row, env)).toBe(false);
+    }
     expect(production.databasePoolLimits).toEqual({
       replicaCount: 1,
       app: 3,

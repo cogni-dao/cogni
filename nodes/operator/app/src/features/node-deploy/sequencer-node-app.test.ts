@@ -41,6 +41,7 @@ import { DeclarationError, resolveWorkloadDeclaration } from "./declarations";
 
 import { EdgeRouter, edgeHostRegexFor } from "./edge";
 import { nodeAppEnv, workerEnv } from "./node-app-env";
+import { releasePlacementRefusal } from "./node-catalog-policy";
 import {
   buildReleaseDetail,
   buildWorkloadView,
@@ -960,6 +961,113 @@ describe("node app runtime env (task.5405)", () => {
     expect(req?.spec.placement).toBeUndefined();
     expect(req?.spec.services[0]?.command).toEqual(["sh", "-c", "echo app"]);
     expect(h.runtimeSecrets.reads).toHaveLength(0);
+  });
+});
+
+describe("the node owns its placement countries (story.5141)", () => {
+  const CATALOG_ONLY_NAME = { slug: "poly", row: { name: "poly" } };
+
+  async function releaseWithPlacement(h: H, countries: string[]) {
+    await h.store.recordRelease({
+      nodeId: POLY_ID,
+      env: ENV,
+      workload: "canary",
+      sourceSha: SHA_1,
+      spec: canaryApp({
+        secretKeys: DECLARED,
+        expose: { http: { host: POLY_HOST } },
+        placement: { requiredCountryCodes: countries },
+      }),
+      createdBy: "test",
+    });
+    return h.seq.step(h.key(POLY_ID, "canary"));
+  }
+
+  it("the release's manifest set is sent on the create when the catalog has no cell", async () => {
+    const h = harness();
+    h.catalog.rows.set(POLY_ID, CATALOG_ONLY_NAME);
+    await stateUp(h, POLY_ID);
+    expect(await releaseWithPlacement(h, ["BG", "FI", "PT"])).toBe("driven");
+    expect(appCreates(h)[0]?.spec.placement).toEqual({
+      requiredCountryCodes: ["BG", "FI", "PT"],
+    });
+    const step = h.log.lines.find(
+      (l) =>
+        l.msg === "node_deploy_step" &&
+        l.fields.step === "placement_constrained"
+    );
+    expect(step?.fields.reason).toBe("allow=2 countries=BG,FI,PT");
+  });
+
+  it("a manifest set beside a catalog cell waits unpaid and names both writers", async () => {
+    const h = harness(); // the fake catalog row still has required_placement_countries.production
+    await stateUp(h, POLY_ID);
+    expect(await releaseWithPlacement(h, ["FI"])).toBe("waiting_dependency");
+    expect(appCreates(h)).toHaveLength(0);
+    expect(await h.store.attemptsFor(h.key(POLY_ID, "canary"))).toHaveLength(0);
+    const waiting = h.log.lines.find(
+      (l) => l.msg === "node_deploy_step" && l.fields.step === "dependency"
+    );
+    expect(String(waiting?.fields.reason)).toContain(
+      "required_placement_countries.production"
+    );
+  });
+
+  it("record time refuses both sources (409) and a fleet-refused country (422); otherwise admits", () => {
+    const spec = (countries?: string[]) =>
+      canaryApp(
+        countries ? { placement: { requiredCountryCodes: countries } } : {}
+      );
+    const withCell = {
+      name: "poly",
+      required_placement_countries: { production: ["FI"] },
+    };
+    expect(
+      releasePlacementRefusal({
+        spec: spec(["FI", "NL"]),
+        catalogRow: withCell,
+        env: "production",
+      })
+    ).toMatchObject({ status: 409, error: "placement_source_conflict" });
+    // a cell for ANOTHER env is not a second writer for this one
+    expect(
+      releasePlacementRefusal({
+        spec: spec(["FI", "NL"]),
+        catalogRow: withCell,
+        env: "candidate-a",
+      })
+    ).toBeUndefined();
+    expect(
+      releasePlacementRefusal({
+        spec: spec(["FI", "IR"]),
+        catalogRow: { name: "poly" },
+        env: "production",
+      })
+    ).toMatchObject({
+      status: 422,
+      error: "placement_country_refused",
+      message: expect.stringContaining("IR"),
+    });
+    // neither source, or the catalog alone: unchanged behavior
+    for (const catalogRow of [{ name: "poly" }, withCell])
+      expect(
+        releasePlacementRefusal({ spec: spec(), catalogRow, env: "production" })
+      ).toBeUndefined();
+  });
+
+  it("the declaration lowers the manifest set for the release env", () => {
+    const d = declarationInput();
+    Object.assign(d.manifest.metadata.annotations, {
+      "cogni.dev/placement-countries": "FI,NL,PT",
+      "cogni.dev/placement-countries-candidate-a": "BE",
+    });
+    expect(d.resolve("production").placement).toEqual({
+      requiredCountryCodes: ["FI", "NL", "PT"],
+    });
+    expect(d.resolve("candidate-a").placement).toEqual({
+      requiredCountryCodes: ["BE"],
+    });
+    expect(declarationInput().resolve("production").placement).toBeUndefined();
   });
 });
 

@@ -10,8 +10,11 @@
  *   - ONE_RELEASE_PER_LEASE: an app and its private stateless companions share one release; retained state stays separate.
  *   - APP_EXPOSE_80: an http app exposes its port as 80, global, accepting only its public host.
  *   - STATE_FORWARDS_TCP: a state service exposes its port as itself, global (provider forwards it).
- *   - PLACEMENT_IS_CATALOG_POLICY: `placement` is sent ONLY when the node's catalog row declares
- *     `required_placement_countries[<env>]` (task.5405); otherwise the actuator's default screening.
+ *   - PLACEMENT_IS_THE_NODES (story.5141): `placement` is sent ONLY when the release names a country
+ *     set: the node's manifest set for the release env (`spec.placement`, read at `sourceSha`, so the
+ *     release pins it, CD3), else, as a bridge until every node moves, its catalog row's
+ *     `required_placement_countries[<env>]` (task.5405). A release with both is refused (one writer,
+ *     CD4). With neither, the actuator's default screening.
  *   - INJECTED_ENV_WINS: platform-injected env overrides a same-named declared `env` key.
  *   - DB_CA_TRUST_FOR_NODE_APPS: a node app that receives a database DSN starts through the database CA
  *     trust wrapper (`databaseConsumerCommand`), exactly as the Crossplane lane started it.
@@ -35,7 +38,7 @@ export function publicHostOf(w: NodeWorkloadSpec): string | undefined {
 }
 
 export interface ToPayerSpecOptions {
-  /** Catalog `required_placement_countries[<env>]`; empty or absent sends no `placement`. */
+  /** The release's manifest set, else catalog `required_placement_countries[<env>]`; empty or absent sends no `placement`. */
   readonly requiredCountryCodes?: readonly string[];
   /** True for a non-operator node app: it starts through the database CA trust wrapper. */
   readonly nodeApp?: boolean;

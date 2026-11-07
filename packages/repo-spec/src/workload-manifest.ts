@@ -28,6 +28,11 @@
  *     `id`. Ids are unique across the node's manifests and differ from every workload name.
  *   - SIZE_PER_FIELD: cpu = `limits.cpu ?? requests.cpu`, memory = `limits.memory ?? requests.memory`,
  *     each field on its own (Akash rents one size); storage = `cogni.dev/ephemeral-storage` or 256Mi.
+ *   - PLACEMENT_IS_THE_NODES (story.5141): `cogni.dev/placement-countries` (every env) and
+ *     `cogni.dev/placement-countries-<env>` (replaces it for one env) are comma lists of unique uppercase
+ *     ISO 3166-1 alpha-2 codes, 1..32 of them; anything else is `invalid_annotation`. The app lowers with
+ *     the set for the release env (`placement.requiredCountryCodes`), so the release pins it with the
+ *     source sha (CD3). A declared set is never dropped: lowering it without a deploy env is refused.
  *   - SUPPORTED_IN_THIS_VERSION: dependencies `postgres` (class `dedicated`, lowered to a `state`
  *     workload named by its id, from the operator-owned profile below) and `route`. Anything else is
  *     `unsupported_dependency_type` / `unsupported_dependency_class`.
@@ -195,8 +200,22 @@ const ANNOTATION = {
   ephemeralStorage: "cogni.dev/ephemeral-storage",
   qualificationPath: "cogni.dev/qualification-path",
   qualificationTimeout: "cogni.dev/qualification-timeout-ms",
+  placementCountries: "cogni.dev/placement-countries",
 } as const;
-const ALLOWED_COGNI_ANNOTATIONS = new Set<string>(Object.values(ANNOTATION));
+
+/** The deploy envs a per-env placement set may name (`cogni.dev/placement-countries-<env>`). */
+export const PLACEMENT_ENVS = ["candidate-a", "preview", "production"] as const;
+export type PlacementEnv = (typeof PLACEMENT_ENVS)[number];
+const placementEnvKey = (env: PlacementEnv) =>
+  `${ANNOTATION.placementCountries}-${env}`;
+/** Mirrors the actuator wire and the catalog cell bound (`requiredCountryCodes` max 32). */
+const MAX_PLACEMENT_COUNTRIES = 32;
+const COUNTRY_CODE_RE = /^[A-Z]{2}$/;
+
+const ALLOWED_COGNI_ANNOTATIONS = new Set<string>([
+  ...Object.values(ANNOTATION),
+  ...PLACEMENT_ENVS.map(placementEnvKey),
+]);
 const DEFAULT_VERSION_PATH = "/version";
 const DEFAULT_STORAGE_MI = 256;
 /** The edge serves every route on port 80 (NodeWorkloadSpec has no public-port field). */
@@ -385,6 +404,64 @@ export function quantityToCpu(q: string): number | undefined {
 }
 
 // ---------------------------------------------------------------------------
+// Placement countries (story.5141)
+// ---------------------------------------------------------------------------
+
+/** A manifest's declared placement sets: `default` for every env, `byEnv` replaces it per env. */
+export interface WorkloadPlacementCountries {
+  readonly default?: readonly string[];
+  readonly byEnv: Partial<Record<PlacementEnv, readonly string[]>>;
+}
+
+/** Parse one placement annotation value; returns the codes or the reason it is refused. */
+function parseCountryList(value: string): string[] | { refused: string } {
+  const codes = value.split(",");
+  if (codes.some((c) => !COUNTRY_CODE_RE.test(c)))
+    return {
+      refused:
+        'must be a non-empty comma list of uppercase ISO 3166-1 alpha-2 codes with no spaces, e.g. "FI,NL,PT"',
+    };
+  if (new Set(codes).size !== codes.length)
+    return { refused: "must not name a country twice" };
+  if (codes.length > MAX_PLACEMENT_COUNTRIES)
+    return { refused: `names at most ${MAX_PLACEMENT_COUNTRIES} countries` };
+  return codes;
+}
+
+/** The placement sets a checked manifest declares (pass 2 has already refused any invalid value). */
+export function placementCountriesOf(
+  manifest: ScoreWorkload
+): WorkloadPlacementCountries {
+  const annotations = manifest.metadata.annotations ?? {};
+  const read = (key: string): string[] | undefined => {
+    const value = annotations[key];
+    if (value === undefined) return undefined;
+    const parsed = parseCountryList(value);
+    if (!Array.isArray(parsed))
+      throw new Error(`unreachable: pass 2 refuses ${key}`);
+    return parsed;
+  };
+  const base = read(ANNOTATION.placementCountries);
+  const byEnv: Partial<Record<PlacementEnv, readonly string[]>> = {};
+  for (const env of PLACEMENT_ENVS) {
+    const set = read(placementEnvKey(env));
+    if (set) byEnv[env] = set;
+  }
+  return { ...(base ? { default: base } : {}), byEnv };
+}
+
+/** The set for one env: its own set, else the base set, else `undefined` (unconstrained). */
+export function resolvePlacementCountries(
+  placement: WorkloadPlacementCountries,
+  env: string
+): readonly string[] | undefined {
+  const own = (PLACEMENT_ENVS as readonly string[]).includes(env)
+    ? placement.byEnv[env as PlacementEnv]
+    : undefined;
+  return own ?? placement.default;
+}
+
+// ---------------------------------------------------------------------------
 // Pass 2: Cogni policy (one manifest)
 // ---------------------------------------------------------------------------
 
@@ -480,6 +557,20 @@ function checkPolicy(m: ScoreWorkload): WorkloadManifestIssue[] {
       path: `metadata.annotations.${ANNOTATION.ephemeralStorage}`,
       message: `${ANNOTATION.ephemeralStorage} must be a memory quantity of whole MiB, e.g. 256Mi`,
     });
+  for (const key of [
+    ANNOTATION.placementCountries,
+    ...PLACEMENT_ENVS.map(placementEnvKey),
+  ]) {
+    const value = annotations[key];
+    if (value === undefined) continue;
+    const parsed = parseCountryList(value);
+    if (!Array.isArray(parsed))
+      add({
+        code: "invalid_annotation",
+        path: `metadata.annotations.${key}`,
+        message: `${key} ${parsed.refused}`,
+      });
+  }
 
   // -- resources (dependencies) ---------------------------------------------
   const routes: [string, ScoreResource][] = [];
@@ -825,6 +916,11 @@ export interface LowerWorkloadOptions {
    * resolves it to a digest before the first paid create. Ignored when `builtImage` is given.
    */
   readonly pendingImage?: string;
+  /**
+   * The deploy env of the release (story.5141). Selects the app's placement set; required when the
+   * manifest declares one, so a declared set is never dropped in silence.
+   */
+  readonly env?: string;
 }
 
 function lowerValidated(
@@ -894,6 +990,21 @@ function lowerValidated(
     else image = options.builtImage;
   }
 
+  const placement = placementCountriesOf(m);
+  const declaresPlacement =
+    placement.default !== undefined || Object.keys(placement.byEnv).length > 0;
+  if (declaresPlacement && !options.env)
+    throw new WorkloadManifestError([
+      {
+        code: "lowered_spec_invalid",
+        path: `metadata.annotations.${ANNOTATION.placementCountries}`,
+        message: "a declared placement set needs the release env to lower",
+      },
+    ]);
+  const countries = options.env
+    ? resolvePlacementCountries(placement, options.env)
+    : undefined;
+
   const app = {
     name: m.metadata.name,
     kind: "app" as const,
@@ -908,6 +1019,9 @@ function lowerValidated(
       storage === undefined ? DEFAULT_STORAGE_MI : quantityToMi(storage),
     env,
     bindings,
+    ...(countries
+      ? { placement: { requiredCountryCodes: [...countries] } }
+      : {}),
     exclusive: false,
     health: {
       version: annotations[ANNOTATION.versionPath] ?? DEFAULT_VERSION_PATH,
