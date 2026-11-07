@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the `candidate-a` env-plane instance's own namespace, so its NetworkPolicies select nothing else.
+# The name matches the Alloy k3s pod-log filter (`cogni-.*`), so substrate-gw's events reach Loki.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cogni-mesh-candidate-a
+  labels:
+    app.kubernetes.io/part-of: cogni-mesh
+    cogni.dev/mesh-tailnet: candidate-a

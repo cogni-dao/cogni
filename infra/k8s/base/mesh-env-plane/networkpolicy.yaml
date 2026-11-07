@@ -1,0 +1,129 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — HR21 egress rule for substrate-gw, as policy (k3s enforces NetworkPolicy with its
+# embedded kube-router controller). substrate-gw may send ONLY to:
+#   - mesh-control-fwd :8443  -> its Headscale (MESH_CONTROL_HOST:443)
+#   - substrate-fwd    :8443  -> this tailnet's relay (MESH_RELAY_HOST:443, the VM's edge Caddy -> derper)
+#   - substrate-fwd    :5432/5435/6379/4000/7233 -> the env VM's shared services
+#   - substrate-fwd    :30900 -> scheduler-worker health (reviewed mesh-grantable port, T5)
+# No DNS: every name substrate-gw dials (control host, relay host, `substrate-fwd`) is a hostAlias.
+# Everything else — every Tailscale-operated host, log upload, bootstrap DNS, any resolver — has no path.
+# Ingress: TCP 8080 only (publisher, behind its NodePort for the edge). Relay-only: no inbound UDP.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: substrate-gw
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: substrate-gw
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mesh-control-fwd
+      ports:
+        - { protocol: TCP, port: 8443 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: substrate-fwd
+      ports:
+        - { protocol: TCP, port: 8443 }
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 5435 }
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 4000 }
+        - { protocol: TCP, port: 7233 }
+        - { protocol: TCP, port: 30900 }
+---
+# mesh-control-fwd accepts only substrate-gw and may send only TCP 443 (its control host on the
+# production edge, a public address) and DNS to resolve that name.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mesh-control-fwd
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mesh-control-fwd
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: substrate-gw
+  egress:
+    - ports:
+        - { protocol: TCP, port: 443 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# substrate-fwd accepts only substrate-gw. NetworkPolicy egress is evaluated AFTER address translation,
+# so it allows the TRANSLATED destinations of the VM-alias targets it dials, not the node address:
+#   node:5432/5435/6379/4000/7233 -> Docker DNAT -> the Compose `internal` bridge (10.100.0.0/24, the
+#     subnet declared in infra/compose/runtime/docker-compose.yml networks.internal; pinned equal by
+#     tests/ci-invariants/node-deploy-mesh-plane.spec.ts) on container ports 5432 (postgres and doltgres
+#     5435->5432), 6379, 4000, 7233;
+#   node:30900 -> kube-proxy NodePort -> the scheduler-worker pod on its container port 9000 (the
+#     namespace is set per env by the overlay);
+#   node:443 -> Docker DNAT -> this VM's edge Caddy on the external `cogni-edge` bridge, whose subnet
+#     Docker assigns at network creation, so 443 is port-scoped only;
+#   cluster DNS to resolve the VM alias.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: substrate-fwd
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: substrate-fwd
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: substrate-gw
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.100.0.0/24
+      ports:
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 6379 }
+        - { protocol: TCP, port: 4000 }
+        - { protocol: TCP, port: 7233 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: replace-env-namespace
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: scheduler-worker
+      ports:
+        - { protocol: TCP, port: 9000 }
+    - ports:
+        - { protocol: TCP, port: 443 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }

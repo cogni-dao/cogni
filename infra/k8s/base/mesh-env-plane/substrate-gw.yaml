@@ -1,0 +1,166 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the env VM's ONE tailnet device, tag:substrate (hub node-service-delivery §2). Stock
+# tailscale 1.104.4 in userspace (no TUN, no capability, non-root) running substrate-gw.sh: the
+# fail-closed map-poll watchdog (HR20) and the enrollment publisher (HR11). Holds NO key: it joins
+# by approval over the verified channel and re-requests approval by itself after a device delete or
+# a coordinator wipe. Forwards exactly the declared registry ports (serve.json: 5432, 5435, 6379, 4000, 7233 and
+# scheduler-worker health 30900) through substrate-fwd.
+#
+# Names, not addresses: hostAliases pin the control host, this tailnet's relay host AND `substrate-fwd` to the two
+# forwarder Services' fixed ClusterIPs (set by kustomize replacements from the Services themselves), so
+# substrate-gw never asks a resolver anything: under the NetworkPolicy it has no DNS and no other egress
+# at all (HR21, zero contact).
+#
+# Exposure: RELAY-ONLY (task.5384 decision, inbox 0d01550b commit 22). No WireGuard hostPort and no
+# inbound UDP: every packet to and from the node devices goes through this tailnet's own relay. The
+# publisher is reached ONLY by this VM's edge Caddy through the `substrate-gw-publisher` NodePort
+# Service (the proven edge pattern), which the hardener drops from the public NIC.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: substrate-gw
+  labels:
+    app.kubernetes.io/name: substrate-gw
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  replicas: 1
+  # One device per env; RWO state: never two at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: substrate-gw
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: substrate-gw
+        app.kubernetes.io/part-of: cogni-mesh
+    spec:
+      priorityClassName: cogni-mesh-critical
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      # ips: from the forwarder Services' spec.clusterIP (each instance overlay's replacements).
+      # hostnames: from the overlay's mesh-env ConfigMap (one source per env value).
+      hostAliases:
+        - ip: 192.0.2.1
+          hostnames: [replace-mesh-control-host]
+        - ip: 192.0.2.1
+          hostnames: [replace-mesh-relay-host, substrate-fwd]
+      containers:
+        - name: substrate-gw
+          image: tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, /opt/cogni/substrate-gw.sh]
+          env:
+            - name: MESH_CONTROL_HOST
+              valueFrom:
+                { configMapKeyRef: { name: mesh-env, key: MESH_CONTROL_HOST } }
+            - name: MESH_CONTROL_URL
+              value: https://$(MESH_CONTROL_HOST)
+            # Fail-closed bound (HR20): declared per env in the overlay's mesh-env (4 h default);
+            # the short-bound test is a reviewed overlay edit, reverted the same way.
+            - name: SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS
+              valueFrom:
+                {
+                  configMapKeyRef:
+                    {
+                      name: mesh-env,
+                      key: SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS,
+                    },
+                }
+            - { name: SUBSTRATE_GW_PUBLISH_DIR, value: /publish }
+            - { name: TS_SERVE_CONFIG, value: /opt/cogni/serve.json }
+            # A subdirectory of the state volume that substrate-gw.sh creates (0700, owned by uid 10001):
+            # the local-path volume root is root-owned and tailscaled cannot chmod it. No fsGroup: k3s
+            # local-path volumes are hostPath-backed and the kubelet does not apply fsGroup to them.
+            - { name: TS_STATE_DIR, value: /var/lib/tailscale/state }
+            - { name: TS_SOCKET, value: /tmp/tailscaled.sock }
+            - { name: TS_HOSTNAME, value: substrate-gw }
+            # tailscaled's pod-local UDP port. Not exposed (relay-only): no hostPort, no ingress rule.
+            - name: TS_PORT
+              valueFrom:
+                {
+                  configMapKeyRef: { name: mesh-env, key: MESH_WIREGUARD_PORT },
+                }
+            - { name: TS_NO_LOGS_NO_SUPPORT, value: "true" }
+            - { name: HOME, value: /tmp }
+            # Not a Kubernetes-aware tailscale: no API discovery, no kube state store.
+            - { name: KUBERNETES_SERVICE_HOST, value: "" }
+          # Guaranteed QoS (B17).
+          # Guaranteed QoS (B17), right-sized: a joined userspace tailscaled measured 41.5 MiB with traffic
+          # forced through our relay (local proof) -> 56Mi.
+          resources:
+            requests: { cpu: 100m, memory: 56Mi }
+            limits: { cpu: 100m, memory: 56Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: state, mountPath: /var/lib/tailscale }
+            - { name: publish, mountPath: /publish }
+            - { name: files, mountPath: /opt/cogni, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+        # Serves the enrollment request (never a credential) read-only to this VM's edge Caddy, which
+        # publishes it at /.well-known/cogni-mesh/substrate-gw.json on the DNS-only ACME VM site.
+        - name: publisher
+          image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+          imagePullPolicy: IfNotPresent
+          command: [caddy, file-server, --root, /publish, --listen, ":8080"]
+          env:
+            - { name: XDG_DATA_HOME, value: /tmp/data }
+            - { name: XDG_CONFIG_HOME, value: /tmp/config }
+          ports:
+            - { name: publish, containerPort: 8080, protocol: TCP }
+          # Right-sized: caddy file-server measured 12.6 MiB idle -> 16Mi.
+          resources:
+            requests: { cpu: 20m, memory: 16Mi }
+            limits: { cpu: 20m, memory: 16Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            # The stock caddy binary carries cap_net_bind_service as a file capability; exec fails
+            # unless it is in the bounding set. It listens on :8080 and needs nothing else.
+            capabilities: { drop: [ALL], add: [NET_BIND_SERVICE] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: publish, mountPath: /publish, readOnly: true }
+            - { name: publisher-tmp, mountPath: /tmp }
+      volumes:
+        - name: state
+          persistentVolumeClaim: { claimName: substrate-gw-state }
+        - name: publish
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }
+        - name: files
+          configMap: { name: substrate-gw-files }
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 8Mi }
+        - name: publisher-tmp
+          emptyDir: { medium: Memory, sizeLimit: 8Mi }
+---
+# The enrollment publisher, for this VM's edge Caddy only (host.docker.internal:<nodePort>). The
+# hardener drops the NodePort from the public NIC before NAT. Off the catalog node_port 100-stride.
+apiVersion: v1
+kind: Service
+metadata:
+  name: substrate-gw-publisher
+  labels:
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: substrate-gw
+  ports:
+    - {
+        name: publish,
+        port: 8080,
+        targetPort: publish,
+        protocol: TCP,
+        nodePort: 32341,
+      }
