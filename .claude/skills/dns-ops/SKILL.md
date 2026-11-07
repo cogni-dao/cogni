@@ -7,7 +7,7 @@ description: "DNS operations for Cogni multi-node infrastructure. Node app DNS i
 
 **Node app DNS is automatic, deterministic, and catalog-driven. Do NOT hand-create or `curl`-upsert per-node records.** A hand-made `<node>-<env>` record drifts from the catalog the next flight reconciles. This skill is for the _genuinely manual_ surface only: one-time Cloudflare zone setup, the env **apex** record, decommissioning a purged node, and protected-record safety.
 
-## Test-fleet DNS boundary — as-will-be (new; still being refined)
+## Test-fleet DNS boundary
 
 > **Live since story.5137.** `cogni-testing.org` was acquired and delegated on 2026-09-22. Test nodes ship through the deploy verb on the test operator, and `https://spawny-boi-test.cogni-testing.org/version` answers 200.
 
@@ -33,19 +33,19 @@ The test GitHub App is deliberately broad inside `cogni-test-org`. That makes th
 3. Create a token with `Zone · DNS · Edit` and `Zone · Zone · Read`, restricted to the single `cogni-testing.org` zone.
 4. Give the token to the secrets-manager lane, which writes it to candidate-a OpenBao and forces ESO refresh. Do not paste it into chat, a file, a PR, or GitHub Actions.
 5. Set the test operator input `NODE_DEPLOY_WORKLOAD_ZONE=cogni-testing.org`. The sequencer finds the zone id by name, so no zone id input is needed.
-6. Prove the boundary with one disposable Akash node. Green means its declared workload host is `<node>.cogni-testing.org`, DNS exists in only that zone, `/version` returns the expected SHA, and the old-SHA → new-SHA probe has zero DNS/TLS/HTTP failures.
+6. Prove the boundary with one disposable Akash node. Green means its candidate-a host is `<node>-test.cogni-testing.org`, DNS exists in only that zone, `/version` returns the expected SHA, and the old-SHA → new-SHA probe has zero DNS/TLS/HTTP failures.
 
 Do not create an apex/VM record for this Akash-only workload zone. The node-deploy sequencer creates each workload host record from the provider endpoint. The candidate operator and shared substrate keep their existing records under `cognidao.org`.
 
-Buying the domain or merging workflow code is not completion. Until step 6 passes, report the new as-will-be design as **not live-proven**; do not fall back to the old shared-zone design.
+Buying the domain or merging code is not completion; step 6 is. spawny-boi passed it (story.5137). Re-run step 6 after any change to this boundary, and never fall back to the old shared-zone design.
 
 ## How node DNS actually works (canon — read before touching anything)
 
-For the production fleet, per-node public hosts — `<node>-test.cognidao.org` (candidate-a), `<node>-preview.cognidao.org` (preview), `<node>.cognidao.org` (prod) — are reconciled on **every flight/promote**, idempotently. The isolated test parent overrides its workload `DOMAIN` as described above, yielding `<node>.cogni-testing.org` without moving the operator endpoint:
+For the production fleet, per-node public hosts — `<node>-test.cognidao.org` (candidate-a), `<node>-preview.cognidao.org` (preview), `<node>.cognidao.org` (prod) — are reconciled on **every flight/promote**, idempotently. The isolated test operator sets `NODE_DEPLOY_WORKLOAD_ZONE=cogni-testing.org` as described above, yielding `<node>-test.cogni-testing.org` without moving the operator endpoint:
 
 - **The deploy verb owns node hosts.** `POST /api/v1/deploy/workloads` makes the node-deploy sequencer move the proxied Cloudflare edge for the node host to the new lease. It moves only after 8 public reads in a row show the exact commit. The old lease keeps serving until then. See [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload). Never hand-upsert a record over a node host.
 - The host must be the node's own host. The workload manifest declares the production host. Other environments use a sibling (`-test`, `-preview`). The sequencer refuses another node's host (`edge_host_refused`).
-- The sequencer writes with the control environment's OpenBao/ESO-backed `operator-env-secrets` token and the workload's declared zone id. Do not copy that runtime token into the test repo.
+- The sequencer writes with the control environment's OpenBao/ESO-backed `operator-env-secrets` token and the zone id it finds by zone name at boot. Do not copy that runtime token into the test repo.
 - **Operator only:** `scripts/ci/reconcile-node-dns.sh <env>` and `scripts/ci/lib/cloudflare-dns.sh` serve the operator's own k3s hosts. `cloudflare-dns.sh` refuses the zone apex and `www` unless `CF_ALLOW_PROTECTED=1`. Its `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ZONE_ID` are env-scoped GH secrets.
 - **Single source of truth:** [`docs/spec/ci-cd.md` Axiom 21 `DNS_IS_RECONCILED_PER_ENV`](../../../docs/spec/ci-cd.md). Don't duplicate the flow — point here.
 
