@@ -21,6 +21,7 @@ import {
 } from "../../../src/catalog";
 import { buildHostPreambleText } from "../../../src/graphs/host-preamble";
 import {
+  collectHubReads,
   collectReviewEvidence,
   createPrReviewGraph,
   HUB_RULE_METRIC,
@@ -244,6 +245,47 @@ describe("collectReviewEvidence (EVIDENCE_FROM_OWN_TOOL_RESULTS)", () => {
     const evidence = collectReviewEvidence(messages);
     expect(evidence.files).toEqual(["src/a.ts"]);
     expect(evidence.entries).toEqual([]);
+  });
+});
+
+describe("collectHubReads (NO_VERDICT_WITHOUT_HUB_READ)", () => {
+  const call = (id: string, name: string, args: Record<string, unknown>) =>
+    new AIMessage({
+      content: "",
+      tool_calls: [{ id, name, args, type: "tool_call" }],
+    });
+  const result = (id: string, name: string, value: unknown) =>
+    new ToolMessage({ tool_call_id: id, name, content: JSON.stringify(value) });
+
+  it("counts only single-entry knowledge_read bodies — not work items, listings or index ids", () => {
+    const noRule = [
+      call("w", "core__work_item_read", { id: "task.1" }),
+      result("w", "core__work_item_read", {
+        complete: true,
+        item: { id: "task.1" },
+      }),
+      call("l", "core__knowledge_read", { domain: "method" }),
+      result("l", "core__knowledge_read", {
+        mode: "list",
+        entries: [{ id: "r1", content: "body" }],
+        totalFound: 1,
+      }),
+      call("i", "core__knowledge_index", {}),
+      result("i", "core__knowledge_index", { items: [{ id: "r2" }] }),
+    ];
+    expect(collectReviewEvidence(noRule).entries).toEqual(["task.1"]);
+    expect(collectHubReads(noRule)).toEqual([]);
+
+    const withRule = [
+      ...noRule,
+      call("g", "core__knowledge_read", { id: "md-to-hub-design" }),
+      result("g", "core__knowledge_read", {
+        mode: "get",
+        entries: [{ id: "md-to-hub-design", content: "rule body" }],
+        totalFound: 1,
+      }),
+    ];
+    expect(collectHubReads(withRule)).toEqual(["md-to-hub-design"]);
   });
 });
 

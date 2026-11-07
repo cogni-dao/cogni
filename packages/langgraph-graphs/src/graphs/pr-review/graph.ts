@@ -22,7 +22,10 @@
  *   - NO_VERDICT_WITHOUT_CODE: a run that read no file with content sets `noCodeRead: true`; the
  *     worker reports that as "could not evaluate" (`no_code_read`), so a verdict never passes
  *     with zero code read.
- *   - HOST_FIELDS_NOT_MODEL_FIELDS: `evidence`, `uncited`, `noCodeRead` and `buildSha` are added by finalize and
+ *   - NO_VERDICT_WITHOUT_HUB_READ: a run that read no hub entry body (single-entry
+ *     core__knowledge_read) sets `noHubRead: true`; the worker reports "could not evaluate"
+ *     (`no_hub_read`), so a pass never rests on zero rules read. Work items do not count.
+ *   - HOST_FIELDS_NOT_MODEL_FIELDS: `evidence`, `uncited`, `noCodeRead`, `noHubRead` and `buildSha` are added by finalize and
  *     are never part of the model's schema.
  *   - VERDICT_CITES_WHAT_IT_READ: a cited id counts only if it is in evidence.entries; a failing
  *     hub metric with no counted citation, or `insufficientEvidence`, sets `uncited: true`.
@@ -150,6 +153,23 @@ const isEmptyCompletion = (error: unknown): boolean =>
 export function collectReviewEvidence(
   messages: readonly BaseMessage[]
 ): PrReviewEvidence {
+  const { files, entries } = scanEvidence(messages);
+  return { files: [...files], entries: [...entries] };
+}
+
+/**
+ * NO_VERDICT_WITHOUT_HUB_READ: hub entry ids whose body came back from a single-entry
+ * core__knowledge_read this run. Work items are evidence but are not hub rules.
+ */
+export function collectHubReads(messages: readonly BaseMessage[]): string[] {
+  return [...scanEvidence(messages).hubEntries];
+}
+
+function scanEvidence(messages: readonly BaseMessage[]): {
+  files: Set<string>;
+  entries: Set<string>;
+  hubEntries: Set<string>;
+} {
   const calls = new Map<string, string>();
   for (const m of messages) {
     if (!isAIMessage(m)) continue;
@@ -159,6 +179,7 @@ export function collectReviewEvidence(
   }
   const files = new Set<string>();
   const entries = new Set<string>();
+  const hubEntries = new Set<string>();
   for (const m of messages) {
     if (!isToolMessage(m)) continue;
     const name = calls.get(m.tool_call_id);
@@ -176,8 +197,10 @@ export function collectReviewEvidence(
           typeof e?.id === "string" &&
           typeof e.content === "string" &&
           e.content.trim().length > 0
-        )
+        ) {
           entries.add(e.id);
+          hubEntries.add(e.id);
+        }
       }
     } else if (name === WORK_ITEM_READ_NAME && v.complete === true) {
       const id = (v.item as { id?: unknown } | undefined)?.id;
@@ -191,7 +214,7 @@ export function collectReviewEvidence(
       files.add(v.path);
     }
   }
-  return { files: [...files], entries: [...entries] };
+  return { files, entries, hubEntries };
 }
 
 /** VERDICT_CITES_WHAT_IT_READ: should this verdict be treated as "could not evaluate"? */
@@ -292,6 +315,7 @@ export function createPrReviewGraph(opts: CreateReactAgentGraphOptions) {
           evidence,
           uncited: isUncited(s.modelVerdict, evidence),
           noCodeRead: evidence.files.length === 0,
+          noHubRead: collectHubReads(s.messages).length === 0,
           buildSha: opts.sourceContext?.mission?.buildSha ?? null,
           ...(s.abortReason ? { abortReason: s.abortReason } : {}),
         },
