@@ -142,6 +142,27 @@ async function pastStrike(
     provider,
     error,
   });
+  return release.id;
+}
+
+/** bug.5586: one more attempt of an existing past release, on `provider`, in `phase`. */
+async function pastAttempt(
+  h: H,
+  releaseId: string,
+  provider: string,
+  phase: "retired" | "active" | "failed",
+  error?: string
+) {
+  const a = await h.store.insertAttempt(
+    releaseId,
+    (n) => `past:${releaseId}:${n}`
+  );
+  await h.store.updateAttempt(a.id, {
+    phase,
+    externalName: `past-${a.id}`,
+    provider,
+    ...(error ? { error } : {}),
+  });
 }
 
 describe("state workload", () => {
@@ -543,7 +564,7 @@ describe("provider exclusion and alert hygiene", () => {
       const h = harness();
       const { exclude, line } = await newReleaseAfter(h, async () => {
         await pastStrike(h, "provider-x", "proof_timeout: version 503");
-        await pastStrike(h, "provider-x", "proof_timeout: version 502");
+        await pastStrike(h, "provider-x", "host_not_routed: version 404");
       });
       expect(exclude).toEqual(["provider-2", "provider-1", "provider-x"]);
       expect(line?.fields.remembered).toEqual(["provider-x"]);
@@ -656,34 +677,86 @@ describe("provider exclusion and alert hygiene", () => {
       expect(line?.fields.remembered).toEqual(admitted);
     });
 
-    describe("bug.5586: FLEET_HOST_MEMORY excludes a host_not_routed provider from every lane after ONE strike", () => {
+    describe("bug.5586: FLEET_HOST_MEMORY excludes a CONFIRMED host_not_routed provider from every lane after ONE strike", () => {
       const OTHER_NODE = "11111111-2222-4333-8444-555555555555";
+      const HNR = "host_not_routed: version 404 for 60s";
 
-      it("one host_not_routed strike on ANOTHER node's lane in ANOTHER env: this lane's first create excludes it, logged as fleet", async () => {
-        const h = harness();
-        const { exclude, line } = await newReleaseAfter(h, async () => {
-          await pastStrike(
-            h,
-            "provider-aes",
-            "host_not_routed: version 404 for 60s",
-            "app",
-            { nodeId: OTHER_NODE, env: "preview" }
+      /** A host_not_routed strike on `lane`, CONFIRMED: the same release later served on `confirmOn`. */
+      async function confirmedStrike(
+        h: H,
+        provider: string,
+        lane: { nodeId?: string; env?: string } = { nodeId: OTHER_NODE },
+        confirmOn = "provider-ok"
+      ) {
+        const releaseId = await pastStrike(h, provider, HNR, "app", lane);
+        await pastAttempt(h, releaseId, confirmOn, "retired");
+        return releaseId;
+      }
+
+      for (const [name, lane] of [
+        ["ANOTHER node's lane", { nodeId: OTHER_NODE }],
+        ["ANOTHER env of this node", { env: "preview" }],
+      ] as const)
+        it(`a confirmed strike on ${name}: this lane's first create excludes it, logged as fleet with the confirming release`, async () => {
+          const h = harness();
+          let releaseId = "";
+          const { exclude, line } = await newReleaseAfter(h, async () => {
+            releaseId = await confirmedStrike(h, "provider-aes", lane);
+          });
+          expect(exclude).toEqual(["provider-2", "provider-1", "provider-aes"]);
+          expect(line?.fields.fleetExcluded).toEqual(["provider-aes"]);
+          expect(line?.fields.fleetConfirmedBy).toEqual({
+            "provider-aes": releaseId,
+          });
+          expect(line?.fields.remembered).toEqual([]);
+          expect(String(line?.fields.reason)).toContain(
+            `fleet host_not_routed: provider-aes confirmed by release ${releaseId}`
           );
         });
-        expect(exclude).toEqual(["provider-2", "provider-1", "provider-aes"]);
-        expect(line?.fields.fleetExcluded).toEqual(["provider-aes"]);
-        expect(line?.fields.remembered).toEqual([]);
-        expect(String(line?.fields.reason)).toContain(
-          "fleet host_not_routed: provider-aes"
-        );
-      });
 
-      it("proof_timeout keeps its per-lane rule; a host_not_routed strike older than 24h is forgotten", async () => {
+      it("an UNCONFIRMED strike (its release never served elsewhere) does not cross lanes", async () => {
         const h = harness();
         const { exclude, line } = await newReleaseAfter(h, async () => {
-          await pastStrike(h, "provider-old", "host_not_routed: 404", "app", {
+          await pastStrike(h, "provider-aes", HNR, "app", {
             nodeId: OTHER_NODE,
+            env: "preview",
           });
+        });
+        expect(exclude).not.toContain("provider-aes");
+        expect(line?.fields.fleetExcluded).toEqual([]);
+      });
+
+      it("a broken flight (one release 404s on 2 providers and never proves) excludes nothing fleet-wide", async () => {
+        const h = harness();
+        const { exclude, line } = await newReleaseAfter(h, async () => {
+          const releaseId = await pastStrike(h, "provider-a", HNR, "app", {
+            nodeId: OTHER_NODE,
+            env: "candidate-a",
+          });
+          await pastAttempt(h, releaseId, "provider-b", "failed", HNR);
+        });
+        expect(exclude).not.toContain("provider-a");
+        expect(exclude).not.toContain("provider-b");
+        expect(line?.fields.fleetExcluded).toEqual([]);
+      });
+
+      it("a confirming attempt on the SAME provider does not confirm", async () => {
+        const h = harness();
+        const { exclude } = await newReleaseAfter(h, async () => {
+          await confirmedStrike(
+            h,
+            "provider-aes",
+            { nodeId: OTHER_NODE },
+            "provider-aes"
+          );
+        });
+        expect(exclude).not.toContain("provider-aes");
+      });
+
+      it("proof_timeout keeps its per-lane rule; a confirmed strike older than 24h is forgotten", async () => {
+        const h = harness();
+        const { exclude, line } = await newReleaseAfter(h, async () => {
+          await confirmedStrike(h, "provider-old");
           h.clock.advance(25 * 60 * 60_000);
           for (let i = 0; i < 2; i++)
             await pastStrike(h, "provider-slow", undefined, "app", {
@@ -701,9 +774,7 @@ describe("provider exclusion and alert hygiene", () => {
         await deployApp(h, SHA_1); // provider-2
         await deployApp(h, SHA_2); // provider-3 active, provider-2 retired
         for (const p of ["provider-2", "provider-3"])
-          await pastStrike(h, p, "host_not_routed: 404", "app", {
-            nodeId: OTHER_NODE,
-          });
+          await confirmedStrike(h, p);
         const blue = (await h.store.attemptsFor(APP)).find(
           (a) => a.phase === "active"
         );
@@ -719,9 +790,7 @@ describe("provider exclusion and alert hygiene", () => {
         const h = harness({ appProviders: ["provider-x", "provider-y"] });
         const { exclude, line } = await newReleaseAfter(h, async () => {
           for (const p of ["provider-x", "provider-y"])
-            await pastStrike(h, p, "host_not_routed: 404", "app", {
-              nodeId: OTHER_NODE,
-            });
+            await confirmedStrike(h, p);
         });
         const admitted = exclude.filter(
           (p) => p === "provider-x" || p === "provider-y"
@@ -736,15 +805,7 @@ describe("provider exclusion and alert hygiene", () => {
           for (let i = 0; i < 2; i++) await pastStrike(h, "provider-lane"); // proof_timeout x2 on this lane
           for (let i = 0; i < 20; i++) {
             h.clock.advance(1_000);
-            await pastStrike(
-              h,
-              `provider-f${i}`,
-              "host_not_routed: 404",
-              "app",
-              {
-                nodeId: OTHER_NODE,
-              }
-            );
+            await confirmedStrike(h, `provider-f${i}`);
           }
         });
         expect(exclude).toHaveLength(16);
@@ -758,9 +819,7 @@ describe("provider exclusion and alert hygiene", () => {
 
       it("a state workload is not touched by fleet host memory (it is not routed by host)", async () => {
         const h = harness();
-        await pastStrike(h, "provider-aes", "host_not_routed: 404", "app", {
-          nodeId: OTHER_NODE,
-        });
+        await confirmedStrike(h, "provider-aes");
         await stateUp(h);
         expect(
           h.payer.createRequests.find((r) => r.spec.name === "canary-db")

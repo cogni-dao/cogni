@@ -144,14 +144,23 @@ export interface AttemptRow {
   readonly mesh?: AttemptMesh | undefined;
 }
 
-/** One provider whose ingress did not route our host on some lane (bug.5586). */
+/** One provider whose ingress did not route our host on some lane, CONFIRMED (bug.5586). */
 export interface HostNotRoutedStrike {
   readonly provider: string;
-  /** The newest strike's attempt `updated_at`. */
+  /** The newest confirmed strike's attempt `updated_at`. */
   readonly lastStruckAt: Date;
-  /** Struck attempts in the window, across every lane. */
-  readonly strikes: number;
+  /** The release of that strike: it served on ANOTHER provider, so the app serves its host. */
+  readonly confirmingReleaseId: string;
 }
+
+/** Phases of an attempt that served (proved) at some point. */
+export const SERVED_ATTEMPT_PHASES: readonly AttemptPhase[] = [
+  "proven",
+  "active",
+  "retiring",
+  "retired",
+  "lost",
+];
 
 /** `egress` = source-IP admission (catalog `compute_egress_cidrs`); `mesh` = the env tailnet. */
 export type SubstrateTransport = "egress" | "mesh";
@@ -514,8 +523,11 @@ export interface StorePort {
   /**
    * FLEET_HOST_MEMORY (bug.5586): distinct providers that failed an attempt `host_not_routed` on ANY
    * lane of this store (every node, env and workload) whose attempt changed phase at or after `since`,
-   * newest strike first, at most `limit`. Bounded read: phase `closing|failed` (indexed), the time
-   * window and the limit.
+   * newest strike first, at most `limit`. CONFIRMED only: the struck attempt's release also has an
+   * attempt on a DIFFERENT provider in a `SERVED_ATTEMPT_PHASES` phase, so the app served its host and
+   * the 404 was the provider's ingress. A release that never serves (a broken build) confirms nothing.
+   * Bounded read: phase `closing|failed` (indexed), the time window, the limit; the confirmation is a
+   * correlated EXISTS on the `(release_id, attempt)` unique index.
    */
   hostNotRoutedProviders(
     since: Date,

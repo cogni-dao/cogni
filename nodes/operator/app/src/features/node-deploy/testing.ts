@@ -45,6 +45,7 @@ import {
   keyString,
   MAX_ATTEMPT_STEPS,
   PayerError,
+  SERVED_ATTEMPT_PHASES,
   withResolvedImage,
 } from "@/ports";
 import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
@@ -237,12 +238,18 @@ export class MemoryStore implements StorePort {
       })
       .reverse();
   }
-  /** Mirrors the Postgres store: closing|failed, `host_not_routed:` error, window, newest strike first. */
+  /**
+   * Mirrors the Postgres store: closing|failed, `host_not_routed:` error, window, CONFIRMED (the same
+   * release served on another provider), newest strike first.
+   */
   async hostNotRoutedProviders(
     since: Date,
     limit: number
   ): Promise<readonly HostNotRoutedStrike[]> {
-    const by = new Map<string, { lastStruckAt: Date; strikes: number }>();
+    const by = new Map<
+      string,
+      { lastStruckAt: Date; confirmingReleaseId: string }
+    >();
     for (const a of this.attempts) {
       if (
         !a.provider ||
@@ -251,13 +258,19 @@ export class MemoryStore implements StorePort {
         !(a.error ?? "").startsWith("host_not_routed:")
       )
         continue;
+      const confirmed = this.attempts.some(
+        (s) =>
+          s.releaseId === a.releaseId &&
+          SERVED_ATTEMPT_PHASES.includes(s.phase) &&
+          s.provider !== undefined &&
+          s.provider !== a.provider
+      );
+      if (!confirmed) continue;
       const cur = by.get(a.provider);
+      if (cur && cur.lastStruckAt > a.updatedAt) continue;
       by.set(a.provider, {
-        lastStruckAt:
-          cur && cur.lastStruckAt > a.updatedAt
-            ? cur.lastStruckAt
-            : a.updatedAt,
-        strikes: (cur?.strikes ?? 0) + 1,
+        lastStruckAt: a.updatedAt,
+        confirmingReleaseId: a.releaseId,
       });
     }
     return [...by]
