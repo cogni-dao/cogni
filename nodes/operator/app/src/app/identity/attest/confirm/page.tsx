@@ -26,6 +26,7 @@ import { PageContainer, SectionCard } from "@/components";
 import { ATTESTATION_SIGNIN_PATH } from "@/shared/identity/broker-config";
 import {
   BROKER_STATE_COOKIE,
+  consentBinding,
   decodeBrokerState,
 } from "@/shared/identity/broker-state";
 
@@ -35,12 +36,10 @@ export const dynamic = "force-dynamic";
 
 export default async function IdentityAttestationConfirmPage() {
   const cookieStore = await cookies();
-  const brokerState = await decodeBrokerState(
-    cookieStore.get(BROKER_STATE_COOKIE)?.value,
-    authSecret
-  );
+  const token = cookieStore.get(BROKER_STATE_COOKIE)?.value;
+  const brokerState = await decodeBrokerState(token, authSecret);
 
-  if (!brokerState?.github) {
+  if (!brokerState?.github || !token) {
     return (
       <PageContainer maxWidth="sm">
         <SectionCard title="This request expired">
@@ -52,7 +51,7 @@ export default async function IdentityAttestationConfirmPage() {
     );
   }
 
-  const { github, nodeSlug, returnTo } = brokerState;
+  const { github, nodeSlug, returnTo, targetOrigin } = brokerState;
   const login = github.login ? `@${github.login}` : `id ${github.id}`;
   // The node picks its landing path, and the two paths mean different things: the
   // sign-in leg lands on the public completion page, the link leg on /profile. That is
@@ -76,12 +75,30 @@ export default async function IdentityAttestationConfirmPage() {
       <div className="space-y-2 text-center">
         <p className="font-semibold text-3xl tracking-tight">{login}</p>
         <p className="text-muted-foreground">
-          {mode === "signin" ? "signing in to" : "linking to"}{" "}
-          <span className="text-foreground">{nodeSlug}</span>
+          {mode === "signin" ? (
+            <>
+              Sign in to <span className="text-foreground">{nodeSlug}</span>.
+            </>
+          ) : (
+            <>
+              Link GitHub {login} to your existing account on{" "}
+              <span className="text-foreground">{nodeSlug}</span>.
+            </>
+          )}
         </p>
       </div>
 
-      <ConfirmActions login={login} mode={mode} />
+      <ConfirmActions mode={mode} consentBinding={consentBinding(token)} />
+      {mode === "link" ? (
+        <a
+          href={`${targetOrigin}/profile`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm underline"
+        >
+          View your profile on {nodeSlug}
+        </a>
+      ) : null}
 
       <p className="text-muted-foreground text-xs">
         Only your public GitHub identity is shared.
