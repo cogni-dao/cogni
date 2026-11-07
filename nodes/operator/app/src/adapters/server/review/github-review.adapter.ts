@@ -62,7 +62,8 @@ import { createInstallationOctokit } from "./github-auth";
 // Constants (ported from the former worker review activity)
 // ---------------------------------------------------------------------------
 
-const CHECK_RUN_NAME = "Cogni Git PR Review";
+/** The check the review App writes; the review KPIs (task.5450) read exactly this name. */
+export const CHECK_RUN_NAME = "Cogni Git PR Review";
 /** Served free (default_free) 1M-context model with reliable tool calls (hub `model-pricing-registry`). */
 export const DEFAULT_REVIEW_MODELREF = {
   providerKey: "platform",

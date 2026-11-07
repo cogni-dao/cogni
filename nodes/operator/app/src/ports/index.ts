@@ -453,6 +453,13 @@ export type {
   ReceiptDeliveryTarget,
 } from "./receipt-delivery.port";
 export type {
+  ReviewCheckFacts,
+  ReviewKpiRepo,
+  ReviewKpiSourcePort,
+  ReviewPrFacts,
+  ReviewPrSelector,
+} from "./review-kpi.port";
+export type {
   ProxyBillingEntry,
   SandboxErrorCode,
   SandboxLlmProxyConfig,
