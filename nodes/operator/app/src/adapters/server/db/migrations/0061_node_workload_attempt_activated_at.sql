@@ -1,0 +1,1 @@
+ALTER TABLE "node_workload_attempts" ADD COLUMN "activated_at" timestamp with time zone;

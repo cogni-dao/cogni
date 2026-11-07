@@ -345,6 +345,9 @@ export class MemoryStore implements StorePort {
         ? { unhealthySince: patch.unhealthySince ?? undefined }
         : {}),
       ...(patch.leasedAt !== undefined ? { leasedAt: patch.leasedAt } : {}),
+      ...(patch.activatedAt !== undefined && cur.activatedAt === undefined
+        ? { activatedAt: patch.activatedAt }
+        : {}),
       ...(patch.mesh !== undefined ? { mesh: patch.mesh } : {}),
       updatedAt:
         patch.phase !== undefined ? new Date(this.clock.now()) : cur.updatedAt,

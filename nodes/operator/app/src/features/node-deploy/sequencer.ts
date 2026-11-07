@@ -2014,6 +2014,8 @@ export class NodeDeploySequencer {
     const active = await this.d.store.updateAttempt(attempt.id, {
       phase: "active",
       unhealthySince: null,
+      // Write-once activation instant (task.5442): lead time survives the 100-step timeline cap.
+      activatedAt: new Date(this.d.clock.now()),
     });
     await this.emit(key, release, active, "activated", "ok", {
       dseq: active.externalName,
