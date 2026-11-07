@@ -21,8 +21,8 @@
  *     formatter + neutral check run — no AI tokens, no GraphRunWorkflow child.
  *   - Domain logic (criteria evaluation, formatting) in domain/review.ts, not here.
  *   - COULD_NOT_EVALUATE_IS_NOT_NEUTRAL (story.5102): with repo-spec `fail_on_error: true`, any
- *     run that did not evaluate (graph failed, no structured output, missing rule, uncited
- *     verdict, head moved) concludes `failure` titled `PR Review: COULD NOT EVALUATE` and logs
+ *     run that did not evaluate (graph failed, no structured output, missing rule, missing
+ *     metric, no code read, uncited verdict, head moved) concludes `failure` titled `PR Review: COULD NOT EVALUATE` and logs
  *     `review.could_not_evaluate {reason}`. With `fail_on_error: false` it stays neutral.
  *   - CHECK_IS_REQUEST_BOUND: a request-bound review's check summary ends with one machine block
  *     (requestId, operator buildSha, model, citations, evidence). The buildSha is the serving
@@ -47,6 +47,7 @@ import type { GraphRunResult } from "@cogni/temporal-workflows";
 import {
   aggregateGateStatuses,
   collectCitations,
+  composeCheckSummary,
   type EvaluationOutput,
   type EvidenceBundle,
   evaluateCriteria,
@@ -55,7 +56,6 @@ import {
   formatCrossDomainRefusal,
   formatNoScopeNeutral,
   formatPrComment,
-  formatReviewResultBlock,
   type GateResult,
   type GateStatus,
   type ReviewResult,
@@ -281,10 +281,11 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
       input.graphResult?.ok && input.graphResult.structuredOutput
         ? (input.graphResult.structuredOutput as EvaluationOutput)
         : undefined;
-    const checkRunSummary =
-      formatCheckRunSummary(reviewResult, { daoBaseUrl }) +
-      (input.requestId
-        ? formatReviewResultBlock({
+    // GitHub caps the summary at 65,535 chars: prose truncates first, the block stays intact.
+    const checkRunSummary = composeCheckSummary(
+      formatCheckRunSummary(reviewResult, { daoBaseUrl }),
+      input.requestId
+        ? {
             requestId: input.requestId,
             buildSha: structured?.buildSha ?? input.operatorBuildSha ?? null,
             model: input.model ?? "unknown",
@@ -295,8 +296,9 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
               files: structured?.evidence?.files ?? [],
               entries: structured?.evidence?.entries ?? [],
             },
-          })
-        : "");
+          }
+        : undefined
+    );
 
     const checkRunUrl = input.checkRunId
       ? `https://github.com/${input.owner}/${input.repo}/runs/${input.checkRunId}`
@@ -468,9 +470,11 @@ export function evaluateGraphResult(
           ? "graph_failed"
           : !structured
             ? "no_structured_output"
-            : structured.uncited === true
-              ? "uncited"
-              : undefined;
+            : structured.noCodeRead === true
+              ? "no_code_read"
+              : structured.uncited === true
+                ? "uncited"
+                : missingMetric(rule, structured);
       if (reason || !rule || !structured) {
         couldNotEvaluate ??= reason;
         gateResults.push({
@@ -536,6 +540,23 @@ export function evaluateGraphResult(
     gateResults,
     ...(couldNotEvaluate ? { couldNotEvaluate } : {}),
   };
+}
+
+/**
+ * A configured metric the verdict omitted is a non-evaluation (`missing_metric`), never a
+ * threshold failure: the model did not judge it.
+ */
+function missingMetric(
+  rule: Rule,
+  structured: EvaluationOutput
+): "missing_metric" | undefined {
+  const scored = new Set((structured.metrics ?? []).map((m) => m.metric));
+  const configured = rule.evaluations
+    .map((entry) => Object.keys(entry)[0])
+    .filter((name): name is string => typeof name === "string");
+  return configured.some((name) => !scored.has(name))
+    ? "missing_metric"
+    : undefined;
 }
 
 /** Evaluate review-limits gate (pure deterministic, no LLM). */

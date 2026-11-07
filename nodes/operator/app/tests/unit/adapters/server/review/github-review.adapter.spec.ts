@@ -348,3 +348,36 @@ describe("story.5102 — pinned review subject + request-bound check", () => {
     });
   });
 });
+
+describe("repo-spec absence is 404 only (story.5102 review fix)", () => {
+  function withRepoSpecError(status: number | undefined) {
+    setFetchPrHandlers({ changedFiles: ["nodes/poly/app/src/foo.ts"] });
+    routeHandlers["GET /repos/{owner}/{repo}/contents/{path}"] = () => {
+      throw Object.assign(new Error("repo-spec read failed"), { status });
+    };
+  }
+  const target = {
+    owner: "org",
+    repo: "repo",
+    prNumber: 123,
+    installationId: 1,
+  };
+
+  it("treats a 404 repo-spec as absent (no gates, miss)", async () => {
+    withRepoSpecError(404);
+    const result = await makeAdapter().fetchPrContext(target);
+    expect(result.gatesConfig.gates).toEqual([]);
+    expect(result.owningNode.kind).toBe("miss");
+  });
+
+  it.each([
+    500,
+    401,
+    undefined,
+  ])("throws on a %s repo-spec read so Temporal retries", async (status) => {
+    withRepoSpecError(status);
+    await expect(makeAdapter().fetchPrContext(target)).rejects.toThrow(
+      "repo-spec read failed"
+    );
+  });
+});

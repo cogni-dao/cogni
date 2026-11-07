@@ -45,7 +45,9 @@ export type {
 export {
   aggregateGateStatuses,
   buildReviewUserMessage,
+  CHECK_SUMMARY_MAX_CHARS,
   collectCitations,
+  composeCheckSummary,
   evaluateCriteria,
   findRequirement,
   formatCheckRunSummary,

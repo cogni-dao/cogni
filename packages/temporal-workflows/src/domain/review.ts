@@ -93,6 +93,8 @@ export interface EvaluationOutput {
   evidence?: { files: string[]; entries: string[] };
   /** Host: a failing hub metric cited nothing the run read, or evidence was insufficient. */
   uncited?: boolean;
+  /** Host: the run read no file with content (a verdict without code is not an evaluation). */
+  noCodeRead?: boolean;
   /** Host: serving operator build that ran the graph. */
   buildSha?: string | null;
 }
@@ -124,6 +126,41 @@ export interface ReviewResultBlock {
 /** Render the block that ends a check summary: marker + one fenced JSON object. */
 export function formatReviewResultBlock(block: ReviewResultBlock): string {
   return `\n${REVIEW_RESULT_MARKER}\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\`\n`;
+}
+
+/** GitHub's check-run `output.summary` limit (characters). */
+export const CHECK_SUMMARY_MAX_CHARS = 65_535;
+/** Each machine-block list is capped so the block itself stays small. */
+export const REVIEW_BLOCK_LIST_CAP = 50;
+
+/**
+ * Compose a check summary that fits GitHub's limit: the machine block is capped (each list to
+ * REVIEW_BLOCK_LIST_CAP items, strings to 300 chars) and kept intact at the end; the prose is
+ * truncated first.
+ */
+export function composeCheckSummary(
+  prose: string,
+  block: ReviewResultBlock | undefined,
+  maxChars: number = CHECK_SUMMARY_MAX_CHARS
+): string {
+  const cap = (xs: readonly string[]) =>
+    xs.slice(0, REVIEW_BLOCK_LIST_CAP).map((x) => x.slice(0, 300));
+  const tail = block
+    ? formatReviewResultBlock({
+        ...block,
+        model: block.model.slice(0, 200),
+        couldNotEvaluate: block.couldNotEvaluate?.slice(0, 200) ?? null,
+        citations: cap(block.citations),
+        evidence: {
+          files: cap(block.evidence.files),
+          entries: cap(block.evidence.entries),
+        },
+      })
+    : "";
+  const room = maxChars - tail.length;
+  if (prose.length <= room) return prose + tail;
+  const marker = "\n\n… (summary truncated)\n";
+  return prose.slice(0, Math.max(0, room - marker.length)) + marker + tail;
 }
 
 /** Union of every metric's citations, in first-seen order. */

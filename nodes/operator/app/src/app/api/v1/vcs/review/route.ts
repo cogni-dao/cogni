@@ -16,6 +16,8 @@
  *     billing account (resolved in the facade).
  *   - NO_REPO_FROM_AGENT: owner/repo come from `resolveNodeRepo`, never the body.
  *   - STABLE_REVIEW_ID: a review of the same head already running → 409 `review_running`.
+ *   - V0_OPERATOR_ONLY (story.5102): code reads are authorized on the operator only, so a review of
+ *     any other node is refused up front with 422 `review_node_unsupported`.
  *   - CONTRACTS_ARE_TRUTH: input/output parsed through `reviewOperation`.
  * Side-effects: IO (DB read, OpenFGA check, GitHub reads, Temporal start)
  * Links: packages/node-contracts/src/vcs.review.v1.contract.ts, story.5102,
@@ -30,6 +32,7 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
@@ -91,6 +94,16 @@ export const POST = wrapRouteHandlerWithLogging(
           : rbac.errorCode === "node_not_found"
             ? "node not found"
             : "not authorized",
+        { prNumber }
+      );
+    }
+
+    // V0_OPERATOR_ONLY: the reviewer's code reads are authorized on this node only.
+    if (rbac.node.nodeId !== getNodeId()) {
+      return fail(
+        422,
+        "review_node_unsupported",
+        "v0 reviews operator PRs only",
         { prNumber }
       );
     }

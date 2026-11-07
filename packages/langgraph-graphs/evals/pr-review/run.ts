@@ -108,20 +108,20 @@ async function github<T>(p: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** PREFLIGHT_OR_UNSCORABLE: the expected rule id is in the candidate's governing index. */
+/**
+ * PREFLIGHT_OR_UNSCORABLE: the expected rule id is in the candidate's governing index — the same
+ * `governingIndex` the cognition bundle serves and the review's host preamble renders.
+ */
 async function ruleInGoverningIndex(ruleId: string): Promise<string | null> {
-  const entry = await cogni<{ domain?: string }>(
+  const bundle = await cogni<{ governingIndex?: Array<{ id: string }> }>(
     "GET",
-    `/api/v1/knowledge/${encodeURIComponent(ruleId)}`
+    "/api/v1/cognition"
   );
-  const domain = entry.json?.domain;
-  if (entry.status !== 200 || !domain) return `rule_missing:${ruleId}`;
-  const index = await cogni<{ items?: Array<{ id: string }> }>(
-    "GET",
-    `/api/v1/knowledge/index?domain=${encodeURIComponent(domain)}&limit=1000`
-  );
-  const ids = (index.json?.items ?? []).map((e) => e.id);
-  return ids.includes(ruleId) ? null : `rule_not_governing:${ruleId}`;
+  if (bundle.status !== 200 || !Array.isArray(bundle.json?.governingIndex))
+    return `cognition_unavailable:${bundle.status}`;
+  return bundle.json.governingIndex.some((e) => e.id === ruleId)
+    ? null
+    : `rule_not_governing:${ruleId}`;
 }
 
 interface CheckRun {

@@ -32,7 +32,7 @@ REST API routes for VCS operations — artifact-gated candidate-a flight dispatc
 
 - **Exports:** none (route handlers only)
 - **Routes:**
-  - `POST /api/v1/vcs/review` — developer-requested PR review (story.5102), the ONLY review trigger; `node.flight` on the named node; repo from `resolveNodeRepo`; pins the PR head; the requester is the run actor and payer; 202 `{workflowId, headSha, requestId}`, 409 `review_running` while the same head is under review
+  - `POST /api/v1/vcs/review` — developer-requested PR review (story.5102), the ONLY review trigger; `node.flight` on the named node; repo from `resolveNodeRepo`; pins the PR head; the requester is the run actor and payer; 202 `{workflowId, headSha, requestId}`, 409 `review_running` while the same head is under review, 409 `pr_not_open`, 422 `review_node_unsupported` for any node but the operator (v0)
   - `POST /api/v1/vcs/flight` — RBAC + artifact-gated candidate-a flight request for `nodeRef`; requires Bearer or session auth; checks `node.flight` when OpenFGA is configured; optional independent `workflowSha` + `workflowRef` is remote-only and additionally requires operator `node.flight`; 202 on dispatch, 422 if source/image preflight fails
 
 ## Ports

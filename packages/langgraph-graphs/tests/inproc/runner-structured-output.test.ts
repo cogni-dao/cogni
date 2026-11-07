@@ -12,7 +12,7 @@
  */
 
 import type { AiEvent } from "@cogni/ai-core";
-import { knowledgeReadContract } from "@cogni/ai-tools";
+import { knowledgeReadContract, nodeCodeReadContract } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { createPrReviewGraph } from "../../src/graphs/pr-review/graph";
@@ -106,6 +106,8 @@ describe("runner + pr-review graph with responseFormat", () => {
     expect(result.structuredOutput).toMatchObject({
       evidence: { files: [], entries: [] },
       uncited: false,
+      // NO_VERDICT_WITHOUT_CODE: nothing was read, so the worker reports no_code_read.
+      noCodeRead: true,
       buildSha: "b".repeat(40),
     });
   });
@@ -268,6 +270,79 @@ describe("runner + pr-review graph with responseFormat", () => {
     expect(result.structuredOutput).toMatchObject({
       evidence: { files: [], entries: ["no-secrets-in-logs"] },
       uncited: false,
+      noCodeRead: true,
+    });
+  });
+
+  it("a run that read code with content is not marked noCodeRead", async () => {
+    let call = 0;
+    const completionFn: CompletionFn = () => {
+      call++;
+      return {
+        stream: (async function* (): AsyncIterable<AiEvent> {})(),
+        final: Promise.resolve({
+          ok: true as const,
+          content: call === 1 ? "" : VALID_JSON_RESPONSE,
+          ...(call === 1
+            ? {
+                toolCalls: [
+                  {
+                    id: "call-code-1",
+                    type: "function" as const,
+                    function: {
+                      name: "core__node_code_read",
+                      arguments: JSON.stringify({ path: "src/ready.ts" }),
+                    },
+                  },
+                ],
+              }
+            : {}),
+          finishReason: call === 1 ? "tool_calls" : "stop",
+        }),
+      };
+    };
+    const { stream, final } = createInProcGraphRunner({
+      createGraph: (opts) => createPrReviewGraph(opts),
+      sourceContext: SOURCE_CONTEXT,
+      completionFn,
+      createToolExecFn: (): ToolExecFn => async () => ({
+        ok: true,
+        value: {
+          nodeId: "node-1",
+          origin: "https://operator.example",
+          repo: "org/repo",
+          commitSha: "c".repeat(40),
+          path: "src/ready.ts",
+          citation: "https://github.com/org/repo/blob/x/src/ready.ts",
+          complete: true,
+          exists: true,
+          content: "export const ready = true;\n",
+          sha256: "0".repeat(64),
+          lineStart: 1,
+          lineEnd: 1,
+          totalLines: 1,
+          fileComplete: true,
+        },
+      }),
+      toolContracts: [nodeCodeReadContract],
+      request: {
+        runId: "test-code-read",
+        messages: [{ role: "user", content: "Evaluate this PR" }],
+        configurable: {
+          model: "test-model",
+          toolIds: ["core__node_code_read"],
+        },
+      },
+      responseFormat: { schema: TestEvalSchema },
+    });
+    for await (const _event of stream) {
+      // drain
+    }
+    const result = await final;
+    expect(result.ok).toBe(true);
+    expect(result.structuredOutput).toMatchObject({
+      evidence: { files: ["src/ready.ts"] },
+      noCodeRead: false,
     });
   });
 });
