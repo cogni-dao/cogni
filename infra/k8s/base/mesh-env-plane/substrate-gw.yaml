@@ -89,7 +89,30 @@ spec:
                 {
                   configMapKeyRef: { name: mesh-env, key: MESH_WIREGUARD_PORT },
                 }
+            # HR21 zero contact (bug.5588). Each knob is proven at tailscale v1.104.4 and pinned by
+            # tests/ci-invariants/mesh-env-plane.spec.ts:
+            # - No log upload (log.tailscale.com): envknob/envknob.go#L482 and logpolicy/logpolicy.go#L721
+            #   (substrate-gw.sh also passes --no-logs-no-support, cmd/tailscaled/tailscaled.go#L234).
             - { name: TS_NO_LOGS_NO_SUPPORT, value: "true" }
+            # - No bootstrap DNS to derp*.tailscale.com. 1.104.4 has no knob that turns bootstrap DNS off:
+            #   every control dial goes through a NEW dnscache.Dialer (control/controlhttp/client.go#L477),
+            #   so a past connect is never remembered, and ANY dial error asks the built-in Tailscale DERP
+            #   map for other IPs (net/dnscache/dnscache.go#L483-L497). The one failing dial was the
+            #   plaintext port-80 try (mesh-control-fwd serves 443 only: "connection refused"); the 443 dial
+            #   always connects to the socat forwarder, even while Headscale is down (502 over TLS, not a
+            #   dial error). TS_FORCE_NOISE_443 skips the port-80 try (control/controlhttp/client.go#L181,
+            #   #L291), so no control dial fails and no fallback runs. It also makes HR22 strict: 443 only.
+            - { name: TS_FORCE_NOISE_443, value: "true" }
+            # - No captive-portal probes (built-in Tailscale DERP IPs before the first map, and always
+            #   controlplane/login.tailscale.com: net/captivedetection/endpoints.go#L87, #L124-L125) and no
+            #   client update path (pkgs.tailscale.com). TS_DISABLE_FEATURE: feature/disable.go#L28; a
+            #   disabled feature does not register (feature/feature.go#L52-L54,
+            #   feature/captiveportal/captiveportal.go#L29, feature/clientupdate/clientupdate.go#L39).
+            - { name: TS_DISABLE_FEATURE, value: "captiveportal,clientupdate" }
+            # - Tripwire: tailscaled panics (exits; the pod restarts, fail closed) if it would ever run
+            #   against controlplane.tailscale.com (ipn/ipnlocal/local.go#L6817-L6821,
+            #   control/controlclient/direct.go#L410, #L519). substrate-gw.sh always passes --login-server.
+            - { name: TS_PANIC_IF_HIT_MAIN_CONTROL, value: "true" }
             - { name: HOME, value: /tmp }
             # Not a Kubernetes-aware tailscale: no API discovery, no kube state store.
             - { name: KUBERNETES_SERVICE_HOST, value: "" }

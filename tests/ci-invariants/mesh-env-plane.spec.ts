@@ -572,6 +572,34 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     expect(sh).not.toMatch(/--auth-?key|TS_AUTHKEY/);
   });
 
+  it("substrate-gw tailscaled carries every HR21 zero-contact knob, base and rendered (bug.5588)", () => {
+    // Each knob is proven at tailscale v1.104.4 (cited in substrate-gw.yaml). TS_FORCE_NOISE_443 is the
+    // bootstrap-DNS fix: no port-80 try, so no failed control dial asks derp*.tailscale.com for IPs.
+    const KNOBS = [
+      { name: "TS_NO_LOGS_NO_SUPPORT", value: "true" },
+      { name: "TS_FORCE_NOISE_443", value: "true" },
+      { name: "TS_DISABLE_FEATURE", value: "captiveportal,clientupdate" },
+      { name: "TS_PANIC_IF_HIT_MAIN_CONTROL", value: "true" },
+    ];
+    const gwEnv = (docs: Doc[], name: string) =>
+      docs
+        .find((d) => d.kind === "Deployment" && d.metadata.name === name)
+        ?.spec.template.spec.containers.find((x) => x.name === "substrate-gw")
+        ?.env;
+    expect(
+      gwEnv(parseAll<Doc>(`${BASE}/substrate-gw.yaml`), "substrate-gw")
+    ).toEqual(expect.arrayContaining(KNOBS));
+    if (kubectlAvailable) {
+      for (const r of INSTANCES) {
+        const env = gwEnv(renderInstance(r), `substrate-gw-${r.tailnet}`);
+        expect(env, r.tailnet).toEqual(expect.arrayContaining(KNOBS));
+      }
+    }
+    const sh = read(`${BASE}/substrate-gw.sh`);
+    expect(sh).toMatch(/tailscaled [^\n]*\\\n[^\n]*--no-logs-no-support/);
+    expect(sh).toContain("--login-server=");
+  });
+
   it("substrate-gw state dir is a subdirectory it owns, never the root-owned volume root (P4 NoState)", () => {
     const gw = parseAll<Doc>(`${BASE}/substrate-gw.yaml`).find(
       (d) => d.kind === "Deployment"
