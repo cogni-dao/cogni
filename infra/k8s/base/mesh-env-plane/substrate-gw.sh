@@ -8,11 +8,7 @@
 #
 # Three jobs, one loop:
 #   1. RUN   tailscaled in userspace (no TUN, no capabilities), state on the env VM's local-path PVC,
-#            no log upload, our control URL only, control over TLS 443 only. tailscaled inherits the
-#            HR21 knobs from the container env (substrate-gw.yaml, bug.5588): TS_NO_LOGS_NO_SUPPORT,
-#            TS_FORCE_NOISE_443 (no refused port-80 try, so a Headscale restart starts no bootstrap DNS to
-#            derp*.tailscale.com), TS_DISABLE_FEATURE=captiveportal,clientupdate and the
-#            TS_PANIC_IF_HIT_MAIN_CONTROL tripwire. The state dir is a SUBDIRECTORY of the volume that
+#            no log upload, our control URL only. The state dir is a SUBDIRECTORY of the volume that
 #            this uid creates and owns (mode 0700): the local-path volume root is root-owned 0777 and
 #            tailscaled must chmod its state dir, which a non-root, capability-free uid cannot do on a
 #            root-owned directory. Deleting the volume still deletes all state (HR10: fresh device). `tailscale up` holds NO key: an unregistered device
@@ -43,10 +39,6 @@
 #                                    backoffSeconds}
 #   substrate_gw_serve_reset     the bound passed; forwarding stopped
 #   substrate_gw_serve_restored  the declared serve config is applied (boot or map poll returned)
-#   substrate_gw_control_probe   before tailscaled starts: one TCP connect try to the control host :443
-#                                failed {try, waitedSeconds, boundSeconds}
-#   substrate_gw_control_reachable  the connect succeeded; tailscaled starts now {tries, waitedSeconds}
-#   substrate_gw_control_unreachable  no connect within the bound; exit 1 (the pod restarts)
 set -u
 
 : "${MESH_CONTROL_URL:?MESH_CONTROL_URL is required (https://mesh-<env>.<zone>)}"
@@ -57,7 +49,6 @@ set -u
 : "${TS_PORT:=41641}"
 BOUND="${SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS:-14400}"
 INTERVAL="${SUBSTRATE_GW_WATCHDOG_INTERVAL_SECONDS:-15}"
-PROBE_BOUND="${SUBSTRATE_GW_CONTROL_PROBE_BOUND_SECONDS:-60}"
 PUBLISH_DIR="${SUBSTRATE_GW_PUBLISH_DIR:-/publish}"
 LOST_FILE="${TS_STATE_DIR}/watchdog.lost-since"
 STATE_FILE="${TS_STATE_DIR}/tailscaled.state"
@@ -67,8 +58,7 @@ case "$MESH_CONTROL_URL" in
   https://?*) ;;
   *) echo "MESH_CONTROL_URL must be https:// (hard requirement 22)" >&2; exit 64 ;;
 esac
-case "$BOUND$INTERVAL$PROBE_BOUND" in *[!0-9]*) echo "bounds and interval must be whole seconds" >&2; exit 64 ;; esac
-CONTROL_HOST="${MESH_CONTROL_URL#https://}"
+case "$BOUND$INTERVAL" in *[!0-9]*) echo "bound and interval must be whole seconds" >&2; exit 64 ;; esac
 
 ts() { tailscale --socket="$TS_SOCKET" "$@"; }
 now() { date +%s; }
@@ -171,32 +161,6 @@ publish() {
 # mesh-env-plane.spec.ts pins TS_STATE_DIR strictly below the state volume's mountPath.
 mkdir -p "$TS_STATE_DIR" && chmod 0700 "$TS_STATE_DIR" \
   || { echo "cannot create state dir $TS_STATE_DIR" >&2; exit 1; }
-
-# HR21 at pod start (bug.5588). tailscaled's control dialer starts bootstrap DNS to derp*.tailscale.com on
-# ANY failed dial, and tailscale 1.104.4 has no knob to turn that off. On a fresh pod the first dial can be
-# refused before this pod's NetworkPolicy egress is programmed (validated 10:04:52-57Z: "dial tcp
-# <mesh-control-fwd ClusterIP>:443: connection refused" -> 10 and 12 bootstrapDNS lines). So tailscaled starts only after a
-# plain TCP connect to the SAME host:port it will dial (the control host, a hostAlias to mesh-control-fwd,
-# :443) succeeds. Probe = the image's busybox `nc -z` (no bash in the image; its nc getopt string
-# "^np:s:ubvw:+lki:o:z" has -z and -w). It contacts only the forwarder. Backoff 1, 2, 4, 8, 8 ... s, up
-# to PROBE_BOUND (60 s default); never reached -> exit 1, the pod restarts and tries again.
-wait_for_control() {
-  start="$(now)"; delay=1; try=0
-  while :; do
-    try=$((try + 1))
-    if nc -z -w 3 "$CONTROL_HOST" 443 </dev/null >/dev/null 2>&1; then
-      log substrate_gw_control_reachable "\"tries\":$try,\"waitedSeconds\":$(($(now) - start))"
-      return 0
-    fi
-    waited=$(($(now) - start))
-    log substrate_gw_control_probe "\"try\":$try,\"waitedSeconds\":$waited,\"boundSeconds\":$PROBE_BOUND"
-    [ "$waited" -lt "$PROBE_BOUND" ] || return 1
-    sleep "$delay"
-    delay=$((delay * 2)); [ "$delay" -le 8 ] || delay=8
-  done
-}
-wait_for_control || { log substrate_gw_control_unreachable "\"boundSeconds\":$PROBE_BOUND"; exit 1; }
-
 tailscaled --tun=userspace-networking --statedir="$TS_STATE_DIR" --socket="$TS_SOCKET" \
   --port="$TS_PORT" --no-logs-no-support &
 TSD=$!
