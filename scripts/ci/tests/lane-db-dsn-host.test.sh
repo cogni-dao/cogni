@@ -17,19 +17,18 @@
 #       baselines: the hand-spelled pre-change format, the current file with the resolver
 #       absent (the provision-env-vm.sh Phase 5c path, which must keep working untouched),
 #       and `origin/main`'s actual blob of the composer.
-#   [2] DOLTGRES_URL is byte-identical too, and keeps `${VM_IP}` + a CONTROL-env-keyed name.
-#       Doltgres residency is explicitly OUT of scope (immutable superuser, databases.md
-#       §5.2), so it must not move — not now, and not when a Postgres pin is deleted.
-#   [3] Deleting one pin moves ONLY that lane's two Postgres DSNs. Every other pair, and
-#       that lane's DOLTGRES_URL, stay byte-identical. That is the per-lane cutover
-#       mechanism, and the blast radius of a cutover is exactly one lane.
+#   [2] DOLTGRES_URL dials the LANE's own VM for every catalog pair (story.5098). Its
+#       superuser and fail-closed contract live in doltgres-lane-residency.test.sh.
+#   [3] Deleting one pin moves ONLY that lane's two Postgres DSNs. Every other pair stays
+#       byte-identical. That is the per-lane cutover mechanism, and the blast radius of a
+#       cutover is exactly one lane.
 #   [4] FAIL LOUD, NEVER COMPOSE A GUESSED HOST: an unset FORK_DOMAIN_ROOT on the foreign
 #       path (the cross-fleet widening class that a defaulted `cogni_domain_root` would
 #       cause), an unresolvable alias, an ambiguous multi-A alias, a missing catalog row on
 #       a pinned pair, and missing arguments all REFUSE.
 #   [5] `lane_db_assert_agreement` — the read-side-vs-write-side gate — passes for every
 #       pair against the DSN this composer actually produces.
-#   [6] SCOPE GUARDS: `${VM_IP}` is still the vault/SSH target, DOLTGRES_URL still dials it,
+#   [6] SCOPE GUARDS: `${VM_IP}` is still the vault/SSH target, DOLTGRES_URL dials the lane host,
 #       and nothing here emits a password rotation (the B2 carrier question is still open,
 #       and a moved host without its password on the target is 28P01).
 #
@@ -139,7 +138,9 @@ for catalog_file in "$CATALOG_DIR"/*.yaml; do
 done
 [ "${#PAIRS[@]}" -ge 10 ] || fail "only ${#PAIRS[@]} (node, lane) pairs derived from $CATALOG_DIR — the enumeration is broken, not the fleet"
 
-DSN_KEYS=(DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL)
+# Postgres only: DOLTGRES_URL moved to the lane host on purpose (story.5098), so it is not
+# part of the historical byte-identity baselines below.
+DSN_KEYS=(DATABASE_URL DATABASE_SERVICE_URL)
 
 # THE MATERIALIZE PATH, REPRODUCED EXACTLY (scripts/ci/secret-materialize.sh):
 #   DEPLOY_ENV          = the lane
@@ -249,11 +250,15 @@ compose_base_ref() {
       [ "${db_path%%\?*}" = "cogni_${node//-/_}" ] || fail "$pair/$key names a non-local DB"
       lane_db_assert_agreement "$node" "$lane" "$dsn" >/dev/null || fail "$pair/$key disagrees"
     done
-    [ "$(compose_now "$node" "$lane" DOLTGRES_URL)" = "$(compose_literal "$node" "$lane" DOLTGRES_URL)" ] \
-      || fail "$pair Doltgres residency changed"
+    # story.5098: Doltgres follows the same lane host; its name keeps the control-env suffix.
+    dgu="$(compose_now "$node" "$lane" DOLTGRES_URL)"
+    dg_after="${dgu##*@}"
+    [ "${dg_after%%:*}" = "$(addr_for_env "$lane")" ] || fail "$pair/DOLTGRES_URL dials a foreign instance: ${dg_after%%:*}"
+    dg_sfx=""; [ "$(control_env_for "$lane" "$node")" = "$lane" ] || dg_sfx="_${lane//-/_}"
+    grep -q ":5435/knowledge_${node//-/_}${dg_sfx}?" <<<"$dgu" || fail "$pair/DOLTGRES_URL renamed its database: ${dg_after}"
   done
 )
-echo '[current] all catalog lanes compose lane-local app/service/migration DSNs; Doltgres unchanged'
+echo '[current] all catalog lanes compose lane-local app/service/migration/Doltgres DSNs'
 
 # Historical pins are an EXPLICIT rollback fixture, not the committed contract.
 # Old inertness baselines apply only to the historical four or local-custody rows;
@@ -308,17 +313,6 @@ This PR must move no DSN host and no database name (bug.5299 B1 is inert by cons
 done
 echo "  ok  ${checked} composed DSN values byte-identical"
 
-# DOLTGRES, EXPLICITLY: still ${VM_IP} (the control VM), still the control-env-keyed name.
-echo "[2] DOLTGRES_URL still dials the control VM for every pair"
-for pair in "${PAIRS[@]}"; do
-  node="${pair%%/*}"; lane="${pair##*/}"
-  control="$(control_env_for "$lane" "$node")"
-  dgu="$(PATH="$SHIM:$PATH" compose_now "$node" "$lane" DOLTGRES_URL)"
-  [ "$(printf '%s' "$dgu" | sed -e 's#.*@##' -e 's#:5435.*##')" = "$(addr_for_env "$control")" ] \
-    || fail "DOLTGRES_URL for ${pair} left the control VM: ${dgu}"
-done
-echo "  ok  all ${#PAIRS[@]} DOLTGRES_URLs still name the control env's VM on :5435"
-
 # ── 3. DELETING ONE PIN MOVES EXACTLY ONE LANE'S TWO POSTGRES DSNs ───────────────
 echo "[3] unpinning poly/candidate-a moves ONLY its two Postgres DSN hosts"
 declare -A PINNED_SNAPSHOT=()
@@ -338,7 +332,7 @@ done
     for key in "${DSN_KEYS[@]}"; do
       got="$(compose_now "$node" "$lane" "$key")"
       before="${PINNED_SNAPSHOT["${pair}/${key}"]}"
-      if [ "$pair" = "poly/candidate-a" ] && [ "$key" != "DOLTGRES_URL" ]; then
+      if [ "$pair" = "poly/candidate-a" ]; then
         [ "$got" != "$before" ] || fail "unpinning poly/candidate-a did not move its ${key} — the ledger could never empty"
         moved=$((moved + 1))
         continue
@@ -359,11 +353,7 @@ done
   out="$(lane_db_assert_agreement poly candidate-a "$dsn")" \
     || fail "the moved DSN must still satisfy the agreement gate; got: ${out}"
   echo "  ok  ${out}"
-  # ...and Doltgres did NOT follow: still production's VM, still the suffixed knowledge DB.
-  dgu="$(compose_now poly candidate-a DOLTGRES_URL)"
-  grep -q '@203.0.113.1:5435/knowledge_poly_candidate_a?' <<<"$dgu" \
-    || fail "Doltgres must NOT move with a Postgres pin deletion (out of scope, immutable superuser): ${dgu}"
-  echo "  ok  poly/candidate-a moved to 203.0.113.3/cogni_poly; DOLTGRES_URL untouched on 203.0.113.1"
+  echo "  ok  poly/candidate-a moved to 203.0.113.3/cogni_poly"
 )
 # the committed ledger is untouched by the experiment
 [ "$(PATH="$SHIM:$PATH" compose_now poly candidate-a DATABASE_URL)" = "${PINNED_SNAPSHOT[poly/candidate-a/DATABASE_URL]}" ] \
@@ -434,13 +424,13 @@ for pair in "${PAIRS[@]}"; do
 done
 
 # ── 6. SCOPE GUARDS — what this change must NOT have touched ─────────────────────
-echo "[6] scope guards: VM_IP is still the vault/SSH target, Doltgres still dials it, no rotations"
+echo "[6] scope guards: VM_IP is still the vault/SSH target, Doltgres dials the lane host, no rotations"
 # shellcheck disable=SC2016  # the literal source text is the assertion
 grep -q 'ssh \$SSH_OPTS root@"\$VM_IP"' "$REPO_ROOT/scripts/setup/lib/reconcile-secrets.sh" \
   || fail "bao_get_field must still SSH to \${VM_IP} — VM_IP is the vault/SSH target and only the two Postgres DSN hosts moved"
 # shellcheck disable=SC2016  # ditto
-grep -q '"\$_dgu" "\${VM_IP}"' "$REPO_ROOT/scripts/setup/lib/reconcile-secrets.sh" \
-  || fail "DOLTGRES_URL must still compose \${VM_IP} as its host (Doltgres residency is out of scope)"
+grep -q '"\$_dgu" "\${pg_host}"' "$REPO_ROOT/scripts/setup/lib/reconcile-secrets.sh" \
+  || fail "DOLTGRES_URL must compose the lane host \${pg_host}, like Postgres (story.5098)"
 for f in scripts/setup/lib/reconcile-secrets.sh scripts/ci/lib/lane-db-residency.sh scripts/ci/secret-materialize.sh; do
   # comments DISCUSS bug.5207's `ALTER USER app_poly PASSWORD`; no line may EXECUTE one.
   if grep -vE '^[[:space:]]*#' "$REPO_ROOT/$f" | grep -qiE 'ALTER +(USER|ROLE)'; then
