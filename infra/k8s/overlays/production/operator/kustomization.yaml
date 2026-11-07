@@ -8,13 +8,14 @@ resources:
   - ../../../base/openfga-external
   # story.5016 step 9, production (mirror of #2212 on candidate-a): the legacy
   # compute-workload-controller is structurally removed so exactly ONE writer — the
-  # Crossplane transaction actuator below — can reach an Akash wallet from this env.
+  # transaction actuator below — can reach an Akash wallet from this env.
   # Its old-account leases are closed (all 12 retired 2026-09-15) and its Console key
   # is dead; the pod was pure reconcile-churn + memory on a full box.
   - external-secret.yaml
   - ../../../base/operator-migration-external-secret
   - ./secrets-writer-sa.yaml
-  # story.5016 production cutover — the private Akash transaction actuator Crossplane calls.
+  # story.5016 production cutover — the private Akash transaction actuator (the node-deploy
+  # sequencer's only paid writer, task.5400).
   # #2234 shipped the two ExternalSecrets deliberately WITHOUT this Deployment because a
   # projected Secret source whose key is absent makes kubelet refuse the mount (FailedMount,
   # Argo app Degraded, invisible to Loki — bug.5142). That ordering constraint is satisfied:
@@ -22,7 +23,6 @@ resources:
   # so the Deployment can land and mount it.
   - ../../../base/akash-tx-actuator
   - ./akash-tx-actuator-external-secret.yaml
-  - ./akash-tx-actuator-auth-external-secret.yaml
   # bug.5240 — the keyless lease-log pump rides beside the actuator BECAUSE custody lives
   # here: this cluster's actuator ledger receipts EVERY env's Akash lane (bug.5206/task.5132),
   # so this one pump tails candidate-a + preview + production leases (UNFILTERED_ENUMERATION;
@@ -50,7 +50,7 @@ components:
   - ../../../base/node-deploy-mesh/tailnets/preview
   - ../../../base/node-deploy-mesh/tailnets/production
 # Runs AFTER the built-in namePrefix transformer and restores the actuator Service's
-# name to the bare `akash-tx-actuator` the Crossplane Composition dials. See
+# name to the bare `akash-tx-actuator` its callers dial. See
 # ../../../base/akash-tx-actuator-service-name for why the prefix is what gives.
 transformers:
   - ../../../base/akash-tx-actuator-service-name
@@ -81,7 +81,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:5f079630c5f19b9bf27d29bef89969cf065f58be4981e144504a76cb4d5d8089"
+    digest: "sha256:14be73c362daff77fd090cc0ec44efca4b250c56a4b83947b5bead3e2d636467"
 patches:
   - target:
       kind: ExternalSecret
@@ -230,6 +230,15 @@ patches:
                         optional: true
                   - name: NODE_DEPLOY_SUBSTRATE_HOSTS
                     value: candidate-a=cogni-candidate-a.vm.cognidao.org,preview=cogni-preview.vm.cognidao.org,production=cogni.vm.cognidao.org
+                  # task.5428 — the canonical candidate-a lane reaches the substrate over its OWN tailnet: its node
+                  # apps get a per-attempt mesh key, the socket /var/run/headscale/candidate-a/headscale.sock and
+                  # the control URL https://mesh-candidate-a.cognidao.org (env-lanes.ts), and this sequencer approves
+                  # the candidate-a VM's substrate-gw (HR11; MESH_LANES_ONLY). preview and production are unlisted, so
+                  # they stay egress until their own lane flip. Rollback: revert this PR; the lane drains.
+                  # node-deploy-mesh-coordinators.spec.ts pins every mesh lane to a coordinator this overlay runs
+                  # and to that tailnet's VM env-plane instance on main.
+                  - name: NODE_DEPLOY_SUBSTRATE_TRANSPORTS
+                    value: candidate-a=mesh:candidate-a
   # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists
   # merge on `name`), never by positional JSON-pointer index. A positional
   # `/env/N/value` patch silently repoints when the base list shifts — that exact
