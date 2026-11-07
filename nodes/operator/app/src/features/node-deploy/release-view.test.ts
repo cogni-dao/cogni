@@ -19,7 +19,6 @@ import {
   buildWorkloadView,
   deriveReleaseTimeline,
 } from "./release-view";
-import { WALLET_WAIT_EXCEEDED } from "./sequencer";
 import { canaryApp, ENV, NODE_ID, SHA_1 } from "./testing";
 
 const T0 = Date.parse("2026-11-02T10:00:00.000Z");
@@ -198,22 +197,6 @@ describe("deriveReleaseTimeline STATE_TABLE", () => {
     expect(t.parkedReason).toBe(
       "3 consecutive failed attempts; last: proof_timeout: version 502"
     );
-  });
-
-  it("parked: a wallet that stayed busy past its bound parks on that reason, not on an attempt count (bug.5585)", () => {
-    const verdict = {
-      step: "alert",
-      outcome: "release_parked",
-      at: "2026-11-02T10:40:00.000Z",
-    };
-    const t = derive([
-      attempt(R1, 1, "failed", {
-        error: WALLET_WAIT_EXCEEDED,
-        steps: [verdict],
-      }),
-    ]);
-    expect(t.releaseState).toBe("parked");
-    expect(t.parkedReason).toBe(WALLET_WAIT_EXCEEDED);
   });
 
   it("parked: the sequencer's own park verdict wins over a third attempt that is still closing", () => {

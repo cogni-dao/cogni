@@ -17,7 +17,6 @@ import {
   DEFAULT_SEQUENCER_CONFIG,
   NodeDeploySequencer,
   type SequencerConfig,
-  WALLET_WAIT_EXCEEDED,
 } from "./sequencer";
 import {
   canaryApp,
@@ -62,7 +61,7 @@ function harness(
     retainMs: 120_000,
     ...cfg,
   };
-  const seq = new NodeDeploySequencer({
+  const deps = {
     store,
     payer,
     edge:
@@ -73,7 +72,10 @@ function harness(
     clock,
     log,
     config,
-  });
+  };
+  const seq = new NodeDeploySequencer(deps);
+  /** A new sequencer process over the same durable store (in-memory throttles start empty). */
+  const restart = () => new NodeDeploySequencer(deps);
   const release = (w: NodeWorkloadSpec, sha: string) =>
     store.recordRelease({
       nodeId: NODE_ID,
@@ -96,6 +98,7 @@ function harness(
     seq,
     release,
     config,
+    restart,
   };
 }
 
@@ -1348,31 +1351,32 @@ describe("keys and parking", () => {
 
 describe("a busy wallet waits without using an attempt (bug.5585)", () => {
   const busy = () => new PayerError("wallet_allocation_blocked", "busy", false);
+  const walletAlerts = (h: H) =>
+    h.log.alerts().filter((a) => a === "wallet_wait_exceeded");
 
-  it("waits far past leaseReadyMs and maxFailedAttempts worth of ticks, then lands on attempt 1", async () => {
+  it("a long wait alerts once, never fails or parks, then lands on the same attempt", async () => {
     const h = harness();
     await stateUp(h);
     let walletBusy = true;
     h.payer.createFault = () => (walletBusy ? busy() : undefined);
     await h.release(canaryApp(), SHA_1);
-    // 20 minutes of ticks: 5x leaseReadyMs, enough to burn and park all 3 attempts on the old rule
+    const since = h.clock.now();
+    // 36 minutes of ticks: 9x leaseReadyMs (the old rule burned and parked all 3 attempts by ~13 min)
     const outcomes: string[] = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 18; i++) {
       outcomes.push(await h.seq.step(APP));
       h.clock.advance(120_000);
     }
     expect(outcomes.every((o) => o === "driven")).toBe(true);
     const waiting = await h.store.attemptsFor(APP);
     expect(waiting.map((a) => [a.attempt, a.phase, a.error])).toEqual([
-      [1, "planned", "unpaid: wallet_busy"],
+      [1, "planned", `unpaid: wallet_busy@${since}`],
     ]);
-    expect(h.log.steps().filter((s) => s === "create:wallet_busy").length).toBe(
-      10
-    );
     expect(h.log.steps().some((s) => s.startsWith("attempt_failed:"))).toBe(
       false
     );
     expect(h.log.alerts()).not.toContain("release_parked");
+    expect(walletAlerts(h)).toHaveLength(1);
 
     walletBusy = false;
     expect(await h.seq.step(APP)).toBe("driven");
@@ -1380,29 +1384,62 @@ describe("a busy wallet waits without using an attempt (bug.5585)", () => {
     expect(landed.map((a) => [a.attempt, a.phase])).toEqual([[1, "active"]]);
   });
 
-  it("past walletWaitMs the release parks on its own reason, never as a counted attempt failure", async () => {
+  it("the wait starts at the first busy reply: an attempt that waited 30+ min on something else does not alert at once", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.createFault = () => busy();
+    const { release } = await h.release(canaryApp(), SHA_1);
+    // an attempt that waited 40 min, unpaid, for its mesh key (mesh_key_pending), then resumes its create
+    const waited = await h.store.insertAttempt(
+      release.id,
+      (n) => `resumed:${release.id}:${n}`
+    );
+    await h.store.updateAttempt(waited.id, {
+      error: "mesh_key_pending: minting closed",
+    });
+    h.clock.advance(40 * 60_000);
+    expect(await h.seq.step(APP)).toBe("driven");
+    const first = h.clock.now();
+    const [a] = await h.store.attemptsFor(APP);
+    expect([a?.attempt, a?.phase, a?.error]).toEqual([
+      1,
+      "planned",
+      `unpaid: wallet_busy@${first}`,
+    ]);
+    expect(walletAlerts(h)).toHaveLength(0);
+    h.clock.advance(h.config.walletWaitMs);
+    await h.seq.step(APP);
+    expect(walletAlerts(h)).toHaveLength(1);
+    expect((await h.store.attemptsFor(APP)).map((x) => x.phase)).toEqual([
+      "planned",
+    ]);
+  });
+
+  it("a restart keeps the wait start; the wait log is one line per minute per attempt", async () => {
     const h = harness();
     await stateUp(h);
     h.payer.createFault = () => busy();
     await h.release(canaryApp(), SHA_1);
-    expect(await h.seq.step(APP)).toBe("driven");
-    h.clock.advance(h.config.walletWaitMs - 1_000);
-    expect(await h.seq.step(APP)).toBe("driven");
-    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("planned");
-    h.clock.advance(2_000);
-    await h.seq.step(APP);
-    const [only, ...rest] = await h.store.attemptsFor(APP);
-    expect(rest).toHaveLength(0);
-    expect(only?.phase).toBe("failed");
-    expect(only?.error).toBe(WALLET_WAIT_EXCEEDED);
-    expect(h.log.alerts()).toContain("release_parked");
-    const creates = h.payer.createRequests.length;
-    for (let i = 0; i < 3; i++) {
-      h.clock.advance(24 * 3_600_000);
-      expect(await h.seq.step(APP)).toBe("parked");
+    const since = h.clock.now();
+    // 5 s ticks for 2 minutes: 25 tries, 3 log lines (0 s, 60 s, 120 s)
+    for (let i = 0; i <= 24; i++) {
+      await h.seq.step(APP);
+      h.clock.advance(5_000);
     }
-    expect(h.payer.createRequests).toHaveLength(creates);
-    expect((await h.store.attemptsFor(APP)).length).toBe(1);
+    expect(
+      h.log.steps().filter((s) => s === "create:wallet_busy")
+    ).toHaveLength(3);
+    h.clock.advance(20 * 60_000);
+    const restarted = h.restart();
+    await restarted.step(APP);
+    expect((await h.store.attemptsFor(APP))[0]?.error).toBe(
+      `unpaid: wallet_busy@${since}`
+    );
+    expect(walletAlerts(h)).toHaveLength(0);
+    h.clock.advance(h.config.walletWaitMs - 20 * 60_000);
+    await restarted.step(APP);
+    expect(walletAlerts(h)).toHaveLength(1);
+    expect((await h.store.attemptsFor(APP)).map((x) => x.attempt)).toEqual([1]);
   });
 });
 

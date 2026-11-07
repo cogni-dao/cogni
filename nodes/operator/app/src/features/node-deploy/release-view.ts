@@ -54,7 +54,7 @@ import {
   type ReleaseRow,
   type StorePort,
 } from "@/ports";
-import { DEFAULT_SEQUENCER_CONFIG, WALLET_WAIT_EXCEEDED } from "./sequencer";
+import { DEFAULT_SEQUENCER_CONFIG } from "./sequencer";
 
 /** How many recent attempts the workload list carries (unchanged from the pre-timeline read). */
 export const RECENT_ATTEMPTS = 10;
@@ -172,8 +172,6 @@ export function deriveReleaseTimeline(input: {
   // writes that step on the tick after the limit, so until then a count alone is `failed`.
   if (parkedByStep) {
     const last = ofRelease[0]?.error ?? "no error recorded";
-    // bug.5585: a wallet busy past its bound parks one unpaid attempt, not a count of failed ones.
-    if (last === WALLET_WAIT_EXCEEDED) return done("parked", last);
     return done(
       "parked",
       `${Math.max(failures, max)} consecutive failed attempts; last: ${last}`.slice(
