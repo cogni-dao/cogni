@@ -2397,16 +2397,16 @@ SECEOF
   # bug.5000/bug.5012: GH_REVIEW_APP_* + GH_WEBHOOK_SECRET are NOT injected —
   # the worker HTTP-delegates GitHub I/O to the operator and holds no GitHub
   # credential. (Parity: SCHEDULER_WORKER_KEYS in scripts/setup/lib/reconcile-secrets.sh.)
-  SECRET_FILE=$(mktemp)
-  cat > "$SECRET_FILE" <<SECEOF
-DATABASE_URL=${OPERATOR_DATABASE_SERVICE_URL:?operator OpenBao service URL required}
-SCHEDULER_API_TOKEN=${SCHEDULER_API_TOKEN:-}
-INTERNAL_OPS_TOKEN=${INTERNAL_OPS_TOKEN:-}
-COGNI_NODE_DBS=${COGNI_NODE_DBS:-}
-SECEOF
-  kubectl -n "${K8S_NS}" create secret generic scheduler-worker-secrets \
-    --from-env-file="$SECRET_FILE" --dry-run=client -o yaml | kubectl apply -f -
-  rm -f "$SECRET_FILE"
+  # Explicit SSA manager avoids last-applied compatibility; qualify owner handoff.
+  # JSON/base64 keeps arbitrary values on stdin. Conflicts fail, never force.
+  DATABASE_URL="${OPERATOR_DATABASE_SERVICE_URL:?operator OpenBao service URL required}" \
+  SCHEDULER_API_TOKEN="${SCHEDULER_API_TOKEN:-}" \
+  INTERNAL_OPS_TOKEN="${INTERNAL_OPS_TOKEN:-}" \
+  COGNI_NODE_DBS="${COGNI_NODE_DBS:-}" \
+    jq -n '{apiVersion: "v1", kind: "Secret", type: "Opaque",
+      metadata: {name: "scheduler-worker-secrets"}, data: (env | {DATABASE_URL, SCHEDULER_API_TOKEN, INTERNAL_OPS_TOKEN, COGNI_NODE_DBS}
+        | map_values(@base64))}' \
+    | kubectl -n "${K8S_NS}" apply --server-side --field-manager=cogni-worker-secrets -f -
   log_info "  Applied scheduler-worker-secrets"
 
   log_info "[$(date -u +%H:%M:%S)] k8s secrets applied"

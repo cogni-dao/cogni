@@ -111,7 +111,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${CYAN}[STEP]${NC} $1"; }
 
 # ── Prerequisites ──────────────────────────────────────────
-for cmd in tofu ssh-keygen age-keygen openssl; do
+for cmd in tofu ssh-keygen age-keygen openssl jq; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     log_error "Required: $cmd not found. Install it first."
     exit 1
@@ -664,20 +664,20 @@ for node in operator; do
   log_info "  Created ${node}-node-app-secrets"
 done
 
-# Scheduler-worker secret
-# NOTE: COGNI_NODE_ENDPOINTS and COGNI_NODE_DBS belong in the configmap (set
-# by Kustomize overlay), NOT here. Putting them in the secret shadows the
-# configmap value (envFrom order: configmap first, secret second → secret wins)
-# and caused CrashLoopBackOff when the secret had UUID-only keys without
-# "operator=" named entry. See scorecard row 20.
-ssh $SSH_OPTS root@"$VM_IP" "kubectl -n ${K8S_NAMESPACE} create secret generic scheduler-worker-secrets \
-  --from-literal=DATABASE_URL='${DATABASE_SERVICE_URL}' \
-  --from-literal=SCHEDULER_API_TOKEN='${SCHEDULER_API_TOKEN}' \
-  --from-literal=GH_REVIEW_APP_ID='${GH_REVIEW_APP_ID:-}' \
-  --from-literal=GH_REVIEW_APP_PRIVATE_KEY_BASE64='${GH_REVIEW_APP_PRIVATE_KEY_BASE64:-}' \
-  --from-literal=GH_WEBHOOK_SECRET='${GH_WEBHOOK_SECRET:-}' \
-  --from-literal=INTERNAL_OPS_TOKEN='${INTERNAL_OPS_TOKEN}' \
-  --dry-run=client -o yaml | kubectl apply -f -"
+# Scheduler-worker secret: same narrow projection and SSA owner as deploy-infra.
+# Endpoint routing remains in the ConfigMap. GitHub credentials are not worker
+# inputs. Qualify the existing managedFields handoff before writer release.
+# Values travel only through the SSH stdin, never its remote command arguments.
+DATABASE_URL="${DATABASE_SERVICE_URL}" \
+SCHEDULER_API_TOKEN="${SCHEDULER_API_TOKEN}" \
+INTERNAL_OPS_TOKEN="${INTERNAL_OPS_TOKEN}" \
+COGNI_NODE_DBS="${COGNI_NODE_DBS}" \
+  jq -n '{apiVersion: "v1", kind: "Secret", type: "Opaque",
+    metadata: {name: "scheduler-worker-secrets"},
+    data: (env | {DATABASE_URL, SCHEDULER_API_TOKEN, INTERNAL_OPS_TOKEN, COGNI_NODE_DBS}
+      | map_values(@base64))}' \
+  | ssh $SSH_OPTS root@"$VM_IP" \
+      "kubectl -n ${K8S_NAMESPACE} apply --server-side --field-manager=cogni-worker-secrets -f -"
 log_info "  Created scheduler-worker-secrets"
 
 log_info "All k8s secrets created"
