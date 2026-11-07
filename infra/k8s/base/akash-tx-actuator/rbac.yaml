@@ -12,9 +12,8 @@
 # KubernetesMigrationJobAdapter calls readNamespacedJob (get), createNamespacedJob (create),
 # listNamespacedJob (list), deleteNamespacedJob (delete), listNamespacedPod (list) and
 # readNamespacedPodLog (get pods/log).
-# Everything else the controller holds — computeworkloads(+status/finalizers), leases, events,
-# the allocation ConfigMap — is deliberately ABSENT: Crossplane owns every CR here, this
-# process holds no Lease (its wallet slot is a Postgres unique index), and its receipts are
+# Everything else the retired controller held — computeworkloads(+status/finalizers), leases,
+# events, the allocation ConfigMap — is deliberately ABSENT: this process owns no CR, holds no Lease (its wallet slot is a Postgres unique index), and its receipts are
 # rows in Postgres, not a ConfigMap.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

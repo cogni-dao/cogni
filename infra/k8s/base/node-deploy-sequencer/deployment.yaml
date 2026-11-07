@@ -109,7 +109,7 @@ spec:
           projected:
             sources:
               # Bearer for the actuator's create/observe/delete ops — the SAME OpenBao key the
-              # Crossplane Composition and the lease-log pump present
+              # lease-log pump presents
               # (cogni/<env>/akash-tx-actuator), projected from the actuator's own ExternalSecret.
               - secret:
                   name: akash-tx-actuator-env-secrets

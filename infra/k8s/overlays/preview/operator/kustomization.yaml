@@ -24,7 +24,7 @@ namePrefix: operator-
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:6bb25bdfa041214473e94a4b1de5bcbb2efa63ffcea7f1774ddbe13f61ae55c8"
+    digest: "sha256:0e82b0b50c31ecc7c6259407a6ad35ffc2636c4abd47bd9e5e6391a830a2b134"
 patches:
   - target:
       kind: ExternalSecret

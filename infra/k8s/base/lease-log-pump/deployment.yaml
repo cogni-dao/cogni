@@ -94,7 +94,7 @@ spec:
           projected:
             sources:
               # Bearer for the actuator's read-only lease-log-sources op — the SAME OpenBao
-              # key the Crossplane Composition presents (cogni/<env>/akash-tx-actuator),
+              # key the node-deploy sequencer presents (cogni/<env>/akash-tx-actuator),
               # projected from the actuator's own ExternalSecret. Read capability only: the
               # actuator's mutating ops are gated behind the same token, but this process
               # never sends one (and the wallet slot serializes spends regardless).
