@@ -2388,8 +2388,8 @@ spec:
     const nextDeploySha = "cccccccccccccccccccccccccccccccccccccccc";
     routeHandlers = {
       ...candidateReviewHandlers([
-        "infra/crossplane/install/packages/provider-http.yaml",
-        "tests/ci-invariants/crossplane-dormant-substrate.spec.ts",
+        "infra/k8s/argocd/control-plane/candidate-a/candidate-a-appsets-application.yaml",
+        "tests/ci-invariants/akash-tx-actuator-runtime.spec.ts",
       ]),
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) =>
         params.commit_sha === candidateSourceSha
@@ -2499,7 +2499,7 @@ spec:
 
   it("rejects a reviewed PR that crosses the candidate control-plane path boundary", async () => {
     routeHandlers = candidateReviewHandlers([
-      "infra/k8s/argocd/control-plane/candidate-a/crossplane-core-application.yaml",
+      "infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml",
       ".github/workflows/promote-and-deploy.yml",
     ]);
 
@@ -2871,7 +2871,7 @@ spec:
   ])("rejects mixed control-plane and Compose path %s before any mutation", async (path) => {
     routeHandlers = candidateReviewHandlers([
       path,
-      "infra/k8s/argocd/control-plane/candidate-a/crossplane-core-application.yaml",
+      "infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml",
     ]);
 
     await expect(

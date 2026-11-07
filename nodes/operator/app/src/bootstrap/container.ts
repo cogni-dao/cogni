@@ -949,6 +949,12 @@ function createContainer(): Container {
     goalMetrics = createGoalMetrics({
       knowledgeSql: doltClient,
       observationsSql: serviceDb.$client,
+      // The node-deploy release store lives in the same operator Postgres (task.5442).
+      releaseStoreSql: serviceDb.$client,
+      // The operator's own public host: the serving-drift egress control probe (task.5442).
+      controlHost: env.APP_BASE_URL
+        ? new URL(env.APP_BASE_URL).host
+        : undefined,
       environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
       // Compute receipts and skipped invalid definitions must reach Loki.
       log: (event) => log.info(event, "metric.event"),

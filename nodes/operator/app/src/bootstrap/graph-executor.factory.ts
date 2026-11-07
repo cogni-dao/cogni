@@ -51,7 +51,10 @@ import {
   LangGraphDevProvider,
   LangGraphInProcProvider,
 } from "@/adapters/server";
-import { runInScope } from "@/adapters/server/ai/execution-scope";
+import {
+  type ExecutionCodeSubject,
+  runInScope,
+} from "@/adapters/server/ai/execution-scope";
 import { OPERATOR_CORE_TOOL_BUNDLE } from "@/bootstrap/ai/evaluation-baseline";
 import type {
   AiExecutionErrorCode,
@@ -139,6 +142,8 @@ export function createScopedGraphExecutor(params: {
   readonly actorId: string;
   /** Execution grant backing a scheduled run; threaded into tool authz audit. */
   readonly grantId?: string;
+  /** Host-validated review code subject (story.5102); only for catalog entries declaring it. */
+  readonly codeSubject?: ExecutionCodeSubject;
 }): GraphExecutorPort {
   const container = getContainer();
 
@@ -256,6 +261,7 @@ export function createScopedGraphExecutor(params: {
             usageSource: provider.usageSource,
             nodeId: container.nodeId,
             ...(params.grantId ? { grantId: params.grantId } : {}),
+            ...(params.codeSubject ? { codeSubject: params.codeSubject } : {}),
             ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
           });
 
@@ -279,6 +285,7 @@ export function createScopedGraphExecutor(params: {
         usageSource: provider.usageSource,
         nodeId: container.nodeId,
         ...(params.grantId ? { grantId: params.grantId } : {}),
+        ...(params.codeSubject ? { codeSubject: params.codeSubject } : {}),
         ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
       });
     },
@@ -304,6 +311,7 @@ export function runGraphWithScope(params: {
   readonly abortSignal?: AbortSignal;
   readonly nodeId?: string;
   readonly grantId?: string;
+  readonly codeSubject?: ExecutionCodeSubject;
 }): GraphRunResult {
   const { executor, req, ctx, billing, llmService, usageSource } = params;
   return runInScope(
@@ -313,6 +321,7 @@ export function runGraphWithScope(params: {
       usageSource,
       ...(params.nodeId ? { nodeId: params.nodeId } : {}),
       ...(params.grantId ? { grantId: params.grantId } : {}),
+      ...(params.codeSubject ? { codeSubject: params.codeSubject } : {}),
       ...(ctx?.actorUserId ? { actorUserId: ctx.actorUserId } : {}),
       ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     },

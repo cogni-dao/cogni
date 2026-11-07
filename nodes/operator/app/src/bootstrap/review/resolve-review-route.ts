@@ -64,6 +64,27 @@ export function resolveReviewRoute(request: Request, log: Logger): Resolved {
     appId: env.GH_REVIEW_APP_ID,
     privateKeyBase64: env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
     logger: log,
+    buildSha: env.APP_BUILD_SHA ?? null,
   });
   return { ok: true, adapter };
+}
+
+/**
+ * Review GitHub plane for the dev-triggered verb (POST /api/v1/vcs/review, story.5102). Same
+ * adapter as the internal routes, without the scheduler bearer (the verb authenticates the
+ * developer itself). Returns null when the review App is not configured.
+ */
+export function createReviewGithubPlane(
+  log: Logger
+): GithubReviewAdapter | null {
+  const env = serverEnv();
+  if (!env.GH_REVIEW_APP_ID || !env.GH_REVIEW_APP_PRIVATE_KEY_BASE64) {
+    return null;
+  }
+  return createGithubReviewAdapter({
+    appId: env.GH_REVIEW_APP_ID,
+    privateKeyBase64: env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
+    logger: log,
+    buildSha: env.APP_BUILD_SHA ?? null,
+  });
 }

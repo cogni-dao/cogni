@@ -11,13 +11,13 @@
  *   the final environment and current `activity_env` cannot be removed. Full decommission and
  *   authority transfer are separate flows.
  *   PLUS the placement lever (story.5016 T5): `{env, placement: "k3s"|"akash"}` picks the serving lane
- *   for an env ALREADY in reach — akash upserts `deployment_provider.<env>` and removes the k3s
- *   overlay/AppSet (the ComputeWorkload CR lane takes over); k3s restores them. `present` and
+ *   for an env ALREADY in reach — akash upserts `deployment_provider.<env>` plus the env's scheduler
+ *   routing; k3s is refused for an externally built node (K3S_NODE_LANE_RETIRED, task.5411). `present` and
  *   `placement` are MUTUALLY EXCLUSIVE (exactly one per request); deploy-straight-onto-akash is
  *   deliberately out of v1 scope — deploy first, then place.
  * Scope: Session auth + a single MANAGE_ENVS authz-gate on the resolved node. Resolves the monorepo
  *   owner/repo exactly like `publish` / `activate-payments` (env-scoped, FAIL CLOSED), then delegates the
- *   byte-exact catalog/overlay/appset edit to `GitHubRepoWriter.openNodeEnvPr`.
+ *   byte-exact catalog + routing edit to `GitHubRepoWriter.openNodeEnvPr`.
  * Invariants:
  *   - GH_APP_INSTALL_REQUIRED, PR_AGAINST_MAIN (never force-push to monorepo main).
  *   - MANAGE_ENVS_GATED: ANY env change (add OR remove, candidate-a / preview / production alike) requires
@@ -28,8 +28,8 @@
  *   - CATALOG_IS_SSOT: the env-set edit is a catalog change; deploy reconcilers consume it.
  *   - DEACTIVATE_ENUMERATES_THE_MONEY (story.5039 PR-B): a remove enumerates the env's live paid
  *     leases from the durable ledger BEFORE the PR opens and embeds them (`openLeases` + a `verify`
- *     read-back URL) in the response — the receipts the Argo prune → Crossplane REMOVE → actuator
- *     delete chain is expected to close. Enumeration only; the close itself never happens app-side.
+ *     read-back URL) in the response — the receipts the node-deploy verb is expected to close when
+ *     it retires the workload. Enumeration only; the close itself never happens in this route.
  *   - NO_LEASE_GENERATION (task.5411): the node-deploy verb mints a fresh lease per release, so
  *     neither the add nor the region verb derives or writes a `lease_generation` cell.
  *   - OBSERVABLE: wrapped in `wrapRouteHandlerWithLogging` (routeId `nodes.envs`) — every request

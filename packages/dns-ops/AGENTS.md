@@ -84,4 +84,4 @@ npx tsx packages/dns-ops/scripts/test-live.ts
 
 ## Change Protocol
 
-When public surface changes: update this AGENTS.md, update `src/index.ts` exports, update skill (`/.claude/skills/dns-ops/SKILL.md`).
+When public surface changes: update this AGENTS.md, update `src/index.ts` exports, update the hub guide [`node-dns-operations`](https://cognidao.org/knowledge/node-dns-operations) through a knowledge contribution.

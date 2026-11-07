@@ -81,6 +81,7 @@ export function toAttemptView(a: AttemptRow): DeployAttemptView {
     leasedAt: iso(a.leasedAt),
     updatedAt: iso(a.updatedAt),
     steps: (a.steps ?? []).map((s) => ({ ...s })),
+    ...(a.activatedAt ? { activatedAt: a.activatedAt.toISOString() } : {}),
     ...(a.transport ? { transport: a.transport } : {}),
   };
 }
@@ -112,13 +113,14 @@ export function deriveReleaseTimeline(input: {
   const oldestFirst = [...ofRelease].reverse();
   const startedAt = iso(oldestFirst[0]?.createdAt);
 
-  // First activation: the earliest `activated` step; a still-active attempt without a step (it
-  // predates the timeline) falls back to its last phase change.
+  // First activation: the earliest write-once `activatedAt` (task.5442), else the `activated` step; a
+  // still-active attempt with neither (it predates both) falls back to its last phase change.
   let activatedAt: string | null = null;
   for (const a of oldestFirst) {
-    const at = (a.steps ?? []).find(
-      (s) => s.step === "activated" && s.outcome === "ok"
-    )?.at;
+    const at =
+      iso(a.activatedAt) ??
+      (a.steps ?? []).find((s) => s.step === "activated" && s.outcome === "ok")
+        ?.at;
     if (at) {
       activatedAt = at;
       break;

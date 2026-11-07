@@ -144,6 +144,18 @@ export const nodeWorkloadAttempts = pgTable(
       .defaultNow(),
     /** When the lease was bound (phase `created`); the proof deadline counts from here. */
     leasedAt: timestamp("leased_at", { withTimezone: true }),
+    /**
+     * The instant this attempt first entered phase `active` (task.5442). Write-once: the store sets it
+     * only while NULL, so a later phase change never moves it. Lead time reads it; the `activated`
+     * step can fall off the 100-step timeline. NULL = never activated, or activated before the column.
+     */
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+    /**
+     * The instant the sequencer first recorded its park verdict on this attempt (the release's newest
+     * attempt; task.5442). Write-once like `activated_at`: the `release_parked` alert repeats every
+     * 10 min and its first step falls off the 100-step timeline, this column does not move.
+     */
+    parkedAt: timestamp("parked_at", { withTimezone: true }),
     /** Last phase change; the retention window of a `retiring` blue counts from here. */
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()

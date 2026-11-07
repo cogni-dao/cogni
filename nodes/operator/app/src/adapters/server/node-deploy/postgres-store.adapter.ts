@@ -79,6 +79,8 @@ function toAttempt(r: AttemptDb): AttemptRow {
     createdAt: r.createdAt,
     leasedAt: r.leasedAt ?? undefined,
     updatedAt: r.updatedAt,
+    ...(r.activatedAt ? { activatedAt: r.activatedAt } : {}),
+    ...(r.parkedAt ? { parkedAt: r.parkedAt } : {}),
     steps: r.steps ?? [],
     ...(r.transport === "mesh" || r.transport === "egress"
       ? { transport: r.transport }
@@ -509,7 +511,21 @@ export class PostgresNodeDeployStore implements StorePort {
       set.mesh = { ...patch.mesh, ports: [...patch.mesh.ports] };
     const [row] = await this.db
       .update(nodeWorkloadAttempts)
-      .set(set)
+      .set({
+        ...set,
+        // WRITE_ONCE (task.5442): only the first activation is recorded; a repeat keeps the stored instant.
+        ...(patch.activatedAt !== undefined
+          ? {
+              // ISO text + cast: a raw Date param bypasses the column's driver mapping.
+              activatedAt: sql`coalesce(${nodeWorkloadAttempts.activatedAt}, ${patch.activatedAt.toISOString()}::timestamptz)`,
+            }
+          : {}),
+        ...(patch.parkedAt !== undefined
+          ? {
+              parkedAt: sql`coalesce(${nodeWorkloadAttempts.parkedAt}, ${patch.parkedAt.toISOString()}::timestamptz)`,
+            }
+          : {}),
+      })
       .where(eq(nodeWorkloadAttempts.id, id))
       .returning();
     if (!row) throw new Error(`attempt ${id} not found`);

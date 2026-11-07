@@ -48,6 +48,7 @@ import {
   StateGraph,
 } from "@langchain/langgraph";
 import { createReactAgent, ToolNode } from "@langchain/langgraph/prebuilt";
+import { buildHostPreamble } from "../host-preamble";
 import type { CreateReactAgentGraphOptions } from "../types";
 
 export const COGNI_TOOL_IDS = [
@@ -254,22 +255,12 @@ export function createCogniProgram(opts: CreateReactAgentGraphOptions) {
   // a systematic-coverage instruction. Built per invoke (FAIL_CLOSED_IDENTITY), never stored, so
   // the graph STRUCTURE renders in langgraph dev even when node bindings are absent. The model
   // and the assignment come from configurable.model and the run input — never from this preamble.
-  const buildPreamble = (): SystemMessage => {
-    if (!opts.sourceContext?.nodeId || !opts.sourceContext.origin)
-      throw new Error("node_source_identity_unavailable");
-    const mission = opts.sourceContext.mission;
-    if (!mission?.content.trim())
-      throw new Error("node_mission_source_unavailable");
-    const index = opts.sourceContext.governingIndex ?? [];
-    const indexBlock = index.length
-      ? `\n\nYour governing index (${index.length} entries; metadata only — read bodies on demand). Select the entries whose use-when fits your task and read each full body with core__knowledge_read before acting:\n${index
-          .map((e) => `- ${e.id} · ${e.domain} · ${e.entryType} — ${e.useWhen}`)
-          .join("\n")}`
-      : "";
-    return new SystemMessage(
-      `${COGNI_PROMPT}\n\nHost-owned node mission (${mission.sourceRef}; serving build ${mission.buildSha ?? "local/unversioned"}):\n${mission.content}${indexBlock}\n\nSystematically gather context across every plane BEFORE deciding, reading full bodies (never decide from a list or search alone): approved goals (core__goal_list); the governing guides whose use-when fits — including ${requiredGuides.join(", ")} — and relevant knowledge by exact ID (core__knowledge_read; narrow with core__knowledge_search); the open knowledge inbox and relevant full diffs (core__knowledge_contribution_read); the work items you judge (core__work_item_query then core__work_item_read); and relevant repository code (core__node_code_list then core__node_code_read). Read the full body of everything you cite.`
-    );
-  };
+  const buildPreamble = (): SystemMessage =>
+    buildHostPreamble({
+      sourceContext: opts.sourceContext,
+      prompt: COGNI_PROMPT,
+      coverage: `Systematically gather context across every plane BEFORE deciding, reading full bodies (never decide from a list or search alone): approved goals (core__goal_list); the governing guides whose use-when fits — including ${requiredGuides.join(", ")} — and relevant knowledge by exact ID (core__knowledge_read; narrow with core__knowledge_search); the open knowledge inbox and relevant full diffs (core__knowledge_contribution_read); the work items you judge (core__work_item_query then core__work_item_read); and relevant repository code (core__node_code_list then core__node_code_read). Read the full body of everything you cite.`,
+    });
 
   // Phase 1 — GATHER: the proven ReAct agent over the read planes (no decision tool here). The
   // preamble is a prompt FUNCTION evaluated at invoke time (fail-closed) while the structure

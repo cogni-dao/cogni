@@ -29,6 +29,9 @@ export const WORKER_EVENT_NAMES = {
   ACTIVITY_RUN_UPDATED: "worker.activity.run_updated",
   ACTIVITY_SWEEP_RESULT: "worker.activity.sweep_result",
 
+  // Review activities — activities/review.ts (story.5102)
+  REVIEW_COULD_NOT_EVALUATE: "review.could_not_evaluate",
+
   // Ledger activities — activities/ledger.ts
   LEDGER_EPOCH_ENSURED: "worker.ledger.epoch_ensured",
   LEDGER_EPOCH_CREATED: "worker.ledger.epoch_created",

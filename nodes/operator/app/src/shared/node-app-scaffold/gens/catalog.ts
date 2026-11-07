@@ -122,7 +122,7 @@ export function renderCatalog(
     : "";
   // ONE_WRITER_PER_NODE_LANE (story.5137 CD4, task.5411) — every birth env is handed to the
   // node-deploy verb (POST /api/v1/deploy/workloads): it is that lane's only writer. Nothing
-  // renders an AppSet, overlay or XComputeWorkload for a born node.
+  // renders an AppSet or overlay for a born node.
   const computeApiBlock = offCluster
     ? `compute_api:\n${envs.map((env) => `  ${env}: node-deploy\n`).join("")}`
     : "";

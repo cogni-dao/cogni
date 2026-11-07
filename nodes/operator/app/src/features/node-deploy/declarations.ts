@@ -28,6 +28,8 @@
  *     Any operator/fleet/substrate credential on that list is refused here (`secret_ref_refused`), so
  *     it can never reach rented compute; fleet-inherited keys that are merely in the bucket are not
  *     on the list and are never delivered.
+ *   - PLACEMENT_FOLLOWS_ENV (story.5141): the app carries the manifest's placement set for `env`
+ *     (`placement.requiredCountryCodes`), frozen into the release with the rest of the spec (CD3).
  *   - HOST_FOLLOWS_ENV: a manifest names its PRODUCTION host; other environments get the
  *     `-test` (candidate-a) / `-preview` / `-dev` sibling of its first label, so one manifest serves
  *     every environment without a per-env copy.
@@ -126,6 +128,7 @@ export function resolveWorkloadDeclaration(input: {
   let workloads: NodeWorkloadSpec[];
   try {
     workloads = lowerWorkloadManifests(input.manifests, {
+      env: input.env,
       ...(input.builtImage ? { builtImage: input.builtImage } : {}),
       ...(input.pendingImage ? { pendingImage: input.pendingImage } : {}),
     });

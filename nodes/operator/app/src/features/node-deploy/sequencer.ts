@@ -154,7 +154,11 @@ import {
   releaseIdentityEnv,
   workerEnv,
 } from "./node-app-env";
-import { nodeCatalogPolicy } from "./node-catalog-policy";
+import {
+  catalogDeclaresPlacement,
+  nodeCatalogPolicy,
+  placementConflictMessage,
+} from "./node-catalog-policy";
 import {
   asQualificationFailure,
   checkQualification,
@@ -387,7 +391,7 @@ class InvalidArtifactSet extends Error {}
 interface ResolvedRuntime {
   readonly env: Record<string, string>;
   readonly companionEnvs?: Record<string, Record<string, string>>;
-  /** Catalog `required_placement_countries[<env>]`; empty = unconstrained. */
+  /** The release's manifest set, else catalog `required_placement_countries[<env>]`; empty = unconstrained. */
   readonly requiredCountryCodes: readonly string[];
   /** True when the env is a non-operator node app's full runtime env (`nodeAppEnv`). */
   readonly nodeApp: boolean;
@@ -546,7 +550,14 @@ export class NodeDeploySequencer {
     if (failures >= this.d.config.maxFailedAttempts) {
       // Attached to the release's newest attempt so the park is a durable step on its timeline:
       // `release-view` reads `alert/release_parked` as the sequencer's own verdict.
-      await this.alert(key, release, ofRelease[0], "release_parked", {
+      const newest = ofRelease[0];
+      // Write-once park instant (task.5442): the alert repeats and its first step can fall off the
+      // 100-step timeline; delivery KPIs read this column instead.
+      if (newest && !newest.parkedAt)
+        await this.d.store.updateAttempt(newest.id, {
+          parkedAt: new Date(this.d.clock.now()),
+        });
+      await this.alert(key, release, newest, "release_parked", {
         failedAttempts: failures,
       });
       return "parked";
@@ -1013,7 +1024,9 @@ export class NodeDeploySequencer {
     const refusal = this.d.httpAdmissionRefusal;
     if (w.kind === "app" && refusal) throw new DependencyNotReady(refusal);
     const env: Record<string, string> = {};
-    let requiredCountryCodes: readonly string[] = [];
+    // The release pins the node's manifest set (CD3); a non-node app (the operator's own) uses it as is.
+    let requiredCountryCodes: readonly string[] =
+      w.kind === "app" ? (w.placement?.requiredCountryCodes ?? []) : [];
     let nodeApp = false;
     let companionEnvs: Record<string, Record<string, string>> = {};
     let substratePorts: readonly number[] = [];
@@ -1105,6 +1118,14 @@ export class NodeDeploySequencer {
     } catch (error) {
       throw new DependencyNotReady(`catalog policy: ${errText(error)}`);
     }
+    // ONE_PLACEMENT_WRITER (CD4, story.5141): the record refuses both sources; this backstop covers a
+    // catalog cell an operator deploy added after the record. Wait unpaid and say why.
+    const declaredCountries = w.placement?.requiredCountryCodes;
+    if (declaredCountries && catalogDeclaresPlacement(entry.row, key.env))
+      throw new DependencyNotReady(placementConflictMessage(key.env));
+    const requiredCountryCodes = [
+      ...(declaredCountries ?? policy.requiredCountryCodes),
+    ];
     if (w.runtimeProfile === "worker") {
       // WORKER_GETS_ITS_OWN_SECRETS_ONLY (task.5272): no node-app profile, no substrate, no database.
       let workerBucket: Readonly<Record<string, string>>;
@@ -1130,7 +1151,7 @@ export class NodeDeploySequencer {
             secretKeys: w.secretKeys ?? [],
             secrets: workerBucket,
           }),
-          requiredCountryCodes: [...policy.requiredCountryCodes],
+          requiredCountryCodes,
           nodeApp: false,
         };
       } catch (error) {
@@ -1178,7 +1199,7 @@ export class NodeDeploySequencer {
           ...substrate,
         }),
         substratePorts: nodeAppSubstrateBinding(substrate)?.ports ?? [],
-        requiredCountryCodes: [...policy.requiredCountryCodes],
+        requiredCountryCodes,
         nodeApp: true,
         companionEnvs: Object.fromEntries(
           (w.companions ?? []).map((c) => [
@@ -2014,6 +2035,8 @@ export class NodeDeploySequencer {
     const active = await this.d.store.updateAttempt(attempt.id, {
       phase: "active",
       unhealthySince: null,
+      // Write-once activation instant (task.5442): lead time survives the 100-step timeline cap.
+      activatedAt: new Date(this.d.clock.now()),
     });
     await this.emit(key, release, active, "activated", "ok", {
       dseq: active.externalName,

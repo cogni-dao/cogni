@@ -112,6 +112,8 @@ export interface ReviewActivities {
     repo: string;
     headSha: string;
     installationId: number;
+    /** Review request id → check run `external_id` (CHECK_IS_REQUEST_BOUND). */
+    externalId?: string;
   }): Promise<number>;
 
   /**
@@ -126,6 +128,10 @@ export interface ReviewActivities {
     repo: string;
     prNumber: number;
     installationId: number;
+    /** Pinned head SHA; the operator reports `headMoved` when the PR head differs. */
+    headSha?: string;
+    /** Pinned base SHA; repo-spec and rules are read at this commit. */
+    baseSha?: string;
   }): Promise<InternalReviewPrContextOutput>;
 
   postReviewResultActivity(input: Record<string, unknown>): Promise<void>;
@@ -144,6 +150,11 @@ export interface ReviewActivities {
     checkRunId?: number;
     owningNode: OwningNode;
     changedFiles: readonly string[];
+    /** Dev-triggered only (story.5102): honour fail_on_error + machine block. */
+    requestId?: string;
+    model?: string;
+    operatorBuildSha?: string | null;
+    failOnError?: boolean;
   }): Promise<void>;
 }
 

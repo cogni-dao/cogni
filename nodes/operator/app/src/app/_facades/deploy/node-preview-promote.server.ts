@@ -367,6 +367,7 @@ async function declaredAppWorkloads(
     throw new Error("repo-spec not found at the pushed sha");
   if (read.kind === "refused") throw new Error(read.message);
   return lowerWorkloadManifests(read.manifests, {
+    env: "preview",
     pendingImage: `pending:sha-${ctx.sourceSha.toLowerCase()}`,
   })
     .filter((w) => w.kind === "app")

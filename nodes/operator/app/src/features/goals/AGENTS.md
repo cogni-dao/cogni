@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Operator-owned Goals + KPIs presentation (story.0021). The measurement engine and the wire contract (`GoalsProgressSchema`, `KpiAssessmentSchema`, `MetricHistorySchema`, `MetricDisplaySchema`) live in the published `@cogni-dao/metrics` 0.3.0 package; this feature owns the Goals view (`components/GoalsBoard`), the open KPI chart (`components/KpiChart`) and per-type card numbers (`lib/display`). Ported once from node-template `app/src/features/goals` at 74ae240; the operator owns it from here.
+Operator-owned Goals + KPIs presentation (story.0021). The measurement engine and the wire contract (`GoalsProgressSchema`, `KpiAssessmentSchema`, `MetricHistorySchema`, `MetricDisplaySchema`) live in the published `@cogni-dao/metrics` 0.4.0 package (the operator's node-local delivery calculators are in `features/node-deploy/delivery-kpis.ts`, task.5442); this feature owns the Goals view (`components/GoalsBoard`), the open KPI chart (`components/KpiChart`) and per-type card numbers (`lib/display`). Ported once from node-template `app/src/features/goals` at 74ae240; the operator owns it from here.
 
 ## Pointers
 

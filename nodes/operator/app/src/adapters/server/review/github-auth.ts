@@ -21,11 +21,13 @@ import { Octokit } from "@octokit/core";
  * @param installationId - GitHub App installation ID (from webhook payload)
  * @param appId - GitHub App ID (GH_REVIEW_APP_ID)
  * @param privateKeyBase64 - Base64-encoded PEM private key (GH_REVIEW_APP_PRIVATE_KEY_BASE64)
+ * @param requestTimeoutMs - Optional per-request timeout (bounds request-path callers, story.5102)
  */
 export function createInstallationOctokit(
   installationId: number,
   appId: string,
-  privateKeyBase64: string
+  privateKeyBase64: string,
+  requestTimeoutMs?: number
 ): Octokit {
   const privateKey = Buffer.from(privateKeyBase64, "base64").toString("utf-8");
 
@@ -36,5 +38,6 @@ export function createInstallationOctokit(
       privateKey,
       installationId,
     },
+    ...(requestTimeoutMs ? { request: { timeout: requestTimeoutMs } } : {}),
   });
 }

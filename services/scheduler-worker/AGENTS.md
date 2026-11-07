@@ -40,6 +40,8 @@ src/
 
 **Note:** Workflow definitions, activity type interfaces, activity profiles, and review domain logic live in `@cogni/temporal-workflows`. This service is the composition root that wires activities and starts workers.
 
+**Review honesty (story.5102):** `postReviewResultActivity` reads repo-spec `fail_on_error`; when true, any run that did not evaluate (graph failed, no structured output, missing rule, missing metric, no code read, no hub entry read, uncited verdict, head moved) concludes `failure` titled `PR Review: COULD NOT EVALUATE` and logs `review.could_not_evaluate {reason}`. Request-bound reviews end the check summary with the machine block (buildSha from the serving operator, never this worker); the summary stays under GitHub's 65,535 chars (prose truncates first, block lists capped at 50).
+
 ### Hard rules (enforced by dep-cruiser)
 
 - **WORKER_IS_DUMB**: scheduler-worker is a thin composition root. It wires activity implementations with concrete deps and starts Temporal workers. Domain-specific logic lives in packages.

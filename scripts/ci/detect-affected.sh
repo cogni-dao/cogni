@@ -361,10 +361,10 @@ PY
         selection_reason="workflow-build-change:${path}"
         break
         ;;
-      infra/k8s/base/compute-workload-controller/* | infra/k8s/base/akash-tx-actuator/* | infra/k8s/base/database-reliability-actuator/* | infra/k8s/base/node-deploy-sequencer/* | infra/k8s/base/node-deploy-env-namespaces/*)
-        # These run inside the operator image (the ComputeWorkload controller, the
-        # Akash transaction actuator, the database reliability actuator and the
-        # node-deploy sequencer with its env-namespace RBAC). Their manifests are
+      infra/k8s/base/akash-tx-actuator/* | infra/k8s/base/database-reliability-actuator/* | infra/k8s/base/node-deploy-sequencer/* | infra/k8s/base/node-deploy-env-namespaces/*)
+        # These run inside the operator image (the Akash transaction actuator, the
+        # database reliability actuator and the node-deploy sequencer with its
+        # env-namespace RBAC). Their manifests are
         # candidate inputs too, so build that exact source SHA rather than flighting
         # new manifests against an older operator artifact.
         add_target operator

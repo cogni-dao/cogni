@@ -119,15 +119,6 @@ export type {
   ComputeResourceCostIdentity,
 } from "./compute-cost.port";
 export { ComputeCostInvariantError } from "./compute-cost.port";
-export type {
-  ComputeWorkloadArtifact,
-  ComputeWorkloadBundle,
-  ComputeWorkloadSecretRef,
-  ComputeWorkloadSource,
-  ComputeWorkloadSpec,
-  DeclaredProvisionServiceSpec,
-  DeclaredProvisionSpec,
-} from "./compute-workload.types";
 export {
   ComputeLifecycleError,
   type ComputeLifecycleFailureKind,
@@ -204,6 +195,13 @@ export type {
   ReliabilityStatusReaderPort,
 } from "./database-containment.port";
 export { DATABASE_CELL_METRIC_LABEL_KEYS } from "./database-containment.port";
+export type {
+  DeliveryKpiSourcePort,
+  DeliveryLaneFacts,
+  DeliveryProbeResult,
+  DeliveryReleaseFacts,
+  DeliveryScope,
+} from "./delivery-kpi.port";
 export type {
   CancelCandidateMaintenanceInput,
   CancelCandidateMaintenanceResult,

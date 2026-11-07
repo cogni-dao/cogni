@@ -84,8 +84,8 @@ deployable_nodes_for_env() {
     grep -qxF "$env" <<<"$envs" || continue
     # ONE_WRITER_PER_NODE_LANE (story.5137, CD4): a cell the node-deploy sequencer owns
     # (`compute_api.<env>: node-deploy`) gets NO per-(env, node) AppSet. The file leaves the
-    # tree, Argo prunes the Application, and the Application's XR / ExternalSecrets cascade
-    # away, so no Crossplane/Argo path remains that can write that lane's lease or DNS.
+    # tree and Argo prunes the Application, so no Argo path remains that can write that
+    # lane's lease or DNS.
     [ "$(env_name="$env" yq -r '.compute_api[strenv(env_name)] // ""' "$f")" != "node-deploy" ] || continue
     printf '%s\n' "$name"
   done | LC_ALL=C sort

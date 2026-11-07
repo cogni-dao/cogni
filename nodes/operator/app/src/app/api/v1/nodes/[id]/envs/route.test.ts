@@ -169,9 +169,8 @@ describe("POST /api/v1/nodes/[id]/envs — schema", () => {
   it("surfaces the writer's derived activation shape on present:true (ADD_DERIVES_PLACEMENT)", async () => {
     const derived = {
       placement: "akash",
-      computeApi: "crossplane",
+      computeApi: "node-deploy",
       controlEnv: "production",
-      leaseGeneration: 0,
     };
     openNodeEnvPr.mockResolvedValue({
       status: "pr_opened",

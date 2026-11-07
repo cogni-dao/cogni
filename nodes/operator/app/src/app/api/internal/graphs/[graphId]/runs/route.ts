@@ -16,6 +16,11 @@
  *   - Per PERSIST_AFTER_PUMP: persists assistant message to thread after full stream drain (disconnect-safe)
  *   - Per IDEMPOTENT_THREAD_PERSIST: assistant message ID = `assistant-{runId}` — skips if already persisted
  *   - Scheduled run stateKey = sha256(idempotencyKey) — one isolated thread per execution slot, not per schedule
+ *   - VERDICT_SURVIVES_REPLAY (story.5102): finalize persists the run's structured output (≤64 KB JSON,
+ *     else null) and BOTH cached replay branches return it, so a worker whose first attempt timed out
+ *     reads the same verdict on retry. The live response returns the same bounded value.
+ *   - REVIEW_SUBJECT_IS_HOST_BOUND (story.5102): `input.codeSubject` binds to the run scope only for
+ *     catalog entries declaring `codeSubject` and only when owner/repo match `resolveNodeRepo(nodeId)`.
  * Side-effects: IO (HTTP request/response, database, graph execution, Redis stream publishing, thread persistence)
  * Links: docs/spec/scheduler.md, graphs.run.internal.v1.contract
  * @internal
@@ -39,6 +44,7 @@ import {
   createScopedGraphExecutor,
 } from "@/bootstrap/graph-executor.factory";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { resolveRunCodeSubject } from "@/bootstrap/review/code-subject";
 import {
   assembleAssistantMessage,
   executeStream,
@@ -103,6 +109,66 @@ function computeRequestHash(graphId: string, rawBody: string): string {
     .update(rawBody, "utf8")
     .digest("hex");
 }
+
+/** VERDICT_SURVIVES_REPLAY bound: larger structured outputs are not persisted or returned. */
+export const MAX_STRUCTURED_OUTPUT_BYTES = 65_536;
+
+/**
+ * Bound a graph's structured output for persistence + response. Returns null when absent,
+ * not a plain object, or larger than MAX_STRUCTURED_OUTPUT_BYTES of UTF-8 JSON.
+ * @internal Exported for testing only.
+ */
+export function boundStructuredOutput(
+  value: unknown
+): Record<string, unknown> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  let json: string;
+  try {
+    json = JSON.stringify(value);
+  } catch {
+    return null;
+  }
+  return Buffer.byteLength(json, "utf8") <= MAX_STRUCTURED_OUTPUT_BYTES
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * The response body for a finalized (cached) execution request — identical for the
+ * checkIdempotency and the claim-race branches.
+ * @internal Exported for testing only.
+ */
+export function cachedRunResponse(cached: {
+  readonly runId: string;
+  readonly traceId: string | null;
+  readonly ok: boolean | null;
+  readonly errorCode: InternalGraphRunFailureCode | null;
+  readonly structuredOutput?: Record<string, unknown> | null;
+}): InternalGraphRunOutput {
+  if (cached.ok) {
+    return {
+      ok: true,
+      runId: cached.runId,
+      traceId: cached.traceId,
+      ...(cached.structuredOutput
+        ? { structuredOutput: cached.structuredOutput }
+        : {}),
+    };
+  }
+  return {
+    ok: false,
+    runId: cached.runId,
+    traceId: cached.traceId,
+    error: cached.errorCode ?? "internal",
+  };
+}
+
+type InternalGraphRunFailureCode = Extract<
+  InternalGraphRunOutput,
+  { ok: false }
+>["error"];
 
 const EXECUTION_LEASE_MS = 60_000;
 const EXECUTION_HEARTBEAT_MS = 15_000;
@@ -245,23 +311,8 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         { idempotencyKey, runId: cached.runId, ok: cached.ok },
         "Returning cached result"
       );
-      // Use explicit branching for discriminated union type narrowing
-      if (cached.ok) {
-        const cachedResponse: InternalGraphRunOutput = {
-          ok: true,
-          runId: cached.runId,
-          traceId: cached.traceId,
-        };
-        return NextResponse.json(cachedResponse, { status: 200 });
-      } else {
-        const cachedResponse: InternalGraphRunOutput = {
-          ok: false,
-          runId: cached.runId,
-          traceId: cached.traceId,
-          error: cached.errorCode ?? "internal",
-        };
-        return NextResponse.json(cachedResponse, { status: 200 });
-      }
+      // VERDICT_SURVIVES_REPLAY: the cached body carries the persisted structured output.
+      return NextResponse.json(cachedRunResponse(cached), { status: 200 });
     }
 
     if (idempotencyResult.status === "pending") {
@@ -511,6 +562,23 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       "Parsed modelRef for graph execution"
     );
 
+    // REVIEW_SUBJECT_IS_HOST_BOUND: validate before claiming (permanent request validation).
+    const codeSubjectDecision = await resolveRunCodeSubject(
+      graphId,
+      input.codeSubject
+    );
+    if (!codeSubjectDecision.ok) {
+      log.warn(
+        { graphId, runId, reason: codeSubjectDecision.error },
+        "Graph run code subject refused"
+      );
+      return NextResponse.json(
+        { error: codeSubjectDecision.error },
+        { status: codeSubjectDecision.status }
+      );
+    }
+    const codeSubject = codeSubjectDecision.codeSubject;
+
     // Claim only after permanent request validation. INSERT races are resolved
     // by ON CONFLICT + re-read; expired pending leases are reclaimed atomically.
     const claimResult =
@@ -531,17 +599,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
           cached.ok ? undefined : "Graph execution failed",
           cached.ok ? undefined : (cached.errorCode ?? "internal")
         );
-        return NextResponse.json(
-          cached.ok
-            ? { ok: true, runId: cached.runId, traceId: cached.traceId }
-            : {
-                ok: false,
-                runId: cached.runId,
-                traceId: cached.traceId,
-                error: cached.errorCode ?? "internal",
-              },
-          { status: 200 }
-        );
+        return NextResponse.json(cachedRunResponse(cached), { status: 200 });
       }
       if (claimResult.status === "mismatch") {
         return NextResponse.json(
@@ -603,6 +661,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       resolver: container.providerResolver,
       actorId: actorUserId,
       ...(scheduledGrantId !== undefined ? { grantId: scheduledGrantId } : {}),
+      ...(codeSubject ? { codeSubject } : {}),
       ...(container.connectionBroker
         ? { broker: container.connectionBroker }
         : {}),
@@ -853,10 +912,22 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     }
 
     // --- 10. Finalize idempotency record with outcome ---
+    // VERDICT_SURVIVES_REPLAY: persist the bounded structured output; the live response returns
+    // the same bounded value so live and replay agree.
+    const structuredOutput = final.ok
+      ? boundStructuredOutput(final.structuredOutput)
+      : null;
+    if (final.ok && final.structuredOutput !== undefined && !structuredOutput) {
+      log.warn(
+        { runId, graphId, maxBytes: MAX_STRUCTURED_OUTPUT_BYTES },
+        "Structured output dropped — over the replay bound"
+      );
+    }
     try {
       await container.executionRequestPort.finalizeRequest(idempotencyKey, {
         ok: final.ok,
         errorCode: final.error ?? null,
+        structuredOutput,
       });
       await container.graphRunRepository.markRunCompleted(
         SYSTEM_ACTOR,
@@ -890,9 +961,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         ok: true,
         runId,
         traceId,
-        ...(final.structuredOutput !== undefined && {
-          structuredOutput: final.structuredOutput,
-        }),
+        ...(structuredOutput ? { structuredOutput } : {}),
       };
       return NextResponse.json(successResponse, { status: 200 });
     } else {
@@ -929,7 +998,12 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
 // Response format resolution
 // ---------------------------------------------------------------------------
 
-/** Known response format schemas, keyed by schemaId. */
+/**
+ * Known response format schemas, keyed by schemaId. `evaluation-output` is the MODEL schema of
+ * the pr-review verdict: `citations` (hub entry ids per metric) and `insufficientEvidence` are
+ * model fields; `evidence` / `uncited` / `buildSha` are host fields the graph adds and are
+ * deliberately NOT here (story.5102).
+ */
 const RESPONSE_FORMAT_SCHEMAS: Record<string, z.ZodType> = {
   "evaluation-output": z.object({
     metrics: z.array(
@@ -937,9 +1011,11 @@ const RESPONSE_FORMAT_SCHEMAS: Record<string, z.ZodType> = {
         metric: z.string(),
         value: z.number().min(0).max(1),
         observations: z.array(z.string()),
+        citations: z.array(z.string()).optional(),
       })
     ),
     summary: z.string(),
+    insufficientEvidence: z.boolean().optional(),
   }),
 };
 

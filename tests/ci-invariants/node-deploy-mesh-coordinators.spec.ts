@@ -253,8 +253,8 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
       expect.objectContaining({
         hostname: `${t.relay_label}.${t.zone}`,
         derpport: 443,
-        // STUN has no table column (relay-only, STUN off since P4). T1p b2 pins every map to -1.
-        stunport: expect.any(Number),
+        // STUN off (relay-only): -1 disables it in the relay map, so clients never probe UDP.
+        stunport: -1,
         stunonly: false,
       }),
     ]);

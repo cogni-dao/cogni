@@ -30,6 +30,10 @@
  *     `workload_manifest_refused` with every issue; no release row is written.
  *   - STATE_IS_CREATE_ONCE: a `state` workload that already has a desired row is refused with 409; a
  *     state lease is never replaced by a deploy.
+ *   - PLACEMENT_ADMISSION (story.5141): an app whose manifest declares a placement set is refused 422
+ *     `placement_country_refused` when the set names a fleet-refused country, and 409
+ *     `placement_source_conflict` when the node's image-catalog row also has
+ *     `required_placement_countries.<env>` (one writer, CD4). No release row is written.
  *   - G4_STATE_ADMISSION: a new production `state` workload is refused 422 `state_admission_refused`
  *     until the off-provider backup debt row closes; the only exception is the operator node's own
  *     `canary-db`.
@@ -41,6 +45,7 @@
  * @public
  */
 
+import { createNodeCatalog } from "@/bootstrap/capabilities/node-catalog";
 import { createNodeDeployStore } from "@/bootstrap/capabilities/node-deploy-store";
 import {
   createDeclarationReader,
@@ -51,6 +56,7 @@ import {
   DeclarationError,
   resolveWorkloadDeclaration,
 } from "@/features/node-deploy/declarations";
+import { releasePlacementRefusal } from "@/features/node-deploy/node-catalog-policy";
 import {
   readWorkloadDeclarations,
   type WorkloadDeclarationsRead,
@@ -185,6 +191,19 @@ export async function recordNodeRelease(
         ...(error.issues.length > 0 ? { issues: error.issues } : {}),
       });
     throw error;
+  }
+
+  if (spec.placement) {
+    const placementRefusal = releasePlacementRefusal({
+      spec,
+      catalogRow: (await createNodeCatalog().entryFor(node.id))?.row,
+      env,
+    });
+    if (placementRefusal)
+      return refused(placementRefusal.status, {
+        error: placementRefusal.error,
+        message: placementRefusal.message,
+      });
   }
 
   // G4: no NEW production state until the off-provider backup debt row closes (hub
