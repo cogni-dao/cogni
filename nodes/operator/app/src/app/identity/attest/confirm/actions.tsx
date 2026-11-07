@@ -45,7 +45,7 @@ export function ConfirmActions({
     <form
       action="/api/auth/attest/confirm"
       aria-busy={pending !== null}
-      className="flex flex-wrap items-center gap-2"
+      className="flex w-full flex-col gap-2"
       method="post"
       onSubmit={(e) => {
         if (submitted.current) {
@@ -61,6 +61,7 @@ export function ConfirmActions({
     >
       <input type="hidden" name="consentBinding" value={consentBinding} />
       <Button
+        className="w-full"
         disabled={pending !== null && pending !== "confirm"}
         name="action"
         type="submit"
@@ -70,6 +71,7 @@ export function ConfirmActions({
         {mode === "signin" ? "Continue" : "Link GitHub"}
       </Button>
       <Button
+        className="w-full"
         disabled={pending !== null && pending !== "switch"}
         name="action"
         type="submit"
@@ -77,9 +79,10 @@ export function ConfirmActions({
         variant="ghost"
       >
         {pending === "switch" ? <Spinner /> : null}
-        Switch account
+        Use a different GitHub account
       </Button>
       <Button
+        className="w-full"
         disabled={pending !== null && pending !== "cancel"}
         name="action"
         type="submit"
@@ -90,7 +93,7 @@ export function ConfirmActions({
         Cancel
       </Button>
       {pending !== null ? (
-        <output className="w-full text-muted-foreground text-sm">
+        <output className="text-muted-foreground text-sm">
           Continuing. If this page does not change, reload it or start again
           from your node.
         </output>

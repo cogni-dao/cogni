@@ -44,7 +44,7 @@ describe("ConfirmActions", () => {
 
   it.each([
     [CONFIRM, "confirm"],
-    ["Switch account", "switch"],
+    ["Use a different GitHub account", "switch"],
     ["Cancel", "cancel"],
   ])("submits %s as action=%s — ACTION_VALUES_ARE_THE_CONTRACT", (label, value) => {
     renderGate();
@@ -64,7 +64,7 @@ describe("ConfirmActions", () => {
 
   it.each([
     [CONFIRM],
-    ["Switch account"],
+    ["Use a different GitHub account"],
     ["Cancel"],
   ])("keeps %s as submitter and locks other actions", async (label) => {
     const gate = renderGate();
@@ -90,6 +90,13 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => ({ value: "test" }) }),
 }));
 vi.mock("@/auth", () => ({ authSecret: "test" }));
+vi.mock("@/bootstrap/container", () => ({
+  resolveNodeRegistry: () => ({
+    listPublic: async () => {
+      throw new Error("registry down");
+    },
+  }),
+}));
 vi.mock("@/shared/identity/broker-state", () => ({
   BROKER_STATE_COOKIE: "test",
   consentBinding: () => "a".repeat(64),
@@ -102,13 +109,20 @@ vi.mock("@/shared/identity/broker-state", () => ({
 }));
 
 describe("confirmation page", () => {
-  it("links only to the signed target profile without broker secrets", async () => {
+  it("names the GitHub account, the node account, and links only the signed target profile", async () => {
     const { default: Page } = await import(
       "@/app/identity/attest/confirm/page"
     );
     render(await Page());
+    expect(
+      screen.getByRole("heading", {
+        name: "Link GitHub to your Fixture Node account",
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByText("@fixture")).toBeInTheDocument();
+    expect(screen.getByText("Your Fixture Node account")).toBeInTheDocument();
     const link = screen.getByRole("link", {
-      name: "View your profile on fixture-node",
+      name: "View your profile on fixture.cognidao.org",
     });
     expect(link).toHaveAttribute(
       "href",
@@ -116,8 +130,5 @@ describe("confirmation page", () => {
     );
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
-    expect(
-      screen.getByText(/Link GitHub @fixture to your existing account/)
-    ).toBeInTheDocument();
   });
 });
