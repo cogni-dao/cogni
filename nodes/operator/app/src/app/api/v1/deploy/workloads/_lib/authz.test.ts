@@ -4,25 +4,62 @@
 /**
  * Module: `@app/api/v1/deploy/workloads/_lib/authz` (test)
  * Purpose: Pin the per-env authority of the node-deploy verb (bug.5574). candidate-a is the developer
- *   proving lane (`node.flight`), preview is env-manager (`node.manage_envs`), production is
- *   production-promoter (`node.promote_production`). The deploy-verb migration (story.5137) had swept
- *   candidate-a into `node.manage_envs`, locking a developer out of proving their own PR.
- * Scope: The pure env->action map; the full gate's IO is covered by `route.test.ts`.
+ *   proving lane (`node.flight`) AND stays open to env managers (`node.manage_envs`); preview is
+ *   env-manager; production is production-promoter. The deploy-verb migration (story.5137) had swept
+ *   candidate-a into `node.manage_envs` only, locking a developer out of proving their own PR.
+ * Scope: The pure env->actions map and the decision reducer; the full gate's IO is in `route.test.ts`.
  */
 
+import type { AuthzDecisionCode } from "@cogni/authorization-core";
 import { describe, expect, it } from "vitest";
-import { authzActionForEnv } from "./authz";
+import { authzActionsForEnv, gateDecisionFromResults } from "./authz";
 
-describe("authzActionForEnv", () => {
-  it("gates candidate-a on node.flight (the developer proving lane, bug.5574)", () => {
-    expect(authzActionForEnv("candidate-a")).toBe("node.flight");
+describe("authzActionsForEnv", () => {
+  it("lets a developer OR an env manager deploy candidate-a (bug.5574, additive)", () => {
+    expect(authzActionsForEnv("candidate-a")).toEqual([
+      "node.flight",
+      "node.manage_envs",
+    ]);
   });
 
-  it("gates preview on node.manage_envs (env manager)", () => {
-    expect(authzActionForEnv("preview")).toBe("node.manage_envs");
+  it("gates preview on node.manage_envs only (env manager)", () => {
+    expect(authzActionsForEnv("preview")).toEqual(["node.manage_envs"]);
   });
 
-  it("gates production on node.promote_production (production promoter)", () => {
-    expect(authzActionForEnv("production")).toBe("node.promote_production");
+  it("gates production on node.promote_production only (production promoter)", () => {
+    expect(authzActionsForEnv("production")).toEqual([
+      "node.promote_production",
+    ]);
+  });
+});
+
+describe("gateDecisionFromResults", () => {
+  const allow = { decision: "allow", code: "allow" as AuthzDecisionCode };
+  const denied = {
+    decision: "deny",
+    code: "authz_denied" as AuthzDecisionCode,
+  };
+  const unavailable = {
+    decision: "deny",
+    code: "authz_unavailable" as AuthzDecisionCode,
+  };
+
+  it("allows when any action allows", () => {
+    expect(gateDecisionFromResults([denied, allow])).toEqual({ ok: true });
+    expect(gateDecisionFromResults([allow])).toEqual({ ok: true });
+  });
+
+  it("denies when every action is denied", () => {
+    expect(gateDecisionFromResults([denied, denied])).toEqual({
+      ok: false,
+      code: "authz_denied",
+    });
+  });
+
+  it("reports an outage over a clean denial (fail closed with distinction)", () => {
+    expect(gateDecisionFromResults([denied, unavailable])).toEqual({
+      ok: false,
+      code: "authz_unavailable",
+    });
   });
 });

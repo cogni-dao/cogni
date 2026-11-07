@@ -352,11 +352,11 @@ superseded by it.
 
 A node walks one ladder with one call, `POST /api/v1/deploy/workloads {nodeId, env, workload, sourceSha}`. Only `env` and the policy differ. The sequence, gates and failure signatures are in the hub: [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence), [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload) and [node-service-delivery](https://cognidao.org/knowledge/node-service-delivery).
 
-| Env             | Trigger                                        | Authorization                                                                                  | `sourceSha`            |
-| --------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------- |
-| **candidate-a** | after review and green CI                      | `node.manage_envs` → `can_manage_envs` (`env_manager`)                                         | PR head                |
-| **preview**     | automatic on merge, where the node declares it | ungated, continues the trust earned at candidate-a                                             | merge commit           |
-| **production**  | explicit call                                  | `node.promote_production` → `can_promote_production` (`production_promoter`; `admin` inherits) | validated merge commit |
+| Env             | Trigger                                        | Authorization                                                                                      | `sourceSha`            |
+| --------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------- |
+| **candidate-a** | after review and green CI                      | `node.flight` → `can_flight` (`developer`) OR `node.manage_envs` (`env_manager`; `admin` inherits) | PR head                |
+| **preview**     | automatic on merge, where the node declares it | ungated, continues the trust earned at candidate-a                                                 | merge commit           |
+| **production**  | explicit call                                  | `node.promote_production` → `can_promote_production` (`production_promoter`; `admin` inherits)     | validated merge commit |
 
 Invariants:
 

@@ -11,7 +11,8 @@
  * Scope: Authorizes per env (same gate as the record route), refuses `state`, writes one flag.
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: production -> `node.promote_production`; preview -> `node.manage_envs`;
- *     candidate-a -> `node.flight` (the developer owns its own proving lane end to end, bug.5574).
+ *     candidate-a -> `node.flight` OR `node.manage_envs` (the developer owns its own proving lane end
+ *     to end, bug.5574).
  *   - ENV_BINDING: `env` must equal this deployment's DEPLOY_ENVIRONMENT (409 `env_not_served`).
  *   - STATE_IS_NEVER_KILLED: a `state` workload is refused with 409 `state_workload_protected`; a state
  *     lease holds data and is never auto-replaced.

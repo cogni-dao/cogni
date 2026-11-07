@@ -14,7 +14,7 @@ POST https://cognidao.org/api/v1/deploy/workloads   {nodeId, env, workload, sour
 GET  https://cognidao.org/api/v1/deploy/workloads?nodeId=<id>&env=<env>
 ```
 
-`candidate-a` takes the PR head. `preview` is automatic on merge. `production` is an explicit call with the validated merge commit. Authz: production needs `production_promoter`. candidate-a and preview need `env_manager`. Read [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence), [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload) and [node-service-delivery](https://cognidao.org/knowledge/node-service-delivery).
+`candidate-a` takes the PR head. `preview` is automatic on merge. `production` is an explicit call with the validated merge commit. Authz: production needs `production_promoter`. preview needs `env_manager`. candidate-a needs `developer` (`can_flight`) or `env_manager` (bug.5574). Read [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence), [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload) and [node-service-delivery](https://cognidao.org/knowledge/node-service-delivery).
 
 **Everything below is operator only.** The operator stays on k3s and Argo with its own deploy branches. It ships through `vcs/flight` and `deploy/promote`.
 
