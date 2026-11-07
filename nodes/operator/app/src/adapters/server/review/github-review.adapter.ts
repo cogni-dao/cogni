@@ -19,6 +19,7 @@
  *     dev-triggered verb; `fetchPrContext` reads repo-spec + rules at the pinned base and compares
  *     the PR head to the pinned head once (`headMoved`).
  *   - CHECK_IS_REQUEST_BOUND: `createCheckRun` writes the request id as the check `external_id`.
+ *   - ABSENT_ONLY_ON_404: a repo-spec read is "absent" only on HTTP 404; other errors throw.
  *   - SERVED_DEFAULT_MODEL: the default review model is `gemini-3.7-flash` (served + paid);
  *     a node may override it with repo-spec `review.model`.
  * Side-effects: IO (GitHub REST API)
@@ -360,7 +361,10 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
         ".cogni/repo-spec.yaml",
         configRef
       );
-    } catch {
+    } catch (error) {
+      // Only a 404 means "no repo-spec". Any other failure (401, 5xx, network) throws so the
+      // Temporal activity retries instead of silently reviewing with no gates.
+      if ((error as { status?: unknown })?.status !== 404) throw error;
       // No repo-spec — empty gates; routing no-ops (miss).
       return {
         evidence,

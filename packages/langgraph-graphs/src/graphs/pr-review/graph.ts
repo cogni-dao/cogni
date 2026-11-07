@@ -18,7 +18,10 @@
  *     tool_call_id. `evidence.entries` counts ONLY entries whose bodies came back from
  *     core__knowledge_read (and core__work_item_read items) — never index/search id lists.
  *     `evidence.files` counts only files read with content.
- *   - HOST_FIELDS_NOT_MODEL_FIELDS: `evidence`, `uncited` and `buildSha` are added by finalize and
+ *   - NO_VERDICT_WITHOUT_CODE: a run that read no file with content sets `noCodeRead: true`; the
+ *     worker reports that as "could not evaluate" (`no_code_read`), so a verdict never passes
+ *     with zero code read.
+ *   - HOST_FIELDS_NOT_MODEL_FIELDS: `evidence`, `uncited`, `noCodeRead` and `buildSha` are added by finalize and
  *     are never part of the model's schema.
  *   - VERDICT_CITES_WHAT_IT_READ: a cited id counts only if it is in evidence.entries; a failing
  *     hub metric with no counted citation, or `insufficientEvidence`, sets `uncited: true`.
@@ -282,6 +285,7 @@ export function createPrReviewGraph(opts: CreateReactAgentGraphOptions) {
           ...s.modelVerdict,
           evidence,
           uncited: isUncited(s.modelVerdict, evidence),
+          noCodeRead: evidence.files.length === 0,
           buildSha: opts.sourceContext?.mission?.buildSha ?? null,
           ...(s.abortReason ? { abortReason: s.abortReason } : {}),
         },

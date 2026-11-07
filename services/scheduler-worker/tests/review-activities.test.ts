@@ -451,3 +451,92 @@ describe("postReviewResultActivity — honest failure (story.5102)", () => {
     );
   });
 });
+
+describe("postReviewResultActivity — review fixes (story.5102)", () => {
+  it("a configured metric absent from the verdict is missing_metric, not a threshold failure", async () => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity(
+      reviewInput({
+        ok: true,
+        runId: "m1",
+        structuredOutput: {
+          metrics: [{ metric: "something-else", value: 1, observations: [] }],
+          summary: "s",
+          uncited: false,
+          evidence: { files: ["a.ts"], entries: ["r"] },
+        },
+      })
+    );
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+      title: string;
+      summary: string;
+    };
+    expect(call.title).toBe("PR Review: COULD NOT EVALUATE");
+    expect(machineBlock(call.summary).couldNotEvaluate).toBe("missing_metric");
+    expect(call.summary).not.toContain("failed threshold checks");
+  });
+
+  it("a verdict with no code read is no_code_read, even when it would pass", async () => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity(
+      reviewInput({
+        ok: true,
+        runId: "m2",
+        structuredOutput: {
+          metrics: [
+            {
+              metric: "complies-with-governing-hub-rules",
+              value: 1,
+              observations: [],
+            },
+          ],
+          summary: "s",
+          uncited: false,
+          noCodeRead: true,
+          evidence: { files: [], entries: ["r"] },
+        },
+      })
+    );
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+      summary: string;
+    };
+    expect(call.conclusion).toBe("failure");
+    expect(machineBlock(call.summary).couldNotEvaluate).toBe("no_code_read");
+  });
+
+  it("keeps the summary under GitHub's 65,535 chars with the block intact and capped", async () => {
+    const acts = makeActivities();
+    const many = Array.from({ length: 400 }, (_, i) => `file-${i}.ts`);
+    await acts.postReviewResultActivity(
+      reviewInput({
+        ok: true,
+        runId: "m3",
+        structuredOutput: {
+          metrics: [
+            {
+              metric: "complies-with-governing-hub-rules",
+              value: 0.1,
+              observations: Array.from({ length: 2000 }, () => "x".repeat(80)),
+              citations: ["r"],
+            },
+          ],
+          summary: "s",
+          uncited: false,
+          evidence: { files: many, entries: ["r"] },
+        },
+      })
+    );
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      summary: string;
+    };
+    expect(call.summary.length).toBeLessThanOrEqual(65_535);
+    const block = machineBlock(call.summary) as {
+      evidence: { files: string[] };
+      citations: string[];
+    };
+    expect(block.evidence.files).toHaveLength(50);
+    expect(block.citations).toEqual(["r"]);
+  });
+});
