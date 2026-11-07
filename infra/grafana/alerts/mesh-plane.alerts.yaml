@@ -183,6 +183,37 @@ groups:
         noDataState: Alerting
         execErrState: Alerting
 
+      # The preview VM's one substrate-gw (cogni-mesh-preview). Its own rule, so the other env rules never
+      # page for a preview rollout and this one never pages for them (same shape as production).
+      # slice: T1v — apply it only AFTER a substrate_gw_watchdog line from cogni-mesh-preview is in Loki:
+      # its no-data state pages, so applying it earlier pages critical for an instance that does not exist.
+      - uid: mesh-substrate-gw-no-heartbeat-preview
+        title: The preview substrate-gw watchdog heartbeat missing for 5 minutes
+        condition: THRESHOLD
+        for: 0s
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'count(sum by (namespace) (count_over_time({env="preview",service="substrate-gw",namespace="cogni-mesh-preview"} | json | msg="substrate_gw_watchdog" [5m])))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: THRESHOLD
+        annotations:
+          summary: "No substrate_gw_watchdog line from preview in 5 minutes: the preview env gateway (or its fail-closed watchdog) is not running, or its logs are not shipped. Check cogni-mesh-preview/substrate-gw on the preview VM's k3s (Argo app preview-mesh-plane-preview)."
+        labels: { severity: critical, plane: mesh, slice: T1v }
+        noDataState: Alerting
+        execErrState: Alerting
+
       # 14 days before a DNS-only mesh certificate expires. Caddy renews at 1/3 lifetime left (~30 d of
       # a 90 d certificate), and logs every maintenance attempt with `remaining` seconds. A line with
       # under 14 d left means renewal has been failing for over two weeks.
