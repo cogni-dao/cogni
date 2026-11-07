@@ -370,6 +370,8 @@ interface CutoverWatch {
   firstAt: string;
   last: string;
   fallbackLogged: boolean;
+  /** A decided rollback whose edge restore failed: the `failAttempt` reason, retried each tick. */
+  rollback?: string;
 }
 
 class DependencyNotReady extends Error {}
@@ -1923,15 +1925,27 @@ export class NodeDeploySequencer {
       }
       // STEP_NEVER_WAITS: a watch means THIS runner already moved the edge to green; a restart has none,
       // so it qualifies and points again (idempotent) and restarts the readback window (only a delay).
+      // Whether the edge points at green is never taken from this memory: `rollBack` reads the edge.
       let watch = this.cutoverWatch.get(attempt.id);
-      let touched = watch !== undefined;
-      let qualified = touched;
+      if (watch?.rollback) {
+        // A decided rollback whose restore failed: retry only the restore, never the cutover.
+        await this.rollBack(
+          key,
+          release,
+          attempt,
+          blue,
+          host,
+          ingress,
+          watch.rollback
+        );
+        return;
+      }
+      let qualified = watch !== undefined;
       try {
         if (!watch) {
           await this.qualify(release, attempt, "readback");
           qualified = true;
           const rec = await edge.point(host, ingress);
-          touched = true;
           watch = {
             movedAt: this.d.clock.now(),
             streak: 0,
@@ -1939,7 +1953,7 @@ export class NodeDeploySequencer {
             last: "",
             fallbackLogged: false,
           };
-          // Never cleared in bulk: losing a watch would lose `touched`. Every exit below deletes it.
+          // Every exit below deletes it (a restart loses it: that only delays, see `rollBack`).
           this.cutoverWatch.set(attempt.id, watch);
           await this.emit(key, release, attempt, "edge_moved", "ok", {
             record: rec.id,
@@ -1977,28 +1991,13 @@ export class NodeDeploySequencer {
             "readback",
             readback
           );
-        // Restore the edge to blue when we moved it (a re-point, NOT a withdrawal), then close green.
-        const blueIngress = blue
-          ? ingressHostOf(blue.endpoints, host)
-          : undefined;
-        if (touched && blueIngress) {
-          await edge
-            .point(host, blueIngress)
-            .then(() =>
-              this.emit(key, release, attempt, "edge_restored", "ok", {
-                target: blueIngress,
-              })
-            )
-            .catch((e: unknown) =>
-              this.alert(key, release, attempt, "edge_restore_failed", {
-                error: errText(e),
-              })
-            );
-        }
-        await this.failAttempt(
+        await this.rollBack(
           key,
           release,
           attempt,
+          blue,
+          host,
+          ingress,
           `cutover_failed: ${readback ? readback.message : errText(error)}`
         );
         return;
@@ -2023,6 +2022,59 @@ export class NodeDeploySequencer {
         retainMs: this.d.config.retainMs,
       });
     }
+  }
+
+  /**
+   * Close green after a failed cutover, but NEVER while the edge may still point at it (bug.5587).
+   * Whether it does is read from the edge record itself, not runner memory, so a restarted runner sees
+   * what its predecessor wrote; an unreadable edge counts as pointing at green. Such an edge is pointed
+   * back to blue first (a re-point, NOT a withdrawal). A failed restore raises `edge_restore_failed` and
+   * keeps green `proven`; the next tick retries only the restore. With no blue to return to, green is
+   * closed as before.
+   */
+  private async rollBack(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    attempt: AttemptRow,
+    blue: AttemptRow | undefined,
+    host: string,
+    ingress: string,
+    reason: string
+  ): Promise<void> {
+    const edge = this.d.edge;
+    const blueIngress = blue ? ingressHostOf(blue.endpoints, host) : undefined;
+    if (edge && blueIngress) {
+      const same = (a: string, b: string) =>
+        a.trim().toLowerCase().replace(/\.$/, "") ===
+        b.trim().toLowerCase().replace(/\.$/, "");
+      const onGreen = await edge.current(host).then(
+        (rec) => rec !== undefined && same(rec.content, ingress),
+        () => true
+      );
+      if (onGreen) {
+        try {
+          await edge.point(host, blueIngress);
+        } catch (e) {
+          await this.alert(key, release, attempt, "edge_restore_failed", {
+            error: errText(e),
+            reason,
+          });
+          this.cutoverWatch.set(attempt.id, {
+            movedAt: this.d.clock.now(),
+            streak: 0,
+            firstAt: "",
+            last: "",
+            fallbackLogged: false,
+            rollback: reason,
+          });
+          return;
+        }
+        await this.emit(key, release, attempt, "edge_restored", "ok", {
+          target: blueIngress,
+        });
+      }
+    }
+    await this.failAttempt(key, release, attempt, reason);
   }
 
   /** Persist before proven; read the current subject again before any edge mutation. */

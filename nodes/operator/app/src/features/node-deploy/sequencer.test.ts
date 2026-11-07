@@ -115,6 +115,21 @@ async function deployApp(h: H, sha: string) {
   return stepUntilSettled(h);
 }
 
+/** A new runner over the same durable state (store, payer, DNS) with none of the old one's memory. */
+function restart(h: H) {
+  return new NodeDeploySequencer({
+    store: h.store,
+    payer: h.payer,
+    edge: new EdgeRouter(h.dns, WORKLOAD_ZONE),
+    probe: h.probe,
+    secrets: h.secrets,
+    chain: h.chain,
+    clock: h.clock,
+    log: h.log,
+    config: h.config,
+  });
+}
+
 /**
  * bug.5587: a step makes ONE proof round or public read; step the workload `pollMs` apart (a tick) until
  * its newest attempt leaves `proving` / `proven`.
@@ -399,6 +414,44 @@ describe("app deploy", () => {
     expect(h.probe.publicReads).toHaveLength(5 + 8); // stale reads, then 8 consecutive exact reads
   });
 
+  it("bug.5587 review B1: a restart between the edge move and the readback never closes green while the edge may point at it", async () => {
+    const h = harness({ publicStreak: 8 });
+    await stateUp(h);
+    await deployApp(h, SHA_1); // blue: lease 1002
+    const blueTarget = "ingress-1002.provider-2.example";
+    const greenTarget = "ingress-1003.provider-3.example";
+    await h.release(canaryApp(), SHA_2);
+    await h.seq.step(APP); // green proven, edge moved, 1 of 8 public reads
+    const green = (await h.store.attemptsFor(APP))[0];
+    expect(green?.phase).toBe("proven");
+    expect([...h.dns.records.values()][0]?.content).toBe(greenTarget);
+    // The runner restarts (its memory is gone) and every DNS write now fails: the re-point AND the restore.
+    const restarted = restart(h);
+    const update = h.dns.update.bind(h.dns);
+    let dnsDown = true;
+    h.dns.update = async (id, input) => {
+      if (dnsDown) throw new Error("dns write down");
+      return update(id, input);
+    };
+    await restarted.step(APP);
+    const phaseOfGreen = async () =>
+      (await h.store.attemptsFor(APP)).find((a) => a.id === green?.id)?.phase;
+    expect(await phaseOfGreen()).toBe("proven"); // NOT closed while the edge points at it
+    expect(h.payer.byDseq("1003").state).toBe("active");
+    expect([...h.dns.records.values()][0]?.content).toBe(greenTarget);
+    expect(h.log.alerts()).toContain("edge_restore_failed");
+    // The next tick retries only the restore; once it lands, green is closed and blue serves.
+    dnsDown = false;
+    await restarted.step(APP);
+    expect([...h.dns.records.values()][0]?.content).toBe(blueTarget);
+    expect(await phaseOfGreen()).toBe("failed");
+    expect(h.payer.byDseq("1003").state).toBe("closed");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    expect(
+      (await h.store.attemptsFor(APP)).find((a) => a.id === green?.id)?.error
+    ).toMatch(/^cutover_failed: dns write down/);
+  });
+
   it("bug.5587: an unconfirmed close does not hold the next tick", async () => {
     const h = harness();
     await stateUp(h);
@@ -441,17 +494,7 @@ describe("app deploy", () => {
     await h.seq.step(APP);
     expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("proving");
     // A restarted sequencer has no window yet: it never strikes early.
-    const restarted = new NodeDeploySequencer({
-      store: h.store,
-      payer: h.payer,
-      edge: new EdgeRouter(h.dns, WORKLOAD_ZONE),
-      probe: h.probe,
-      secrets: h.secrets,
-      chain: h.chain,
-      clock: h.clock,
-      log: h.log,
-      config: h.config,
-    });
+    const restarted = restart(h);
     h.clock.advance(1);
     await restarted.step(APP); // window restarts here
     expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("proving");
