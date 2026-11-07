@@ -44,15 +44,15 @@ Everything about how the system runs. Split by responsibility, not by tool.
 
 ## Directory Responsibilities
 
-| Directory     | Answers                                                            | Changes when...                                   |
-| ------------- | ------------------------------------------------------------------ | ------------------------------------------------- |
-| `catalog/`    | What apps/nodes exist?                                             | A new node is added                               |
-| `k8s/`        | How do apps deploy to Kubernetes?                                  | Image digests or manifests change                 |
-| `grafana/`    | What Grafana dashboards/alerts exist?                              | Observability UI or alerting changes              |
-| `compose/`    | What infra services run on the VM?                                 | Infrastructure config changes                     |
-| `images/`     | How are infra-owned images built?                                  | LiteLLM/proxy code changes                        |
-| `provision/`  | How is the VM created and bootstrapped?                            | Cloud provider or bootstrap changes               |
-| `akash/`      | How do apps deploy to Akash?                                       | (Future — SDL renderer)                           |
+| Directory    | Answers                                 | Changes when...                      |
+| ------------ | --------------------------------------- | ------------------------------------ |
+| `catalog/`   | What apps/nodes exist?                  | A new node is added                  |
+| `k8s/`       | How do apps deploy to Kubernetes?       | Image digests or manifests change    |
+| `grafana/`   | What Grafana dashboards/alerts exist?   | Observability UI or alerting changes |
+| `compose/`   | What infra services run on the VM?      | Infrastructure config changes        |
+| `images/`    | How are infra-owned images built?       | LiteLLM/proxy code changes           |
+| `provision/` | How is the VM created and bootstrapped? | Cloud provider or bootstrap changes  |
+| `akash/`     | How do apps deploy to Akash?            | (Future — SDL renderer)              |
 
 ## Standards
 
