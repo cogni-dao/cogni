@@ -12,6 +12,9 @@
  *   - NODE_DEPLOYS_FROM_ITS_OWN_REPO: the repo is resolved from the IMAGE catalog (story.5137); the
  *     operator is in-repo, so the parent repo (the remote-source case lives in the route's own test).
  *   - INTENT_ONLY: 200 means a release was recorded; this route never pays or touches DNS.
+ *   - PLACEMENT_ADMISSION (story.5141): a manifest set naming a fleet-refused country is 422
+ *     `placement_country_refused`; a manifest set beside the catalog cell for the env is 409
+ *     `placement_source_conflict` (CD4). Neither writes a release.
  * Side-effects: none
  */
 
@@ -60,6 +63,10 @@ const envState = vi.hoisted(() => ({
   DEPLOY_ENVIRONMENT: "production" as string | undefined,
   NODE_DEPLOY_WORKLOAD_ZONE: "cognidao.org",
 }));
+/** Extra cells merged onto the REAL image-catalog row (story.5141 placement admission). */
+const catalogOverlay = vi.hoisted(() => ({
+  row: undefined as Record<string, unknown> | undefined,
+}));
 const mockGetSessionUser = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
@@ -87,6 +94,29 @@ const mockDb = {
 vi.mock("@/bootstrap/capabilities/operator-deploy-plane", () => ({
   createOperatorDeployPlane: () => plane,
 }));
+vi.mock("@/bootstrap/capabilities/node-catalog", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/bootstrap/capabilities/node-catalog")
+    >();
+  return {
+    createNodeCatalog: () => {
+      const real = actual.createNodeCatalog();
+      // Every other method stays the real image catalog; only the row can gain overlay cells.
+      return Object.assign(Object.create(real), {
+        async entryFor(nodeId: string) {
+          const entry = await real.entryFor(nodeId);
+          return entry && catalogOverlay.row
+            ? {
+                ...entry,
+                row: { ...(entry.row as object), ...catalogOverlay.row },
+              }
+            : entry;
+        },
+      });
+    },
+  };
+});
 vi.mock("@/bootstrap/capabilities/node-deploy-store", () => ({
   createNodeDeployStore: () => store,
 }));
@@ -182,6 +212,7 @@ describe("/api/v1/deploy/workloads", () => {
     envState.NODE_SUBMODULE_PARENT_OWNER = "test-owner";
     envState.NODE_SUBMODULE_PARENT_REPO = "test-repo";
     envState.DEPLOY_ENVIRONMENT = "production";
+    catalogOverlay.row = undefined;
     files.byPath = new Map([
       [".cogni/repo-spec.yaml", ROOT_SPEC],
       [CANARY_PATH, CANARY],
@@ -488,6 +519,58 @@ describe("/api/v1/deploy/workloads", () => {
       expect(res.status).toBe(422);
       expect((await res.json()).error).toBe("state_admission_refused");
       expect(store.recordRelease).not.toHaveBeenCalled();
+    });
+
+    describe("placement admission (story.5141)", () => {
+      const withPlacement = (countries: string) =>
+        CANARY.replace(
+          '    cogni.dev/exclusive: "false"\n',
+          `    cogni.dev/exclusive: "false"\n    cogni.dev/placement-countries: "${countries}"\n`
+        );
+
+      it("records the manifest set for the env on the release", async () => {
+        files.byPath.set(CANARY_PATH, withPlacement("FI,NL"));
+        const res = await post(valid);
+        expect(res.status).toBe(200);
+        expect(store.recordRelease.mock.calls[0]?.[0].spec.placement).toEqual({
+          requiredCountryCodes: ["FI", "NL"],
+        });
+      });
+
+      it("422 placement_country_refused for a set naming a fleet-refused country; no release is written", async () => {
+        files.byPath.set(CANARY_PATH, withPlacement("FI,KP"));
+        const res = await post(valid);
+        expect(res.status).toBe(422);
+        const body = await res.json();
+        expect(body.error).toBe("placement_country_refused");
+        expect(body.message).toContain("KP");
+        expect(store.recordRelease).not.toHaveBeenCalled();
+      });
+
+      it("409 placement_source_conflict when the catalog row also has the env's cell (CD4); no release is written", async () => {
+        files.byPath.set(CANARY_PATH, withPlacement("FI,NL"));
+        catalogOverlay.row = {
+          required_placement_countries: { production: ["PT"] },
+        };
+        const res = await post(valid);
+        expect(res.status).toBe(409);
+        const body = await res.json();
+        expect(body.error).toBe("placement_source_conflict");
+        expect(body.message).toContain(
+          "required_placement_countries.production"
+        );
+        expect(store.recordRelease).not.toHaveBeenCalled();
+      });
+
+      it("a catalog cell alone, with no manifest set, still records (unchanged behavior)", async () => {
+        catalogOverlay.row = {
+          required_placement_countries: { production: ["PT"] },
+        };
+        expect((await post(valid)).status).toBe(200);
+        expect(
+          store.recordRelease.mock.calls[0]?.[0].spec.placement
+        ).toBeUndefined();
+      });
     });
 
     it("G4 is production-only: candidate-a admits a new state", async () => {

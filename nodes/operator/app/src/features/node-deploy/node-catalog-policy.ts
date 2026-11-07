@@ -33,9 +33,10 @@ import { DatabaseCellRuntimePoolLimitsSchema } from "@/shared/secrets/database-c
 import type { NodeAppPoolLimits } from "./node-app-env";
 
 /**
- * Fleet refused placement countries (operator policy, reviewed in this repo): the OFAC comprehensively
- * sanctioned jurisdictions. A declared set that names one is refused at record time. Bid screening of
- * these countries for nodes with no set is a separate follow-up.
+ * Fleet refused placement countries (operator policy, reviewed in this repo). Source: the "OFAC-sanctioned"
+ * section of https://docs.polymarket.com/api-reference/geoblock (IR, SY, CU, KP; checked 2026-11-07).
+ * A declared set that names one is refused at record time. Dropping these countries from bid screening
+ * for nodes with no set is task.5444.
  */
 export const FLEET_REFUSED_PLACEMENT_COUNTRIES: ReadonlySet<string> = new Set([
   "CU",
