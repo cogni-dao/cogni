@@ -158,7 +158,7 @@ groups:
             relativeTimeRange: { from: 900, to: 0 }
             model:
               datasource: { type: loki, uid: grafanacloud-logs }
-              expr: 'sum by (nodeId, workload) (count_over_time({env="production",service="sequencer"} | json | msg="node_deploy_alert" | outcome="edge_restore_failed" [15m]))'
+              expr: 'sum by (env, nodeId, workload) (count_over_time({env="production",service="sequencer"} | json | msg="node_deploy_alert" | outcome="edge_restore_failed" [15m]))'
               queryType: instant
               refId: COUNT
           - refId: THRESHOLD
@@ -170,7 +170,7 @@ groups:
                 - evaluator: { type: gt, params: [0] }
               refId: THRESHOLD
         annotations:
-          summary: "Node {{ $labels.nodeId }} workload {{ $labels.workload }}: a failed cutover cannot point its public host back to blue, so the host may still serve the failed green and the lane is held. Read the node_deploy_alert line (error, reason) and the edge record for the host (duplicate/protected record, zone token, Cloudflare). Once the edge write works the sequencer restores blue and closes green on its own."
+          summary: "Node {{ $labels.nodeId }} workload {{ $labels.workload }} ({{ $labels.env }}): a failed cutover cannot point its public host back to blue, so the host may still serve the failed green and the lane is held. Read the node_deploy_alert line (error, reason) and the edge record for the host (duplicate/protected record, zone token, Cloudflare). Once the edge write works the sequencer restores blue and closes green on its own."
         labels: { severity: critical, plane: node-deploy }
         noDataState: OK
         execErrState: Alerting

@@ -2050,11 +2050,12 @@ export class NodeDeploySequencer {
     const edge = this.d.edge;
     const blueIngress = blue ? ingressHostOf(blue.endpoints, host) : undefined;
     if (edge && blueIngress) {
-      this.cutoverWatch.delete(attempt.id);
+      // The durable decision first; only then drop the in-memory readback (a failed write keeps it).
       if (!attempt.error?.startsWith(ROLLBACK_PENDING))
         attempt = await this.d.store.updateAttempt(attempt.id, {
           error: `${ROLLBACK_PENDING}${reason}`.slice(0, ERROR_TEXT_MAX),
         });
+      this.cutoverWatch.delete(attempt.id);
       const onGreen = await edge.current(host).then(
         (rec) => rec !== undefined && sameHostname(rec.content, ingress),
         () => true
