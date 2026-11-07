@@ -355,6 +355,9 @@ importers:
       '@cogni-dao/knowledge-store':
         specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
         version: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.9.0/cogni-dao-knowledge-store-0.9.0.tgz
+      '@cogni-dao/metrics':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/metrics-v0.3.0/cogni-dao-metrics-0.3.0.tgz
+        version: https://github.com/cogni-dao/node-template/releases/download/metrics-v0.3.0/cogni-dao-metrics-0.3.0.tgz(drizzle-orm@0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7))(postgres@3.4.7)
       '@cogni-dao/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
         version: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.4.0/cogni-dao-work-items-0.4.0.tgz
@@ -1907,6 +1910,18 @@ packages:
     version: 0.2.1
     peerDependencies:
       '@cogni/ai-tools': '>=0.3.0'
+
+  '@cogni-dao/metrics@https://github.com/cogni-dao/node-template/releases/download/metrics-v0.3.0/cogni-dao-metrics-0.3.0.tgz':
+    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/metrics-v0.3.0/cogni-dao-metrics-0.3.0.tgz}
+    version: 0.3.0
+    peerDependencies:
+      drizzle-orm: ^0.44.7
+      postgres: ^3.4.5
+    peerDependenciesMeta:
+      drizzle-orm:
+        optional: true
+      postgres:
+        optional: true
 
   '@cogni-dao/money-plane@https://github.com/cogni-dao/node-template/releases/download/money-plane-v0.2.0/cogni-dao-money-plane-0.2.0.tgz':
     resolution: {integrity: sha512-meo7aO8VqwM2lqiqmNmohnvQa4Qby2DZGiZo4eaQqcsQil3Tw9gIDHH9yts9Qe1uvCnHADlI0T4MxpaclrcsRA==, tarball: https://github.com/cogni-dao/node-template/releases/download/money-plane-v0.2.0/cogni-dao-money-plane-0.2.0.tgz}
@@ -13528,6 +13543,13 @@ snapshots:
       - undici
       - vue
       - ws
+
+  '@cogni-dao/metrics@https://github.com/cogni-dao/node-template/releases/download/metrics-v0.3.0/cogni-dao-metrics-0.3.0.tgz(drizzle-orm@0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7))(postgres@3.4.7)':
+    dependencies:
+      zod: 4.3.6
+    optionalDependencies:
+      drizzle-orm: 0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+      postgres: 3.4.7
 
   '@cogni-dao/money-plane@https://github.com/cogni-dao/node-template/releases/download/money-plane-v0.2.0/cogni-dao-money-plane-0.2.0.tgz(react@19.0.0)':
     optionalDependencies:

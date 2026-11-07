@@ -69,6 +69,9 @@ export const EVENT_NAMES = {
   IDENTITY_BROKER_REJECTED: "feature.identity_broker.rejected",
   DNS_REVERSE_RECONCILE_SKIPPED: "dns.reverse_reconcile.skipped",
   DNS_FORWARD_RECONCILE_SKIPPED: "dns.forward_reconcile.skipped",
+  // Goal metrics (@cogni-dao/metrics, story.0021): one refresh tick and one goals read.
+  METRIC_REFRESH_COMPLETE: "metric.refresh_complete",
+  GOALS_PROGRESS_READ: "goals.progress_read",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

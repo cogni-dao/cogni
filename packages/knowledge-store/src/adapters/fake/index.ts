@@ -363,6 +363,8 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       tags: entry.tags ?? null,
       evaluateAt: entry.evaluateAt ?? null,
       resolutionStrategy: entry.resolutionStrategy ?? null,
+      metricSpec: entry.metricSpec ?? null,
+      kpiBindings: entry.kpiBindings ?? null,
       createdAt: new Date(),
     };
     this.rows.set(entry.id, row);
@@ -416,6 +418,10 @@ export class FakeKnowledgeStoreAdapter implements KnowledgeStorePort {
       ...(update.evaluateAt !== undefined && { evaluateAt: update.evaluateAt }),
       ...(update.resolutionStrategy !== undefined && {
         resolutionStrategy: update.resolutionStrategy,
+      }),
+      ...(update.metricSpec !== undefined && { metricSpec: update.metricSpec }),
+      ...(update.kpiBindings !== undefined && {
+        kpiBindings: update.kpiBindings,
       }),
     };
     this.rows.set(id, merged);
