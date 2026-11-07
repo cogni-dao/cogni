@@ -2083,25 +2083,23 @@ describe("GitHubRepoWriter.promoteNodeFromPreview", () => {
   });
 });
 
-describe("GitHubRepoWriter operator lane ships its in-repo services (bug.5599)", () => {
+describe("GitHubRepoWriter operator services promote on their own lane (bug.5599, CD5)", () => {
   const DISPATCH =
     "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
   const COMPARE = "GET /repos/{owner}/{repo}/compare/{basehead}";
   const sha = "0123456789012345678901234567890123456789";
   const previewSha = "cccccccccccccccccccccccccccccccccccccccc";
-  const operatorRow =
-    "name: operator\ntype: node\npath_prefix: nodes/operator/\nenvs: [candidate-a, preview, production]\n";
   const rows: Record<string, string> = {
-    "operator.yaml": operatorRow,
+    "operator.yaml":
+      "name: operator\ntype: node\npath_prefix: nodes/operator/\nenvs: [candidate-a, preview, production]\n",
     "scheduler-worker.yaml":
       "name: scheduler-worker\ntype: service\npath_prefix: services/scheduler-worker/\nenvs: [candidate-a, preview, production]\n",
-    // service WITHOUT production in envs: excluded for production, included for preview
+    // service without production in envs
     "preview-only-svc.yaml":
       "name: preview-only-svc\ntype: service\nenvs: [candidate-a, preview]\n",
-    // service with a remote source: never an operator artifact
+    // service with a remote source
     "remote-svc.yaml":
       "name: remote-svc\ntype: service\nsource_repo: https://github.com/cogni-dao/remote-svc.git\nenvs: [production, preview]\n",
-    // a node row: not a service
     "beacon.yaml":
       "name: beacon\ntype: node\nsource_repo: https://github.com/cogni-dao/beacon.git\nenvs: [production, preview]\n",
   };
@@ -2115,13 +2113,6 @@ describe("GitHubRepoWriter operator lane ships its in-repo services (bug.5599)",
   ): (params: Record<string, unknown>) => unknown {
     return (params) => {
       const path = String(params.path);
-      if (path === "infra/catalog") {
-        return Object.keys(rows).map((name) => ({
-          name,
-          type: "file",
-          size: 1,
-        }));
-      }
       const row = /^infra\/catalog\/(.+\.yaml)$/.exec(path)?.[1];
       if (row && rows[row]) {
         return { type: "file", encoding: "base64", content: encode(rows[row]) };
@@ -2130,10 +2121,7 @@ describe("GitHubRepoWriter operator lane ships its in-repo services (bug.5599)",
         const ref = String(params.ref);
         const pin = pins[ref];
         if (!pin) throw statusError(404, "Not Found");
-        const slug = ref.replace(
-          /^deploy\/[a-z-]+?-(operator|scheduler-worker)$/,
-          "$1"
-        );
+        const slug = ref.replace(/^deploy\/(preview|production)-/, "");
         return {
           type: "file",
           encoding: "base64",
@@ -2144,52 +2132,79 @@ describe("GitHubRepoWriter operator lane ships its in-repo services (bug.5599)",
     };
   }
 
-  function dispatchedNodes(): string | undefined {
+  function dispatchedInputs(): Record<string, string> {
     const dispatch = requests.find((r) => r.route === DISPATCH);
-    return (dispatch?.params.inputs as Record<string, string> | undefined)
-      ?.nodes;
+    return dispatch?.params.inputs as Record<string, string>;
   }
 
-  it("promoteNode(operator, production, sourceSha) stays single-target: nodes operator, no catalog read (affected-only builds)", async () => {
+  function pinRefs(): unknown[] {
+    return requests
+      .filter(
+        (r) =>
+          r.route === "GET /repos/{owner}/{repo}/contents/{path}" &&
+          r.params.path === ".promote-state/source-sha-by-app.json"
+      )
+      .map((r) => r.params.ref);
+  }
+
+  it("promoteNode(operator, service=scheduler-worker, sourceSha) dispatches nodes=scheduler-worker, forward-checked against the worker's own pin", async () => {
     routeHandlers = {
-      "GET /repos/{owner}/{repo}/contents/{path}": (params) => {
-        const path = String(params.path);
-        if (path === "infra/catalog/operator.yaml") {
-          return {
-            type: "file",
-            encoding: "base64",
-            content: encode(operatorRow),
-          };
-        }
-        if (path === ".promote-state/source-sha-by-app.json") {
-          expect(params.ref).toBe("deploy/production-operator");
-          throw statusError(404, "Not Found");
-        }
-        throw new Error(`unexpected read: ${path}`);
-      },
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(),
       [COMPARE]: () => ({ status: "ahead" }),
       [DISPATCH]: observedPromoteDispatch,
     };
 
-    await makeWriter().promoteNode({
+    const result = await makeWriter().promoteNode({
       env: "production",
       parentOwner: "Cogni-DAO",
       parentRepo: "cogni",
       slug: "operator",
+      service: "scheduler-worker",
       sourceSha: sha,
     });
 
-    expect(dispatchedNodes()).toBe("operator");
-    const dispatch = requests.find((r) => r.route === DISPATCH);
-    expect((dispatch?.params.inputs as Record<string, string>).source_sha).toBe(
-      sha
-    );
+    expect(result).toMatchObject({
+      status: "dispatched",
+      sourceAddressing: "in_repo",
+    });
+    expect(dispatchedInputs()).toMatchObject({
+      environment: "production",
+      nodes: "scheduler-worker",
+      source_sha: sha,
+      skip_infra: "true",
+    });
+    expect(pinRefs()).toEqual(["deploy/production-scheduler-worker"]);
   });
 
-  it("promoteNodeFromPreview(operator) forwards both targets' preview pins and excludes non-matching catalog rows", async () => {
+  it("promoteNode(service) refuses a worker target that does not descend from the worker's pin", async () => {
+    const pinned = "dddddddddddddddddddddddddddddddddddddddd";
     routeHandlers = {
       "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler({
-        "deploy/preview-operator": previewSha,
+        "deploy/production-scheduler-worker": pinned,
+      }),
+      [COMPARE]: (params) =>
+        String(params.basehead).startsWith(`${pinned}...${sha}`)
+          ? { status: "behind" }
+          : { status: "ahead" },
+      [DISPATCH]: observedPromoteDispatch,
+    };
+
+    await expect(
+      makeWriter().promoteNode({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        service: "scheduler-worker",
+        sourceSha: sha,
+      })
+    ).rejects.toMatchObject({ code: "non_forward_promotion", status: 409 });
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+  });
+
+  it("promoteNodeFromPreview(operator, service) forwards ONLY the worker's own preview pin", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler({
         "deploy/preview-scheduler-worker": previewSha,
       }),
       [COMPARE]: () => ({ status: "ahead" }),
@@ -2200,52 +2215,19 @@ describe("GitHubRepoWriter operator lane ships its in-repo services (bug.5599)",
       parentOwner: "Cogni-DAO",
       parentRepo: "cogni",
       slug: "operator",
+      service: "scheduler-worker",
     });
 
-    // preview-only-svc (no production env), remote-svc (source_repo) and beacon (node) are excluded.
-    expect(dispatchedNodes()).toBe("operator,scheduler-worker");
-    const inputs = requests.find((r) => r.route === DISPATCH)?.params
-      .inputs as Record<string, string>;
-    expect(inputs.source_sha).toBeUndefined();
-    expect(inputs.node_source_sha).toBeUndefined();
-    // Each target's preview pin and production pin were read (forward guard per target).
-    const pinRefs = requests
-      .filter(
-        (r) =>
-          r.route === "GET /repos/{owner}/{repo}/contents/{path}" &&
-          r.params.path === ".promote-state/source-sha-by-app.json"
-      )
-      .map((r) => r.params.ref);
-    expect(pinRefs).toContain("deploy/preview-scheduler-worker");
-    expect(pinRefs).toContain("deploy/production-scheduler-worker");
+    expect(dispatchedInputs().nodes).toBe("scheduler-worker");
+    expect(dispatchedInputs().source_sha).toBeUndefined();
+    expect(dispatchedInputs().node_source_sha).toBeUndefined();
+    expect(pinRefs()).toEqual([
+      "deploy/preview-scheduler-worker",
+      "deploy/production-scheduler-worker",
+    ]);
   });
 
-  it("promoteNodeFromPreview(operator) refuses when the worker's preview pin does not move forward from production", async () => {
-    const pinned = "dddddddddddddddddddddddddddddddddddddddd";
-    routeHandlers = {
-      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler({
-        "deploy/preview-operator": previewSha,
-        "deploy/preview-scheduler-worker": previewSha,
-        "deploy/production-scheduler-worker": pinned,
-      }),
-      [COMPARE]: (params) =>
-        String(params.basehead).startsWith(`${pinned}...${previewSha}`)
-          ? { status: "behind" }
-          : { status: "ahead" },
-      [DISPATCH]: observedPromoteDispatch,
-    };
-
-    await expect(
-      makeWriter().promoteNodeFromPreview({
-        parentOwner: "Cogni-DAO",
-        parentRepo: "cogni",
-        slug: "operator",
-      })
-    ).rejects.toMatchObject({ code: "non_forward_promotion", status: 409 });
-    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
-  });
-
-  it("promoteNodeFromPreview(operator) refuses when the worker has no preview pin", async () => {
+  it("promoteNodeFromPreview(service) refuses when the worker has no preview pin", async () => {
     routeHandlers = {
       "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler({
         "deploy/preview-operator": previewSha,
@@ -2259,16 +2241,15 @@ describe("GitHubRepoWriter operator lane ships its in-repo services (bug.5599)",
         parentOwner: "Cogni-DAO",
         parentRepo: "cogni",
         slug: "operator",
+        service: "scheduler-worker",
       })
     ).rejects.toMatchObject({ code: "preview_pin_missing", status: 409 });
     expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
   });
 
-  it("dispatchNodePromote(operator, preview) stays single-target: operator only, no catalog read", async () => {
+  it("dispatchNodePromote(operator, preview, service) dispatches nodes=scheduler-worker", async () => {
     routeHandlers = {
-      "GET /repos/{owner}/{repo}/contents/{path}": () => {
-        throw new Error("preview dispatch must not read the catalog");
-      },
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(),
       [DISPATCH]: observedPromoteDispatch,
     };
 
@@ -2277,25 +2258,89 @@ describe("GitHubRepoWriter operator lane ships its in-repo services (bug.5599)",
       repo: "cogni",
       env: "preview",
       slug: "operator",
+      service: "scheduler-worker",
     });
-    expect(dispatchedNodes()).toBe("operator");
+    expect(dispatchedInputs().nodes).toBe("scheduler-worker");
   });
 
-  it("a non-operator slug is unchanged: one node, no catalog directory read", async () => {
+  it("rejects unknown, remote-source, node-type and env-less services without dispatching", async () => {
     routeHandlers = {
-      "GET /repos/{owner}/{repo}/contents/{path}": () => {
-        throw new Error("catalog must not be read for a non-operator slug");
-      },
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(),
+      [COMPARE]: () => ({ status: "ahead" }),
+      [DISPATCH]: observedPromoteDispatch,
+    };
+    const promote = (service: string) =>
+      makeWriter().promoteNode({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        service,
+        sourceSha: sha,
+      });
+
+    await expect(promote("nope")).rejects.toMatchObject({
+      code: "service_not_found",
+      status: 404,
+    });
+    await expect(promote("remote-svc")).rejects.toMatchObject({
+      code: "invalid_service",
+      status: 400,
+    });
+    await expect(promote("beacon")).rejects.toMatchObject({
+      code: "invalid_service",
+      status: 400,
+    });
+    await expect(promote("operator")).rejects.toMatchObject({
+      code: "invalid_service",
+      status: 400,
+    });
+    await expect(promote("preview-only-svc")).rejects.toMatchObject({
+      code: "invalid_service",
+      status: 400,
+    });
+    await expect(promote("../operator")).rejects.toMatchObject({
+      code: "invalid_service",
+      status: 400,
+    });
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+  });
+
+  it("refuses a service on a non-operator slug", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(),
+      [DISPATCH]: observedPromoteDispatch,
+    };
+    await expect(
+      makeWriter().promoteNodeFromPreview({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "beacon",
+        service: "scheduler-worker",
+      })
+    ).rejects.toMatchObject({
+      code: "service_not_on_operator_lane",
+      status: 400,
+    });
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+  });
+
+  it("default path unchanged: an operator promote without service dispatches nodes=operator and never reads the catalog directory", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler({
+        "deploy/preview-operator": previewSha,
+      }),
+      [COMPARE]: () => ({ status: "ahead" }),
       [DISPATCH]: observedPromoteDispatch,
     };
 
-    await makeWriter().dispatchNodePromote({
-      owner: "Cogni-DAO",
-      repo: "cogni",
-      env: "production",
-      slug: "beacon",
+    await makeWriter().promoteNodeFromPreview({
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
     });
-    expect(dispatchedNodes()).toBe("beacon");
+    expect(dispatchedInputs().nodes).toBe("operator");
+    expect(requests.some((r) => r.params.path === "infra/catalog")).toBe(false);
   });
 });
 
