@@ -77,7 +77,10 @@ spec:
                 }
             - { name: SUBSTRATE_GW_PUBLISH_DIR, value: /publish }
             - { name: TS_SERVE_CONFIG, value: /opt/cogni/serve.json }
-            - { name: TS_STATE_DIR, value: /var/lib/tailscale }
+            # A subdirectory of the state volume that substrate-gw.sh creates (0700, owned by uid 10001):
+            # the local-path volume root is root-owned and tailscaled cannot chmod it. No fsGroup: k3s
+            # local-path volumes are hostPath-backed and the kubelet does not apply fsGroup to them.
+            - { name: TS_STATE_DIR, value: /var/lib/tailscale/state }
             - { name: TS_SOCKET, value: /tmp/tailscaled.sock }
             - { name: TS_HOSTNAME, value: substrate-gw }
             # tailscaled's pod-local UDP port. Not exposed (relay-only): no hostPort, no ingress rule.

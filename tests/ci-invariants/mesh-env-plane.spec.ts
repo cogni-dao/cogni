@@ -17,8 +17,16 @@
  * @internal
  */
 
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -520,6 +528,85 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     expect(sh).toContain('request_enrollment "not_joined_no_pending_request"');
     expect(sh).not.toMatch(/--auth-?key|TS_AUTHKEY/);
   });
+
+  it("substrate-gw state dir is a subdirectory it owns, never the root-owned volume root (P4 NoState)", () => {
+    const gw = parseAll<Doc>(`${BASE}/substrate-gw.yaml`).find(
+      (d) => d.kind === "Deployment"
+    );
+    const c = gw?.spec.template.spec.containers.find(
+      (x) => x.name === "substrate-gw"
+    ) as
+      | (Container & { volumeMounts?: { name: string; mountPath: string }[] })
+      | undefined;
+    const mount = c?.volumeMounts?.find((m) => m.name === "state")?.mountPath;
+    const dir = c?.env?.find((e) => e.name === "TS_STATE_DIR")?.value;
+    expect(mount).toBeTruthy();
+    // tailscaled chmods its state dir; uid 10001 with no capability cannot chmod the root-owned root.
+    expect(dir?.startsWith(`${mount}/`), `${dir} under ${mount}`).toBe(true);
+    const sh = read(`${BASE}/substrate-gw.sh`);
+    expect(sh).toContain(
+      'mkdir -p "$TS_STATE_DIR" && chmod 0700 "$TS_STATE_DIR"'
+    );
+    expect(sh).toContain('--statedir="$TS_STATE_DIR"');
+    expect(sh).toContain('LOST_FILE="${TS_STATE_DIR}/watchdog.lost-since"');
+    expect(sh).toContain('STATE_FILE="${TS_STATE_DIR}/tailscaled.state"');
+  });
+
+  it("substrate-gw loop re-requests enrollment with backoff while BackendState is NoState", () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), "substrate-gw-"));
+    try {
+      const bin = path.join(tmp, "bin");
+      mkdirSync(bin);
+      const upLog = path.join(tmp, "up.log");
+      writeFileSync(
+        path.join(bin, "tailscale"),
+        [
+          "#!/bin/sh",
+          'for a in "$@"; do case "$a" in',
+          `  serve) echo '{}'; exit 0 ;;`,
+          `  up) echo up >> "$UP_LOG"; exit 0 ;;`,
+          `  status) printf '{\\n  "BackendState": "NoState",\\n  "AuthURL": "",\\n  "Self": {\\n    "Online": false\\n  }\\n}\\n'; exit 0 ;;`,
+          "esac; done",
+          "exit 0",
+          "",
+        ].join("\n"),
+        { mode: 0o755 }
+      );
+      writeFileSync(
+        path.join(bin, "tailscaled"),
+        "#!/bin/sh\nexec sleep 30\n",
+        { mode: 0o755 }
+      );
+      const serve = path.join(tmp, "serve.json");
+      writeFileSync(serve, "{}\n");
+      mkdirSync(path.join(tmp, "publish"));
+      const stateDir = path.join(tmp, "volume", "state");
+      const run = spawnSync("sh", [path.join(root, BASE, "substrate-gw.sh")], {
+        encoding: "utf8",
+        timeout: 6000,
+        killSignal: "SIGTERM",
+        env: {
+          PATH: `${bin}:/usr/bin:/bin`,
+          UP_LOG: upLog,
+          MESH_CONTROL_URL: "https://mesh-test.example",
+          TS_SERVE_CONFIG: serve,
+          TS_STATE_DIR: stateDir,
+          TS_SOCKET: path.join(tmp, "ts.sock"),
+          SUBSTRATE_GW_PUBLISH_DIR: path.join(tmp, "publish"),
+          SUBSTRATE_GW_WATCHDOG_INTERVAL_SECONDS: "1",
+        },
+      });
+      const ups = readFileSync(upLog, "utf8").trim().split("\n").length;
+      // boot + at least one NoState re-request (old loop: boot only, then waited forever).
+      expect(ups, run.stdout).toBeGreaterThanOrEqual(2);
+      expect(run.stdout).toMatch(
+        /"msg":"substrate_gw_enrollment_requested".*"backendState":"NoState","backoffSeconds":\d+/
+      );
+      expect(statSync(stateDir).mode & 0o777).toBe(0o700);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it("is not a Compose service and adds nothing to the frozen deploy brain", () => {
     expect(read("infra/compose/runtime/docker-compose.yml")).not.toMatch(
