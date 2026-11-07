@@ -3,10 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import {
-  renderCatalog,
-  WIZARD_AKASH_COMPUTE_EGRESS_CIDRS,
-} from "@/shared/node-app-scaffold/gens/catalog";
+import { renderCatalog } from "@/shared/node-app-scaffold/gens/catalog";
 
 describe("renderCatalog", () => {
   const ownerWallet = "0x070075F1389Ae1182aBac722B36CA12285d0c949";
@@ -82,7 +79,8 @@ describe("renderCatalog", () => {
       "candidate-a": "node-deploy",
       production: "node-deploy",
     });
-    expect(row.compute_egress_cidrs).toEqual(WIZARD_AKASH_COMPUTE_EGRESS_CIDRS);
+    // task.5428 — a lease reaches the substrate over its env mesh; no provider egress CIDR.
+    expect(row).not.toHaveProperty("compute_egress_cidrs");
     expect(row).not.toHaveProperty("lease_generation");
   });
 
