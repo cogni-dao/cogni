@@ -329,12 +329,13 @@ const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
     },
     {
       why:
-        "TEST LANE ON THE MESH FIRST (task.5428, test-fleet parity): the test operator's candidate-a lane " +
-        "reaches the substrate over its own test-candidate-a tailnet so the fixture release proves the mesh " +
-        "end to end before any production lane flips (T6b). tests/ci-invariants/node-deploy-mesh-coordinators.spec.ts " +
-        "pins the named tailnet to a coordinator this overlay runs.",
+        "EACH OPERATOR'S CANDIDATE-A LANE ON ITS OWN TAILNET (task.5428, test-fleet parity): both overlays " +
+        "set candidate-a to mesh; the test operator names its own test-candidate-a tailnet, production the " +
+        "canonical candidate-a tailnet. Production also lists the lanes the test operator does not serve as " +
+        "they flip. tests/ci-invariants/node-deploy-mesh-coordinators.spec.ts pins both values and each named " +
+        "tailnet to a coordinator its overlay runs.",
       pattern:
-        /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_SUBSTRATE_TRANSPORTS\]\.(name|value)$/,
+        /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_SUBSTRATE_TRANSPORTS\]\.value$/,
     },
   ],
   "scheduler-worker": [
