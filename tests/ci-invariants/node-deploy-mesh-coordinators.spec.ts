@@ -21,6 +21,9 @@
  *   - MESH_LANE_NEEDS_ITS_GATEWAY (CD6): every `<env>=mesh[:<tailnet>]` lane in an operator overlay names a tailnet whose
  *     VM env-plane instance (overlays/<env>/mesh-plane/<tailnet>) and its Argo Application are in the repo, so CI is red
  *     until the gateway the lane needs is on main.
+ *   - LANE_FLIPS_ARE_PINNED: each operator overlay's NODE_DEPLOY_SUBSTRATE_TRANSPORTS equals its pinned value
+ *     (production: canonical candidate-a on the mesh; candidate-a test operator: its own tailnet), so a lane flip
+ *     is a reviewed edit of this spec.
  * Side-effects: IO (reads committed files; optional local kubectl kustomize)
  * Links: task.5428, task.5384, bug.5579, hub node-service-delivery, infra/k8s/base/node-deploy-mesh/
  * @internal
@@ -491,6 +494,16 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
     }
     for (const env of ["production", "candidate-a"])
       expect(declared(env), env).toEqual((expected[env] ?? []).sort());
+  });
+
+  it("each operator flips exactly its candidate-a lane to the mesh, on its own tailnet (task.5428)", () => {
+    const transports = (env: string) =>
+      read(`infra/k8s/overlays/${env}/operator/kustomization.yaml`).match(
+        /name: NODE_DEPLOY_SUBSTRATE_TRANSPORTS\n\s+value: "?([^"\n]+)"?/
+      )?.[1];
+    // Unlisted lanes are egress (env-lanes.ts). A lane flip edits this pin in the same reviewed PR.
+    expect(transports("production")).toBe("candidate-a=mesh:candidate-a");
+    expect(transports("candidate-a")).toBe("candidate-a=mesh:test-candidate-a");
   });
 
   it("Reloader rolls the sequencer pod only for the Secrets and the operator ConfigMap it reads (CD5)", () => {
