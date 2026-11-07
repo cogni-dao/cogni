@@ -28,7 +28,10 @@ export { UserDrizzleAccountService } from "./accounts/drizzle.adapter";
 export type { AgentCatalogProvider } from "./ai/agent-catalog.provider";
 // Agent discovery infrastructure
 export { AggregatingAgentCatalog } from "./ai/aggregating-agent-catalog";
-export type { ExecutionScope } from "./ai/execution-scope";
+export type {
+  ExecutionCodeSubject,
+  ExecutionScope,
+} from "./ai/execution-scope";
 // Execution scope (ALS) — per-run billing + actor context for tools
 export { getExecutionScope, runInScope } from "./ai/execution-scope";
 export {
@@ -245,6 +248,11 @@ export {
   AppOrPublicDeclarationReader,
   GitHubPublicReader,
 } from "./vcs/github-declaration-reader.adapter";
+// VCS capability (GitHub App adapter)
+export {
+  type NodeCodeAdmissionPolicy,
+  REVIEW_NODE_CODE_POLICY,
+} from "./vcs/github-node-code.adapter";
 // Operator-only GitHub-App repo writer — node formation + candidate-flight prep.
 export {
   type ForkFromTemplateInput,
@@ -254,7 +262,6 @@ export {
   type OpenNodeAppPrResult,
   type PackageImageTagExistsInput,
 } from "./vcs/github-repo-write";
-// VCS capability (GitHub App adapter)
 export {
   GitHubVcsAdapter,
   type GitHubVcsAdapterConfig,

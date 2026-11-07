@@ -15,12 +15,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   aggregateGateStatuses,
+  collectCitations,
   evaluateCriteria,
   findRequirement,
   formatCheckRunSummary,
   formatCrossDomainRefusal,
   formatNoScopeNeutral,
   formatPrComment,
+  formatReviewResultBlock,
   formatThreshold,
   type ReviewResult,
 } from "../src/domain/review.js";
@@ -296,5 +298,46 @@ describe("formatNoScopeNeutral", () => {
     expect(body).toContain("No recognizable scope");
     expect(body).toContain("Skipping review");
     expect(body).toContain("single-node-scope");
+  });
+});
+
+describe("review result block (CHECK_IS_REQUEST_BOUND, story.5102)", () => {
+  it("renders the exact wire format the pr-review eval parses", () => {
+    const block = {
+      requestId: "r",
+      buildSha: "b",
+      model: "m",
+      conclusion: "failure" as const,
+      couldNotEvaluate: null,
+      citations: ["rule-a"],
+      evidence: { files: ["a.ts"], entries: ["rule-a"] },
+    };
+    expect(formatReviewResultBlock(block)).toBe(
+      `\n<!-- cogni-review-result v1 -->\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\`\n`
+    );
+  });
+
+  it("collects the union of metric citations in first-seen order", () => {
+    expect(
+      collectCitations({
+        metrics: [
+          { metric: "a", value: 1, observations: [], citations: ["x", "y"] },
+          { metric: "b", value: 1, observations: [] },
+          { metric: "c", value: 0, observations: [], citations: ["y", "z"] },
+        ],
+        summary: "",
+      })
+    ).toEqual(["x", "y", "z"]);
+    expect(collectCitations(undefined)).toEqual([]);
+  });
+
+  it("a could-not-evaluate summary says so before the verdict", () => {
+    const summary = formatCheckRunSummary({
+      conclusion: "fail",
+      gateResults: [],
+      couldNotEvaluate: "graph_failed",
+    });
+    expect(summary).toContain("COULD NOT EVALUATE");
+    expect(summary).toContain("graph_failed");
   });
 });

@@ -53,6 +53,36 @@ describe("GET /.well-known/agent.json", () => {
     });
   });
 
+  it("publishes the dev-triggered review action from the typed wire contract (story.5102)", async () => {
+    const { GET } = await import("./route");
+    const response = await GET(
+      new Request("http://0.0.0.0:3000/.well-known/agent.json", {
+        headers: {
+          "x-forwarded-host": "operator.example",
+          "x-forwarded-proto": "https",
+        },
+      })
+    );
+    const body = await response.json();
+
+    expect(body.endpoints.review).toBe(
+      "https://operator.example/api/v1/vcs/review"
+    );
+    expect(body.actions.requestReview).toMatchObject({
+      method: "POST",
+      endpoint: "https://operator.example/api/v1/vcs/review",
+      auth: { type: "bearer", capability: "node.flight" },
+      inputSchema: {
+        type: "object",
+        required: ["nodeId", "prNumber"],
+      },
+      outputSchema: {
+        type: "object",
+        required: ["workflowId", "headSha", "requestId"],
+      },
+    });
+  });
+
   // `endpoints.workItems` is only a URL — it cannot tell an agent the route takes
   // POST, what body it wants, or that the server allocates the id. Agents without
   // these schemas fall back to harness-local slash commands, which hardcode the

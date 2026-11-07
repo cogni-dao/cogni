@@ -260,4 +260,10 @@ export const executionRequests = pgTable("execution_requests", {
     .defaultNow(),
   /** Graph claim lease; null after finalization or for non-leased generic jobs */
   leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  /**
+   * VERDICT_SURVIVES_REPLAY (story.5102): the graph's structured output, written at finalize
+   * and returned by every cached replay. Nullable; bounded to 64 KB of JSON by the writer
+   * (larger outputs are stored as null, and the run reads as "no structured output").
+   */
+  structuredOutput: jsonb("structured_output").$type<Record<string, unknown>>(),
 });

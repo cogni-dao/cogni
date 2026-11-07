@@ -7,7 +7,7 @@
  * Scope: Injected Git API and execution scope; no network, real credentials or model calls. Does not perform source mutations.
  * Invariants: Deny links before blob access; inaccessible/capped sources cannot prove absence.
  * Side-effects: none
- * Links: https://cognidao.org/work/items/subtask.5027
+ * Links: https://cognidao.org/work/items/subtask.5027, story.5102 (review admission policy + code subject)
  * @internal
  */
 
@@ -15,16 +15,36 @@ import { createHash } from "node:crypto";
 import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { NodeCodeGitRequest } from "@/adapters/server/vcs/github-node-code.adapter";
-import { GitHubNodeCodeAdapter } from "@/adapters/server/vcs/github-node-code.adapter";
+import {
+  GitHubNodeCodeAdapter,
+  REVIEW_NODE_CODE_POLICY,
+} from "@/adapters/server/vcs/github-node-code.adapter";
 import { GitHubVcsAdapter } from "@/adapters/server/vcs/github-vcs.adapter";
 import { createNodeCodeCapability } from "@/bootstrap/capabilities/node-code";
 
-const scope = vi.hoisted(() => ({
-  nodeId: "node-own",
-  actorUserId: "developer",
-  billing: { billingAccountId: "payer" },
-}));
+const scope = vi.hoisted(
+  () =>
+    ({
+      nodeId: "node-own",
+      actorUserId: "developer",
+      billing: { billingAccountId: "payer" },
+    }) as {
+      nodeId: string;
+      actorUserId: string;
+      billing: { billingAccountId: string };
+      codeSubject?: {
+        nodeId: string;
+        owner: string;
+        repo: string;
+        baseSha: string;
+        headSha: string;
+      };
+    }
+);
 const boundRead = vi.hoisted(() => vi.fn());
+const readerFactory = vi.hoisted(() =>
+  vi.fn((..._args: unknown[]) => ({ read: boundRead, list: boundRead }))
+);
 const authCalls = vi.hoisted(() =>
   vi.fn(async (_input: unknown) => ({ token: "synthetic-test-token" }))
 );
@@ -41,11 +61,14 @@ vi.mock("@octokit/core", () => ({
     request = apiCalls;
   },
 }));
-vi.mock("@/adapters/server", () => ({
+vi.mock("@/adapters/server", async () => ({
+  REVIEW_NODE_CODE_POLICY: (
+    await import("@/adapters/server/vcs/github-node-code.adapter")
+  ).REVIEW_NODE_CODE_POLICY,
   getExecutionScope: () => scope,
   GitHubVcsAdapter: class {
-    nodeCodeReader() {
-      return { read: boundRead, list: boundRead };
+    nodeCodeReader(...args: unknown[]) {
+      return readerFactory(...args);
     }
   },
 }));
@@ -413,5 +436,181 @@ describe("host-bound immutable node Git reader", () => {
       unavailable.read({ path: "packages/source.ts" })
     ).rejects.toThrow("node_code_source_unavailable");
     expect(boundRead).not.toHaveBeenCalled();
+  });
+
+  it("a code-subject run reads a NEW reader bound to the PR head with the review policy (story.5102)", async () => {
+    const authorization = new FakeAuthorizationAdapter();
+    authorization.allow({
+      actorId: "user:developer",
+      action: "node.flight",
+      resource: "node:node-own",
+      context: { nodeId: "node-own", tenantId: "payer" },
+    });
+    const head = "d".repeat(40);
+    readerFactory.mockClear();
+    boundRead.mockReset();
+    boundRead.mockResolvedValue({ complete: true });
+    const cap = createNodeCodeCapability({
+      ...binding,
+      appId: "123",
+      privateKeyBase64: "aw==",
+      log,
+      getAuthorization: () => authorization,
+    });
+    // Construction built only the serving reader.
+    expect(readerFactory).toHaveBeenCalledTimes(1);
+    scope.nodeId = "node-own";
+    scope.codeSubject = {
+      nodeId: "node-own",
+      owner: "test-org",
+      repo: "pr-repo",
+      baseSha: "e".repeat(40),
+      headSha: head,
+    };
+    try {
+      await cap.read({ path: ".github/workflows/ci.yml" });
+      await cap.list({ path: "." });
+      expect(readerFactory).toHaveBeenCalledTimes(3);
+      for (const call of readerFactory.mock.calls.slice(1)) {
+        expect(call[0]).toMatchObject({
+          nodeId: "node-own",
+          owner: "test-org",
+          repo: "pr-repo",
+          commitSha: head,
+        });
+        expect(call[2]).toBe(REVIEW_NODE_CODE_POLICY);
+      }
+      // v0 single-node authz: a subject for another node is denied before any read.
+      scope.codeSubject = { ...scope.codeSubject, nodeId: "other-node" };
+      boundRead.mockClear();
+      await expect(cap.read({ path: "README.md" })).rejects.toThrow(
+        "node_code_authz_denied"
+      );
+      expect(boundRead).not.toHaveBeenCalled();
+    } finally {
+      delete scope.codeSubject;
+    }
+  });
+});
+
+describe("review admission policy (story.5102)", () => {
+  const head = "1".repeat(40);
+  const rootTree = "2".repeat(40);
+  const githubTree = "3".repeat(40);
+  const workflowsTree = "4".repeat(40);
+  const scriptsTree = "5".repeat(40);
+  const text = "name: ci\non: push\n";
+  const textBytes = Buffer.from(text, "utf8");
+  const textBlob = createHash("sha1")
+    .update(`blob ${textBytes.length}\0`)
+    .update(textBytes)
+    .digest("hex");
+  const reviewBinding = {
+    nodeId: "node-own",
+    origin: "https://node.example",
+    owner: "test-org",
+    repo: "pr-repo",
+    commitSha: head,
+    roots: [],
+    manifests: [],
+  };
+  const file = (path: string) => ({
+    path,
+    mode: path.endsWith(".sh") ? "100755" : "100644",
+    type: "blob",
+    sha: textBlob,
+    size: textBytes.length,
+  });
+  const dir = (path: string, sha: string) => ({
+    path,
+    mode: "040000",
+    type: "tree",
+    sha,
+  });
+  const trees: Record<string, unknown[]> = {
+    [rootTree]: [
+      dir(".github", githubTree),
+      dir("scripts", scriptsTree),
+      dir(".git", "6".repeat(40)),
+      file(".env"),
+      file(".env.example"),
+      file(".env.production"),
+      file("server.pem"),
+      file("id_rsa"),
+    ],
+    [githubTree]: [dir("workflows", workflowsTree)],
+    [workflowsTree]: [file("x.yml")],
+    [scriptsTree]: [file("deploy.sh")],
+  };
+  const requested: string[] = [];
+  const request: NodeCodeGitRequest = async (route, params) => {
+    expect(params).toMatchObject({ owner: "test-org", repo: "pr-repo" });
+    if (route.includes("commits")) {
+      requested.push(`commit:${params.commit_sha}`);
+      return { sha: head, tree: { sha: rootTree } };
+    }
+    if (route.includes("trees")) {
+      const sha = params.tree_sha ?? "";
+      return { sha, truncated: false, tree: trees[sha] ?? [] };
+    }
+    requested.push(`blob:${params.file_sha}`);
+    return {
+      sha: textBlob,
+      encoding: "base64",
+      size: textBytes.length,
+      content: textBytes.toString("base64"),
+    };
+  };
+  const reader = new GitHubNodeCodeAdapter(
+    reviewBinding,
+    request,
+    log,
+    REVIEW_NODE_CODE_POLICY
+  );
+
+  it("reads .github/workflows/x.yml and a .sh at the PR head", async () => {
+    for (const path of [".github/workflows/x.yml", "scripts/deploy.sh"]) {
+      const result = await reader.read({ path });
+      expect(result).toMatchObject({
+        complete: true,
+        exists: true,
+        content: text,
+        commitSha: head,
+        repo: "test-org/pr-repo",
+      });
+    }
+    expect(requested).toContain(`commit:${head}`);
+  });
+
+  it("reads .env.example but refuses .env, .env.* and key material, naming the path", async () => {
+    expect(await reader.read({ path: ".env.example" })).toMatchObject({
+      exists: true,
+      content: text,
+    });
+    for (const path of [
+      ".env",
+      ".env.production",
+      "server.pem",
+      "id_rsa",
+      "certs/tls.key",
+      "keys/store.p12",
+      ".git/config",
+      "../escape.ts",
+    ]) {
+      expect(await reader.read({ path })).toMatchObject({
+        path,
+        content: null,
+        reason: "node_code_path_denied",
+      });
+    }
+  });
+
+  it("lists every top-level root and dot-dir except .git, omitting secret files", async () => {
+    const listing = await reader.list({ path: "." });
+    expect(listing.entries.map((e) => e.path).sort()).toEqual([
+      ".env.example",
+      ".github",
+      "scripts",
+    ]);
   });
 });

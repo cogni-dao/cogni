@@ -49,6 +49,12 @@ export interface GateResult {
 export interface ReviewResult {
   readonly conclusion: GateStatus;
   readonly gateResults: readonly GateResult[];
+  /**
+   * COULD_NOT_EVALUATE_IS_NOT_NEUTRAL (story.5102): set when the run did not evaluate (graph
+   * failed, no structured output, missing rule, uncited verdict, head moved). With
+   * `fail_on_error: true` the conclusion is then `fail`, never `neutral`.
+   */
+  readonly couldNotEvaluate?: string;
 }
 
 export interface EvidenceBundle {
@@ -67,14 +73,70 @@ export interface EvidenceBundle {
   readonly totalDiffBytes: number;
 }
 
-/** Structured output from the pr-review graph's LLM evaluation. */
+/**
+ * Structured output from the pr-review graph. `metrics`/`summary`/`insufficientEvidence` come
+ * from the model (`evaluation-output` schema); `evidence`, `uncited` and `buildSha` are HOST
+ * fields the graph's finalize node adds from the run's own tool results — never model-written.
+ */
 export interface EvaluationOutput {
   metrics: Array<{
     metric: string;
     value: number;
     observations: string[];
+    /** Hub entry ids this metric's verdict rests on (VERDICT_CITES_WHAT_IT_READ). */
+    citations?: string[];
   }>;
   summary: string;
+  /** The model reports it lacked the evidence to judge. */
+  insufficientEvidence?: boolean;
+  /** Host: files read with content and hub/work entries whose bodies were returned this run. */
+  evidence?: { files: string[]; entries: string[] };
+  /** Host: a failing hub metric cited nothing the run read, or evidence was insufficient. */
+  uncited?: boolean;
+  /** Host: serving operator build that ran the graph. */
+  buildSha?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Machine-readable check block (CHECK_IS_REQUEST_BOUND, story.5102)
+// ---------------------------------------------------------------------------
+
+/** Marker that precedes the one fenced JSON block at the end of a review check summary. */
+export const REVIEW_RESULT_MARKER = "<!-- cogni-review-result v1 -->";
+
+/** The machine-readable review block. Graders read ONLY this, never the prose. */
+export interface ReviewResultBlock {
+  readonly requestId: string;
+  /** Serving operator build (stamped by the operator, not the worker). */
+  readonly buildSha: string | null;
+  readonly model: string;
+  readonly conclusion: "success" | "failure" | "neutral";
+  /** Set when the run could not evaluate; the reason code. */
+  readonly couldNotEvaluate: string | null;
+  /** Hub entry ids the model cited (union over metrics), unfiltered. */
+  readonly citations: readonly string[];
+  readonly evidence: {
+    readonly files: readonly string[];
+    readonly entries: readonly string[];
+  };
+}
+
+/** Render the block that ends a check summary: marker + one fenced JSON object. */
+export function formatReviewResultBlock(block: ReviewResultBlock): string {
+  return `\n${REVIEW_RESULT_MARKER}\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\`\n`;
+}
+
+/** Union of every metric's citations, in first-seen order. */
+export function collectCitations(
+  structured: EvaluationOutput | undefined
+): string[] {
+  const out = new Set<string>();
+  for (const m of structured?.metrics ?? []) {
+    for (const id of m.citations ?? []) {
+      if (typeof id === "string" && id.length > 0) out.add(id);
+    }
+  }
+  return [...out];
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +371,12 @@ export function formatCheckRunSummary(
 
   if (opts?.daoBaseUrl && result.conclusion === "fail") {
     lines.push(`[Propose DAO Vote to Merge](${opts.daoBaseUrl})\n\n---\n`);
+  }
+
+  if (result.couldNotEvaluate) {
+    lines.push(
+      `**COULD NOT EVALUATE** \u2014 \`${result.couldNotEvaluate}\`. The review did not judge this PR; re-run it with POST /api/v1/vcs/review.\n`
+    );
   }
 
   lines.push(`**${verdictLabel(result.conclusion)}**\n`);
