@@ -256,15 +256,6 @@ patches:
                         optional: true
                   - name: NODE_DEPLOY_SUBSTRATE_HOSTS
                     value: candidate-a=cogni-candidate-a.vm.cognidao.org,preview=cogni-preview.vm.cognidao.org,production=cogni.vm.cognidao.org
-                  # task.5428 — the canonical candidate-a lane reaches the substrate over its OWN tailnet: its node
-                  # apps get a per-attempt mesh key, the socket /var/run/headscale/candidate-a/headscale.sock and
-                  # the control URL https://mesh-candidate-a.cognidao.org (env-lanes.ts), and this sequencer approves
-                  # the candidate-a VM's substrate-gw (HR11; MESH_LANES_ONLY). preview and production are unlisted, so
-                  # they stay egress until their own lane flip. Rollback: revert this PR; the lane drains.
-                  # node-deploy-mesh-coordinators.spec.ts pins every mesh lane to a coordinator this overlay runs
-                  # and to that tailnet's VM env-plane instance on main.
-                  - name: NODE_DEPLOY_SUBSTRATE_TRANSPORTS
-                    value: candidate-a=mesh:candidate-a
   # story.5016 Gate 0b: env values are set BY NAME via strategic merge (env lists
   # merge on `name`), never by positional JSON-pointer index. A positional
   # `/env/N/value` patch silently repoints when the base list shifts — that exact
