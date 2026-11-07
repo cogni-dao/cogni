@@ -505,14 +505,18 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         }
       }
     }
-    // Right-sized to measured footprints (task.5428): one instance requests at most 108Mi. Each VM's budget
+    // Sized to real load (task.5428): one instance requests at most 276Mi (12 control-fwd + 128
+    // substrate-fwd + 64 derper + 56 gw + 16 caddy). substrate-fwd was 12Mi until the 2026-11-07
+    // OOM outage (OOMKilled x11 under all-node load); derper went 12Mi -> 64Mi with it. Each VM's budget
     // counts every mesh request on it: its env-plane instances AND the Headscale containers of the
-    // sequencer on that VM's cluster (coordinator_env). 7-day minimum MemAvailable (node_exporter, read
-    // 2026-11-06): candidate-a 271 MiB -> 240Mi (31 MiB margin). production 7278 MiB, so headroom is not
-    // the limit there: its budget is pinned AT today's total (1 x 108Mi instance + 3 x 24Mi Headscale =
-    // 180Mi), so any growth must restate it in review. preview (read 2026-11-07) 717 MiB, no Headscale
-    // (its coordinator runs in production): pinned AT 1 x 108Mi (609 MiB margin). The limits proof (every Headscale at its limit) is
-    // a live check, not this one.
+    // sequencer on that VM's cluster (coordinator_env). Budgets are pinned AT today's totals, so any
+    // growth must restate them in review: candidate-a 2 x 276Mi + 1 x 24Mi Headscale = 576Mi; preview
+    // 1 x 276Mi (no Headscale, its coordinator runs in production); production 276Mi + 3 x 24Mi
+    // Headscale = 348Mi. 7-day minimum MemAvailable (node_exporter): production 7278 MiB and preview
+    // 717 MiB (read 2026-11-07) fit with wide margin. candidate-a read 271 MiB on 2026-11-06, so its
+    // 576Mi is a worst-case reservation, not measured use: forwarder RSS stays far under its limit
+    // at test-fleet load. Re-read candidate-a headroom before raising any mesh limit again. The limits
+    // proof (every Headscale at its limit) is a live check, not this one.
     const mib = (v: unknown): number => {
       const m = /^(\d+)Mi$/.exec(String(v));
       if (!m) throw new Error(`memory request not in Mi: ${String(v)}`);
@@ -528,7 +532,7 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
           ),
         0
       );
-    expect(perInstance).toBeLessThanOrEqual(108);
+    expect(perInstance).toBeLessThanOrEqual(276);
     const headscaleOn = (vm: string): number[] =>
       TABLE.filter((r) => r.coordinator_env === vm).map((r) => {
         const patch = parse<Doc>(
@@ -542,9 +546,9 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         );
       });
     const BUDGET_MI: Record<string, number> = {
-      "candidate-a": 240,
-      preview: 108,
-      production: 180,
+      "candidate-a": 576,
+      preview: 276,
+      production: 348,
     };
     // Only a VM whose cluster runs a sequencer with coordinators must count Headscale (a preview instance's
     // coordinator runs in production, so the preview VM counts none).

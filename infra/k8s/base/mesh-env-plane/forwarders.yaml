@@ -58,7 +58,9 @@ spec:
           ports:
             - { name: control, containerPort: 8443, protocol: TCP }
           # Guaranteed QoS (B17), right-sized: socat measured 5.8 MiB with 7 listeners -> 12Mi. Each
-          # concurrent connection forks a child; this cap is the first limit to raise at the T2/T4 load gate.
+          # concurrent connection forks a child. This one has a single listener and carries only each
+          # node's long-lived Headscale control connection, so it stays at 12Mi (no OOM seen on
+          # 2026-11-07). Raise it if its restarts ever show OOMKilled.
           resources:
             requests: { cpu: 20m, memory: 12Mi }
             limits: { cpu: 20m, memory: 12Mi }
@@ -135,11 +137,16 @@ spec:
             - { name: litellm, containerPort: 4000, protocol: TCP }
             - { name: temporal, containerPort: 7233, protocol: TCP }
             - { name: worker-health, containerPort: 30900, protocol: TCP }
-          # Guaranteed QoS (B17), right-sized: socat measured 5.8 MiB with 7 listeners -> 12Mi. Each
-          # concurrent connection forks a child; this cap is the first limit to raise at the T2/T4 load gate.
+          # Guaranteed QoS (B17). Sized for real all-node load: 128Mi / 100m (task.5428). It was 12Mi / 20m
+          # (socat measured 5.8 MiB idle). Each concurrent connection forks a socat child, and every node
+          # app pools Postgres, Doltgres, Redis, LiteLLM and Temporal connections through this pod. On
+          # 2026-11-07 22:20-23:15Z, once all production node apps routed through the mesh, it was
+          # OOMKilled 11 times at 12Mi. Every node's /readyz?deep=1 failed "Temporal connection timeout"
+          # until a live patch to 128Mi at 23:14Z. Raise it again at the next load gate, never
+          # lower it without a measured peak.
           resources:
-            requests: { cpu: 20m, memory: 12Mi }
-            limits: { cpu: 20m, memory: 12Mi }
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 100m, memory: 128Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
