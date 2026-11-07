@@ -60,7 +60,7 @@ compute_api:
   production: node-deploy
 required_placement_countries:
   candidate-a: [FI, NL, PT, UA]
-  production: [FI, NL, PT, UA]
+  production: [BG, CZ, FI, NL, PT, UA]
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/poly/
@@ -71,6 +71,14 @@ node_id: 4b06359a-a859-4399-888e-a8c7a6696f7e
 # scripts/ci/render-compute-egress-allowlist.sh and applied by
 # infra/provision/cherry/harden-docker-public-ports.sh. Absent = fail-closed.
 compute_egress_cidrs:
+  - cidr: 194.107.163.3/32
+    ports: [5435, 6379, 4000, 7233]
+    envs: [production]
+    comment: BG digitalfrontier h6i (akash1aaul83…e82z) egress measured from inside 4 probe-wallet leases 2026-11-07 (.4 three times, .3 once); polymarket.com/api/geoblock from inside = blocked:false country BG. The only Polymarket-allowed provider bidding that day (story.5142). Bridge until the mesh retires per-IP admission (story.5137). Published Postgres 5432 stays excluded (bug.5481).
+  - cidr: 194.107.163.4/32
+    ports: [5435, 6379, 4000, 7233]
+    envs: [production]
+    comment: BG digitalfrontier h6i egress, second measured address (see the 194.107.163.3 row). story.5142.
   - cidr: 89.207.152.9/32
     ports: [5435, 6379, 4000, 7233]
     envs: [production]
