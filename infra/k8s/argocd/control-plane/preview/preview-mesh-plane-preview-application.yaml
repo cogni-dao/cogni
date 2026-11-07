@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# Argo CD Application — preview-mesh-plane-preview (task.5428; hub node-service-delivery §1-§2, test-fleet parity).
+#
+# Reconciles infra/k8s/overlays/preview/mesh-plane/preview onto the preview VM's OWN k3s: the `preview` tailnet's
+# relay (derper), its one tailnet device (substrate-gw + watchdog + enrollment publisher) and its two
+# forwarders (canonical; its coordinator runs in the production sequencer). One Application per tailnet instance; no instance writes another's objects.
+#
+# targetRevision main, like its siblings in control-plane/preview/: preview never runs an
+# unmerged control plane.
+#
+# prune: true — removing the instance from git removes it. The state PVC is substrate-gw's node key
+# only; a loss re-enrolls by approval with no person (HR10/HR11).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: preview-mesh-plane-preview
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cogni-dao/cogni.git
+    targetRevision: main
+    path: infra/k8s/overlays/preview/mesh-plane/preview
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cogni-mesh-preview
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
