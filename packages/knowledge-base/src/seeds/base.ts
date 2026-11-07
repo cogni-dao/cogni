@@ -61,7 +61,7 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
   {
     id: "cogni-architect",
     domain: "meta",
-    title: "Node architect starter — route design and code through it",
+    title: "Node architect starter for this node",
     entryType: "skill",
     content:
       "**Use when:** before any research, design, or code review on this node. Skip only for wording-only edits.\n\n" +
@@ -69,7 +69,7 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
       "Keep every change on the shortest safe path to THIS node's mission. You build on the node-template foundation; you do not rebuild it.\n\n" +
       "## You inherited a working baseline\n" +
       "- The node-template foundation gives you CI/CD, governance, payments, cognition, work items, knowledge, and delivery. Treat these as given.\n" +
-      "- For any change to that shared plumbing, the owner is node-template, not this node. Read [node-template-architect](https://node-template.cognidao.org/knowledge/node-template-architect) in full and route the change upstream. Do not fork or re-derive baseline behavior here.\n\n" +
+      "- For any change to that shared plumbing, the owner is node-template, not this node. Read `node-template-architect` (on the node-template hub, https://node-template.cognidao.org/knowledge/node-template-architect) in full and route the change upstream. Do not fork or re-derive baseline behavior here.\n\n" +
       "## Stay aligned to receive updates\n" +
       "- This node keeps receiving node-template package and fork-sync updates. Keep your mission code and mission knowledge separate from inherited baseline files so those updates merge cleanly.\n" +
       "- A shared fix authored here instead of upstream blocks the next update. Treat it as a design finding, not a shortcut.\n\n" +
@@ -82,7 +82,7 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
       "3. Trace the mechanism: input -> authoritative writer -> external effect -> evidence -> gate. Inspect the failed behavior before proposing its cure.\n" +
       "4. Contrast with the north star: for each issue, cite the target, the current evidence, the proposed delta, and whether it is convergence, a justified transition, or a regression. A regression blocks approval.\n\n" +
       "## Review and hand off\n" +
-      "- For designs apply `review-design`; for code apply `review-implementation`. Do not approve your own work.\n" +
+      "- Review before shipping: for designs run the repo's `/review-design`, for code run `/review-implementation`. Do not approve your own work.\n" +
       "- Prove live before->after behavior with the exact build SHA. Green CI, a merged PR, or a written artifact is not proof.",
     sourceType: "human",
     confidencePct: 60,
