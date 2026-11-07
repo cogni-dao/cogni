@@ -1,17 +1,20 @@
 {
-  "repo": { "owner": "cogni-test-org", "repo": "cogni-monorepo" },
+  "repo": {
+    "owner": "cogni-test-org",
+    "repo": "cogni-monorepo"
+  },
   "nodeId": "operator",
   "base": "eval/pr-review-base",
   "cases": [
     {
       "id": "breaks-rule",
-      "prNumber": 0,
+      "prNumber": 165,
       "expect": "failure",
-      "ruleId": "check-reads-not-record"
+      "ruleId": "md-to-hub-design"
     },
     {
       "id": "compliant",
-      "prNumber": 0,
+      "prNumber": 166,
       "expect": "success"
     }
   ]
