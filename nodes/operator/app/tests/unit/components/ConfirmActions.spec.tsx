@@ -1,52 +1,30 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/**
- * Module: `@tests/unit/components/ConfirmActions.spec`
- * Purpose: Pin the wire contract of the identity broker's one human gate. The confirm
- *   screen was rewritten AFTER the human validation of task.5024, so the axis a human
- *   proved on candidate-a — click "Link @flock-leader" and get exactly one attestation
- *   for exactly that account — is re-proven here instead of re-run by hand on every
- *   subsequent edit.
- * Scope: The client component only. It decides nothing; `api/auth/attest/confirm` owns
- *   every outcome and reads ONLY the posted `action` value.
- * Invariants:
- *   - ACTION_VALUES_ARE_THE_CONTRACT: the server route branches on `confirm` / `switch`
- *     and treats everything else as cancelled. A `Button` that dropped `name`/`value`
- *     would silently turn every confirmation into a cancel, with no type error — so the
- *     submitted attributes are asserted on the DOM, not inferred from the component.
- *   - NO_AUTO_SUBMIT: nothing is posted without a human click (task.5024 — an
- *     auto-submit defeats the entire purpose of the gate).
- *   - ONE_SUBMIT: one click disables all three, so a double-click cannot race two
- *     terminal actions against one consume-once broker cookie.
- * Side-effects: none
- * Links: src/app/identity/attest/confirm/actions.tsx, task.5024
+/** Tests native submit gating; browser wire serialization is checked separately.
  * @vitest-environment jsdom
  */
 
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { ConfirmActions } from "@/app/identity/attest/confirm/actions";
 
-const LOGIN = "@flock-leader";
-const CONFIRM = `Link ${LOGIN}`;
+const CONFIRM = "Link GitHub";
 
 function button(name: string): HTMLButtonElement {
   return screen.getByRole("button", { name }) as HTMLButtonElement;
 }
 
 /**
- * Renders the gate and counts real form submissions. jsdom cannot navigate, so the
- * POST is suppressed; the count is what proves a click did — or did not — fire one.
+ * Renders the gate and counts submit events without canceling them. Synthetic
+ * events do not navigate; cancellation belongs to the component guard.
  */
 function renderGate(): { form: HTMLFormElement; submits: () => number } {
   let submits = 0;
-  render(<ConfirmActions login={LOGIN} mode="link" />);
+  render(<ConfirmActions mode="link" consentBinding={"a".repeat(64)} />);
   const form = button(CONFIRM).closest("form") as HTMLFormElement;
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
+  form.addEventListener("submit", () => {
     submits += 1;
   });
   return { form, submits: () => submits };
@@ -56,31 +34,26 @@ describe("ConfirmActions", () => {
   it("posts to the confirm route, whose only authority is the broker cookie", () => {
     const { form } = renderGate();
 
+    expect(form.querySelectorAll('input[name="consentBinding"]')).toHaveLength(
+      1
+    );
+    expect(form.querySelector('input[name="action"]')).toBeNull();
     expect(form.getAttribute("action")).toBe("/api/auth/attest/confirm");
     expect(form.getAttribute("method")?.toLowerCase()).toBe("post");
   });
 
   it.each([
     [CONFIRM, "confirm"],
-    ["Switch account", "switch"],
+    ["Use a different GitHub account", "switch"],
     ["Cancel", "cancel"],
   ])("submits %s as action=%s — ACTION_VALUES_ARE_THE_CONTRACT", (label, value) => {
     renderGate();
     const target = button(label);
 
-    // The browser serialises the clicked submitter's name/value pair; these two
-    // attributes ARE the request body the server route branches on.
+    // The real browser fixture checks serialization after this event.
     expect(target.type).toBe("submit");
     expect(target.name).toBe("action");
     expect(target.value).toBe(value);
-  });
-
-  it("names the authenticated account on the affirmative action", () => {
-    renderGate();
-
-    // The verb and the identity are the only two tokens a human reads under a
-    // security prompt, so the affirmative button must carry both.
-    expect(button(CONFIRM)).toBeInTheDocument();
   });
 
   it("submits nothing until a human clicks — NO_AUTO_SUBMIT", () => {
@@ -89,21 +62,73 @@ describe("ConfirmActions", () => {
     expect(gate.submits()).toBe(0);
   });
 
-  it("disables every action after one click — ONE_SUBMIT", async () => {
+  it.each([
+    [CONFIRM],
+    ["Use a different GitHub account"],
+    ["Cancel"],
+  ])("keeps %s as submitter and locks other actions", async (label) => {
     const gate = renderGate();
-
-    await userEvent.click(button(CONFIRM));
-
+    const selected = button(label);
+    const first = new Event("submit", { bubbles: true, cancelable: true });
+    Object.defineProperty(first, "submitter", { value: selected });
+    fireEvent(gate.form, first);
+    expect(first.defaultPrevented).toBe(false);
     expect(gate.submits()).toBe(1);
+    expect(selected).toBeEnabled();
     for (const el of screen.getAllByRole("button")) {
-      expect(el).toBeDisabled();
+      if (el !== selected) expect(el).toBeDisabled();
     }
+    expect(
+      screen.getByText(/If this page does not change/)
+    ).toBeInTheDocument();
+    const later = new Event("submit", { bubbles: true, cancelable: true });
+    expect(gate.form.dispatchEvent(later)).toBe(false);
+  });
+});
 
-    // A double-click, or a change of mind mid-flight, must not race a second
-    // terminal action against the consume-once broker cookie.
-    await userEvent.click(button("Switch account"));
-    await userEvent.click(button("Cancel"));
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => ({ value: "test" }) }),
+}));
+vi.mock("@/auth", () => ({ authSecret: "test" }));
+vi.mock("@/bootstrap/container", () => ({
+  resolveNodeRegistry: () => ({
+    listPublic: async () => {
+      throw new Error("registry down");
+    },
+  }),
+}));
+vi.mock("@/shared/identity/broker-state", () => ({
+  BROKER_STATE_COOKIE: "test",
+  consentBinding: () => "a".repeat(64),
+  decodeBrokerState: async () => ({
+    github: { id: "123", login: "fixture" },
+    nodeSlug: "fixture-node",
+    targetOrigin: "https://fixture.cognidao.org",
+    returnTo: "https://fixture.cognidao.org/profile",
+  }),
+}));
 
-    expect(gate.submits()).toBe(1);
+describe("confirmation page", () => {
+  it("names the GitHub account, the node account, and links only the signed target profile", async () => {
+    const { default: Page } = await import(
+      "@/app/identity/attest/confirm/page"
+    );
+    render(await Page());
+    expect(
+      screen.getByRole("heading", {
+        name: "Link GitHub to your Fixture Node account",
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByText("@fixture")).toBeInTheDocument();
+    expect(screen.getByText("Your Fixture Node account")).toBeInTheDocument();
+    const link = screen.getByRole("link", {
+      name: "View your profile on fixture.cognidao.org",
+    });
+    expect(link).toHaveAttribute(
+      "href",
+      "https://fixture.cognidao.org/profile"
+    );
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 });

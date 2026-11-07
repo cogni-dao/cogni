@@ -3,6 +3,17 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  async headers() {
+    return [
+      {
+        source: "/identity/attest/confirm",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      },
+    ];
+  },
   transpilePackages: ["@cogni/node-app", "@cogni/node-ui-kit"],
   // In monorepo: tell Next.js where the workspace root is so standalone output
   // includes shared packages and resolves node_modules correctly.
