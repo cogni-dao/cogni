@@ -1786,7 +1786,11 @@ export class DoltgresKnowledgeContributionAdapter
         before.content === after.content &&
         before.useWhen === after.useWhen &&
         before.entryType === after.entryType &&
-        before.domain === after.domain
+        before.domain === after.domain &&
+        // KPI bindings and metric specs are governed fields: a bindings-only goal
+        // edit must surface so the merge gate (GOAL_CHANGE_IS_NODE_ADMIN) sees it.
+        sameJson(before.metricSpec, after.metricSpec) &&
+        sameJson(before.kpiBindings, after.kpiBindings)
       ) {
         continue;
       }
@@ -2008,4 +2012,11 @@ export class DoltgresKnowledgeContributionAdapter
       );
     });
   }
+}
+
+/** Structural equality for jsonb columns that may arrive as strings or objects. */
+function sameJson(a: unknown, b: unknown): boolean {
+  const norm = (v: unknown) =>
+    typeof v === "string" ? v : JSON.stringify(v ?? null);
+  return norm(a) === norm(b);
 }
