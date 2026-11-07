@@ -373,6 +373,8 @@ json.dump({"records": [
      "proxied": False, "type": "A"},
     {"id": "vmca", "name": "cogni-candidate-a.vm.cognidao.org", "content": "5.6.7.8",
      "proxied": False, "type": "A"},
+    {"id": "vmpv", "name": "cogni-preview.vm.cognidao.org", "content": "5.6.7.9",
+     "proxied": False, "type": "A"},
 ], "next_id": 9}, open(os.environ["CF_STORE"], "w"))'
 COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \
   bash scripts/ci/reconcile-node-dns.sh production >/dev/null 2>&1
@@ -395,6 +397,10 @@ assert_eq "$(cf_a_record_content test-token zone123 derp-production.cognidao.org
   "production places its own relay host on its own VM (T1p)"
 assert_eq "$(cf_a_record_proxied test-token zone123 derp-production.cognidao.org)" "false" \
   "derp-production is DNS-only"
+assert_eq "$(cf_a_record_content test-token zone123 derp-preview.cognidao.org)" "5.6.7.9" \
+  "production places the canonical preview relay host on the preview VM (its alias record, T1p)"
+assert_eq "$(cf_a_record_proxied test-token zone123 derp-preview.cognidao.org)" "false" \
+  "derp-preview is DNS-only"
 assert_eq "$(grep -c 'cogni-testing.org' "$CF_STORE" || true)" "0" \
   "the production run writes nothing in the test-fleet zone"
 if COGNI_CATALOG_ROOT="$FIXTURE_CATALOG" DOMAIN=test.cognidao.org FORK_SLUG=cogni \

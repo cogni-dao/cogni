@@ -41,7 +41,7 @@ INTERNAL_PORTS="5432,5435,6379,4000,7233,8080"
 # plain-HTTP control port, no /api surface and no plain DERP is public (hard requirements 12 and 22).
 # The mesh plane opens no public UDP port: it is relay-only (substrate-gw's WireGuard port is pod-local)
 # and its relays run with STUN off. Nothing here drops UDP. IPv4 only: k3s is single-stack IPv4 here.
-MESH_EDGE_ONLY_PORTS="32340:32345,32441:32444"
+MESH_EDGE_ONLY_PORTS="32340:32347,32441:32444"
 POD_CIDR="10.42.0.0/16"
 SVC_CIDR="10.43.0.0/16"
 TAG="cogni-harden-internal-ports"

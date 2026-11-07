@@ -260,8 +260,23 @@ assert_mesh_vm_sites production "$PROD" || fail "production render must carry ev
   || fail "production must render no relay site other than derp-production"
 [ "$(grep -oE 'cogni-mesh/[a-z0-9-]+/' <<<"$PROD" | sort -u | grep -vxF 'cogni-mesh/production/' || true)" = "" ] \
   || fail "production must render no publish path other than the production tailnet's"
-grep -Eq '^(derp|mesh)-|cogni-mesh/' <<<"$(bash scripts/ci/render-caddyfile.sh --domain preview.cognidao.org)" \
-  && fail "preview edge must render no mesh site"
+# T1p: the preview VM serves the canonical preview tailnet's relay + publisher (its coordinator runs in the
+# production sequencer, so the preview edge fronts no control host). Edge site + hardener drop land BEFORE the
+# instance that opens the NodePorts (CD6).
+PREV="$(bash scripts/ci/render-caddyfile.sh --domain preview.cognidao.org)"
+[ "$(mesh_vm_tailnets preview | paste -sd' ' -)" = "preview" ] \
+  || fail "the preview VM must serve exactly the preview tailnet"
+vd="$(block_of derp-preview.cognidao.org "$PREV")"
+grep -Fq "reverse_proxy host.docker.internal:$(mesh_tailnet_field preview relay_np)" <<<"$vd" \
+  || fail "derp-preview must proxy to the preview derper NodePort"
+grep -Fq 'handle /.well-known/cogni-mesh/preview/substrate-gw.json {' <<<"$(block_of cogni-preview.vm.cognidao.org "$PREV")" \
+  || fail "the preview VM alias must carry the preview publish path"
+assert_mesh_vm_sites preview "$PREV" || fail "preview render must carry every preview mesh route"
+[ "$(grep -E '^derp-' <<<"$PREV" | grep -vxF 'derp-preview.cognidao.org {' || true)" = "" ] \
+  || fail "preview must render no relay site other than derp-preview"
+[ "$(grep -oE 'cogni-mesh/[a-z0-9-]+/' <<<"$PREV" | sort -u | grep -vxF 'cogni-mesh/preview/' || true)" = "" ] \
+  || fail "preview must render no publish path other than the preview tailnet's"
+grep -Eq '^mesh-' <<<"$PREV" && fail "preview edge must front no coordinator (preview's runs in production)"
 grep -Fq 'issuer acme' <<<"$RENDERED" && fail "template render must not carry env-specific mesh sites"
 # Hardener drops exactly the table's edge-only NodePorts, before NAT, only after DOCKER-USER is complete.
 HARDEN="infra/provision/cherry/harden-docker-public-ports.sh"
