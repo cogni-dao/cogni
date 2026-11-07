@@ -327,6 +327,15 @@ const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
       pattern:
         /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_MESH_DNS_RECORDS\]\.(name|value)$/,
     },
+    {
+      why:
+        "TEST LANE ON THE MESH FIRST (task.5428, test-fleet parity): the test operator's candidate-a lane " +
+        "reaches the substrate over its own test-candidate-a tailnet so the fixture release proves the mesh " +
+        "end to end before any production lane flips (T6b). tests/ci-invariants/node-deploy-mesh-coordinators.spec.ts " +
+        "pins the named tailnet to a coordinator this overlay runs.",
+      pattern:
+        /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_SUBSTRATE_TRANSPORTS\]\.(name|value)$/,
+    },
   ],
   "scheduler-worker": [
     {
