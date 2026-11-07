@@ -83,6 +83,7 @@ import {
 } from "../../domain/schemas.js";
 import {
   ContributionConflictError,
+  ContributionHeadChangedError,
   ContributionNotFoundError,
   ContributionStateError,
   type CreateEdoDecisionInput,
@@ -1931,10 +1932,12 @@ export class DoltgresKnowledgeContributionAdapter
     );
   }
 
+  /** An explicit reviewed head must match the canonical open record under native ownership. */
   async close(input: {
     contributionId: string;
     principal: Principal;
     reason: string;
+    expectedHeadCommit?: string | null;
   }): Promise<void> {
     const rec = await this.getById(input.contributionId);
     if (!rec) throw new ContributionNotFoundError(input.contributionId);
@@ -1969,6 +1972,15 @@ export class DoltgresKnowledgeContributionAdapter
         throw new ContributionStateError(
           `contribution ${input.contributionId} is ${rec.state}`
         );
+
+      // Compare only the canonical record under the existing native writer.
+      // Explicit null is a reviewed empty inbox; omitted guards retain v0 behavior.
+      if (
+        input.expectedHeadCommit !== undefined &&
+        input.expectedHeadCommit !== rec.headCommit
+      ) {
+        throw new ContributionHeadChangedError();
+      }
 
       return await owner.metadata(
         `contrib-close: ${input.contributionId}`,

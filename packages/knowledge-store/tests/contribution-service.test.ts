@@ -611,10 +611,12 @@ describe("createContributionService", () => {
       principal: agent,
       contributionId: "contrib-agent-1-abc123",
       reason: "superseded by a better edit",
+      expectedHeadCommit: null,
     });
 
     expect(port.lastClose?.contributionId).toBe("contrib-agent-1-abc123");
     expect(port.lastClose?.principal).toEqual(agent);
+    expect(port.lastClose?.expectedHeadCommit).toBeNull();
   });
 
   it("rejects bearer close for another principal's contribution", async () => {

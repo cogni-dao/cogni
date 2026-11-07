@@ -21,6 +21,7 @@ import {
   CitationTypeMismatchError,
   ContributionConflictError,
   ContributionForbiddenError,
+  ContributionHeadChangedError,
   ContributionNotFoundError,
   ContributionStateError,
   DomainNotRegisteredError,
@@ -53,6 +54,11 @@ import {
   nodeAdminFailureBody,
 } from "@/bootstrap/node-admin-gate";
 import { getNodeId } from "@/shared/config/repoSpec.server";
+import {
+  EVENT_NAMES,
+  logEvent,
+  type RequestContext,
+} from "@/shared/observability";
 
 function service() {
   const svc = getContainer().knowledgeContributionService;
@@ -114,6 +120,11 @@ function mapError(e: unknown): NextResponse {
     return NextResponse.json({ error: e.message }, { status: 404 });
   if (e instanceof ContributionStateError)
     return NextResponse.json({ error: e.message }, { status: 409 });
+  if (e instanceof ContributionHeadChangedError)
+    return NextResponse.json(
+      { error: e.message, errorCode: e.code, retryable: false },
+      { status: 409 }
+    );
   if (e instanceof ContributionConflictError)
     return NextResponse.json({ error: e.message }, { status: 409 });
   if (e instanceof DomainNotRegisteredError)
@@ -450,39 +461,112 @@ export async function handleMerge(
 export async function handleClose(
   request: Request,
   contributionId: string,
-  sessionUser: SessionUser | null
+  sessionUser: SessionUser | null,
+  ctx: RequestContext
 ): Promise<NextResponse> {
-  if (!sessionUser)
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const svc = service();
-  if (!svc)
-    return NextResponse.json(
-      { error: "knowledge contribution service not configured" },
-      { status: 503 }
-    );
-
-  let body: unknown;
+  const start = performance.now();
+  let status = 500;
+  let errorCode = "internal_error";
+  let guarded = false;
+  const finish = (response: NextResponse, code: string): NextResponse => {
+    status = response.status;
+    errorCode = code;
+    return response;
+  };
   try {
-    body = await request.json();
+    if (!sessionUser)
+      return finish(
+        NextResponse.json({ error: "unauthorized" }, { status: 401 }),
+        "unauthorized"
+      );
+    const svc = service();
+    if (!svc)
+      return finish(
+        NextResponse.json(
+          { error: "knowledge contribution service not configured" },
+          { status: 503 }
+        ),
+        "service_unavailable"
+      );
+
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return finish(
+        NextResponse.json({ error: "invalid JSON body" }, { status: 400 }),
+        "invalid_json"
+      );
+    }
+    const parsed = ContributionCloseRequestSchema.safeParse(body);
+    if (!parsed.success)
+      return finish(
+        NextResponse.json(
+          { error: "invalid input", issues: parsed.error.issues },
+          { status: 400 }
+        ),
+        "invalid_input"
+      );
+
+    guarded = parsed.data.expectedHeadCommit !== undefined;
+    const principal = sessionUserToPrincipal(sessionUser, authSource(request));
+    try {
+      await svc.close({
+        principal,
+        contributionId,
+        reason: parsed.data.reason,
+        ...(parsed.data.expectedHeadCommit === undefined
+          ? {}
+          : { expectedHeadCommit: parsed.data.expectedHeadCommit }),
+      });
+      return finish(
+        NextResponse.json({ contributionId, closed: true }),
+        "none"
+      );
+    } catch (e) {
+      const code =
+        e instanceof ContributionHeadChangedError
+          ? "contribution_head_changed"
+          : e instanceof ContributionForbiddenError
+            ? "forbidden"
+            : e instanceof ContributionNotFoundError
+              ? "not_found"
+              : e instanceof ContributionStateError
+                ? "invalid_state"
+                : e instanceof KnowledgeBusyError
+                  ? "knowledge_busy"
+                  : e instanceof KnowledgeWriteOutcomeUnknownError
+                    ? "knowledge_write_outcome_unknown"
+                    : e instanceof KnowledgeWriteConflictError
+                      ? "knowledge_write_conflict"
+                      : "close_failed";
+      return finish(mapError(e), code);
+    }
   } catch {
-    return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
-  }
-  const parsed = ContributionCloseRequestSchema.safeParse(body);
-  if (!parsed.success)
-    return NextResponse.json(
-      { error: "invalid input", issues: parsed.error.issues },
-      { status: 400 }
+    // A terminally instrumented close contains unexpected failures locally:
+    // wrapper start + this feature terminal + wrapper end stay within 3 logs.
+    // Neither HTTP nor logs expose raw database/driver error text.
+    return finish(
+      NextResponse.json(
+        {
+          error:
+            "Unable to close the proposal. Read its state before retrying.",
+          errorCode: "close_failed",
+          retryable: false,
+        },
+        { status: 500 }
+      ),
+      "close_failed"
     );
-
-  const principal = sessionUserToPrincipal(sessionUser, authSource(request));
-  try {
-    await svc.close({
-      principal,
-      contributionId,
-      reason: parsed.data.reason,
+  } finally {
+    logEvent(ctx.log, EVENT_NAMES.KNOWLEDGE_CONTRIBUTION_CLOSE_COMPLETE, {
+      reqId: ctx.reqId,
+      routeId: ctx.routeId,
+      status,
+      durationMs: performance.now() - start,
+      outcome: status < 400 ? "success" : "error",
+      errorCode,
+      guarded,
     });
-    return NextResponse.json({ contributionId, closed: true });
-  } catch (e) {
-    return mapError(e);
   }
 }

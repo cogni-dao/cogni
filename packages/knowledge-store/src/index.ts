@@ -193,6 +193,7 @@ export { createEdoCapability } from "./edo-capability.js";
 export {
   ContributionConflictError,
   ContributionForbiddenError,
+  ContributionHeadChangedError,
   ContributionNotFoundError,
   ContributionStateError,
   type CreateEdoDecisionInput,

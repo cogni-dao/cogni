@@ -13,12 +13,12 @@
 
 import type { ReservedSql, Sql } from "postgres";
 import { describe, expect, it } from "vitest";
-
 import { DoltgresKnowledgeContributionAdapter } from "../src/adapters/doltgres/contribution-adapter.js";
 import {
   KnowledgeContributionEditSchema,
   type Principal,
 } from "../src/domain/contribution-schemas.js";
+import { ContributionHeadChangedError } from "../src/port/contribution.port.js";
 import {
   CitationTargetNotFoundError,
   HypothesisMissingEvaluateAtError,
@@ -89,7 +89,10 @@ class FakeReservedSql {
   private readonly native = new NativeState();
   readonly queries: string[] = [];
 
-  constructor(private readonly hasUseWhen = true) {}
+  constructor(
+    private readonly hasUseWhen = true,
+    private readonly canonicalRecord: Record<string, unknown> = record
+  ) {}
 
   async unsafe(
     query: string
@@ -127,7 +130,7 @@ class FakeReservedSql {
       return rows;
     }
     if (query.includes("FROM knowledge_contributions")) {
-      return [record];
+      return [this.canonicalRecord];
     }
     // cite-path lookups: both endpoints resolve, no incoming edges yet.
     if (query.includes("SELECT 1 FROM knowledge WHERE id")) {
@@ -176,9 +179,10 @@ class FakeSql {
 
   constructor(
     private readonly contributionRecord: Record<string, unknown> = record,
-    hasUseWhen = true
+    hasUseWhen = true,
+    canonicalRecord: Record<string, unknown> = record
   ) {
-    this.conn = new FakeReservedSql(hasUseWhen);
+    this.conn = new FakeReservedSql(hasUseWhen, canonicalRecord);
   }
 
   async unsafe(query: string): Promise<Record<string, unknown>[]> {
@@ -532,6 +536,97 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     expect(conn.queries.some((q) => q.includes("SET state = 'merged'"))).toBe(
       false
     );
+  });
+
+  it("rejects a reviewed head changed after the optimistic read without close DML or proposal reap", async () => {
+    const fake = new FakeSql(record, true, {
+      ...record,
+      head_commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    });
+    await expect(
+      adapterFor(fake).close({
+        contributionId: record.id,
+        principal: reviewer,
+        reason: "reviewed waste",
+        expectedHeadCommit: record.head_commit,
+      })
+    ).rejects.toBeInstanceOf(ContributionHeadChangedError);
+    expect(
+      fake.queries.some((query) =>
+        query.includes("FROM knowledge_contributions")
+      )
+    ).toBe(true);
+    const lockedRead = fake.conn.queries.findIndex((query) =>
+      query.includes("FROM knowledge_contributions")
+    );
+    const lock = fake.conn.queries.findIndex((query) =>
+      query.includes("pg_try_advisory_lock")
+    );
+    expect(lock).toBeGreaterThanOrEqual(0);
+    expect(lockedRead).toBeGreaterThan(lock);
+    expect(
+      fake.conn.queries.some((query) => query.includes("SET state = 'closed'"))
+    ).toBe(false);
+    expect(
+      fake.conn.queries.some(
+        (query) =>
+          query.includes("dolt_branch('-D'") && query.includes(record.branch)
+      )
+    ).toBe(false);
+  });
+
+  it.each([
+    record.head_commit,
+    null,
+  ])("closes the matching reviewed nullable head %s", async (head) => {
+    const current = { ...record, head_commit: head };
+    const fake = new FakeSql(current, true, current);
+    await adapterFor(fake).close({
+      contributionId: record.id,
+      principal: reviewer,
+      reason: "reviewed waste",
+      expectedHeadCommit: head,
+    });
+    const update = fake.conn.queries.find((query) =>
+      query.includes("SET state = 'closed'")
+    );
+    expect(update).toBeDefined();
+    expect(update).not.toMatch(/head_commit|base_commit|commit_count/);
+  });
+
+  it("does not mistake explicit null for an omitted close guard", async () => {
+    const fake = new FakeSql();
+    await expect(
+      adapterFor(fake).close({
+        contributionId: record.id,
+        principal: reviewer,
+        reason: "empty review",
+        expectedHeadCommit: null,
+      })
+    ).rejects.toBeInstanceOf(ContributionHeadChangedError);
+    expect(
+      fake.conn.queries.some((query) => query.includes("SET state = 'closed'"))
+    ).toBe(false);
+  });
+
+  it("keeps repeat close idempotent without replacing its persisted reason or lineage", async () => {
+    const closed = {
+      ...record,
+      state: "closed",
+      closed_reason: "original reason",
+    };
+    const fake = new FakeSql(closed, true, closed);
+    await adapterFor(fake).close({
+      contributionId: record.id,
+      principal: reviewer,
+      reason: "retry",
+      expectedHeadCommit: null,
+    });
+    expect(
+      fake.conn.queries.some((query) =>
+        query.includes("UPDATE knowledge_contributions")
+      )
+    ).toBe(false);
   });
 
   it("commits close metadata before deleting the contribution branch", async () => {
