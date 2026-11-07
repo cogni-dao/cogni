@@ -31,6 +31,9 @@
  *     heads with a bounded path class; control-plane trees also require the invariant self-object.
  *   - ONE_CANDIDATE_INFRA_LANE: reviewed candidate changes classify as Compose OR control-plane;
  *     mixed/unsupported paths fail before dispatch/ref mutation.
+ *   - OPERATOR_LANE_FORWARDS_SERVICES: production preview-forward of the operator also forwards its
+ *     in-repo catalog services (scheduler-worker; bug.5599). Source-addressed and preview promotes stay
+ *     single-target because PR builds are affected-only: a named target with no image hard-fails.
  *   - BRANCH_HEAD_IS_LEASE: divergent reviewed trees are serialized by a synthetic commit parented
  *     on the observed deploy-ref head and a non-force ref update; stale writers fail closed.
  * Side-effects: IO (GitHub REST API)
@@ -1524,40 +1527,22 @@ export class GitHubRepoWriter implements DeployPlanePort {
       parentRepo,
       slug,
     });
-    // The operator lane ships its in-repo services (scheduler-worker) at the same sha; each target
-    // is guarded against its OWN current pin (bug.5599). Non-operator slugs resolve to [slug].
-    const targets = await this.resolvePromoteTargets({
+    await this.assertForwardPromotion({
       parentOwner,
       parentRepo,
       slug,
       env,
+      sourceOwner: source.owner,
+      sourceRepo: source.repo,
+      sourceSha,
+      allowRollback,
     });
-    for (const target of targets) {
-      const targetSource =
-        target === slug
-          ? source
-          : await this.resolvePromotionSource({
-              parentOwner,
-              parentRepo,
-              slug: target,
-            });
-      await this.assertForwardPromotion({
-        parentOwner,
-        parentRepo,
-        slug: target,
-        env,
-        sourceOwner: targetSource.owner,
-        sourceRepo: targetSource.repo,
-        sourceSha,
-        allowRollback,
-      });
-    }
 
     const dispatch = await this.dispatchPromoteWorkflow({
       owner: parentOwner,
       repo: parentRepo,
       env,
-      nodes: targets,
+      nodes: [slug],
       // REMOTE-SOURCE: source-address the node image (no source_sha — operator checkout ref stays
       // main). IN-REPO: source_sha is the operator checkout ref.
       ...(source.isRemoteSource ? { nodeSourceSha: sourceSha } : { sourceSha }),
@@ -1626,18 +1611,19 @@ export class GitHubRepoWriter implements DeployPlanePort {
   }
 
   /**
-   * The nodes one promote of `slug` dispatches (bug.5599). A node is its own single target. The
+   * The nodes one production preview-forward of `slug` dispatches (bug.5599). A node is its own single target. The
    * operator lane is the control plane PLUS every in-repo service the operator ships from this
    * repo: catalog rows with `type: service`, no `source_repo`, and the target env in `envs`
    * (today: scheduler-worker). The catalog at main is the SSOT; no slug is hardcoded here.
    * Since task.5411 the promote route refuses every non-operator slug, so without this nothing
-   * promoted the worker to production.
+   * promoted the worker to production. Preview-forward reads each target's own proven preview digest,
+   * so a target never needs a fresh image. Source-addressed promotes do NOT use this (affected-only builds).
    */
   private async resolvePromoteTargets(input: {
     parentOwner: string;
     parentRepo: string;
     slug: string;
-    env: "preview" | "production";
+    env: "production";
   }): Promise<readonly string[]> {
     if (input.slug !== OPERATOR_PROMOTE_SLUG) return [input.slug];
     const entries = await this.listDirectoryEntries({
@@ -2464,17 +2450,12 @@ export class GitHubRepoWriter implements DeployPlanePort {
     nodeSourceSha?: string;
   }): Promise<ObservedWorkflowDispatchResult> {
     const { slug, ...rest } = input;
-    const nodes = await this.resolvePromoteTargets({
-      parentOwner: input.owner,
-      parentRepo: input.repo,
-      slug,
-      env: input.env === "production" ? "production" : "preview",
-    });
-    return this.dispatchPromoteWorkflow({ ...rest, nodes });
+    return this.dispatchPromoteWorkflow({ ...rest, nodes: [slug] });
   }
 
   /**
-   * One promote-and-deploy dispatch for an already-resolved target list. The workflow takes a CSV
+   * One promote-and-deploy dispatch for an already-resolved target list (a CSV only on the operator's
+   * production preview-forward; every other caller passes one node). The workflow takes a CSV
    * `nodes` input; its concurrency group includes `inputs.nodes`, so an `operator,scheduler-worker`
    * run serializes only with an identical CSV, never with a bare `operator` run.
    */
