@@ -8,7 +8,10 @@
 #
 # Three jobs, one loop:
 #   1. RUN   tailscaled in userspace (no TUN, no capabilities), state on the env VM's local-path PVC,
-#            no log upload, our control URL only. `tailscale up` holds NO key: an unregistered device
+#            no log upload, our control URL only. The state dir is a SUBDIRECTORY of the volume that
+#            this uid creates and owns (mode 0700): the local-path volume root is root-owned 0777 and
+#            tailscaled must chmod its state dir, which a non-root, capability-free uid cannot do on a
+#            root-owned directory. Deleting the volume still deletes all state (HR10: fresh device). `tailscale up` holds NO key: an unregistered device
 #            asks to join with --advertise-tags=tag:substrate and waits for approval (enrollment by
 #            approval). It asks AGAIN whenever the device is not joined and has no pending request
 #            (its node was deleted, HR11, or the coordinator was wiped, HR10): no person acts.
@@ -31,14 +34,16 @@
 #   substrate_gw_watchdog        heartbeat once a minute
 #   substrate_gw_map_poll_lost   every tick while joined but out of map poll {lostSeconds, boundSeconds}
 #   substrate_gw_enrollment_pending  once a minute while not joined (waiting for approval)
-#   substrate_gw_enrollment_requested  `tailscale up` (re)issued: boot, deleted device or wiped coordinator
+#   substrate_gw_enrollment_requested  `tailscale up` (re)issued: boot, NoState/NeedsLogin with no running
+#                                    request, deleted device or wiped coordinator {reason, backendState,
+#                                    backoffSeconds}
 #   substrate_gw_serve_reset     the bound passed; forwarding stopped
 #   substrate_gw_serve_restored  the declared serve config is applied (boot or map poll returned)
 set -u
 
 : "${MESH_CONTROL_URL:?MESH_CONTROL_URL is required (https://mesh-<env>.<zone>)}"
 : "${TS_SERVE_CONFIG:?TS_SERVE_CONFIG is required (declared tailnet ports)}"
-: "${TS_STATE_DIR:=/var/lib/tailscale}"
+: "${TS_STATE_DIR:=/var/lib/tailscale/state}"
 : "${TS_SOCKET:=/tmp/tailscaled.sock}"
 : "${TS_HOSTNAME:=substrate-gw}"
 : "${TS_PORT:=41641}"
@@ -152,7 +157,10 @@ publish() {
     && mv -f "$tmp" "$PUBLISH_DIR/substrate-gw.json"
 }
 
-mkdir -p "$TS_STATE_DIR"
+# The volume root is root-owned 0777: create our own 0700 subdirectory (tailscaled chmods it).
+# mesh-env-plane.spec.ts pins TS_STATE_DIR strictly below the state volume's mountPath.
+mkdir -p "$TS_STATE_DIR" && chmod 0700 "$TS_STATE_DIR" \
+  || { echo "cannot create state dir $TS_STATE_DIR" >&2; exit 1; }
 tailscaled --tun=userspace-networking --statedir="$TS_STATE_DIR" --socket="$TS_SOCKET" \
   --port="$TS_PORT" --no-logs-no-support &
 TSD=$!
@@ -166,13 +174,24 @@ until ts status --json >/dev/null 2>&1; do
 done
 
 # Holds no key. Registered state on the volume: returns at once. Unregistered: waits for approval.
+# Re-requests back off: INTERVAL, doubling, at most 300 s; reset once the device is Running.
 UP=""
+UP_BACKOFF="$INTERVAL"
+NEXT_UP=0
+# The CLI is started with `exec` in its background subshell, so $UP is the `tailscale up` process
+# itself (a backgrounded shell function would leave $! = a wrapper subshell, and killing that
+# orphans the CLI). Kill, then wait: the old request is gone and reaped before a new one starts.
 request_enrollment() {
-  [ -z "$UP" ] || kill "$UP" 2>/dev/null || true
-  ts up --login-server="$MESH_CONTROL_URL" --hostname="$TS_HOSTNAME" \
-    --advertise-tags=tag:substrate --accept-dns=false --accept-routes=false --timeout=0 >/dev/null 2>&1 &
+  if [ -n "$UP" ]; then
+    kill "$UP" 2>/dev/null || true
+    wait "$UP" 2>/dev/null || true
+  fi
+  (exec tailscale --socket="$TS_SOCKET" up --login-server="$MESH_CONTROL_URL" --hostname="$TS_HOSTNAME" \
+    --advertise-tags=tag:substrate --accept-dns=false --accept-routes=false --timeout=0 >/dev/null 2>&1) &
   UP=$!
-  log substrate_gw_enrollment_requested "\"reason\":\"$1\""
+  NEXT_UP=$(($(now) + UP_BACKOFF))
+  log substrate_gw_enrollment_requested "\"reason\":\"$1\",\"backendState\":\"${2:-}\",\"backoffSeconds\":$UP_BACKOFF"
+  UP_BACKOFF=$((UP_BACKOFF * 2)); [ "$UP_BACKOFF" -le 300 ] || UP_BACKOFF=300
 }
 request_enrollment boot
 
@@ -187,15 +206,17 @@ while kill -0 "$TSD" 2>/dev/null; do
   node_key="$(field "$st" '    ' PublicKey)"
   publish "${backend:-unknown}" "$auth_url" "$node_key"
 
-  # Re-enrollment (HR10/HR11): not joined and no pending request for more than 2 ticks, or the
-  # waiting `tailscale up` is gone -> ask again, so a fresh authId is published with no person.
+  # Re-enrollment (HR10/HR11): not joined (NoState included: a fresh or wiped store) and no pending
+  # request for more than 2 ticks, or the waiting `tailscale up` is gone -> ask again, with backoff,
+  # so a fresh authId is published with no person. Never wait forever on NoState.
   case "$backend" in
-    NeedsLogin | NeedsMachineAuth | Stopped)
+    NoState | NeedsLogin | NeedsMachineAuth | Stopped)
       if [ -z "$auth_url" ]; then noauth=$((noauth + 1)); else noauth=0; fi
-      if [ "$noauth" -gt 2 ] || ! kill -0 "${UP:-0}" 2>/dev/null; then
+      if { [ "$noauth" -gt 2 ] || ! kill -0 "${UP:-0}" 2>/dev/null; } && [ "$(now)" -ge "$NEXT_UP" ]; then
         noauth=0
-        request_enrollment "not_joined_no_pending_request"
+        request_enrollment "not_joined_no_pending_request" "$backend"
       fi ;;
+    Running) noauth=0; UP_BACKOFF="$INTERVAL" ;;
     *) noauth=0 ;;
   esac
 
