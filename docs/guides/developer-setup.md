@@ -110,26 +110,17 @@ Receipts appear in `/gov/epoch` within seconds. The seeded open epoch covers the
 
 ## PR Review Bot (optional)
 
-Runs a hub-grounded AI review of one PR when a developer calls `POST /api/v1/vcs/review`. No PR event starts a review. Requires the GitHub App from above with `Checks:write` + `Pull requests:write` permissions. See [GitHub App + Webhook Setup](./github-app-webhook-setup.md) for credentials.
+Runs a hub-grounded AI review of one PR when a developer calls `POST /api/v1/vcs/review`. No PR event starts a review. The operator's GitHub App posts the `Cogni Git PR Review` Check Run at the PR head and a PR comment. App credentials: [GitHub App + Webhook Setup](./github-app-webhook-setup.md).
 
-**Environment variables** (`.env.local`):
-
-```bash
-GH_REVIEW_APP_ID=<your app id>
-GH_REVIEW_APP_PRIVATE_KEY_BASE64=<base64-encoded private key>
-NODE_SUBMODULE_PARENT_OWNER=<owner of the reviewed repo>
-NODE_SUBMODULE_PARENT_REPO=<reviewed repo name>
-```
-
-**Run it:** start `pnpm dev:stack`, open a PR on that repo, then request the review. The caller needs `node.flight` on the node. v0 reviews operator PRs only.
+Request it from a deployed operator: `https://cognidao.org` for `cogni-dao/cogni` PRs, `https://test.cognidao.org` for `cogni-test-org` PRs. Use that operator's API key; the caller needs `node.flight` on the node. v0 reviews operator PRs only. A local `pnpm dev:stack` cannot authorize the call: it starts no OpenFGA.
 
 ```bash
-curl -X POST http://localhost:3000/api/v1/vcs/review \
+curl -X POST https://cognidao.org/api/v1/vcs/review \
   -H "Authorization: Bearer $COGNI_NODE_API_KEY" -H 'content-type: application/json' \
   -d '{"nodeId":"<operator node id>","prNumber":<PR number>}'
 ```
 
-The App creates the `Cogni Git PR Review` Check Run at the PR head and posts a PR comment. Click "View Details" on the Check Run for the full review.
+Click "View Details" on the Check Run for the full review.
 
 ## On-Chain Governance (optional)
 
