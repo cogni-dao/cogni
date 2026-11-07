@@ -158,22 +158,6 @@ describe("parseRule", () => {
     expect(rule.success_criteria.require).toHaveLength(3);
   });
 
-  it("parses patterns-and-docs.yaml fixture", () => {
-    const yaml = readRuleFixture("patterns-and-docs.yaml");
-    const rule = parseRule(yaml);
-    expect(rule.id).toBe("patterns-and-docs");
-    expect(rule.evaluations).toHaveLength(2);
-    expect(rule.success_criteria.any_of).toHaveLength(2);
-  });
-
-  it("parses repo-goal-alignment.yaml fixture", () => {
-    const yaml = readRuleFixture("repo-goal-alignment.yaml");
-    const rule = parseRule(yaml);
-    expect(rule.id).toBe("operator-mission-alignment");
-    expect(rule.evaluations).toHaveLength(2);
-    expect(rule.success_criteria.any_of).toHaveLength(2);
-  });
-
   it("parses pre-parsed object", () => {
     const rule = parseRule({
       id: "test",
@@ -204,8 +188,13 @@ describe("extractGatesConfig", () => {
     const spec = parseRepoSpec(yaml);
     const config = extractGatesConfig(spec);
 
-    expect(config.gates.length).toBeGreaterThanOrEqual(4);
+    expect(config.gates).toHaveLength(3);
     expect(config.gates[0]?.type).toBe("review-limits");
+    expect(
+      config.gates.flatMap((g) =>
+        g.type === "ai-rule" ? [g.with.rule_file] : []
+      )
+    ).toEqual(["pr-syntropy-coherence.yaml", "hub-rule-compliance.yaml"]);
     expect(config.failOnError).toBe(true);
   });
 
