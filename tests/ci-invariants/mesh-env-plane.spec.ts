@@ -608,6 +608,79 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     }
   }, 15_000);
 
+  it("substrate-gw re-request kills and reaps the blocked `tailscale up`: one at a time (B3)", () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), "substrate-gw-up-"));
+    const pidsFile = path.join(tmp, "up.pids");
+    try {
+      const bin = path.join(tmp, "bin");
+      mkdirSync(bin);
+      // A blocking fake `up` (Headscale unreachable). Each start records how many earlier `up`
+      // processes are still alive, then becomes `sleep` under the same pid.
+      writeFileSync(
+        path.join(bin, "tailscale"),
+        [
+          "#!/bin/sh",
+          'for a in "$@"; do case "$a" in',
+          `  serve) echo '{}'; exit 0 ;;`,
+          "  up)",
+          "    alive=0",
+          '    if [ -f "$UP_PIDS" ]; then for p in $(cat "$UP_PIDS"); do kill -0 "$p" 2>/dev/null && alive=$((alive + 1)); done; fi',
+          '    echo "$alive" >> "$UP_ALIVE"',
+          '    echo "$$" >> "$UP_PIDS"',
+          "    exec sleep 30 ;;",
+          `  status) printf '{\\n  "BackendState": "NoState",\\n  "AuthURL": "",\\n  "Self": {\\n    "Online": false\\n  }\\n}\\n'; exit 0 ;;`,
+          "esac; done",
+          "exit 0",
+          "",
+        ].join("\n"),
+        { mode: 0o755 }
+      );
+      writeFileSync(
+        path.join(bin, "tailscaled"),
+        "#!/bin/sh\nexec sleep 30\n",
+        { mode: 0o755 }
+      );
+      const serve = path.join(tmp, "serve.json");
+      writeFileSync(serve, "{}\n");
+      mkdirSync(path.join(tmp, "publish"));
+      const aliveFile = path.join(tmp, "up.alive");
+      const run = spawnSync("sh", [path.join(root, BASE, "substrate-gw.sh")], {
+        encoding: "utf8",
+        timeout: 9000,
+        killSignal: "SIGTERM",
+        env: {
+          PATH: `${bin}:/usr/bin:/bin`,
+          UP_PIDS: pidsFile,
+          UP_ALIVE: aliveFile,
+          MESH_CONTROL_URL: "https://mesh-test.example",
+          TS_SERVE_CONFIG: serve,
+          TS_STATE_DIR: path.join(tmp, "volume", "state"),
+          TS_SOCKET: path.join(tmp, "ts.sock"),
+          SUBSTRATE_GW_PUBLISH_DIR: path.join(tmp, "publish"),
+          SUBSTRATE_GW_WATCHDOG_INTERVAL_SECONDS: "1",
+        },
+      });
+      const alive = readFileSync(aliveFile, "utf8").trim().split("\n");
+      // boot + at least two re-requests; at each start no earlier `up` is still running.
+      expect(alive.length, run.stdout).toBeGreaterThanOrEqual(3);
+      expect(alive).toEqual(alive.map(() => "0"));
+    } finally {
+      // Stop only the fake `up` processes this test started.
+      try {
+        for (const p of readFileSync(pidsFile, "utf8").trim().split("\n")) {
+          try {
+            process.kill(Number(p), "SIGKILL");
+          } catch {
+            // already gone
+          }
+        }
+      } catch {
+        // no pid file
+      }
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it("is not a Compose service and adds nothing to the frozen deploy brain", () => {
     expect(read("infra/compose/runtime/docker-compose.yml")).not.toMatch(
       /derper|substrate-gw|mesh-control-fwd/

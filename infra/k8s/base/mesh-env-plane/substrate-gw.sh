@@ -178,10 +178,16 @@ done
 UP=""
 UP_BACKOFF="$INTERVAL"
 NEXT_UP=0
+# The CLI is started with `exec` in its background subshell, so $UP is the `tailscale up` process
+# itself (a backgrounded shell function would leave $! = a wrapper subshell, and killing that
+# orphans the CLI). Kill, then wait: the old request is gone and reaped before a new one starts.
 request_enrollment() {
-  [ -z "$UP" ] || kill "$UP" 2>/dev/null || true
-  ts up --login-server="$MESH_CONTROL_URL" --hostname="$TS_HOSTNAME" \
-    --advertise-tags=tag:substrate --accept-dns=false --accept-routes=false --timeout=0 >/dev/null 2>&1 &
+  if [ -n "$UP" ]; then
+    kill "$UP" 2>/dev/null || true
+    wait "$UP" 2>/dev/null || true
+  fi
+  (exec tailscale --socket="$TS_SOCKET" up --login-server="$MESH_CONTROL_URL" --hostname="$TS_HOSTNAME" \
+    --advertise-tags=tag:substrate --accept-dns=false --accept-routes=false --timeout=0 >/dev/null 2>&1) &
   UP=$!
   NEXT_UP=$(($(now) + UP_BACKOFF))
   log substrate_gw_enrollment_requested "\"reason\":\"$1\",\"backendState\":\"${2:-}\",\"backoffSeconds\":$UP_BACKOFF"
