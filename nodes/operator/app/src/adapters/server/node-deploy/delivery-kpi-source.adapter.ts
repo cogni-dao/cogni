@@ -14,6 +14,11 @@
  *   - UNREACHABLE_VS_CANNOT_RUN: a probe that got no HTTP answer returns `unreachable`; a caller abort is
  *     rethrown so the reading becomes unknown, never a pass.
  *   - NO_REDIRECTS: a 3xx is the lane's answer, not a hop to follow.
+ *   - DURABLE_PARK: a release's park instant is the write-once `attempts.parked_at` (else the write-once
+ *     admission refusal); the repeating `release_parked` step only sets `parkStepSeen`.
+ *   - NOT_PUBLIC_READ: unlike `ProbePort.publicRead` (deploy proof: resolves a NEW host at the zone's
+ *     authoritative nameservers), this probe asks the normal resolver, as a real visitor does. Requests
+ *     send `cache-control: no-cache`; callers add a `cb=` query to `/version`.
  * Side-effects: IO (Postgres reads, outbound HTTPS)
  * Links: ports/delivery-kpi.port.ts, shared/db/node-workloads.ts, task.5442
  * @internal
@@ -92,23 +97,22 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
         SELECT r.id, r.node_id, r.env, r.workload, r.created_at,
           (d.release_id = r.id) AS current,
           min(a.activated_at) AS activated_at,
-          min(st.at) FILTER (WHERE st.kind = 'activated') AS activated_step_at,
+          min(st.at) AS activated_step_at,
           coalesce(
-            min(st.at) FILTER (WHERE st.kind = 'parked'),
+            min(a.parked_at),
             (r.spec -> '_admissionRefusal' ->> 'at')::timestamptz
           ) AS parked_at,
+          coalesce(bool_or(a.steps @> '[{"step":"alert","outcome":"release_parked"}]'::jsonb), false)
+            AS park_step_seen,
           coalesce(bool_or(a.phase IN ('active', 'retiring', 'retired')), false) AS served
         FROM node_workload_releases r
         LEFT JOIN node_workload_desired d
           ON d.node_id = r.node_id AND d.env = r.env AND d.workload = r.workload
         LEFT JOIN node_workload_attempts a ON a.release_id = r.id
         LEFT JOIN LATERAL (
-          SELECT
-            CASE WHEN e ->> 'step' = 'activated' THEN 'activated' ELSE 'parked' END AS kind,
-            (e ->> 'at')::timestamptz AS at
+          SELECT (e ->> 'at')::timestamptz AS at
           FROM jsonb_array_elements(coalesce(a.steps, '[]'::jsonb)) AS e
-          WHERE (e ->> 'step' = 'activated' AND e ->> 'outcome' = 'ok')
-             OR (e ->> 'step' = 'alert' AND e ->> 'outcome' = 'release_parked')
+          WHERE e ->> 'step' = 'activated' AND e ->> 'outcome' = 'ok'
         ) st ON true
         WHERE r.created_at >= ${input.recordedFrom.toISOString()}::timestamptz
           AND r.created_at < ${input.to.toISOString()}::timestamptz
@@ -131,6 +135,7 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
         activatedStepAt: date(r.activated_step_at),
         served: r.served === true,
         parkedAt: date(r.parked_at),
+        parkStepSeen: r.park_step_seen === true,
         current: r.current === true,
       }));
     return {
@@ -214,7 +219,8 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
         method: "GET",
         redirect: "manual",
         cache: "no-store",
-        headers: { accept: "application/json" },
+        // With the caller's `cb=` query, keeps an edge cache from answering for the lane.
+        headers: { accept: "application/json", "cache-control": "no-cache" },
         signal: AbortSignal.any([input.signal, timeout]),
       });
       return {

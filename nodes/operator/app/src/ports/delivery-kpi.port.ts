@@ -37,8 +37,13 @@ export interface DeliveryReleaseFacts {
   readonly activatedStepAt: Date | undefined;
   /** An attempt is or was serving (`active|retiring|retired`), even with no recorded instant. */
   readonly served: boolean;
-  /** The park verdict: the `alert/release_parked` step, else the terminal admission refusal. */
+  /**
+   * The durable park instant: earliest write-once `attempts.parked_at`, else the write-once terminal
+   * admission refusal. Never the repeating `release_parked` step.
+   */
   readonly parkedAt: Date | undefined;
+  /** A `release_parked` step exists (a park from before `parked_at`, with no durable instant). */
+  readonly parkStepSeen: boolean;
   /** The workload's desired row still points at this release. */
   readonly current: boolean;
 }

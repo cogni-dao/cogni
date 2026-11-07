@@ -35,15 +35,18 @@ export function createGoalMetrics(deps: {
   observationsSql: Sql;
   /** The operator Postgres that holds `node_workload_*` (the node-deploy release store). */
   releaseStoreSql: Sql;
+  /** The operator's own public host (`APP_BASE_URL`): the drift calculator's egress control probe. */
+  controlHost: string | undefined;
   environment: string;
   log(event: object): void;
 }) {
-  const { releaseStoreSql, ...rest } = deps;
+  const { releaseStoreSql, controlHost, ...rest } = deps;
   return createPublishedGoalMetrics({
     ...rest,
     node: getNodeId(),
     nodeCalculators: createDeliveryCalculators(
-      new DeliveryKpiSource(releaseStoreSql)
+      new DeliveryKpiSource(releaseStoreSql),
+      { controlHost }
     ),
   });
 }

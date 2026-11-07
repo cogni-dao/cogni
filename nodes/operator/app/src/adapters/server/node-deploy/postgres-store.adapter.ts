@@ -80,6 +80,7 @@ function toAttempt(r: AttemptDb): AttemptRow {
     leasedAt: r.leasedAt ?? undefined,
     updatedAt: r.updatedAt,
     ...(r.activatedAt ? { activatedAt: r.activatedAt } : {}),
+    ...(r.parkedAt ? { parkedAt: r.parkedAt } : {}),
     steps: r.steps ?? [],
     ...(r.transport === "mesh" || r.transport === "egress"
       ? { transport: r.transport }
@@ -517,6 +518,11 @@ export class PostgresNodeDeployStore implements StorePort {
           ? {
               // ISO text + cast: a raw Date param bypasses the column's driver mapping.
               activatedAt: sql`coalesce(${nodeWorkloadAttempts.activatedAt}, ${patch.activatedAt.toISOString()}::timestamptz)`,
+            }
+          : {}),
+        ...(patch.parkedAt !== undefined
+          ? {
+              parkedAt: sql`coalesce(${nodeWorkloadAttempts.parkedAt}, ${patch.parkedAt.toISOString()}::timestamptz)`,
             }
           : {}),
       })

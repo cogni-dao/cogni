@@ -16,10 +16,14 @@
  *   - FINISHED_IS_AN_EVENT: a release finishes when it first activates (success) or the sequencer parks it
  *     (failure). The window counts finish instants in `[end - days, end)`. A release replaced before it
  *     finished (superseded) or still in flight counts as neither.
+ *   - DURABLE_FINISH_INSTANTS: a failure is timed only by the write-once `attempts.parked_at` or the
+ *     write-once admission refusal, never by the repeating `release_parked` step.
  *   - LEAD_TIME_IS_DURABLE: lead = `attempts.activated_at - releases.created_at`. A success without the
  *     write-once column is excluded and counted in evidence, never estimated.
  *   - UNKNOWN_IS_A_RESULT: zero lanes, zero finished releases, a truncated read or a probe that could not
  *     run yields an incomplete sample with a reason, never a pass and never zero.
+ *   - EGRESS_CONTROL: drift probes the operator's own public `/livez` first. If that fails, or every
+ *     probed lane gets no HTTP answer, the reading is unknown (`source_failed`), never N bad lanes.
  *   - IDS_USE_DASHES: calculator ids match `MetricSpecSchema.calculatorId` (no underscores).
  * Side-effects: none (calculators call the injected source)
  * Links: ports/delivery-kpi.port.ts, adapters/server/node-deploy/delivery-kpi-source.adapter.ts,
@@ -70,7 +74,10 @@ const daysSchema = z.number().int().min(1).max(28).default(7);
 export type ReleaseOutcome =
   | { readonly kind: "success"; readonly at: Date; readonly leadMs?: number }
   | { readonly kind: "failure"; readonly at: Date }
-  /** Served, but no instant survives (no column, no step): excluded, counted. */
+  /**
+   * Finished, but no durable instant: served with no activation column or step, or parked only by a
+   * step from before the write-once `parked_at`. Excluded, counted.
+   */
   | { readonly kind: "untimed" }
   /** Replaced by a newer release before it finished. */
   | { readonly kind: "superseded" }
@@ -101,10 +108,13 @@ export function classifyRelease(
       : { kind: "success", at: activated };
   }
   if (r.served) return { kind: "untimed" };
+  // Only the write-once park instant (or the write-once admission refusal) times a failure; the
+  // repeating `release_parked` step does not (it drifts once the first one leaves the timeline).
   if (r.parkedAt)
     return within(r.parkedAt, from, to)
       ? { kind: "failure", at: r.parkedAt }
       : { kind: "outside" };
+  if (r.parkStepSeen) return { kind: "untimed" };
   return r.current ? { kind: "in_flight" } : { kind: "superseded" };
 }
 
@@ -175,7 +185,9 @@ export type LaneVerdict =
       readonly reason:
         | "no_active_attempt"
         | "stuck_release"
-        | "unreachable"
+        | "unreachable/network"
+        | "unreachable/timeout"
+        | "unreachable/invalid_target"
         | "version_status"
         | "sha_mismatch"
         | "readyz_status";
@@ -213,18 +225,38 @@ export function laneVerdictFromProbes(
   version: DeliveryProbeResult,
   ready: DeliveryProbeResult
 ): LaneVerdict {
-  if (version.kind === "unreachable")
-    return { bad: true, reason: "unreachable" };
+  if (version.kind === "unreachable") return unreachable(version.code);
   if (version.status !== 200) return { bad: true, reason: "version_status" };
   if (buildShaOf(version.body) !== expectedSha)
     return { bad: true, reason: "sha_mismatch" };
-  if (ready.kind === "unreachable") return { bad: true, reason: "unreachable" };
+  if (ready.kind === "unreachable") return unreachable(ready.code);
   if (ready.status !== 200) return { bad: true, reason: "readyz_status" };
   return { bad: false };
 }
 
-function deepReadyPath(path: string): string {
-  return `${path}${path.includes("?") ? "&" : "?"}deep=1`;
+function unreachable(code: string): LaneVerdict {
+  return {
+    bad: true,
+    reason:
+      code === "timeout"
+        ? "unreachable/timeout"
+        : code === "invalid_target"
+          ? "unreachable/invalid_target"
+          : "unreachable/network",
+  };
+}
+
+/** No HTTP answer at all (connect failure or timeout): what an operator egress outage looks like. */
+export function isTransportFailure(v: LaneVerdict): boolean {
+  return (
+    v.bad &&
+    (v.reason === "unreachable/network" || v.reason === "unreachable/timeout")
+  );
+}
+
+/** Append a query parameter. The `cb` buster defeats an edge cache that could hide drift. */
+function withQuery(path: string, query: string): string {
+  return `${path}${path.includes("?") ? "&" : "?"}${query}`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -256,10 +288,21 @@ const scopeOf = (p: {
 const scopeRef = (s: DeliveryScope) =>
   `scope:node=${s.nodeId ?? "*"},env=${s.env ?? "*"}`;
 
+export interface DeliveryCalculatorOptions {
+  /**
+   * The operator's own public host (from `APP_BASE_URL`). Each drift reading probes its `/livez` first:
+   * when the operator cannot reach itself through the public edge, its egress is unverified and the
+   * reading is unknown. Undefined = never verifiable, so drift is always unknown.
+   */
+  readonly controlHost: string | undefined;
+  readonly now?: () => number;
+}
+
 export function createDeliveryCalculators(
   source: DeliveryKpiSourcePort,
-  now: () => number = Date.now
+  options: DeliveryCalculatorOptions
 ): MetricCalculator[] {
+  const now = options.now ?? Date.now;
   // ---- KPI 1: serving drift ----------------------------------------------------------------
   const driftParams = z.strictObject({
     ...scopeShape,
@@ -270,10 +313,10 @@ export function createDeliveryCalculators(
     unit: "lanes",
     display: "progress",
     paramsSchema: driftParams,
-    // One lane read, then one read per probed lane (its two probes run inside it).
+    // One lane read, one control probe, then one read per probed lane (its two probes run inside it).
     budget: {
-      timeoutMs: PROBE_TIMEOUT_MS + 7000,
-      maxSourceCalls: 1 + MAX_DRIFT_LANES,
+      timeoutMs: 2 * PROBE_TIMEOUT_MS + 7000,
+      maxSourceCalls: 2 + MAX_DRIFT_LANES,
       maxRows: MAX_DRIFT_LANES,
       maxResponseBytes: PROBE_MAX_BYTES,
     },
@@ -298,25 +341,48 @@ export function createDeliveryCalculators(
           scopeRef(scope),
           "deploy:lanes=0",
         ]);
+      // EGRESS_CONTROL: an operator that cannot reach its own public host cannot judge anyone else's
+      // (hub starvation-not-a-verdict). Unknown, never N bad lanes.
+      const egressUnverified = (detail: string) =>
+        unknownSample("lanes", "source_failed", watermarks, [
+          scopeRef(scope),
+          `deploy:egress_unverified:${detail}`,
+        ]);
+      const controlHost = options.controlHost;
+      if (!controlHost) return egressUnverified("no_control_host");
+      const control = await ctx.read((signal, budget) =>
+        source.probe({
+          host: controlHost,
+          path: withQuery("/livez", `cb=${now()}`),
+          timeoutMs: PROBE_TIMEOUT_MS,
+          maxBytes: budget.maxResponseBytes,
+          signal,
+        })
+      );
+      if (control.kind === "unreachable")
+        return egressUnverified(`control_${control.code}`);
+      if (control.status !== 200)
+        return egressUnverified(`control_status_${control.status}`);
       const nowMs = now();
       const stuckMs = p.stuckMinutes * 60_000;
       const verdicts = await Promise.all(
         read.lanes.map(async (lane) => {
           const early = laneVerdictBeforeProbe(lane, nowMs, stuckMs);
-          if (early) return { lane, verdict: early };
+          if (early) return { lane, verdict: early, probed: false };
           // A probe that cannot run (budget, abort) throws: the whole reading is unknown.
           const [version, ready] = await ctx.read((signal, budget) =>
             Promise.all([
               source.probe({
                 host: lane.host,
-                path: lane.versionPath,
+                // Cache-buster: an edge-cached /version body could hide drift.
+                path: withQuery(lane.versionPath, `cb=${nowMs}`),
                 timeoutMs: PROBE_TIMEOUT_MS,
                 maxBytes: budget.maxResponseBytes,
                 signal,
               }),
               source.probe({
                 host: lane.host,
-                path: deepReadyPath(lane.readyPath),
+                path: withQuery(lane.readyPath, "deep=1"),
                 timeoutMs: PROBE_TIMEOUT_MS,
                 maxBytes: budget.maxResponseBytes,
                 signal,
@@ -325,6 +391,7 @@ export function createDeliveryCalculators(
           );
           return {
             lane,
+            probed: true,
             verdict: laneVerdictFromProbes(
               lane.expectedSha as string,
               version,
@@ -333,6 +400,14 @@ export function createDeliveryCalculators(
           };
         })
       );
+      const probed = verdicts.filter((v) => v.probed);
+      // Every probed lane got no HTTP answer at all: an egress outage looks exactly like this, and the
+      // control probe may have passed just before it. Unknown, never a fleet-wide red.
+      if (
+        probed.length > 0 &&
+        probed.every((v) => isTransportFailure(v.verdict))
+      )
+        return egressUnverified(`all_${probed.length}_lanes_unreachable`);
       const bad = verdicts.filter((v) => v.verdict.bad);
       return {
         value: bad.length,

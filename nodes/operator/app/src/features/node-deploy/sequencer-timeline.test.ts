@@ -276,6 +276,23 @@ describe("release state on the read model", () => {
     expect(v.recentAttempts.map((a) => a.attempt)).toEqual([3, 2, 1]);
     expect(v.recentAttempts.every((a) => a.phase === "failed")).toBe(true);
     expect(DeployWorkloadViewSchema.safeParse(v).success).toBe(true);
+    // task.5442: the park instant is write-once on the newest attempt; re-alerts never move it.
+    const parkedAt = (await h.store.attemptsFor(APP))[0]?.parkedAt;
+    expect(parkedAt).toBeInstanceOf(Date);
+    for (let i = 0; i < 3; i++) {
+      h.clock.advance(11 * 60_000);
+      await h.seq.step(APP);
+    }
+    const [newest, ...older] = await h.store.attemptsFor(APP);
+    expect(newest?.parkedAt?.getTime()).toBe(parkedAt?.getTime());
+    expect(older.every((a) => a.parkedAt === undefined)).toBe(true);
+    // The alert did repeat (its persisted step collapses, so count the log twins).
+    expect(
+      h.log.lines.filter(
+        (l) =>
+          l.msg === "node_deploy_alert" && l.fields.outcome === "release_parked"
+      ).length
+    ).toBeGreaterThan(1);
   });
 
   it("a newer release supersedes the old one, which keeps its activation record; detail lists its attempts", async () => {

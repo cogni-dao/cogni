@@ -36,6 +36,7 @@ const MIN = 60_000;
 const NODE = "11111111-1111-4111-8111-111111111111";
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
+const CONTROL = "cognidao.org";
 
 const at = (msBeforeNow: number) => new Date(NOW - msBeforeNow);
 
@@ -50,6 +51,7 @@ function release(over: Partial<DeliveryReleaseFacts>): DeliveryReleaseFacts {
     activatedStepAt: undefined,
     served: false,
     parkedAt: undefined,
+    parkStepSeen: false,
     current: true,
     ...over,
   };
@@ -106,11 +108,14 @@ function source(input: {
 async function run(
   src: DeliveryKpiSourcePort,
   id: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  /** `null` = no control host configured (a default parameter would swallow `undefined`). */
+  controlHost: string | null = CONTROL
 ): Promise<MetricSample> {
-  const calc = createDeliveryCalculators(src, () => NOW).find(
-    (c) => c.id === id
-  ) as MetricCalculator;
+  const calc = createDeliveryCalculators(src, {
+    controlHost: controlHost ?? undefined,
+    now: () => NOW,
+  }).find((c) => c.id === id) as MetricCalculator;
   const windowMs = (calc.windowSeconds?.(params) ?? 0) * 1000;
   const controller = new AbortController();
   let calls = 0;
@@ -153,6 +158,11 @@ describe("classifyRelease", () => {
       "superseded"
     );
     expect(classifyRelease(release({}), from, to).kind).toBe("in_flight");
+    // A park known only from the repeating step (before parked_at) has no durable instant.
+    expect(
+      classifyRelease(release({ parkStepSeen: true, current: false }), from, to)
+        .kind
+    ).toBe("untimed");
     // Parked first, superseded later: it finished as a failure.
     expect(
       classifyRelease(release({ parkedAt: at(DAY), current: false }), from, to)
@@ -252,8 +262,10 @@ describe(SERVING_DRIFT_ID, () => {
     const src = source({ lanes: [lane({})] });
     const s = await run(src, SERVING_DRIFT_ID, {});
     expect(s).toMatchObject({ complete: true, unit: "lanes", value: 0 });
+    // Control probe first, then the lane; /version carries a cache-buster.
     expect(src.probes).toEqual([
-      "node.cognidao.org/version",
+      `${CONTROL}/livez?cb=${NOW}`,
+      `node.cognidao.org/version?cb=${NOW}`,
       "node.cognidao.org/readyz?deep=1",
     ]);
   });
@@ -264,7 +276,7 @@ describe(SERVING_DRIFT_ID, () => {
         lane({ workload: "other", host: "other.cognidao.org" }),
       ],
       probe: (host, path) =>
-        host === "other.cognidao.org" && path === "/version"
+        host === "other.cognidao.org" && path.startsWith("/version")
           ? {
               kind: "response",
               status: 200,
@@ -282,7 +294,7 @@ describe(SERVING_DRIFT_ID, () => {
       `lane:${NODE}/production/other:sha_mismatch`
     );
   });
-  it("no active attempt, a stuck desired release, readyz failure and an unreachable host are bad", async () => {
+  it("no active attempt, a stuck desired release, readyz failure and ONE unreachable host (others answer) are bad", async () => {
     const src = source({
       lanes: [
         lane({
@@ -322,8 +334,59 @@ describe(SERVING_DRIFT_ID, () => {
         `lane:${NODE}/production/a:no_active_attempt`,
         `lane:${NODE}/production/b:stuck_release`,
         `lane:${NODE}/production/c:readyz_status`,
-        `lane:${NODE}/production/d:unreachable`,
+        `lane:${NODE}/production/d:unreachable/timeout`,
       ])
+    );
+  });
+  it("an operator egress outage is unknown, never N bad lanes: the control probe fails", async () => {
+    const src = source({
+      lanes: [lane({}), lane({ workload: "w2", host: "w2.cognidao.org" })],
+      probe: () => ({ kind: "unreachable", code: "network" }),
+    });
+    const s = await run(src, SERVING_DRIFT_ID, {});
+    expect(s).toMatchObject({ complete: false, reason: "source_failed" });
+    expect(s.evidenceRefs).toContain(
+      "deploy:egress_unverified:control_network"
+    );
+    // No lane was probed once the control failed.
+    expect(src.probes).toEqual([`${CONTROL}/livez?cb=${NOW}`]);
+    const noControl = await run(
+      source({ lanes: [lane({})] }),
+      SERVING_DRIFT_ID,
+      {},
+      null
+    );
+    expect(noControl).toMatchObject({
+      complete: false,
+      reason: "source_failed",
+    });
+    expect(noControl.evidenceRefs).toContain(
+      "deploy:egress_unverified:no_control_host"
+    );
+  });
+  it("every probed lane getting no HTTP answer is unknown even when the control passed", async () => {
+    const src = source({
+      lanes: [
+        lane({ workload: "a", host: "a.cognidao.org" }),
+        lane({ workload: "b", host: "b.cognidao.org" }),
+        // Not probed (no active attempt): does not make the outage look partial.
+        lane({
+          workload: "c",
+          activeReleaseId: undefined,
+          expectedSha: undefined,
+        }),
+      ],
+      probe: (host) =>
+        host === CONTROL
+          ? { kind: "response", status: 200, body: "{}" }
+          : host === "a.cognidao.org"
+            ? { kind: "unreachable", code: "timeout" }
+            : { kind: "unreachable", code: "network" },
+    });
+    const s = await run(src, SERVING_DRIFT_ID, {});
+    expect(s).toMatchObject({ complete: false, reason: "source_failed" });
+    expect(s.evidenceRefs).toContain(
+      "deploy:egress_unverified:all_2_lanes_unreachable"
     );
   });
   it("zero lanes and a probe that cannot run are unknown, never a pass", async () => {
@@ -337,7 +400,9 @@ describe(SERVING_DRIFT_ID, () => {
     await expect(run(src, SERVING_DRIFT_ID, {})).rejects.toThrow("aborted");
   });
   it("ids use dashes, never underscores", () => {
-    for (const c of createDeliveryCalculators(source({})))
+    for (const c of createDeliveryCalculators(source({}), {
+      controlHost: CONTROL,
+    }))
       expect(c.id).toMatch(/^[a-z][a-z0-9.-]*@[1-9][0-9]*$/);
   });
 });

@@ -546,7 +546,14 @@ export class NodeDeploySequencer {
     if (failures >= this.d.config.maxFailedAttempts) {
       // Attached to the release's newest attempt so the park is a durable step on its timeline:
       // `release-view` reads `alert/release_parked` as the sequencer's own verdict.
-      await this.alert(key, release, ofRelease[0], "release_parked", {
+      const newest = ofRelease[0];
+      // Write-once park instant (task.5442): the alert repeats and its first step can fall off the
+      // 100-step timeline; delivery KPIs read this column instead.
+      if (newest && !newest.parkedAt)
+        await this.d.store.updateAttempt(newest.id, {
+          parkedAt: new Date(this.d.clock.now()),
+        });
+      await this.alert(key, release, newest, "release_parked", {
         failedAttempts: failures,
       });
       return "parked";
