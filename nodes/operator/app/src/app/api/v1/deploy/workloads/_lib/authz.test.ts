@@ -34,7 +34,10 @@ describe("authzActionsForEnv", () => {
 });
 
 describe("gateDecisionFromResults", () => {
-  const allow = { decision: "allow", code: "allow" as AuthzDecisionCode };
+  const allow = {
+    decision: "allow",
+    code: "authz_allowed" as AuthzDecisionCode,
+  };
   const denied = {
     decision: "deny",
     code: "authz_denied" as AuthzDecisionCode,

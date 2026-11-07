@@ -187,22 +187,38 @@ describe("POST /api/v1/deploy/workloads/game-day", () => {
     expect(store.requestGameDay).not.toHaveBeenCalled();
   });
 
-  it("production is gated on node.promote_production; candidate-a and preview on node.manage_envs", async () => {
-    await post(valid);
+  it("per-env authz: production->promote_production, preview->manage_envs, candidate-a->flight OR manage_envs (bug.5574)", async () => {
+    await post(valid); // DEPLOY_ENVIRONMENT=production
     expect(authz.check).toHaveBeenLastCalledWith(
       expect.objectContaining({
         action: "node.promote_production",
         resource: `node:${NODE_ID}`,
       })
     );
-    for (const env of ["candidate-a", "preview"]) {
+
+    const actionsFor = async (env: string): Promise<string[]> => {
       dbState.call = 0;
       envState.DEPLOY_ENVIRONMENT = env;
+      authz.check.mockClear();
       await post({ ...valid, env });
-      expect(authz.check).toHaveBeenLastCalledWith(
-        expect.objectContaining({ action: "node.manage_envs" })
-      );
-    }
+      return authz.check.mock.calls.map((c) => c[0].action);
+    };
+
+    // preview: a single check on node.manage_envs.
+    expect(await actionsFor("preview")).toEqual(["node.manage_envs"]);
+
+    // candidate-a, developer allowed: short-circuits on node.flight, never reaches manage_envs.
+    expect(await actionsFor("candidate-a")).toEqual(["node.flight"]);
+
+    // candidate-a, env_manager only: node.flight denied falls through to node.manage_envs (additive).
+    authz.check.mockImplementation(async ({ action }) => ({
+      decision: action === "node.manage_envs" ? "allow" : "deny",
+      code: action === "node.manage_envs" ? "authz_allowed" : "authz_denied",
+    }));
+    expect(await actionsFor("candidate-a")).toEqual([
+      "node.flight",
+      "node.manage_envs",
+    ]);
   });
 
   it("409 env_not_served for an env other than DEPLOY_ENVIRONMENT; nothing is read or written", async () => {
