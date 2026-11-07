@@ -117,28 +117,19 @@ Runs a hub-grounded AI review of one PR when a developer calls `POST /api/v1/vcs
 ```bash
 GH_REVIEW_APP_ID=<your app id>
 GH_REVIEW_APP_PRIVATE_KEY_BASE64=<base64-encoded private key>
-GH_REPOS=<owner/repo>
-GH_WEBHOOK_SECRET=<webhook secret>
-GH_WEBHOOK_PROXY_URL=<smee channel url>
+NODE_SUBMODULE_PARENT_OWNER=<owner of the reviewed repo>
+NODE_SUBMODULE_PARENT_REPO=<reviewed repo name>
 ```
 
-**Run it:**
+**Run it:** start `pnpm dev:stack`, open a PR on that repo, then request the review. The caller needs `node.flight` on the node. v0 reviews operator PRs only.
 
 ```bash
-# Terminal 1: dev stack
-pnpm dev:stack
-
-# Terminal 2: smee proxy for GitHub webhooks
-npx smee -u $GH_WEBHOOK_PROXY_URL --path /api/internal/webhooks/github --port 3000
+curl -X POST http://localhost:3000/api/v1/vcs/review \
+  -H "Authorization: Bearer $COGNI_NODE_API_KEY" -H 'content-type: application/json' \
+  -d '{"nodeId":"<operator node id>","prNumber":<PR number>}'
 ```
 
-Push a branch and open a PR on the configured repo. The review bot creates a Check Run, runs LLM-powered gate evaluations, posts a PR comment with results. Click "View Details" on the Check Run to see the full review summary.
-
-**Automated external tests** (requires credentials + running stack + smee):
-
-```bash
-pnpm test:external
-```
+The App creates the `Cogni Git PR Review` Check Run at the PR head and posts a PR comment. Click "View Details" on the Check Run for the full review.
 
 ## On-Chain Governance (optional)
 
