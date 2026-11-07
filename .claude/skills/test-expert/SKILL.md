@@ -36,8 +36,8 @@ All of the above run in `ci.yaml`. **`pnpm check` / `check:fast` / `check:fast:f
 | **Contract**       | same                                     | `tests/contract/`               | Zod shapes vs route handlers                                                                                                                                                | None (in-memory)                                           | `pnpm test:contract`          | ✅                                                                                                                                                                                                 |
 | **Ports**          | same                                     | `tests/ports/`                  | Every adapter implements its port                                                                                                                                           | None                                                       | (in `pnpm test:app`)          | ✅                                                                                                                                                                                                 |
 | **Security**       | same                                     | `tests/security/`               | Auth, RLS, injection guards                                                                                                                                                 | None                                                       | (in `pnpm test:app`)          | ✅                                                                                                                                                                                                 |
-| **Arch (meta)**    | same                                     | `tests/arch/`                   | _Enforcement itself hasn't been weakened_ — spawns `depcruise` against arch-probe fixtures to prove rules still catch violations                                            | None (subprocess)                                          | `pnpm test:arch`              | ✅                                                                                                                                                                                                 |
-| **Lint (meta)**    | same                                     | `tests/lint/`                   | Verifies lint-rule config hasn't been weakened — same meta-test pattern as `tests/arch/`. Catches an LLM disabling an ESLint/Biome rule to make a PR pass.                  | None                                                       | `pnpm test:lint`              | ✅                                                                                                                                                                                                 |
+| **Arch (meta)**    | root `vitest.config.mts`                 | `tests/arch/`                   | _Enforcement itself hasn't been weakened_ — spawns `depcruise` against arch-probe fixtures to prove rules still catch violations                                            | None (subprocess)                                          | `pnpm test:arch`              | ✅                                                                                                                                                                                                 |
+| **Lint (meta)**    | root `vitest.config.mts`                 | `tests/lint/`                   | Verifies lint-rule config hasn't been weakened — same meta-test pattern as `tests/arch/`. Catches an LLM disabling an ESLint/Biome rule to make a PR pass.                  | None                                                       | `pnpm test:lint`              | ✅                                                                                                                                                                                                 |
 | **Component**      | `vitest.component.config.mts`            | `tests/component/*.int.test.ts` | Adapter ↔ real Postgres                                                                                                                                                    | Testcontainers (Docker)                                    | `pnpm test:component`         | ✅                                                                                                                                                                                                 |
 | **Stack (single)** | `vitest.stack.config.mts`                | `tests/stack/`                  | Full HTTP through one node                                                                                                                                                  | `dev:stack:test` or `docker:test:stack`                    | `pnpm test:stack:dev`         | ❌ — `stack-test.yml` is `workflow_dispatch` only. Run it by hand.                                                                                                                                 |
 | **Stack (multi)**  | `vitest.stack-multi.config.mts`          | `tests/stack/`                  | Cross-node isolation / routing                                                                                                                                              | No script starts it. `dev:stack:full:test` does not exist. | `pnpm test:stack:multi`       | ❌ — no CI job runs it                                                                                                                                                                             |
@@ -62,7 +62,7 @@ The full token-distribution loop has a **proven, product-code e2e** most agents 
 | `scripts/e2e/verify-publish-condition-on-fork.ts`   | The scoped `DistributionPublishCondition` answers ERC-165 so `DAO.grantWithCondition` doesn't revert, and `isGranted` allows ONLY the publish shape (positive + negative execute checks).                                                                                             | `pnpm tsx scripts/e2e/verify-publish-condition-on-fork.ts` against a running `scripts/e2e/start-fork.sh`.                                                                                                                                        | None — fork.                       |
 | `scripts/e2e/seed-toks2.mts` (+ `SEED_INCREMENT=1`) | Seeds a toks2 review epoch (or an increment folded onto the prior manifest) for the local-UI walk rig.                                                                                                                                                                                | `DATABASE_SERVICE_URL=… pnpm tsx scripts/e2e/seed-toks2.mts`.                                                                                                                                                                                    | None — local DB.                   |
 
-**GAP (known):** these are manual harnesses — `finalize-mint-claim.ts` is now `pnpm test:walk:dev` but NOT yet in CI (`ci.yaml`), and the fork-condition + toks2 rig have no `pnpm test:*` alias. Wiring `test:walk` into a CI lane (needs anvil + temporal + postgres) is the missing repeatable regression gate for tokenomics — same shape as the `e2e`/`env-e2e` gaps above. Spec: `docs/spec/tokenomics-distribution.md` (§ "What is proven", § "Local rig vs production").
+**GAP (known):** these are manual harnesses — `finalize-mint-claim.ts` is now `pnpm test:walk:dev` but NOT yet in CI (`ci.yaml`), and the fork-condition + toks2 rig have no `pnpm test:*` alias. Wiring `test:walk` into a CI lane (needs anvil + temporal + postgres) is the missing repeatable regression gate for tokenomics — same shape as the `env-e2e` gap above. Spec: `docs/spec/tokenomics-distribution.md` (§ "What is proven", § "Local rig vs production").
 
 ## What agents can actually run locally
 
@@ -71,7 +71,7 @@ For ~90% of agent sessions, infra-gated lanes are out of reach. Use this split:
 **Always available, lightweight (no infra — run freely):**
 
 - `pnpm typecheck`, `pnpm lint` / `biome check <path>`, `pnpm arch:check`, `pnpm check:docs`
-- 1–2 specific test files: `pnpm test <path/to/file.test.ts>`, `test:meta`, `test:contract`, `test:arch`
+- 1–2 specific test files: `pnpm test:app <path/to/file.test.ts>` (operator) or `pnpm test <path>` (root `tests/`, `packages/`, `services/`), `test:meta`, `test:contract`, `test:arch`
 
 **Available but resource-heavy — default to NO, clarify permission first (AGENTS.md, Local execution safety):**
 
@@ -88,7 +88,7 @@ For ~90% of agent sessions, infra-gated lanes are out of reach. Use this split:
 - `pnpm test:external:money` (funded wallet, real $)
 - `pnpm e2e` (full docker stack, browser)
 
-**Default agent pattern:** run what you can locally, then push the branch. CI runs the unit, contract and component lanes (plus `test:doltgres-migrate`). CI does not run stack tests on a PR. Stack tests run only by hand: ask the human to run `pnpm dev:stack:test`, then run the stack test against it.
+**Default agent pattern:** run what you can locally, then push the branch. CI runs the unit, contract and component lanes (plus `test:doltgres-migrate`). CI does not run stack tests on a PR. Stack tests run only by hand. Either ask the human to run `pnpm dev:stack:test` and then run the stack test against it, or dispatch `stack-test.yml`.
 
 ## Coverage — the ignored dial
 
@@ -183,7 +183,7 @@ The parity table above says _what_ must match; this says _how the code gets ther
    const env = config({ path: path.resolve(__dirname, "../../../.env.test") });
    ```
 
-3. **Skip-gate must precede provider construction.** External tests that build Privy/GitHub-App/EVM clients must do so _inside_ `describe.skipIf(!hasCreds)` or a gated `beforeAll`, never at module scope. Module-scope construction throws on missing env → the skip never runs → red test instead of a clean skip. Reference: [bug.0314](https://cognidao.org/work/items/bug.0314) documents four real failures from this pattern.
+3. **Skip-gate must precede provider construction.** External tests that build Privy/GitHub-App/EVM clients must do so _inside_ `describe.skipIf(!hasCreds)` or a gated `beforeAll`, never at module scope. Module-scope construction throws on missing env → the skip never runs → red test instead of a clean skip. The per-lane rules live in `nodes/operator/app/tests/external/AGENTS.md`.
 
 4. **Testcontainers globalSetup uses `pnpm -w db:migrate:direct`.** The `-w` flag (workspace root) matters. Without it, the migrate script isn't found when globalSetup runs under `pnpm -F <node>`. See `nodes/*/app/tests/component/setup/testcontainers-postgres.global.ts`.
 
@@ -204,7 +204,7 @@ Triage in this order:
 3. **Testcontainer started?** If `db:migrate:direct` errors, see gotcha #4. If migrations ran but DB state is surprising, the globalSetup's test-container epoch may not match expectations — check `testcontainers-postgres.global.ts`.
 4. **Shared-state flakiness?** If tests pass solo but fail in the suite, see gotcha #6.
 5. **External service reachable?** For external lane: is `pnpm test:smee` running for webhook-dependent tests? Is `OLLAMA_URL` reachable? Is the funded wallet still funded for money tests?
-6. **Am I the wrong runner?** If the user is an agent hitting a stack test locally without `dev:stack:test` running, the answer is "ask the human to start it." No CI job runs stack tests on a PR.
+6. **Am I the wrong runner?** If the user is an agent hitting a stack test locally without `dev:stack:test` running, the answer is "ask the human to start it, or dispatch `stack-test.yml`." No CI job runs stack tests on a PR.
 
 ## References
 
@@ -214,7 +214,6 @@ Triage in this order:
 - `docs/guides/github-app-webhook-setup.md` — per-env GitHub App setup; `cogni-operator-test` is the candidate/test app
 - `docs/spec/node-ci-cd-contract.md` — submodule-pinned node CI/CD, test org identity, node-ref flight constraints
 - `docs/runbooks/dolthub-remote-bootstrap.md` — `DOLTHUB_OWNER`, DoltHub PAT, and Dolt push credential split
-- [bug.0314](https://cognidao.org/work/items/bug.0314) — latest skip-gate + RPC/webhook setup bug
 - `work/projects/proj.system-test-architecture.md` — mock-LLM + FakeLlmAdapter strategy
 - `nodes/operator/app/tests/external/AGENTS.md` — per-lane invariants for external tests
 - `.github/workflows/ci.yaml` — exact CI step list; compare against this matrix if anything above looks wrong
@@ -226,8 +225,8 @@ Triage in this order:
 2. Drop the file into that layer's directory with the matching filename pattern (`*.test.ts`, `*.spec.ts`, or `*.int.test.ts` for component).
 3. Run the layer's specific command first (`pnpm test:component`, `pnpm test:contract`, etc.), not `pnpm check`. Fastest feedback.
 4. If the test needs env or infra, read the relevant config's header TSDoc — every config documents its invariants at the top.
-5. If the layer is stack/e2e/money and you're an agent without infra access, do not burn a session on local setup. CI does not run these lanes on a PR. Open the PR and ask the human to run the lane.
-6. Once the new test passes in isolation (`pnpm test <that-file>`), lint/typecheck the touched surface and push — CI runs the full bundle. The aggregate `check:fast:fix` → `check:fast` → `check` sequence is resource-heavy and defaults to NO (AGENTS.md, Local execution safety): run it only when the human asks you to verify locally this session — worth asking for when the change is complex and CI confidence is low.
+5. If the layer is stack/e2e/money and you're an agent without infra access, do not burn a session on local setup. CI does not run these lanes on a PR. Open the PR, then run the lane by hand (for stack, dispatch `stack-test.yml`) or ask the human to run it.
+6. Once the new test passes in isolation (`pnpm test:app <that-file>` for an operator test), lint/typecheck the touched surface and push — CI runs the full bundle. The aggregate `check:fast:fix` → `check:fast` → `check` sequence is resource-heavy and defaults to NO (AGENTS.md, Local execution safety): run it only when the human asks you to verify locally this session — worth asking for when the change is complex and CI confidence is low.
 
 ## Driving the TEST operator as an agent (RBAC + credentials)
 

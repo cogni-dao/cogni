@@ -74,7 +74,7 @@ Never use the production actuator account. A manual mint has no `akash_tx_alloca
 ## Poly production placement findings, 2026-11-02
 
 - Gen-24 and gen-25 failed `provider_rejected` with zero FI, NL or PT bids, although the same spec drew FI bids from the dev wallet. Gen-26 leased RHITE FI. The cause is unknown. Read the provider roster first, then probe with the dev key.
-- Providers froggy (RO) and metz (CH) returned nginx 404 for every host. No static exclude list exists now: PR #3056 emptied the provider pins. A provider with one confirmed `host_not_routed` strike is kept out of every lane for 24 hours (PR #3061, bug.5586).
+- Providers froggy (RO) and metz (CH) returned nginx 404 for every host. Do not keep a static list of them. PR #3056 set the provider allowlist (`AKASH_ALLOWED_PROVIDERS`) to empty. Instead, a new app create skips each provider with one confirmed `host_not_routed` strike on any lane in the last 24 hours (PR #3061, bug.5586). The no-lockout rules in `nodes/operator/app/src/features/node-deploy/AGENTS.md` (Provider memory) still apply.
 - RHITE FI and BG h6i egress IP varies per pod. Do not pin a `compute_egress_cidrs` /32 to them. UA ithub `89.207.152.9` and FI m3a `95.217.72.142` were stable.
 - The Polymarket CLOB geoblock covers only Crimea, Donetsk and Luhansk in UA. UA providers are usable.
 
