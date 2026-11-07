@@ -94,7 +94,7 @@ const BundleDigestSchema = z
 
 /**
  * THE RELEASE-SIDE MIGRATION STEP (task.5135). Stated on OBSERVE — the unpaid, level-triggered
- * tick Crossplane already runs on every reconcile — and NEVER on a paid mutation.
+ * tick the node-deploy sequencer runs on every reconcile — and NEVER on a paid mutation.
  *
  * The block's PRESENCE is the whole policy: a workload with a database sends it, one without
  * omits it. There is no `policy` discriminator here on purpose, because the only thing a policy

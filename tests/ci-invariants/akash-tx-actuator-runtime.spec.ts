@@ -3,11 +3,9 @@
 
 /**
  * Module: `@tests/ci-invariants/akash-tx-actuator-runtime`
- * Purpose: Pin the seams that decide whether the node-deploy sequencer can REACH the Akash
- *   transaction actuator (its only paid writer, task.5400).
- *   Each one is a silent, deploy-time-only failure otherwise: nothing in CI builds these
- *   overlays, and the symptom is a connection error hours later on a manifest that renders
- *   perfectly (task.5102).
+ * Purpose: Pin the seams that let the node-deploy sequencer reach the Akash tx actuator.
+ *   Each is a silent, deploy-time-only failure otherwise: no CI builds these overlays, and the
+ *   symptom is a connection error hours later (task.5102, task.5400).
  * Scope: Static assertions over the actuator's manifests, RBAC and entrypoint wiring; does not
  *   render kustomize, reach a cluster, or touch a provider.
  * Invariants:
@@ -152,7 +150,7 @@ function roleRules(documents: string): RbacRule[][] {
 }
 /**
  * The FUNDED/writer environments — exactly those whose overlay must ship the actuator base,
- * transformer, and the two actuator ExternalSecrets. Preview pins no wallet and must NOT ship
+ * transformer, and the actuator ExternalSecret. Preview pins no wallet and must NOT ship
  * the actuator (story.5016). This list was derived from the Crossplane writer map, whose only
  * runtime consumers were deleted with that lane (task.5411); this spec is now its sole owner
  * (task.5443). Widening it is a FUNDING decision: one account per writer, one writer per account.
