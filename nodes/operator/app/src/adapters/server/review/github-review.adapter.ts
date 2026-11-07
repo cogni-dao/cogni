@@ -20,7 +20,7 @@
  *     the PR head to the pinned head once (`headMoved`).
  *   - CHECK_IS_REQUEST_BOUND: `createCheckRun` writes the request id as the check `external_id`.
  *   - ABSENT_ONLY_ON_404: a repo-spec read is "absent" only on HTTP 404; other errors throw.
- *   - SERVED_DEFAULT_MODEL: the default review model is `gemini-3.7-flash` (served + paid);
+ *   - SERVED_DEFAULT_MODEL: the default review model is `deepseek-v4-flash` (served, the fleet default_free);
  *     a node may override it with repo-spec `review.model`.
  * Side-effects: IO (GitHub REST API)
  * Links: bug.5000, story.5102, docs/spec/node-ci-cd-contract.md#single-domain-scope,
@@ -63,10 +63,10 @@ import { createInstallationOctokit } from "./github-auth";
 // ---------------------------------------------------------------------------
 
 const CHECK_RUN_NAME = "Cogni Git PR Review";
-/** Served, paid, 1M-context model with reliable tool calls (hub `model-pricing-registry`). */
+/** Served free (default_free) 1M-context model with reliable tool calls (hub `model-pricing-registry`). */
 export const DEFAULT_REVIEW_MODELREF = {
   providerKey: "platform",
-  modelId: "gemini-3.7-flash",
+  modelId: "deepseek-v4-flash",
 } as const;
 /** The verb path (POST /api/v1/vcs/review) is a user request: every GitHub call is bounded. */
 const VERB_REQUEST_TIMEOUT_MS = 10_000;

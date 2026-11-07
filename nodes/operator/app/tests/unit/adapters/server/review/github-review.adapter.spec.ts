@@ -251,7 +251,7 @@ describe("fetchPrContext — review on/off + model (repo-spec driven)", () => {
     });
 
     expect(result.reviewEnabled).toBe(true);
-    expect(result.modelRef.modelId).toBe("gemini-3.7-flash");
+    expect(result.modelRef.modelId).toBe("deepseek-v4-flash");
   });
 
   it("propagates review.enabled=false (node opts out)", async () => {

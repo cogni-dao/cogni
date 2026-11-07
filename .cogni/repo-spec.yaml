@@ -112,7 +112,7 @@ payments_out:
 # target repo, so each node controls its own review with no operator-side hardcode.
 #   enabled: false → operator skips review entirely (no Check Run, no comment).
 #   model: any platform (LiteLLM-resolvable) model id; omit to use the operator default
-#          (gemini-3.7-flash — served, paid, reliable tool calls; story.5102).
+#          (deepseek-v4-flash — served, fleet default_free, reliable tool calls; story.5102).
 # A review runs ONLY when a developer calls POST /api/v1/vcs/review — no PR event starts one.
 review:
   enabled: true
