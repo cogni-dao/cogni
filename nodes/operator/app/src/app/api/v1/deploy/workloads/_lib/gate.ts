@@ -7,8 +7,9 @@
  *   billing account, the per-env authorization gate, and the node's image-baked catalog row (task.5400).
  * Scope: Request-time checks only; reads nothing from GitHub and writes nothing.
  * Invariants:
- *   - AUTHZ_BEFORE_SIDE_EFFECT: production -> `node.promote_production`; candidate-a/preview ->
- *     `node.manage_envs`. A denial or an unavailable authorizer is a refusal.
+ *   - AUTHZ_BEFORE_SIDE_EFFECT: production -> `node.promote_production`; preview -> `node.manage_envs`;
+ *     candidate-a -> `node.flight` (the developer proving lane, bug.5574). A denial or an unavailable
+ *     authorizer is a refusal.
  *   - CATALOG_ROW_AFTER_AUTHZ: the node's catalog row (the lane refusals in `./lane` decide from it) is
  *     read from the image only after the authorization check allows.
  * Side-effects: IO (Postgres reads, authz check)
@@ -23,6 +24,7 @@ import { createNodeCatalog } from "@/bootstrap/capabilities/node-catalog";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { nodes } from "@/shared/db/nodes";
+import { authzActionForEnv } from "./authz";
 
 export type Gate =
   | {
@@ -74,8 +76,7 @@ export async function gate(
     };
   const decision = await authorization.check({
     actorId: `user:${userId}`,
-    action:
-      env === "production" ? "node.promote_production" : "node.manage_envs",
+    action: authzActionForEnv(env),
     resource: `node:${node.id}`,
     context: { tenantId: billing.id, nodeId: node.id },
   });

@@ -10,8 +10,8 @@
  * Scope: Read-only. Same addressing (`nodeId`, `env`) and the SAME authz gate as `GET
  *   /api/v1/deploy/workloads`; the release must belong to that node and env.
  * Invariants:
- *   - AUTHZ_BEFORE_READ: production -> `node.promote_production`; other envs -> `node.manage_envs`;
- *     checked before the release row is touched (shared `gate`).
+ *   - AUTHZ_BEFORE_READ: production -> `node.promote_production`; preview -> `node.manage_envs`;
+ *     candidate-a -> `node.flight` (bug.5574); checked before the release row is touched (shared `gate`).
  *   - NO_CROSS_NODE_READ: a release id that belongs to another node or env answers 404 `release_not_found`
  *     exactly like a missing id, so ids are not an oracle for other nodes' deploys.
  *   - ENV_BINDING: `env` must equal this deployment's DEPLOY_ENVIRONMENT (409 `env_not_served`).
