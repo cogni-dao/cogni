@@ -90,8 +90,10 @@ const WORK_BASE = strip(
 const WORK_KEY = process.env.EVAL_WORK_API_KEY ?? KEY;
 /**
  * The selector endpoint: any OpenAI-compatible chat completions URL. Default is
- * the node's own route with the free `gpt-oss-120b`, routed through a graph
- * (`EVAL_GRAPH`, default `pr-review`). That route caps each MESSAGE at 4,000
+ * the node's own route with the free `gpt-oss-120b`, routed through the graph named
+ * by `EVAL_GRAPH` (required on the node route — there is no default: the former default
+ * `pr-review` is now a grounded, tool-using reviewer and would break BLIND_SELECTOR, story.5102).
+ * That route caps each MESSAGE at 4,000
  * characters (not each request), so the prompt is split across consecutive
  * user messages of at most `EVAL_MAX_MESSAGE_CHARS` (default 3,900 on the node
  * route; unset = one message for an external endpoint).
@@ -100,8 +102,7 @@ const EXTERNAL_LLM = process.env.EVAL_COMPLETIONS_URL;
 const LLM_URL = EXTERNAL_LLM ?? `${BASE}/api/v1/chat/completions`;
 const LLM_KEY = process.env.EVAL_COMPLETIONS_API_KEY ?? KEY;
 const MODEL = process.env.EVAL_MODEL ?? "gpt-oss-120b";
-const GRAPH =
-  process.env.EVAL_GRAPH ?? (EXTERNAL_LLM ? undefined : "pr-review");
+const GRAPH = process.env.EVAL_GRAPH;
 const MAX_MESSAGE_CHARS = process.env.EVAL_MAX_MESSAGE_CHARS
   ? Number(process.env.EVAL_MAX_MESSAGE_CHARS)
   : EXTERNAL_LLM
@@ -134,6 +135,12 @@ if (!["A", "T", "T+method", "BM25"].includes(MECHANISM)) {
 }
 if (!CEILING_ONLY && (!Number.isInteger(RUNS) || RUNS < th.minRuns)) {
   console.error(`--runs must be an integer >= ${th.minRuns} (MEAN_OF_RUNS)`);
+  process.exit(2);
+}
+if (!CEILING_ONLY && !GRAPH && !EXTERNAL_LLM) {
+  console.error(
+    "Set EVAL_GRAPH (a tool-free graph on the node chat route) or EVAL_COMPLETIONS_URL; there is no default selector graph"
+  );
   process.exit(2);
 }
 if (!CEILING_ONLY && EXTERNAL_LLM && !process.env.EVAL_COMPLETIONS_API_KEY) {

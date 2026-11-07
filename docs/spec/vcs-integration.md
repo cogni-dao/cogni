@@ -5,7 +5,7 @@ title: VCS Integration Architecture (ASPIRATIONAL)
 status: draft
 spec_state: draft
 trust: draft
-summary: ASPIRATIONAL — NOT as-built. Describes a two-GitHub-App + git-daemon target architecture. As-built today, PR review runs in-process within the Next.js app (no services/git-daemon/, no packages/github-core/). GitHub App authentication, permission tiering, webhook routing, and VCS adapter contracts for integrating git platform operations (ingestion, code review, admin actions) into the Node template.
+summary: ASPIRATIONAL — NOT as-built. Describes a two-GitHub-App + git-daemon target architecture. As-built today, PR review is requested via POST /api/v1/vcs/review and runs as a Temporal workflow + operator graph (no services/git-daemon/, no packages/github-core/). GitHub App authentication, permission tiering, webhook routing, and VCS adapter contracts for integrating git platform operations (ingestion, code review, admin actions) into the Node template.
 read_when: Adding a VCS integration, working on GitHub/GitLab auth, wiring webhook handlers, or understanding the git-daemon service.
 implements: proj.vcs-integration
 owner: derekg1729
@@ -16,7 +16,7 @@ tags: [infra, github, auth, services]
 
 # VCS Integration Architecture
 
-> ⚠️ **ASPIRATIONAL — NOT the live contract.** This document describes a **target** two-GitHub-App + `services/git-daemon/` architecture that is **not built**. As-built today, PR review runs **in-process** within the Next.js app — there is no `services/git-daemon/` and no `packages/github-core/` (see § Current Implementation below). For the live merge/flight/promote contract, read [development-lifecycle.md §8](./development-lifecycle.md#8-request-merge--the-operator-is-the-merge-authority), [ci-cd.md](./ci-cd.md), and [node-ci-cd-contract.md](./node-ci-cd-contract.md). Do not mistake the Walk-target architecture below for what ships.
+> ⚠️ **ASPIRATIONAL — NOT the live contract.** This document describes a **target** two-GitHub-App + `services/git-daemon/` architecture that is **not built**. As-built today, PR review is **requested via `POST /api/v1/vcs/review`** and runs as `PrReviewWorkflow` + the operator's `pr-review` graph — there is no `services/git-daemon/` and no `packages/github-core/` (see § Current Implementation below). For the live merge/flight/promote contract, read [development-lifecycle.md §8](./development-lifecycle.md#8-request-merge--the-operator-is-the-merge-authority), [ci-cd.md](./ci-cd.md), and [node-ci-cd-contract.md](./node-ci-cd-contract.md). Do not mistake the Walk-target architecture below for what ships.
 
 > The Node template integrates with GitHub (and future GitLab/Radicle) through **two GitHub Apps** with distinct permission tiers — a read/review app and an admin app — served by a **single backend service** (`services/git-daemon/`). A shared `packages/github-core/` package provides auth primitives. PAT fallback remains for self-hosted Nodes that don't need App-based auth.
 
@@ -35,42 +35,32 @@ tags: [infra, github, auth, services]
 
 ## Design
 
-### Current Implementation (Crawl — task.0153)
+### Current Implementation (story.5102 — dev-triggered, grounded)
 
-PR review runs **in-process** within the Next.js app — no `services/git-daemon/` or `packages/github-core/` yet. The architecture below describes the Walk target; this section documents what is built today.
+A developer asks for a review; no push, commit or PR webhook starts one (REVIEW_IS_DEV_TRIGGERED). The review is one graph on the shared harness. Design: hub entry [`pr-review-grounded-gate`](https://cognidao.org/knowledge/pr-review-grounded-gate).
 
 ```
-GitHub webhook (pull_request.opened / .synchronize / .reopened)
-  │
-  POST /api/internal/webhooks/github
-    ├─ Verify signature (existing)
-    ├─ Return 200 immediately
-    ├─ [existing] Attribution normalization (sync)
-    └─ [Crawl] Fire-and-forget: dispatch PR review (async)
-          │
-          ├─ src/app/_facades/review/dispatch.server.ts
-          │    └─ createInstallationOctokit() → src/adapters/server/review/github-auth.ts
-          │
-          ├─ src/features/review/services/review-handler.ts
-          │    ├─ Create Check Run (in_progress) via injected adapter
-          │    ├─ Gather evidence via injected adapter
-          │    ├─ Load gates from .cogni/repo-spec.yaml (local fs)
-          │    ├─ Gate orchestrator (src/features/review/gate-orchestrator.ts)
-          │    │    ├─ review-limits: deterministic size check
-          │    │    └─ ai-rule: invoke pr-review graph via GraphExecutorPort
-          │    │         └─ packages/langgraph-graphs/src/graphs/pr-review/
-          │    ├─ Update Check Run (conclusion + markdown summary)
-          │    └─ Post PR comment (staleness guard)
-          │
-          └─ Billing: system tenant (COGNI_SYSTEM_BILLING_ACCOUNT_ID)
+POST /api/v1/vcs/review {nodeId, prNumber}          (node.flight, like /vcs/flight)
+  ├─ resolveNodeRepo(nodeId) → owner/repo           (never from the body)
+  ├─ review App: pin PR headSha + baseSha, installation
+  ├─ developer billing account + default virtual key (requester = actor = payer)
+  └─ start PrReviewWorkflow  id pr-review:{owner}/{repo}/{pr}/{headSha}   (running → 409 review_running)
+        ├─ fetchPrContext  (operator plane; repo-spec + rules read at the pinned baseSha; headMoved check)
+        ├─ createCheckRun  (in_progress, external_id = requestId)
+        ├─ GraphRunWorkflow(langgraph:pr-review)  runKind user_immediate, triggerSource api:vcs_review
+        │    └─ operator graph route → codeSubject validated against resolveNodeRepo → run scope
+        │         gather (knowledge index/search/read, work_item_read, node_code list/read @ PR head)
+        │         → verdict (structured, no tools) → finalize (host evidence, uncited, buildSha)
+        └─ postReviewResult (worker): fail_on_error → any non-evaluation = failure "COULD NOT EVALUATE";
+             summary ends with the machine block (<!-- cogni-review-result v1 -->)
 ```
 
 **Key differences from Walk target:**
 
-- Auth lives in `src/adapters/server/review/github-auth.ts`, not `packages/github-core/`
-- Review dispatched from Next.js webhook route, not `services/git-daemon/`
-- Self-install only — reads `.cogni/` from local filesystem
-- Graph execution via `GraphExecutorPort` (in-proc), not internal API endpoint
+- Auth lives in `src/adapters/server/review/github-auth.ts` + `github-review.adapter.ts`, not `packages/github-core/`
+- Review is requested through the typed verb, not a webhook; there is no `check_suite.rerequested` handler (re-run = call the verb again on the same SHA)
+- Graph execution via `PrReviewWorkflow` → `GraphRunWorkflow` → the internal graph run route
+- GitHub requiring the check (rulesets, merge-queue SHAs) is task.5438, not built
 
 ### Why Two GitHub Apps
 
@@ -163,8 +153,8 @@ Each GitHub App gets its own webhook URL so signature verification implicitly id
 POST /api/v1/webhooks/github/review   ← Review App webhook URL
   │
   ├─ Verify X-Hub-Signature-256 with REVIEW_APP_WEBHOOK_SECRET
-  ├─ pull_request.opened/synchronize/reopened → reviewHandler
-  ├─ check_suite.rerequested                  → rerunHandler
+  ├─ (Walk target, NOT built) pull_request / check_suite.rerequested handlers —
+  │   as built, review is requested only via POST /api/v1/vcs/review (story.5102)
   └─ installation_repositories.added           → welcomeHandler
 
 POST /api/v1/webhooks/github/admin    ← Admin App webhook URL

@@ -446,10 +446,12 @@ The boundary between LangGraph and Temporal is **durability and runtime semantic
 
 #### Normative Pattern: Webhook → Parent Workflow → Graph Child → Write Activity
 
-All webhook-triggered graph execution **must** follow this pattern. It is the canonical template for PR review, deploy analysis, incident response, and any future webhook→graph flow.
+All trigger-started graph execution **must** follow this pattern — a webhook route or a typed API verb. It is the canonical template for deploy analysis, incident response, PR review, and any future trigger→graph flow.
+
+PR review is started ONLY by the developer verb `POST /api/v1/vcs/review` (story.5102, REVIEW_IS_DEV_TRIGGERED) — no webhook event starts it. The verb starts `PrReviewWorkflow` with the stable id `pr-review:{owner}/{repo}/{pr}/{headSha}` (a running duplicate → 409 `review_running`); the requesting developer is the graph run's actor and payer, and the check run carries the request id as `external_id`.
 
 ```
-webhook route (fire-and-forget)
+webhook route or API verb (fire-and-forget)
   → start ParentWorkflow (Temporal parent — exits immediately)
     → Activity: fetch context (read — Temporal gives retry + timeout)
     → executeChild: GraphRunWorkflow(graph-id) (LangGraph decision)
@@ -459,7 +461,7 @@ webhook route (fire-and-forget)
 
 **Required constraints:**
 
-1. Webhook handler starts the Workflow and exits immediately — no blocking Next.js on Redis/SSE for completion
+1. The trigger (webhook handler or verb) starts the Workflow and exits immediately — no blocking Next.js on Redis/SSE for completion
 2. Graph returns a **pure structured decision artifact**, not side effects. Required writes happen in Activities after the graph child completes
 3. Write Activities use idempotency keys derived from **stable business keys** (e.g., `${repo}/${pr}/${headSha}/${reviewType}`). Do not include `attempt` in idempotency keys for externally visible writes — retries must produce the same external result
 4. `graph_runs` records the child GraphRunWorkflow for dashboard observability (per WORKFLOW_TOP_LEVEL_VISIBILITY, the parent Workflow is the primary UI object; the graph run is drill-down detail)

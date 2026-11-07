@@ -6,8 +6,11 @@
  * Purpose: Bind immutable code reads to this node, source repository and serving revision.
  * Scope: Existing App installation contents:read only; no local filesystem fallback or new grants. Does not perform source mutations.
  * Invariants: ToolRunner and this bound capability independently require computed node.flight authority; reject wrong execution node.
+ *   REVIEW_READS_PR_HEAD (story.5102): when the run scope carries a host-validated `codeSubject`, every
+ *   call builds a NEW reader for `codeSubject.owner/repo@headSha` with REVIEW_NODE_CODE_POLICY — the
+ *   serving-code reader is never mutated. v0 single-node authz: a subject for another node is denied.
  * Side-effects: none
- * Links: https://cognidao.org/work/items/subtask.5027
+ * Links: https://cognidao.org/work/items/subtask.5027, story.5102
  * @internal
  */
 
@@ -17,7 +20,11 @@ import {
   type AuthzDecision,
   authzNodeResource,
 } from "@cogni/authorization-core";
-import { GitHubVcsAdapter, getExecutionScope } from "@/adapters/server";
+import {
+  GitHubVcsAdapter,
+  getExecutionScope,
+  REVIEW_NODE_CODE_POLICY,
+} from "@/adapters/server";
 
 export function createNodeCodeCapability(deps: {
   getAuthorization?: () => AuthorizationPort | undefined;
@@ -34,6 +41,7 @@ export function createNodeCodeCapability(deps: {
   };
 }): NodeCodeCapability {
   let reader: NodeCodeCapability | undefined;
+  let adapter: GitHubVcsAdapter | undefined;
   let origin: string | undefined;
   if (deps.origin) {
     try {
@@ -44,17 +52,18 @@ export function createNodeCodeCapability(deps: {
       /* Invalid optional source configuration remains unavailable. */
     }
   }
-  if (
-    origin &&
-    deps.appId &&
-    deps.privateKeyBase64 &&
-    deps.commitSha &&
-    /^[0-9a-f]{40}$/.test(deps.commitSha)
-  ) {
-    const adapter = new GitHubVcsAdapter({
+  if (origin && deps.appId && deps.privateKeyBase64) {
+    adapter = new GitHubVcsAdapter({
       appId: deps.appId,
       privateKey: Buffer.from(deps.privateKeyBase64, "base64").toString("utf8"),
     });
+  }
+  if (
+    adapter &&
+    origin &&
+    deps.commitSha &&
+    /^[0-9a-f]{40}$/.test(deps.commitSha)
+  ) {
     reader = adapter.nodeCodeReader(
       {
         nodeId: deps.nodeId,
@@ -85,7 +94,12 @@ export function createNodeCodeCapability(deps: {
     const scope = getExecutionScope();
     if (!scope.actorUserId || scope.nodeId !== deps.nodeId)
       throw new Error("node_code_scope_unavailable");
-    if (!reader) throw new Error("node_code_source_unavailable");
+    const subject = scope.codeSubject;
+    // v0 single-node authz: node.flight below is checked on THIS node only.
+    if (subject && subject.nodeId !== deps.nodeId)
+      throw new Error("node_code_authz_denied");
+    if (subject ? !adapter || !origin : !reader)
+      throw new Error("node_code_source_unavailable");
     const authorization = deps.getAuthorization?.();
     if (!authorization) throw new Error("node_code_authz_unavailable");
     let decision: AuthzDecision;
@@ -109,6 +123,23 @@ export function createNodeCodeCapability(deps: {
           ? "node_code_authz_unavailable"
           : "node_code_authz_denied"
       );
+    if (subject && adapter && origin) {
+      // A fresh reader per call, bound to the PR head; the serving reader stays untouched.
+      return adapter.nodeCodeReader(
+        {
+          nodeId: deps.nodeId,
+          origin,
+          owner: subject.owner,
+          repo: subject.repo,
+          commitSha: subject.headSha,
+          roots: [],
+          manifests: [],
+        },
+        deps.log,
+        REVIEW_NODE_CODE_POLICY
+      );
+    }
+    if (!reader) throw new Error("node_code_source_unavailable");
     return reader;
   }
   return {

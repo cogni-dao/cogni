@@ -52,6 +52,11 @@ export const ReviewCheckRunConclusionSchema = z.enum([
 
 export const InternalReviewCreateCheckRunInputSchema = RepoTargetSchema.extend({
   headSha: z.string().min(1),
+  /**
+   * CHECK_IS_REQUEST_BOUND (story.5102): the review request id, written to the check run's
+   * `external_id` so a caller can find the check for exactly its request.
+   */
+  externalId: z.string().min(1).max(255).optional(),
 });
 
 export const InternalReviewCreateCheckRunOutputSchema = z.object({
@@ -100,6 +105,22 @@ export const InternalReviewPostPrCommentOutputSchema = z.object({
 
 export const InternalReviewPrContextInputSchema = RepoTargetSchema.extend({
   prNumber: z.number().int().positive(),
+  /**
+   * Pinned head SHA (story.5102). When set, the operator compares the PR's current head to it
+   * once and reports `headMoved`.
+   */
+  headSha: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .optional(),
+  /**
+   * Pinned base SHA (story.5102). When set, repo-spec and rule files are read at this commit
+   * instead of the moving base branch.
+   */
+  baseSha: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .optional(),
 });
 
 const EvidenceBundleSchema = z.object({
@@ -167,6 +188,13 @@ export const InternalReviewPrContextOutputSchema = z.object({
   repoSpecYaml: z.string().optional(),
   changedFiles: z.array(z.string()),
   owningNode: OwningNodeSchema,
+  /**
+   * True when a pinned `headSha` was sent and the PR head no longer matches it. The diff then
+   * describes a different commit, so the review cannot evaluate the pinned one.
+   */
+  headMoved: z.boolean().optional().default(false),
+  /** Serving operator build (APP_BUILD_SHA) that built this context; null when unversioned. */
+  operatorBuildSha: z.string().nullable().optional(),
 });
 
 // ---------------------------------------------------------------------------

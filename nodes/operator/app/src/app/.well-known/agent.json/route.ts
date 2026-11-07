@@ -22,6 +22,7 @@
 import {
   agentMeOperation,
   flightOperation,
+  reviewOperation,
   workItemsCreateOperation,
   workItemsPatchOperation,
 } from "@cogni/node-contracts";
@@ -127,6 +128,8 @@ export async function GET(request: Request) {
       // operator-node-only production substrate lever. Grant the role via the
       // access-request → owner-approve loop below.
       flight: `${origin}/api/v1/vcs/flight`,
+      // Developer-requested PR review (story.5102) — the ONLY review trigger; no webhook starts one.
+      review: `${origin}/api/v1/vcs/review`,
       promote: `${origin}/api/v1/deploy/promote`,
       // Node-deploy verb (task.5400): POST records intent to blue/green-deploy one declared
       // workload at a sha; GET reads desired + releaseState (queued|deploying|active|parked|
@@ -166,6 +169,19 @@ export async function GET(request: Request) {
         },
         inputSchema: z.toJSONSchema(flightOperation.input),
         outputSchema: z.toJSONSchema(flightOperation.output),
+      },
+      // REVIEW_IS_DEV_TRIGGERED (story.5102): a developer asks for a PR review; the requester is
+      // the run actor and pays. The check run carries `external_id = requestId` and its summary
+      // ends with one machine-readable block (marker `<!-- cogni-review-result v1 -->`).
+      requestReview: {
+        method: "POST",
+        endpoint: `${origin}/api/v1/vcs/review`,
+        auth: {
+          type: "bearer",
+          capability: "node.flight",
+        },
+        inputSchema: z.toJSONSchema(reviewOperation.input),
+        outputSchema: z.toJSONSchema(reviewOperation.output),
       },
       // WRITE_SEAM_IS_DISCOVERABLE: `endpoints.workItems` is only a URL — it cannot
       // tell an agent that the route accepts POST, what body it takes, or that the
