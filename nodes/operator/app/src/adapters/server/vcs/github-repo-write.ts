@@ -567,6 +567,21 @@ const PromoteDiscriminatorSchema = z.object({
   source_repo: z.string().url().optional(),
 });
 
+/**
+ * The row fields that decide whether a catalog entry is an in-repo artifact the operator promote
+ * ships alongside the operator (bug.5599). `type`/`envs` are optional here so a malformed unrelated
+ * row is skipped by the predicate, not promoted.
+ */
+const OperatorLaneArtifactRowSchema = z.object({
+  name: z.string(),
+  type: z.string().optional(),
+  source_repo: z.string().optional(),
+  envs: z.array(z.string()).optional(),
+});
+
+/** Mirrors features/compute OPERATOR_LANE_SLUG (adapters may not import features). */
+const OPERATOR_PROMOTE_SLUG = "operator";
+
 function parseGhcrImageRepository(imageRepository: string): {
   owner: string;
   packageName: string;
@@ -1509,22 +1524,40 @@ export class GitHubRepoWriter implements DeployPlanePort {
       parentRepo,
       slug,
     });
-    await this.assertForwardPromotion({
+    // The operator lane ships its in-repo services (scheduler-worker) at the same sha; each target
+    // is guarded against its OWN current pin (bug.5599). Non-operator slugs resolve to [slug].
+    const targets = await this.resolvePromoteTargets({
       parentOwner,
       parentRepo,
       slug,
       env,
-      sourceOwner: source.owner,
-      sourceRepo: source.repo,
-      sourceSha,
-      allowRollback,
     });
+    for (const target of targets) {
+      const targetSource =
+        target === slug
+          ? source
+          : await this.resolvePromotionSource({
+              parentOwner,
+              parentRepo,
+              slug: target,
+            });
+      await this.assertForwardPromotion({
+        parentOwner,
+        parentRepo,
+        slug: target,
+        env,
+        sourceOwner: targetSource.owner,
+        sourceRepo: targetSource.repo,
+        sourceSha,
+        allowRollback,
+      });
+    }
 
-    const dispatch = await this.dispatchNodePromote({
+    const dispatch = await this.dispatchPromoteWorkflow({
       owner: parentOwner,
       repo: parentRepo,
       env,
-      slug,
+      nodes: targets,
       // REMOTE-SOURCE: source-address the node image (no source_sha — operator checkout ref stays
       // main). IN-REPO: source_sha is the operator checkout ref.
       ...(source.isRemoteSource ? { nodeSourceSha: sourceSha } : { sourceSha }),
@@ -1546,40 +1579,119 @@ export class GitHubRepoWriter implements DeployPlanePort {
     input: PromoteNodeFromPreviewInput
   ): Promise<CandidateFlightDispatchResult> {
     const { parentOwner, parentRepo, slug, allowRollback = false } = input;
-    const previewPin = await this.fetchDeployPin({
-      parentOwner,
-      parentRepo,
-      env: "preview",
-      slug,
-    });
-    if (previewPin.kind !== "ok") {
-      throw deployPlaneError(
-        "preview_pin_missing",
-        `preview deploy pin is missing or invalid for ${slug}`,
-        409
-      );
-    }
-    const source = await this.resolvePromotionSource({
-      parentOwner,
-      parentRepo,
-      slug,
-    });
-    await this.assertForwardPromotion({
+    // The operator lane forwards its in-repo services too (bug.5599): every target needs its own
+    // valid preview pin, and each is guarded forward against its own production pin.
+    const targets = await this.resolvePromoteTargets({
       parentOwner,
       parentRepo,
       slug,
       env: "production",
-      sourceOwner: source.owner,
-      sourceRepo: source.repo,
-      sourceSha: previewPin.sha,
-      allowRollback,
     });
-    return this.dispatchNodePromote({
+    for (const target of targets) {
+      const previewPin = await this.fetchDeployPin({
+        parentOwner,
+        parentRepo,
+        env: "preview",
+        slug: target,
+      });
+      if (previewPin.kind !== "ok") {
+        throw deployPlaneError(
+          "preview_pin_missing",
+          `preview deploy pin is missing or invalid for ${target}`,
+          409
+        );
+      }
+      const source = await this.resolvePromotionSource({
+        parentOwner,
+        parentRepo,
+        slug: target,
+      });
+      await this.assertForwardPromotion({
+        parentOwner,
+        parentRepo,
+        slug: target,
+        env: "production",
+        sourceOwner: source.owner,
+        sourceRepo: source.repo,
+        sourceSha: previewPin.sha,
+        allowRollback,
+      });
+    }
+    return this.dispatchPromoteWorkflow({
       owner: parentOwner,
       repo: parentRepo,
       env: "production",
-      slug,
+      nodes: targets,
     });
+  }
+
+  /**
+   * The nodes one promote of `slug` dispatches (bug.5599). A node is its own single target. The
+   * operator lane is the control plane PLUS every in-repo service the operator ships from this
+   * repo: catalog rows with `type: service`, no `source_repo`, and the target env in `envs`
+   * (today: scheduler-worker). The catalog at main is the SSOT; no slug is hardcoded here.
+   * Since task.5411 the promote route refuses every non-operator slug, so without this nothing
+   * promoted the worker to production.
+   */
+  private async resolvePromoteTargets(input: {
+    parentOwner: string;
+    parentRepo: string;
+    slug: string;
+    env: "preview" | "production";
+  }): Promise<readonly string[]> {
+    if (input.slug !== OPERATOR_PROMOTE_SLUG) return [input.slug];
+    const entries = await this.listDirectoryEntries({
+      owner: input.parentOwner,
+      repo: input.parentRepo,
+      path: "infra/catalog",
+      ref: "main",
+    });
+    if (entries === null) {
+      throw deployPlaneError(
+        "catalog_missing",
+        `${input.parentOwner}/${input.parentRepo} has no infra/catalog directory at main`,
+        404
+      );
+    }
+    const services: string[] = [];
+    for (const entry of entries) {
+      if (entry.type !== "file" || !entry.name.endsWith(".yaml")) continue;
+      const rowSlug = entry.name.replace(/\.yaml$/, "");
+      if (rowSlug === OPERATOR_PROMOTE_SLUG) continue;
+      const text = await this.fetchFileText({
+        owner: input.parentOwner,
+        repo: input.parentRepo,
+        path: `infra/catalog/${entry.name}`,
+        ref: "main",
+      });
+      if (!text) {
+        throw deployPlaneError(
+          "catalog_read_failed",
+          `infra/catalog/${entry.name} disappeared while resolving promote targets`,
+          409
+        );
+      }
+      let parsed: ReturnType<typeof OperatorLaneArtifactRowSchema.safeParse>;
+      try {
+        parsed = OperatorLaneArtifactRowSchema.safeParse(parseYaml(text));
+      } catch (error) {
+        throw deployPlaneError(
+          "invalid_catalog",
+          `infra/catalog/${entry.name} is invalid YAML: ${String(error)}`,
+          409
+        );
+      }
+      if (
+        parsed.success &&
+        parsed.data.type === "service" &&
+        parsed.data.source_repo === undefined &&
+        parsed.data.name === rowSlug &&
+        parsed.data.envs?.includes(input.env)
+      ) {
+        services.push(rowSlug);
+      }
+    }
+    return [OPERATOR_PROMOTE_SLUG, ...services.sort()];
   }
 
   private async resolvePromotionSource(input: {
@@ -2351,10 +2463,34 @@ export class GitHubRepoWriter implements DeployPlanePort {
     sourceSha?: string;
     nodeSourceSha?: string;
   }): Promise<ObservedWorkflowDispatchResult> {
+    const { slug, ...rest } = input;
+    const nodes = await this.resolvePromoteTargets({
+      parentOwner: input.owner,
+      parentRepo: input.repo,
+      slug,
+      env: input.env === "production" ? "production" : "preview",
+    });
+    return this.dispatchPromoteWorkflow({ ...rest, nodes });
+  }
+
+  /**
+   * One promote-and-deploy dispatch for an already-resolved target list. The workflow takes a CSV
+   * `nodes` input; its concurrency group includes `inputs.nodes`, so an `operator,scheduler-worker`
+   * run serializes only with an identical CSV, never with a bare `operator` run.
+   */
+  private async dispatchPromoteWorkflow(input: {
+    owner: string;
+    repo: string;
+    env: string;
+    nodes: readonly string[];
+    sourceSha?: string;
+    nodeSourceSha?: string;
+  }): Promise<ObservedWorkflowDispatchResult> {
     const octokit = await this.getOctokit(input.owner, input.repo);
+    const nodesCsv = input.nodes.join(",");
     const inputs: Record<string, string> = {
       environment: input.env,
-      nodes: input.slug,
+      nodes: nodesCsv,
       // APP_PROMOTE_IS_NO_INFRA: the agent-facing promote endpoint reconciles the
       // app digest only — orthogonal to substrate, mirroring candidate-flight (no
       // deploy-infra job). Set explicitly, not via the workflow default, so the
@@ -2411,7 +2547,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     return {
       dispatched: true,
       workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/promote-and-deploy.yml`,
-      message: `Promote dispatched: ${input.slug} → ${input.env}.`,
+      message: `Promote dispatched: ${nodesCsv} → ${input.env}.`,
       runId,
       runUrl,
       runApiUrl,
