@@ -47,7 +47,8 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
       "- DB creds come from ESO/OpenBao on every env; never write plaintext DB passwords.\n" +
       "- Deploys ship prebuilt images by SHA; verify the live build before validating.\n\n" +
       "## What to recall next\n" +
-      "- `cognition-substrate-bootstrap` (why the session bundle exists) and the skills index in the session bundle. Then create this node's `<slug>-agent-orientation` and cite this entry.\n\n" +
+      "- `cognition-substrate-bootstrap` (why the session bundle exists) and the skills index in the session bundle. Then create this node's `<slug>-agent-orientation` and cite this entry.\n" +
+      "- Create this node's `<slug>-architect` from the `cogni-architect` starter, then route every design or code change through it. The architect is required reading for nearly any design or code change; skip it only for wording-only edits. It is a foundational atom: every node has one.\n\n" +
       "## Work items belong to this node\n" +
       "- Resolve this node's base URL from `.cogni/repo-spec.yaml` and `/.well-known/agent.json`; never default writes to the operator apex.\n" +
       '- Discover the typed write contracts at `actions.createWorkItem` and `actions.updateWorkItem`. Create with `POST /api/v1/work/items`; progress or close with `PATCH /api/v1/work/items/{id}` using `{"set":{...}}`.\n' +
@@ -56,6 +57,42 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
     sourceType: "human",
     confidencePct: 60,
     tags: ["agent-orientation", "operating-map", "onboarding", "session-start"],
+  },
+  {
+    id: "cogni-architect",
+    domain: "meta",
+    title: "Node architect starter — route design and code through it",
+    entryType: "skill",
+    content:
+      "**Use when:** before any research, design, or code review on this node. Skip only for wording-only edits.\n\n" +
+      "This is the starter architect every Cogni node inherits from the base seed set. Rename it to this node's own `<slug>-architect`, then grow it as the node builds its mission. A re-seed may overwrite this starter, so node-owned content belongs in the slug-specific entry. It is a foundational atom: every node keeps one and routes design through it.\n\n" +
+      "Keep every change on the shortest safe path to THIS node's mission. You build on the node-template foundation; you do not rebuild it.\n\n" +
+      "## You inherited a working baseline\n" +
+      "- The node-template foundation gives you CI/CD, governance, payments, cognition, work items, knowledge, and delivery. Treat these as given.\n" +
+      "- For any change to that shared plumbing, the owner is node-template, not this node. Read [node-template-architect](https://node-template.cognidao.org/knowledge/node-template-architect) in full and route the change upstream. Do not fork or re-derive baseline behavior here.\n\n" +
+      "## Stay aligned to receive updates\n" +
+      "- This node keeps receiving node-template package and fork-sync updates. Keep your mission code and mission knowledge separate from inherited baseline files so those updates merge cleanly.\n" +
+      "- A shared fix authored here instead of upstream blocks the next update. Treat it as a design finding, not a shortcut.\n\n" +
+      "## Build this node's mission\n" +
+      "- Name the node's north-star goal and the mission-loop stage the change moves: Goals -> Measure -> Prioritize -> Discover -> Act -> Learn. A change that serves no node goal is sprawl; record it as a finding.\n" +
+      "- Map this node's own services, domains, and decisions here as they grow. Replace this list with the real owners.\n\n" +
+      "## Compare target, current system, and proposed change\n" +
+      "1. Fix the scope from the owned work item outcome: node, environment, services, authority.\n" +
+      "2. Pin the evidence: repository and revision for each input; read the changed files and their callers.\n" +
+      "3. Trace the mechanism: input -> authoritative writer -> external effect -> evidence -> gate. Inspect the failed behavior before proposing its cure.\n" +
+      "4. Contrast with the north star: for each issue, cite the target, the current evidence, the proposed delta, and whether it is convergence, a justified transition, or a regression. A regression blocks approval.\n\n" +
+      "## Review and hand off\n" +
+      "- For designs apply `review-design`; for code apply `review-implementation`. Do not approve your own work.\n" +
+      "- Prove live before->after behavior with the exact build SHA. Green CI, a merged PR, or a written artifact is not proof.",
+    sourceType: "human",
+    confidencePct: 60,
+    tags: [
+      "architect",
+      "operating-map",
+      "onboarding",
+      "design-review",
+      "node-template-baseline",
+    ],
   },
   {
     id: "cogni-meta-confidence-convention",
