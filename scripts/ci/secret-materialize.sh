@@ -394,7 +394,9 @@ DSN_DEFER_KEYS=" "
 # zero churn while a half-migrated node self-heals. This includes stale per-node
 # DOLTGRES_URL copies: node-substrate provisions with the operator SSOT, so the pod
 # must receive a URL derived from that same SSOT or the migrator 28P01s.
-COMPOSED_DSN_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_URL DATABASE_SSL_CA_CERT "
+# DOLTGRES_PASSWORD is recomposed the same way (story.5098): a node bank that still holds
+# another env's superuser is overwritten with its own lane's superuser.
+COMPOSED_DSN_KEYS=" DATABASE_URL DATABASE_SERVICE_URL DOLTGRES_PASSWORD DOLTGRES_URL DATABASE_SSL_CA_CERT "
 
 # Shared/human inheritance uses only explicit catalog inheritFrom authority.
 # Unspecified optional keys stay target-owned; there is no ancestor scan.

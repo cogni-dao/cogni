@@ -102,6 +102,8 @@ put_secret database-reliability-readmitter DATABASE_RELIABILITY_READMIT_PASSWORD
 # Doltgres superuser SSOT is operator-canonical (cogni/<env>/operator/DOLTGRES_PASSWORD),
 # shared env-wide; reconcile reads it from operator and injects it into doltgres-provision.
 put_secret operator DOLTGRES_PASSWORD doltgres-super-sentinel
+# The runtime DSN must agree with the lane Doltgres host, database and superuser (story.5098).
+put_secret operator DOLTGRES_URL 'postgresql://postgres:doltgres-super-sentinel@127.0.0.1:5435/knowledge_operator?sslmode=disable'
 # Existing infra-owned mirror credentials must stay untouched by target reconcile.
 put_secret operator DOLT_CREDS_JWK '{"kty":"OKP","d":"jwk-secret-sentinel"}'
 put_secret operator DOLT_CREDS_KEYID dolt-mirror-keyid-sentinel
@@ -291,6 +293,13 @@ cat > "$FAKEBIN/docker" <<'EOF'
 printf '%s\n' "$*" >> "${FAKE_REMOTE_ROOT}/docker.log"
 if [ "${1:-}" = ps ] && [ "${2:-}" = -q ]; then
   printf '%s\n' destination-postgres
+  exit 0
+fi
+if [[ "$*" == *'dst=/app/doltgres-provision.sh'* ]]; then
+  [ "$DOLTGRES_PASSWORD" = doltgres-super-sentinel ] || exit 41
+  [ "$DOLTGRES_HOST" = 172.19.0.2 ] && [ "$DOLTGRES_PORT" = 5432 ] || exit 42
+  [[ "$COGNI_NODE_DBS" == cogni_*_candidate_a ]] || exit 43
+  printf 'lane doltgres superuser; %s\n' "$COGNI_NODE_DBS" >> "${FAKE_REMOTE_ROOT}/doltgres-provision-proof.log"
   exit 0
 fi
 if [[ "$*" == *'--network container:destination-postgres'* ]]; then
@@ -541,7 +550,7 @@ grep -q -- "--ns cogni-candidate-a-${operator_node_id}" "$REMOTE_ROOT/docker.log
 # operator's bank carries the env-wide DOLTGRES superuser SSOT in addition to its
 # per-node DB creds; reconcile must leave all three untouched.
 after_keys="$(cd "$BAO_ROOT/cogni/candidate-a/operator" && printf '%s\n' * | sort | paste -sd, -)"
-if [ "$after_keys" != "APP_DB_PASSWORD,APP_DB_SERVICE_PASSWORD,DATABASE_SERVICE_URL,DATABASE_URL,DOLTGRES_PASSWORD,DOLT_CREDS_JWK,DOLT_CREDS_KEYID" ]; then
+if [ "$after_keys" != "APP_DB_PASSWORD,APP_DB_SERVICE_PASSWORD,DATABASE_SERVICE_URL,DATABASE_URL,DOLTGRES_PASSWORD,DOLTGRES_URL,DOLT_CREDS_JWK,DOLT_CREDS_KEYID" ]; then
   echo "reconcile must perform ZERO OpenBao writes; operator bank changed to: $after_keys" >&2
   exit 1
 fi
@@ -865,7 +874,8 @@ FOREIGN_CATALOG="$FOREIGN_SOURCE/infra/catalog"
 mkdir -p "$FOREIGN_CATALOG" "$BAO_ROOT/cogni/production/operator"
 cp infra/catalog/*.yaml "$FOREIGN_CATALOG/"
 cp infra/database-budget-profiles.yaml "$FOREIGN_SOURCE/infra/"
-printf '%s' doltgres-super-sentinel > "$BAO_ROOT/cogni/production/operator/DOLTGRES_PASSWORD"
+# The control env's superuser differs from the lane's: a foreign lane must never use it.
+printf '%s' prod-doltgres-super-sentinel > "$BAO_ROOT/cogni/production/operator/DOLTGRES_PASSWORD"
 FOREIGN_NODE=poly-guard-fixture
 cp "$FOREIGN_CATALOG/poly.yaml" "$FOREIGN_CATALOG/$FOREIGN_NODE.yaml"
 yq -i ".name = \"$FOREIGN_NODE\"" "$FOREIGN_CATALOG/$FOREIGN_NODE.yaml"
@@ -881,6 +891,8 @@ for foreign_node in poly "$FOREIGN_NODE"; do
   put_secret "$foreign_node-database-migration" APP_DB_MIGRATION_PASSWORD foreign-migration-sentinel
   put_secret "$foreign_node-database-recovery-probe" DATABASE_RECOVERY_PROBE_PASSWORD foreign-probe-sentinel
   put_secret "$foreign_node-database-migration" DATABASE_MIGRATION_URL "$foreign_migration_dsn"
+  put_secret "$foreign_node" DOLTGRES_URL \
+    "postgresql://postgres:doltgres-super-sentinel@127.0.0.1:5435/knowledge_${control_db#cogni_}?sslmode=disable"
   mkdir -p "$FOREIGN_SOURCE/nodes/$foreign_node/k8s/external-secrets/candidate-a"
   cp nodes/operator/k8s/external-secrets/candidate-a/external-secret.yaml \
     "$FOREIGN_SOURCE/nodes/$foreign_node/k8s/external-secrets/candidate-a/external-secret.yaml"
@@ -897,8 +909,16 @@ for foreign_node in poly "$FOREIGN_NODE"; do
     bash scripts/ci/reconcile-node-substrate.sh candidate-a "$foreign_node" \
     > "$TMPROOT/$foreign_node.out"
   tail -n "+$((docker_log_start + 1))" "$REMOTE_ROOT/docker.log" > "$TMPROOT/$foreign_node-docker.log"
-  grep -qE -- "--profile bootstrap run --rm --no-deps -e COGNI_NODE_DBS=$control_db .* doltgres-provision" \
-    "$TMPROOT/$foreign_node-docker.log"
+  # story.5098: the knowledge DB is created on the LANE VM's Doltgres with the lane superuser,
+  # never on the control VM.
+  if grep -q 'doltgres-provision' "$TMPROOT/$foreign_node-docker.log"; then
+    echo 'foreign lane Doltgres provisioning reached the control VM' >&2; exit 1
+  fi
+  grep -q "lane doltgres superuser; $control_db" "$DESTINATION_ROOT/doltgres-provision-proof.log"
+  jq -e '.rows[] | select(.row == "doltgres_destination_provision") | .state == "updated"' \
+    "$TMPROOT/$foreign_node-summary.json" >/dev/null
+  jq -e '.rows[] | select(.row == "doltgres_host_agreement") | .state == "ready"' \
+    "$TMPROOT/$foreign_node-summary.json" >/dev/null
   cmp "$TMPROOT/runtime-env.before" "$REMOTE_ROOT/opt/cogni-template-runtime/.env"
   grep -q 'projected migration DSN digest and live identity verified ok' "$TMPROOT/$foreign_node.out"
   jq -e '.rows[] | select(.row == "migration_dsn_proven") | .state == "ready"' \
@@ -987,6 +1007,26 @@ jq -e '.status == "failure" and ([.rows[] | select(.row == "migration_dsn_proven
 if grep -q 'substrate ready' "$TMPROOT/foreign-provision-failed.out"; then
   echo 'failed destination provisioning falsely reported readiness' >&2; exit 1
 fi
+
+# story.5098: a stored DOLTGRES_URL that still carries the control env's superuser or the
+# control VM refuses before any Doltgres provisioning.
+dg_proofs_before="$(wc -l < "$DESTINATION_ROOT/doltgres-provision-proof.log")"
+good_dg_url="postgresql://postgres:doltgres-super-sentinel@127.0.0.1:5435/knowledge_${FOREIGN_NODE//-/_}_candidate_a?sslmode=disable"
+for bad_dg_url in \
+  "postgresql://postgres:prod-doltgres-super-sentinel@127.0.0.1:5435/knowledge_${FOREIGN_NODE//-/_}_candidate_a?sslmode=disable" \
+  "postgresql://postgres:doltgres-super-sentinel@203.0.113.1:5435/knowledge_${FOREIGN_NODE//-/_}_candidate_a?sslmode=disable" \
+  "postgresql://postgres:doltgres-super-sentinel@127.0.0.1:5435/knowledge_${FOREIGN_NODE//-/_}?sslmode=disable"; do
+  put_secret "$FOREIGN_NODE" DOLTGRES_URL "$bad_dg_url"
+  if run_foreign_reconcile foreign-doltgres-drift > "$TMPROOT/foreign-doltgres-drift.out" 2>&1; then
+    echo "a DOLTGRES_URL off the lane's own Doltgres passed agreement" >&2; exit 1
+  fi
+  grep -q 'stored DOLTGRES_URL' "$TMPROOT/foreign-doltgres-drift.out"
+  if grep -q 'prod-doltgres-super-sentinel' "$TMPROOT/foreign-doltgres-drift.out"; then
+    echo 'Doltgres agreement refusal leaked a superuser' >&2; exit 1
+  fi
+done
+[ "$dg_proofs_before" = "$(wc -l < "$DESTINATION_ROOT/doltgres-provision-proof.log")" ]
+put_secret "$FOREIGN_NODE" DOLTGRES_URL "$good_dg_url"
 
 # Delegating provisioning must never bypass mandatory destination authentication.
 docker_log_start="$(wc -l < "$REMOTE_ROOT/docker.log" | tr -d ' ')"

@@ -238,7 +238,8 @@ _resolve_node_value() {
 # Unpinning a lane therefore moves both at once, which is the only safe pairing.
 #
 # POSTGRES ONLY. `_doltgres_db_suffix` below is the deliberate exception: the Doltgres DSN
-# keeps the `knowledge_<node>_<lane>` name a foreign-custodied lane was born with.
+# keeps the `knowledge_<node>_<lane>` name on the lane VM, so it never collides with that
+# VM's own env's `knowledge_<node>`.
 _lane_db_suffix() {
   local node="${1:-}" lane="${DEPLOY_ENV:-}" control="${SECRETS_CONTROL_ENV:-${DEPLOY_ENV:-}}"
   if [ -n "$node" ] && [ -n "$lane" ] && command -v lane_db_vm_env >/dev/null 2>&1; then
@@ -255,9 +256,11 @@ _lane_db_suffix() {
 #
 # This is `_lane_db_suffix`'s pre-resolver body, kept as its own function on purpose. The
 # Doltgres HOST is the lane's own VM (`${pg_host}`, the same host as Postgres) and its
-# superuser is the lane's own (`_lane_doltgres_superuser`). Only the NAME stays as it was:
-# a foreign-custodied lane keeps `knowledge_<node>_<lane>`, the database name it was born
-# with, so moving the host does not also rename the database under it.
+# superuser is the lane's own (`_lane_doltgres_superuser`). Only the NAME keeps the
+# control-env suffix: a foreign-custodied lane uses `knowledge_<node>_<lane>`, because the
+# lane VM's Doltgres can also hold its own env's unsuffixed `knowledge_<node>` (candidate-a's
+# serves the test fleet), and the suffix keeps the two apart. reconcile-node-substrate.sh
+# creates that exact name on the lane VM; `lane_doltgres_assert_agreement` proves it.
 _doltgres_db_suffix() {
   local lane="${DEPLOY_ENV:-}" control="${SECRETS_CONTROL_ENV:-${DEPLOY_ENV:-}}"
   if command -v lane_db_suffix >/dev/null 2>&1; then

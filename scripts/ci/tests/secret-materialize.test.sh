@@ -46,6 +46,9 @@ put_secret() {
 }
 
 # Explicit shared integration owners differ from the ordinary target.
+# story.5098: a node bank still holding another env's Doltgres superuser must be
+# overwritten with its own lane's superuser (recompose on drift, like the DSNs).
+put_secret node-template DOLTGRES_PASSWORD stale-foreign-doltgres-superuser
 put_secret operator POSTHOG_API_KEY phc_existing
 put_secret operator POSTHOG_HOST https://us.i.posthog.com
 put_secret operator TAVILY_API_KEY tvly-owner-fixture
@@ -390,6 +393,11 @@ test -f "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL" \
   || { echo "materialize did not compose DOLTGRES_URL" >&2; exit 1; }
 grep -qE '://postgres:[^@]+@[^/]+/knowledge_node_template\?' "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL" \
   || { echo "DOLTGRES_URL must reach knowledge_node_template as the postgres superuser (non-empty pw)" >&2; exit 1; }
+node_dg_password="$(cat "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_PASSWORD")"
+[ "$node_dg_password" != stale-foreign-doltgres-superuser ] \
+  || { echo "a stale foreign DOLTGRES_PASSWORD survived materialize (story.5098)" >&2; exit 1; }
+grep -qF "://postgres:${node_dg_password}@" "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL" \
+  || { echo "DOLTGRES_URL and DOLTGRES_PASSWORD must carry the same lane superuser" >&2; exit 1; }
 
 # Per-node LiteLLM key: exact format, distinct from the fleet master, and the
 # explicit value's hash is registered under the repo-spec identity alias.

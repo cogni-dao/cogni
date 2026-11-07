@@ -242,8 +242,13 @@ lane_db_residency_check "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" \
   || fail "foreign Postgres residency is forbidden"
 postgres_provision_here=false
 [[ "$postgres_residency_env" != "$SUBSTRATE_CONTROL_ENV" ]] || postgres_provision_here=true
-# Doltgres and its inventory retain control residency when Postgres moves.
+# Doltgres follows Postgres onto the lane's own VM (story.5098): the same host the composer
+# writes into DOLTGRES_URL. The NAME keeps the control-env suffix (knowledge_<node>_<lane>):
+# a lane VM's Doltgres can also hold an unsuffixed knowledge_<node> of its own env's fleet,
+# so the suffix keeps the two apart.
 node_doltgres_db="$(node_database_for_target "$TARGET_NODE")$(lane_db_suffix "$DEPLOY_ENVIRONMENT" "$SUBSTRATE_CONTROL_ENV")"
+node_knowledge_db="knowledge_${node_doltgres_db#cogni_}"
+doltgres_provision_here="$postgres_provision_here"
 node_role_suffix="${node_db#cogni_}"
 migration_role="migration_${node_role_suffix}"
 app_role="app_${node_role_suffix}"
@@ -359,6 +364,8 @@ _bao_env_for_svc() {
   case "${2:-target}" in
     target) printf '%s' "$DEPLOY_ENVIRONMENT" ;;
     owner) printf '%s' "$SUBSTRATE_CONTROL_ENV" ;;
+    # The lane's own bank in this vault (story.5098): its Doltgres superuser lives here.
+    lane-owner) printf '%s' "$DEPLOY_ENVIRONMENT" ;;
     *) fail "unknown secret bank authority" ;;
   esac
 }
@@ -521,8 +528,10 @@ if [[ "$reliability_controller" == true ]]; then
   mark_row database_reliability_creds read "read dedicated reliability role password from OpenBao (key name only)"
 fi
 
-# Doltgres superuser password — the OpenBao-custodied SSOT at the canonical operator
-# path (cogni/<env>/operator/DOLTGRES_PASSWORD). The superuser is shared env-wide
+# Doltgres superuser password — the OpenBao-custodied SSOT at the LANE's canonical operator
+# path (cogni/<lane>/operator/DOLTGRES_PASSWORD, authority lane-owner; story.5098). For a
+# local lane that is the control path, unchanged. For a foreign-custodied lane it is the
+# lane's own superuser, never the control env's. The superuser is shared env-wide
 # (one server, every node's knowledge_<node> DB), so operator holds the single
 # authoritative value and all consumers read it there — mirrors the #1613
 # OPENFGA_DB_PASSWORD pattern. It is immutable post-init (Doltgres 0.56.3 cannot
@@ -530,10 +539,72 @@ fi
 # value via `pnpm secrets:set <env> operator DOLTGRES_PASSWORD` (secrets-rotate.md),
 # never re-derived. Passed to doltgres-provision so it connects as the live superuser.
 # Fail-loud if the SSOT is empty — never silently fall back to a poisoned VM .env.
-doltgres_superuser_password="$(bao_get_field operator DOLTGRES_PASSWORD owner)"
+doltgres_superuser_password="$(bao_get_field operator DOLTGRES_PASSWORD lane-owner)"
 [[ -n "$doltgres_superuser_password" ]] \
-  || fail "doltgres superuser SSOT absent at cogni/${SUBSTRATE_CONTROL_ENV}/operator/DOLTGRES_PASSWORD — seed/reconcile the shared owner bank via 'pnpm secrets:set ${SUBSTRATE_CONTROL_ENV} operator DOLTGRES_PASSWORD' (never fall back to a derived/.env value)"
+  || fail "doltgres superuser SSOT absent at cogni/${DEPLOY_ENVIRONMENT}/operator/DOLTGRES_PASSWORD in ${SUBSTRATE_CONTROL_ENV}'s vault — seed the lane's own superuser there (never fall back to the control superuser or a derived/.env value; story.5098)"
 dg_pw_env="-e DOLTGRES_PASSWORD='${doltgres_superuser_password}'"
+
+# The runtime's stored DOLTGRES_URL must name the database this run creates, on the lane's
+# own Doltgres, with the superuser this run provisions with (story.5098).
+CURRENT_ROW=doltgres_host_agreement
+stored_doltgres_dsn="$(bao_get_field "$TARGET_NODE" DOLTGRES_URL)"
+lane_doltgres_assert_agreement "$TARGET_NODE" "$DEPLOY_ENVIRONMENT" "$stored_doltgres_dsn" "$node_knowledge_db" \
+  || fail "stored DOLTGRES_URL disagrees with lane Doltgres residency"
+[[ "$stored_doltgres_dsn" == "postgresql://postgres:${doltgres_superuser_password}@"* ]] \
+  || fail "stored DOLTGRES_URL does not carry the lane's own Doltgres superuser — re-run secret-materialize (story.5098)"
+mark_row doltgres_host_agreement ready "stored DOLTGRES_URL agrees with the lane-local Doltgres host, database and superuser"
+
+# Foreign-custodied lane: create its knowledge DB on the LANE VM's Doltgres, with the lane's
+# own superuser — the exact host and credential the composer wrote (story.5098). Mirrors
+# postgres_destination_provision: custodian SSH identity, exact staged provisioner, and
+# the reader/writer role passwords read locally at the destination.
+if ! "$doltgres_provision_here"; then
+  CURRENT_ROW=doltgres_destination_provision
+  [[ "$postgres_residency_env" == "$DEPLOY_ENVIRONMENT" && "$DEPLOY_ENVIRONMENT" != production ]] \
+    || fail "refusing an upward-trust or non-lane Doltgres provisioning target"
+  doltgres_destination_host="$(lane_db_host "$TARGET_NODE" "$DEPLOY_ENVIRONMENT")" \
+    || fail "cannot resolve destination Doltgres host"
+  control_vm_host="$VM_HOST"
+  VM_HOST="$doltgres_destination_host"
+  stage_exact "$REPO_ROOT/infra/compose/runtime/doltgres-init/provision.sh" lane-doltgres-provisioner
+  destination_dg_provisioner="$STAGED_EXACT_PATH"
+  destination_dg_provisioner_sha256="$STAGED_EXACT_SHA256"
+  VM_HOST="$control_vm_host"
+  {
+    printf 'set -euo pipefail\nset -a\n. /opt/cogni-template-runtime/.env\nset +a\n'
+    printf 'lane_env=%q\nlane_dg_db=%q\nprovisioner=%q\nprovisioner_sha256=%q\nlane_dg_superuser=%q\n' \
+      "$DEPLOY_ENVIRONMENT" "$node_doltgres_db" "$destination_dg_provisioner" \
+      "$destination_dg_provisioner_sha256" "$doltgres_superuser_password"
+    cat <<'DOLTGRES_DESTINATION'
+trap 'rm -f "$provisioner"' EXIT
+[ "$(sha256sum "$provisioner" | awk '{print $1}')" = "$provisioner_sha256" ]
+[ "${DEPLOY_ENVIRONMENT:-}" = "$lane_env" ] || {
+  echo '::error::destination runtime environment does not match Doltgres residency' >&2
+  exit 1
+}
+doltgres_container=$(docker ps -q --filter label=com.docker.compose.project=cogni-runtime --filter label=com.docker.compose.service=doltgres)
+[ -n "$doltgres_container" ] && [ "$(printf '%s
+' "$doltgres_container" | wc -l)" -eq 1 ]
+export DOLTGRES_HOST=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$doltgres_container")
+[[ "$DOLTGRES_HOST" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || {
+  echo '::error::destination Doltgres must have one IPv4 address' >&2
+  exit 1
+}
+export DOLTGRES_PORT=5432 DOLTGRES_PASSWORD="$lane_dg_superuser" COGNI_NODE_DBS="$lane_dg_db"
+export DOLTGRES_READER_PASSWORD="${DOLTGRES_READER_PASSWORD:-knowledge_reader}"
+export DOLTGRES_WRITER_PASSWORD="${DOLTGRES_WRITER_PASSWORD:-knowledge_writer}"
+docker run --rm --pull=never --cpus=.5 --memory=256m --pids-limit=64 \
+  --network "container:$doltgres_container" \
+  --mount "type=bind,src=$provisioner,dst=/app/doltgres-provision.sh,readonly" \
+  -e DOLTGRES_HOST -e DOLTGRES_PORT -e DOLTGRES_PASSWORD -e COGNI_NODE_DBS \
+  -e DOLTGRES_READER_PASSWORD -e DOLTGRES_WRITER_PASSWORD \
+  postgres:15 bash /app/doltgres-provision.sh >/dev/null
+echo '[remote] exact lane-local Doltgres provisioner completed'
+DOLTGRES_DESTINATION
+  } | cogni_ssh_transport_retry "$SSH_BIN" "${SSH_OPTS_ARR[@]}" "root@$doltgres_destination_host" bash -s \
+    || fail "lane-local Doltgres provisioning failed on ${DEPLOY_ENVIRONMENT}"
+  mark_row doltgres_destination_provision updated "${node_knowledge_db} provisioned on ${DEPLOY_ENVIRONMENT}'s own Doltgres with the lane superuser; provisioner_sha256=${destination_dg_provisioner_sha256}"
+fi
 
 # Shared mirror credentials and lifecycle belong exclusively to the infra lane.
 # Ordinary target reconciliation neither reads nor rotates that authority.
@@ -967,10 +1038,14 @@ ${edge_reconcile_snippet}
   # symmetric with db-provision above. Otherwise doltgres-provision relied on the
   # env-file COGNI_NODE_DBS (whole fleet). Missing/unreadable shared prerequisites
   # refuse above. Scoping to THIS node is deterministic + idempotent.
+  if ${doltgres_provision_here}; then
   \"\${runtime_compose[@]}\" --profile bootstrap run --rm --no-deps \
     -e COGNI_NODE_DBS='${node_doltgres_db}' \
     ${dg_pw_env} doltgres-provision >/dev/null
   echo '[remote] doltgres-provision ok'
+  else
+    echo '[remote] Doltgres already provisioned on lane-local ${DEPLOY_ENVIRONMENT}; no Doltgres mutation on ${SUBSTRATE_CONTROL_ENV}'
+  fi
   " \
   || fail "remote reconcile block failed (rc=$?) — the last '[remote] … ok' breadcrumb above names the last completed step"
 

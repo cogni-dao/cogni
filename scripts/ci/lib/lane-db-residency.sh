@@ -172,6 +172,49 @@ lane_db_assert_agreement() {
   return 1
 }
 
+# THE DOLTGRES TWIN OF lane_db_assert_agreement (story.5098). A node's stored DOLTGRES_URL
+# must dial the lane's own VM on :5435 and name the exact knowledge database the provisioner
+# creates there (<want-db>, from the same derivation the provisioner uses). Read side and
+# write side must agree on WHOSE Doltgres holds it, the same way Postgres does.
+lane_doltgres_assert_agreement() {
+  local node="${1:-}" lane="${2:-}" dsn="${3:-}" want_db="${4:-}" after hostport host port dbpath db want_host addrs
+  if [ -z "$node" ] || [ -z "$lane" ] || [ -z "$want_db" ]; then
+    echo "::error::lane_doltgres_assert_agreement: <node> <lane> <dsn> <want-db> are required" >&2
+    return 2
+  fi
+  [ -n "$dsn" ] || {
+    echo "::error::lane Doltgres agreement: no stored DOLTGRES_URL for ${node}/${lane}, so agreement is unprovable (story.5098)" >&2
+    return 1
+  }
+  after="${dsn##*@}"
+  hostport="${after%%/*}"
+  host="${hostport%%:*}"
+  port="${hostport##*:}"
+  dbpath="${after#*/}"
+  db="${dbpath%%\?*}"
+  if [ -z "$host" ] || [ -z "$db" ] || [ "$after" = "$dsn" ]; then
+    echo "::error::lane Doltgres agreement: could not parse host+dbname out of ${node}/${lane}'s stored DOLTGRES_URL" >&2
+    return 1
+  fi
+  if [ "$db" != "$want_db" ] || [ "$port" != 5435 ]; then
+    echo "::error::lane Doltgres disagreement: ${node}/${lane}'s stored DOLTGRES_URL names '${db}' on port ${port}, but the provisioner creates '${want_db}' on :5435 (story.5098)" >&2
+    return 1
+  fi
+  want_host="$(lane_db_host "$node" "$lane")" || return 2
+  if [ "$host" != "$want_host" ]; then
+    addrs=""
+    if printf '%s' "$host" | grep -Eq '^[0-9]+(\.[0-9]+){3}$'; then
+      addrs="$(_lane_db_resolve_a "$want_host")" || addrs=""
+    fi
+    printf '%s\n' "$addrs" | grep -qxF "$host" || {
+      echo "::error::lane Doltgres residency disagreement: ${node}/${lane}'s stored DOLTGRES_URL dials '${host}', but the lane's own Doltgres is on '${want_host}' (story.5098). A nonproduction lane must never dial another env's Doltgres." >&2
+      return 1
+    }
+  fi
+  printf '[OK] lane Doltgres agreement: %s/%s dsn host=%s db=%s == resolver %s (env=%s)\n' \
+    "$node" "$lane" "$host" "$db" "$want_host" "$(lane_db_vm_env "$node" "$lane")"
+}
+
 _lane_db_resolve_a() {
   local name="$1" out=""
   if command -v getent >/dev/null 2>&1; then
