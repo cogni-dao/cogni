@@ -572,6 +572,34 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     expect(sh).not.toMatch(/--auth-?key|TS_AUTHKEY/);
   });
 
+  it("substrate-gw tailscaled carries every HR21 zero-contact knob, base and rendered (bug.5588)", () => {
+    // Each knob is proven at tailscale v1.104.4 (cited in substrate-gw.yaml). TS_FORCE_NOISE_443 is the
+    // bootstrap-DNS fix for Headscale restarts: no refused port-80 try, so no fallback to derp*.tailscale.com.
+    const KNOBS = [
+      { name: "TS_NO_LOGS_NO_SUPPORT", value: "true" },
+      { name: "TS_FORCE_NOISE_443", value: "true" },
+      { name: "TS_DISABLE_FEATURE", value: "captiveportal,clientupdate" },
+      { name: "TS_PANIC_IF_HIT_MAIN_CONTROL", value: "true" },
+    ];
+    const gwEnv = (docs: Doc[], name: string) =>
+      docs
+        .find((d) => d.kind === "Deployment" && d.metadata.name === name)
+        ?.spec.template.spec.containers.find((x) => x.name === "substrate-gw")
+        ?.env;
+    expect(
+      gwEnv(parseAll<Doc>(`${BASE}/substrate-gw.yaml`), "substrate-gw")
+    ).toEqual(expect.arrayContaining(KNOBS));
+    if (kubectlAvailable) {
+      for (const r of INSTANCES) {
+        const env = gwEnv(renderInstance(r), `substrate-gw-${r.tailnet}`);
+        expect(env, r.tailnet).toEqual(expect.arrayContaining(KNOBS));
+      }
+    }
+    const sh = read(`${BASE}/substrate-gw.sh`);
+    expect(sh).toMatch(/tailscaled [^\n]*\\\n[^\n]*--no-logs-no-support/);
+    expect(sh).toContain("--login-server=");
+  });
+
   it("substrate-gw state dir is a subdirectory it owns, never the root-owned volume root (P4 NoState)", () => {
     const gw = parseAll<Doc>(`${BASE}/substrate-gw.yaml`).find(
       (d) => d.kind === "Deployment"
@@ -620,6 +648,10 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         "#!/bin/sh\nexec sleep 30\n",
         { mode: 0o755 }
       );
+      // The control forwarder answers (the pre-start probe passes at once).
+      writeFileSync(path.join(bin, "nc"), "#!/bin/sh\nexit 0\n", {
+        mode: 0o755,
+      });
       const serve = path.join(tmp, "serve.json");
       writeFileSync(serve, "{}\n");
       mkdirSync(path.join(tmp, "publish"));
@@ -683,6 +715,10 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         "#!/bin/sh\nexec sleep 30\n",
         { mode: 0o755 }
       );
+      // The control forwarder answers (the pre-start probe passes at once).
+      writeFileSync(path.join(bin, "nc"), "#!/bin/sh\nexit 0\n", {
+        mode: 0o755,
+      });
       const serve = path.join(tmp, "serve.json");
       writeFileSync(serve, "{}\n");
       mkdirSync(path.join(tmp, "publish"));
@@ -723,6 +759,104 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
       rmSync(tmp, { recursive: true, force: true });
     }
   }, 20_000);
+
+  it("substrate-gw starts tailscaled only after a TCP connect to the control host :443 (bug.5588 pod start)", () => {
+    // tailscaled 1.104.4 starts bootstrap DNS to derp*.tailscale.com on ANY failed control dial. A fresh
+    // pod's first dial can be refused before its NetworkPolicy egress is programmed, so the script
+    // probes the same host:port first and starts tailscaled only after the connect succeeds.
+    const fakes = (tmp: string, ncOkAfter: number) => {
+      const bin = path.join(tmp, "bin");
+      mkdirSync(bin);
+      const order = path.join(tmp, "order.log");
+      writeFileSync(
+        path.join(bin, "nc"),
+        [
+          "#!/bin/sh",
+          'echo "nc $*" >> "$ORDER"',
+          `n=$(grep -c '^nc ' "$ORDER")`,
+          `[ "$n" -gt ${ncOkAfter} ]`,
+          "",
+        ].join("\n"),
+        { mode: 0o755 }
+      );
+      writeFileSync(
+        path.join(bin, "tailscaled"),
+        '#!/bin/sh\necho tailscaled >> "$ORDER"\nexec sleep 30\n',
+        { mode: 0o755 }
+      );
+      writeFileSync(
+        path.join(bin, "tailscale"),
+        [
+          "#!/bin/sh",
+          'for a in "$@"; do case "$a" in',
+          `  serve) echo '{}'; exit 0 ;;`,
+          `  status) printf '{\\n  "BackendState": "NoState",\\n  "AuthURL": "",\\n  "Self": {\\n    "Online": false\\n  }\\n}\\n'; exit 0 ;;`,
+          "esac; done",
+          "exit 0",
+          "",
+        ].join("\n"),
+        { mode: 0o755 }
+      );
+      const serve = path.join(tmp, "serve.json");
+      writeFileSync(serve, "{}\n");
+      mkdirSync(path.join(tmp, "publish"));
+      return {
+        order,
+        env: {
+          PATH: `${bin}:/usr/bin:/bin`,
+          ORDER: order,
+          MESH_CONTROL_URL: "https://mesh-test.example",
+          TS_SERVE_CONFIG: serve,
+          TS_STATE_DIR: path.join(tmp, "volume", "state"),
+          TS_SOCKET: path.join(tmp, "ts.sock"),
+          SUBSTRATE_GW_PUBLISH_DIR: path.join(tmp, "publish"),
+          SUBSTRATE_GW_WATCHDOG_INTERVAL_SECONDS: "1",
+        },
+      };
+    };
+    const script = path.join(root, BASE, "substrate-gw.sh");
+
+    // Refused twice (egress not programmed yet), then reachable: 3 probes, THEN tailscaled.
+    const a = mkdtempSync(path.join(tmpdir(), "substrate-gw-probe-"));
+    try {
+      const { order, env } = fakes(a, 2);
+      const run = spawnSync("sh", [script], {
+        encoding: "utf8",
+        timeout: 8000,
+        killSignal: "SIGTERM",
+        env,
+      });
+      const lines = readFileSync(order, "utf8").trim().split("\n");
+      expect(lines.slice(0, 4), run.stdout).toEqual([
+        "nc -z -w 3 mesh-test.example 443",
+        "nc -z -w 3 mesh-test.example 443",
+        "nc -z -w 3 mesh-test.example 443",
+        "tailscaled",
+      ]);
+      expect(run.stdout).toMatch(/"msg":"substrate_gw_control_probe".*"try":2/);
+      expect(run.stdout).toMatch(
+        /"msg":"substrate_gw_control_reachable".*"tries":3/
+      );
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+    }
+
+    // Never reachable within the bound: exit non-zero and tailscaled never starts.
+    const b = mkdtempSync(path.join(tmpdir(), "substrate-gw-probe-"));
+    try {
+      const { order, env } = fakes(b, 1_000);
+      const run = spawnSync("sh", [script], {
+        encoding: "utf8",
+        timeout: 8000,
+        env: { ...env, SUBSTRATE_GW_CONTROL_PROBE_BOUND_SECONDS: "2" },
+      });
+      expect(run.status, run.stdout).toBe(1);
+      expect(readFileSync(order, "utf8")).not.toContain("tailscaled");
+      expect(run.stdout).toContain('"msg":"substrate_gw_control_unreachable"');
+    } finally {
+      rmSync(b, { recursive: true, force: true });
+    }
+  }, 25_000);
 
   it("is not a Compose service and adds nothing to the frozen deploy brain", () => {
     expect(read("infra/compose/runtime/docker-compose.yml")).not.toMatch(
