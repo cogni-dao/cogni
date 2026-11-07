@@ -9,17 +9,17 @@ description: "DNS operations for Cogni multi-node infrastructure. Node app DNS i
 
 ## Test-fleet DNS boundary — as-will-be (new; still being refined)
 
-> **New architecture, 2026-09-22.** `cogni-testing.org` has been acquired and delegated. The contract below is the intended steady state and is still being refined through the first real `spawny-boi` flight. Treat the design as authoritative; treat its rollout status as incomplete until the live proof at the end passes.
+> **Live since story.5137.** `cogni-testing.org` was acquired and delegated on 2026-09-22. Test nodes ship through the deploy verb on the test operator, and `https://spawny-boi-test.cogni-testing.org/version` answers 200.
 
 The candidate operator and disposable test workloads intentionally use different DNS zones:
 
 | Concern                             | Canonical value                                                             | Authority                                                                                                 |
 | ----------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | candidate operator/control endpoint | `test.cognidao.org`                                                         | production `cognidao.org` zone; do not move it                                                            |
-| test-org Akash workload             | `<node>.cogni-testing.org`                                                  | isolated `cogni-testing.org` zone                                                                         |
-| workload public-domain input        | `DOMAIN=cogni-testing.org` in `cogni-test-org/cogni-monorepo` `candidate-a` | non-secret GitHub environment variable                                                                    |
+| test-org Akash workload             | `<node>-test.cogni-testing.org` (candidate-a)                               | isolated `cogni-testing.org` zone                                                                         |
+| workload public-domain input        | `NODE_DEPLOY_WORKLOAD_ZONE=cogni-testing.org` on the test operator          | operator config; no `DOMAIN` fallback                                                                     |
 | shared substrate root               | `FORK_DOMAIN_ROOT=cognidao.org` (or its existing default)                   | names candidate-a's VM services; it is **not** the workload DNS zone                                      |
-| DNS zone id                         | `cogni-testing.org` zone id                                                 | public identifier; the current materializer reads the candidate-a `CLOUDFLARE_ZONE_ID` environment secret |
+| DNS zone id                         | `cogni-testing.org` zone id                                                 | public identifier; the sequencer finds it by zone name at boot                                            |
 | DNS writer credential               | token scoped only to `cogni-testing.org`                                    | candidate-a OpenBao `cogni/candidate-a/operator/CLOUDFLARE_API_TOKEN` → ESO `operator-env-secrets`        |
 
 Cloudflare API-token permissions are zone-wide; they cannot be restricted to a record prefix. Therefore a test-fleet token for the `cognidao.org` zone is not isolated, even if an agent promises to write only `*-test` records. Never put the production-zone token, VM SSH key, or any other production credential in `cogni-test-org`.
@@ -32,7 +32,7 @@ The test GitHub App is deliberately broad inside `cogni-test-org`. That makes th
 2. In Cloudflare, set SSL/TLS encryption mode to **Full**. Akash workload records are proxied; do not grant settings-write merely to automate this one-time click.
 3. Create a token with `Zone · DNS · Edit` and `Zone · Zone · Read`, restricted to the single `cogni-testing.org` zone.
 4. Give the token to the secrets-manager lane, which writes it to candidate-a OpenBao and forces ESO refresh. Do not paste it into chat, a file, a PR, or GitHub Actions.
-5. Set the test parent inputs: `DOMAIN=cogni-testing.org`; keep `FORK_DOMAIN_ROOT=cognidao.org`; set `CLOUDFLARE_ZONE_ID` to the new zone's id through the current candidate-a environment interface.
+5. Set the test operator input `NODE_DEPLOY_WORKLOAD_ZONE=cogni-testing.org`. The sequencer finds the zone id by name, so no zone id input is needed.
 6. Prove the boundary with one disposable Akash node. Green means its declared workload host is `<node>.cogni-testing.org`, DNS exists in only that zone, `/version` returns the expected SHA, and the old-SHA → new-SHA probe has zero DNS/TLS/HTTP failures.
 
 Do not create an apex/VM record for this Akash-only workload zone. The node-deploy sequencer creates each workload host record from the provider endpoint. The candidate operator and shared substrate keep their existing records under `cognidao.org`.

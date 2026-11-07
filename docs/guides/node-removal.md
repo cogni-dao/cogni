@@ -91,7 +91,7 @@ When you push the strip branch, expect:
 
 ## Multi-environment cleanup
 
-A node's app runs on Akash through `POST /api/v1/deploy/workloads`, so the strip PR does not remove it from any cluster. Remove the node's workload from each env it runs in. There is no stop verb yet (task.5409). Until it ships, close the lease with `scripts/ops/recover-orphaned-akash-lease.sh --dseq <dseq>`, then verify by re-reading Console. See [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload) and the `akash-node-expert` skill.
+A node's app runs on Akash through `POST /api/v1/deploy/workloads`, so the strip PR does not remove it from any cluster. Remove the node's workload from each env it runs in. There is no stop verb. Close the lease with `scripts/ops/recover-orphaned-akash-lease.sh --dseq <dseq>`, then verify by re-reading Console. See [deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload) and the `akash-node-expert` skill.
 
 **Operator only:** an operator-lane app is evicted by Argo `prune: true` after the operator's ApplicationSets are re-applied (`flight-preview.yml` for preview, `candidate-flight-infra.yml` and `promote-and-deploy.yml` for the others).
 
