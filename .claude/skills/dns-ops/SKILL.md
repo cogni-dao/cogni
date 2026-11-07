@@ -53,7 +53,7 @@ For the production fleet, per-node public hosts — `<node>-test.cognidao.org` (
 
 - To give a node DNS → add it to the catalog and flight it. Nothing else.
 - To change where a node points → fix the **operator apex** record (below); node records follow it.
-- `<node>-test` shows `NXDOMAIN` right after a flight → almost always **negative-cache** on your resolver; re-check with `dig <host> +short @1.1.1.1`. If the flight's `reconcile-dns` job was green, the record exists.
+- `<node>-test` shows `NXDOMAIN` right after a release → almost always **negative-cache** on your resolver; re-check with `dig <host> +short @1.1.1.1`. If the release logged `edge_moved`, the record exists.
 
 ## The genuinely-manual surface
 
@@ -94,7 +94,7 @@ await removeDnsRecord(cf, "cognidao.org", "<node>-test", "A");
 
 | Symptom                                                   | Fix                                                                                                                                                                   |
 | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `<node>-<env>` `NXDOMAIN` just after a green flight       | Negative-cache. `dig <host> +short @1.1.1.1`; flush local (`sudo dscacheutil -flushcache`). If `reconcile-dns` was green the record exists.                           |
+| `<node>-<env>` `NXDOMAIN` just after a release            | Negative-cache. `dig <host> +short @1.1.1.1`; flush local (`sudo dscacheutil -flushcache`). If the release logged `edge_moved`, the record exists.                   |
 | Born node Healthy + DNS resolves but page 000/unreachable | Not DNS — the **edge Caddy route**. Reconciled by the flight's `node-substrate` job (`reconcile-node-substrate.sh` → `reconcile-edge-caddy.remote.sh`); see ci-cd.md. |
 | A node never gets a record on flight                      | Env is missing `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ZONE_ID` (reconcile skips with a warning), OR the node isn't a catalog `type:node` with `envs:` including that env. |
 | `PROTECTED: refusing to modify`                           | You targeted `@`/`www`. Use the dashboard.                                                                                                                            |
