@@ -64,26 +64,19 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
     title: "Node architect starter for this node",
     entryType: "skill",
     content:
-      "**Use when:** before any research, design, or code review on this node. Skip only for wording-only edits.\n\n" +
-      "This is the starter architect every Cogni node inherits from the base seed set. Rename it to this node's own `<slug>-architect`, then grow it as the node builds its mission. A re-seed may overwrite this starter, so node-owned content belongs in the slug-specific entry. It is a foundational atom: every node keeps one and routes design through it.\n\n" +
-      "Keep every change on the shortest safe path to THIS node's mission. You build on the node-template foundation; you do not rebuild it.\n\n" +
-      "## You inherited a working baseline\n" +
-      "- The node-template foundation gives you CI/CD, governance, payments, cognition, work items, knowledge, and delivery. Treat these as given.\n" +
-      "- For any change to that shared plumbing, the owner is node-template, not this node. Read `node-template-architect` (on the node-template hub, https://node-template.cognidao.org/knowledge/node-template-architect) in full and route the change upstream. Do not fork or re-derive baseline behavior here.\n\n" +
-      "## Stay aligned to receive updates\n" +
-      "- This node keeps receiving node-template package and fork-sync updates. Keep your mission code and mission knowledge separate from inherited baseline files so those updates merge cleanly.\n" +
-      "- A shared fix authored here instead of upstream blocks the next update. Treat it as a design finding, not a shortcut.\n\n" +
-      "## Build this node's mission\n" +
-      "- Name the node's north-star goal and the mission-loop stage the change moves: Goals -> Measure -> Prioritize -> Discover -> Act -> Learn. A change that serves no node goal is sprawl; record it as a finding.\n" +
-      "- Map this node's own services, domains, and decisions here as they grow. Replace this list with the real owners.\n\n" +
-      "## Compare target, current system, and proposed change\n" +
-      "1. Fix the scope from the owned work item outcome: node, environment, services, authority.\n" +
-      "2. Pin the evidence: repository and revision for each input; read the changed files and their callers.\n" +
-      "3. Trace the mechanism: input -> authoritative writer -> external effect -> evidence -> gate. Inspect the failed behavior before proposing its cure.\n" +
-      "4. Contrast with the north star: for each issue, cite the target, the current evidence, the proposed delta, and whether it is convergence, a justified transition, or a regression. A regression blocks approval.\n\n" +
-      "## Review and hand off\n" +
-      "- Review before shipping: for designs run the repo's `/review-design`, for code run `/review-implementation`. Do not approve your own work.\n" +
-      "- Prove live before->after behavior with the exact build SHA. Green CI, a merged PR, or a written artifact is not proof.",
+      "**Use when:** before any design or code change on this node. Skip only for wording-only edits.\n\n" +
+      "Starter architect every node inherits. Rename it to this node's own `<slug>-architect` and keep it linked to this node's real mission and architecture atoms as they grow. Read it first before you change behavior; it is a routing map, not a rulebook.\n\n" +
+      "## Serve the mission\n" +
+      "- Recall `<slug>-mission` and this node's own design and strategy atoms. Name the goal and the mission-loop stage the change serves; a change that serves no node goal is sprawl.\n" +
+      "- Link the node architecture atoms that own the area you touch, and grow this list.\n\n" +
+      "## node-template is your code baseline: be aware, do not edit it\n" +
+      "- node-template owns the shared code you inherit; know what it owns via `node-template-architect` (https://node-template.cognidao.org/knowledge/node-template-architect). You consume it from here, you do not edit it.\n" +
+      "- If a change truly belongs in the shared baseline, first weigh whether it improves every node, then raise it upstream rather than forking it locally. Keep mission code separate so updates keep merging.\n\n" +
+      "## Ship through the operator: do not reinvent delivery\n" +
+      "- CI/CD, flight, validation, merge, promotion, secrets, runtime and logs are operator-owned, not in your code. Use `operator-service-index` (it points to the canonical operator atoms) and `knowledge-contribution-flow` to ship.\n\n" +
+      "## Compare and prove\n" +
+      "- For each change name the target, the current evidence, the delta, and whether it is convergence or a regression; a regression blocks approval. Hold durable knowledge to `knowledge-syntropy-protocol`.\n" +
+      "- Review before shipping (the repo's `/review-design`, `/review-implementation`); never approve your own work. Prove live before->after at the exact build SHA; green CI or a merged PR is not proof.",
     sourceType: "human",
     confidencePct: 60,
     tags: [
