@@ -24,6 +24,7 @@ import type {
   DnsRecord,
   DnsRecordInput,
   DnsRecordsPort,
+  HostNotRoutedStrike,
   HttpResult,
   NodeWorkloadSpec,
   PayerCreateRequest,
@@ -235,6 +236,34 @@ export class MemoryStore implements StorePort {
         return r && keyString(r) === keyString(key);
       })
       .reverse();
+  }
+  /** Mirrors the Postgres store: closing|failed, `host_not_routed:` error, window, newest strike first. */
+  async hostNotRoutedProviders(
+    since: Date,
+    limit: number
+  ): Promise<readonly HostNotRoutedStrike[]> {
+    const by = new Map<string, { lastStruckAt: Date; strikes: number }>();
+    for (const a of this.attempts) {
+      if (
+        !a.provider ||
+        (a.phase !== "closing" && a.phase !== "failed") ||
+        a.updatedAt.getTime() < since.getTime() ||
+        !(a.error ?? "").startsWith("host_not_routed:")
+      )
+        continue;
+      const cur = by.get(a.provider);
+      by.set(a.provider, {
+        lastStruckAt:
+          cur && cur.lastStruckAt > a.updatedAt
+            ? cur.lastStruckAt
+            : a.updatedAt,
+        strikes: (cur?.strikes ?? 0) + 1,
+      });
+    }
+    return [...by]
+      .map(([provider, v]) => ({ provider, ...v }))
+      .sort((x, y) => y.lastStruckAt.getTime() - x.lastStruckAt.getTime())
+      .slice(0, limit);
   }
   async insertAttempt(
     releaseId: string,

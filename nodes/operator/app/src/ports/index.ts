@@ -325,6 +325,7 @@ export type {
   DnsRecord,
   DnsRecordInput,
   DnsRecordsPort,
+  HostNotRoutedStrike,
   HttpResult,
   NodeWorkloadSpec,
   PayerCreateRequest,

@@ -22,7 +22,7 @@
 
 import type { Database } from "@cogni/db-client";
 import { nodeWorkloadSpecSchema } from "@cogni/repo-spec";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, like, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import type {
@@ -30,6 +30,7 @@ import type {
   AttemptRow,
   AttemptStep,
   DesiredRow,
+  HostNotRoutedStrike,
   RecordReleaseInput,
   ReleaseRow,
   StorePort,
@@ -375,6 +376,43 @@ export class PostgresNodeDeployStore implements StorePort {
       )
       .limit(200);
     return rows.map((r) => toAttempt(r.a));
+  }
+
+  async hostNotRoutedProviders(
+    since: Date,
+    limit: number
+  ): Promise<readonly HostNotRoutedStrike[]> {
+    const lastStruckAt = sql<Date>`max(${nodeWorkloadAttempts.updatedAt})`;
+    const rows = await this.db
+      .select({
+        provider: nodeWorkloadAttempts.provider,
+        lastStruckAt,
+        strikes: sql<number>`count(*)::int`,
+      })
+      .from(nodeWorkloadAttempts)
+      .where(
+        and(
+          // node_workload_attempts_phase_idx; a struck attempt is `closing` until its close is confirmed
+          inArray(nodeWorkloadAttempts.phase, ["closing", "failed"]),
+          gte(nodeWorkloadAttempts.updatedAt, since),
+          isNotNull(nodeWorkloadAttempts.provider),
+          like(nodeWorkloadAttempts.error, "host_not_routed:%")
+        )
+      )
+      .groupBy(nodeWorkloadAttempts.provider)
+      .orderBy(desc(lastStruckAt))
+      .limit(limit);
+    return rows.flatMap((r) =>
+      r.provider
+        ? [
+            {
+              provider: r.provider,
+              lastStruckAt: new Date(r.lastStruckAt),
+              strikes: Number(r.strikes),
+            },
+          ]
+        : []
+    );
   }
 
   async insertAttempt(

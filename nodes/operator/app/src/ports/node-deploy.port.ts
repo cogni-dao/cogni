@@ -144,6 +144,15 @@ export interface AttemptRow {
   readonly mesh?: AttemptMesh | undefined;
 }
 
+/** One provider whose ingress did not route our host on some lane (bug.5586). */
+export interface HostNotRoutedStrike {
+  readonly provider: string;
+  /** The newest strike's attempt `updated_at`. */
+  readonly lastStruckAt: Date;
+  /** Struck attempts in the window, across every lane. */
+  readonly strikes: number;
+}
+
 /** `egress` = source-IP admission (catalog `compute_egress_cidrs`); `mesh` = the env tailnet. */
 export type SubstrateTransport = "egress" | "mesh";
 
@@ -502,6 +511,16 @@ export interface StorePort {
   ): Promise<{ release: ReleaseRow; desired: DesiredRow }>;
   /** Every attempt of the workload across releases, newest first (created_at desc). */
   attemptsFor(key: WorkloadKey): Promise<readonly AttemptRow[]>;
+  /**
+   * FLEET_HOST_MEMORY (bug.5586): distinct providers that failed an attempt `host_not_routed` on ANY
+   * lane of this store (every node, env and workload) whose attempt changed phase at or after `since`,
+   * newest strike first, at most `limit`. Bounded read: phase `closing|failed` (indexed), the time
+   * window and the limit.
+   */
+  hostNotRoutedProviders(
+    since: Date,
+    limit: number
+  ): Promise<readonly HostNotRoutedStrike[]>;
   /**
    * Insert the next attempt (phase `planned`) of a release. The ordinal is allocated by the store
    * and the key by `makeKey`, both before the row is visible. KEY_IS_NEVER_REUSED.

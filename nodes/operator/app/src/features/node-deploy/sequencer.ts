@@ -322,8 +322,11 @@ const MAX_EXCLUDED_PROVIDERS = 16;
 const STRIKE_MEMORY_MS = 24 * 60 * 60_000;
 /** LANE_MEMORY: a provider is excluded by memory after this many remembered strikes. */
 const STRIKE_MEMORY_MIN = 2;
-/** LANE_MEMORY: the struck-after-bind failures (`strike` + `failAttempt` write this error prefix). */
-const STRIKE_MEMORY_ERROR = /^(proof_timeout|host_not_routed):/;
+/**
+ * LANE_MEMORY: the per-lane struck-after-bind failure (`strike` + `failAttempt` write this error prefix).
+ * `host_not_routed` is not here: FLEET_HOST_MEMORY (bug.5586) excludes it on every lane after one strike.
+ */
+const STRIKE_MEMORY_ERROR = /^proof_timeout:/;
 /** LANE_MEMORY: phases of an attempt that served the lane. Memory never names such a provider (no lockout). */
 const SERVED_PHASES: readonly AttemptPhase[] = [
   "active",
@@ -1140,15 +1143,16 @@ export class NodeDeploySequencer {
    * the provider of every earlier attempt of THIS release that failed or was lost AFTER binding a lease
    * (proof_timeout, failed proof, lease lost): a provider whose egress is not admitted must not be
    * retried (bug.5569). A refused create bound no provider, so it adds none. Also with `withFailedTries`,
-   * the LANE MEMORY (story.5137): see `rememberedStrikes`. Deduped, blue first, capped at the wire's 16.
-   * `remembered` names which entries came from the lane memory (for the one log line).
+   * the FLEET_HOST_MEMORY (bug.5586) and the LANE MEMORY (story.5137): see `rememberedStrikes`. Deduped,
+   * blue first, capped at the wire's 16. `fleet` and `remembered` name which entries came from each memory
+   * (for the one log line).
    */
   private async exclusion(
     key: WorkloadKey,
     release: ReleaseRow,
     blue: AttemptRow | undefined,
     withFailedTries: boolean
-  ): Promise<{ providers: string[]; remembered: string[] }> {
+  ): Promise<{ providers: string[]; remembered: string[]; fleet: string[] }> {
     const w = release.spec;
     const providers: (string | undefined)[] = [blue?.provider];
     for (const stateName of new Set(w.bindings.map((b) => b.workload))) {
@@ -1169,39 +1173,62 @@ export class NodeDeploySequencer {
     const base = [
       ...new Set(providers.filter((p): p is string => Boolean(p))),
     ].slice(0, MAX_EXCLUDED_PROVIDERS);
-    if (!withFailedTries) return { providers: base, remembered: [] };
+    if (!withFailedTries) return { providers: base, remembered: [], fleet: [] };
     const admitted =
       w.kind === "app"
         ? (this.d.config.appProviders ?? []).slice(0, MAX_ALLOWED_PROVIDERS)
         : [];
-    const remembered = this.rememberedStrikes(lane, base, admitted).slice(
-      0,
+    const since = this.d.clock.now() - STRIKE_MEMORY_MS;
+    // A state workload is reached by forwarded port, never by host: host routing says nothing about it.
+    const fleetStruck =
+      w.kind === "app"
+        ? (
+            await this.d.store.hostNotRoutedProviders(
+              new Date(since),
+              MAX_EXCLUDED_PROVIDERS
+            )
+          ).map((s) => s.provider)
+        : [];
+    // Fleet first (a host the provider does not route can never prove), newest strike first; the lane's
+    // proof_timeout memory only fills what is left under the wire's 16.
+    const { fleet, remembered } = this.rememberedStrikes(
+      lane,
+      base,
+      admitted,
+      since,
+      fleetStruck,
       MAX_EXCLUDED_PROVIDERS - base.length
     );
-    return { providers: [...base, ...remembered], remembered };
+    return { providers: [...base, ...fleet, ...remembered], remembered, fleet };
   }
 
   /**
-   * LANE_MEMORY (story.5137): a provider that bound a lease on THIS lane (node + env + workload) and was
-   * struck `proof_timeout` or `host_not_routed` at least `STRIKE_MEMORY_MIN` times in the last
-   * `STRIKE_MEMORY_MS`, across releases, is excluded from a new create. Without it every release re-tries
-   * the same dead provider (candidate-a 2026-11-05: one provider burned 10 minutes of proof_timeout on
-   * every release). It reads the attempts store: a struck attempt keeps its provider and its error.
-   * NO LOCKOUT: a `proof_timeout` can be the app's own fault, so memory never names
+   * Provider memory for a new create. Two sources, read from the attempts store (a struck attempt keeps
+   * its provider and its error):
+   *  - FLEET_HOST_MEMORY (bug.5586): `fleetStruck`, every provider that failed `host_not_routed` on ANY
+   *    lane of this store (every node, env and workload) since `since`, after ONE strike. Its ingress
+   *    does not route our custom host; that is a provider property, not an app fault (2026-11-06: one
+   *    provider won the auction and burned attempt 1 on every node).
+   *  - LANE_MEMORY (story.5137): a provider struck `proof_timeout` on THIS lane (node + env + workload) at
+   *    least `STRIKE_MEMORY_MIN` times since `since`, across releases. Without it every release re-tries
+   *    the same dead provider (candidate-a 2026-11-05).
+   * NO LOCKOUT: neither memory ever names
    *  - the lane's most recent served provider (newest active, retiring, retired or lost attempt: blue, or
-   *    or the blue a lost lease left behind), so HAIRPIN_RULE alone decides blue;
+   *    the blue a lost lease left behind), so HAIRPIN_RULE alone decides blue;
    *  - any provider that served this lane (same phases) in the window;
    *  - the last admitted provider (`appProviders`) not already excluded: memory alone never empties an
    *    admitted pool. With no allowlist the open market is the pool; memory cannot see bids, so that case
    *    rests on the two rules above.
-   * Entries already excluded are not repeated; the caller caps the total at the wire's 16.
+   * Entries already excluded are not repeated. At most `room` entries, fleet first in the order given.
    */
   private rememberedStrikes(
     lane: readonly AttemptRow[],
     already: readonly string[],
-    admitted: readonly string[]
-  ): string[] {
-    const since = this.d.clock.now() - STRIKE_MEMORY_MS;
+    admitted: readonly string[],
+    since: number,
+    fleetStruck: readonly string[],
+    room: number
+  ): { fleet: string[]; remembered: string[] } {
     const servedPhase = (a: AttemptRow) => SERVED_PHASES.includes(a.phase);
     const served = new Set<string>();
     const newestServed = lane.find(servedPhase)?.provider;
@@ -1218,17 +1245,24 @@ export class NodeDeploySequencer {
       )
         counts.set(a.provider, (counts.get(a.provider) ?? 0) + 1);
     const open = new Set(admitted.filter((p) => !already.includes(p)));
-    const out: string[] = [];
-    for (const [p, n] of counts) {
-      if (n < STRIKE_MEMORY_MIN || served.has(p) || already.includes(p))
-        continue;
+    const taken = new Set<string>();
+    const take = (p: string): boolean => {
+      if (taken.size >= room || served.has(p) || already.includes(p))
+        return false;
+      if (taken.has(p)) return false;
       if (open.has(p)) {
-        if (open.size === 1) continue; // the last admitted candidate stays open
+        if (open.size === 1) return false; // the last admitted candidate stays open
         open.delete(p);
       }
-      out.push(p);
-    }
-    return out;
+      taken.add(p);
+      return true;
+    };
+    const fleet = fleetStruck.filter(take);
+    const remembered = [...counts]
+      .filter(([, n]) => n >= STRIKE_MEMORY_MIN)
+      .map(([p]) => p)
+      .filter(take);
+    return { fleet, remembered };
   }
 
   /** New effects use current fleet authority; recorded hosts are never retargeted. */
@@ -1342,18 +1376,21 @@ export class NodeDeploySequencer {
       meshCompanions = prepared.services;
     }
 
-    const { providers: excludeProviders, remembered } = await this.exclusion(
-      key,
-      release,
-      blue,
-      true
-    );
+    const {
+      providers: excludeProviders,
+      remembered,
+      fleet,
+    } = await this.exclusion(key, release, blue, true);
     if (excludeProviders.length > 0)
       await this.emit(key, release, attempt, "providers_excluded", "ok", {
         providers: excludeProviders,
         remembered,
+        fleetExcluded: fleet,
         reason:
           excludeProviders.join(",") +
+          (fleet.length > 0
+            ? ` (fleet host_not_routed: ${fleet.join(",")})`
+            : "") +
           (remembered.length > 0 ? ` (memory: ${remembered.join(",")})` : ""),
       });
     // Placement for APPS only: the interim egress-admitted provider set and the node's catalog

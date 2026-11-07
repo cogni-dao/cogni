@@ -118,12 +118,13 @@ async function pastStrike(
   h: H,
   provider: string,
   error = "proof_timeout: version 503",
-  workload = "canary"
+  workload = "canary",
+  lane: { nodeId?: string; env?: string } = {}
 ) {
   const desired = new Map(h.store.desired);
   const { release } = await h.store.recordRelease({
-    nodeId: NODE_ID,
-    env: ENV,
+    nodeId: lane.nodeId ?? NODE_ID,
+    env: lane.env ?? ENV,
     workload,
     sourceSha: SHA_2,
     spec: canaryApp(),
@@ -542,7 +543,7 @@ describe("provider exclusion and alert hygiene", () => {
       const h = harness();
       const { exclude, line } = await newReleaseAfter(h, async () => {
         await pastStrike(h, "provider-x", "proof_timeout: version 503");
-        await pastStrike(h, "provider-x", "host_not_routed: version 404");
+        await pastStrike(h, "provider-x", "proof_timeout: version 502");
       });
       expect(exclude).toEqual(["provider-2", "provider-1", "provider-x"]);
       expect(line?.fields.remembered).toEqual(["provider-x"]);
@@ -653,6 +654,119 @@ describe("provider exclusion and alert hygiene", () => {
       );
       expect(admitted).toHaveLength(1);
       expect(line?.fields.remembered).toEqual(admitted);
+    });
+
+    describe("bug.5586: FLEET_HOST_MEMORY excludes a host_not_routed provider from every lane after ONE strike", () => {
+      const OTHER_NODE = "11111111-2222-4333-8444-555555555555";
+
+      it("one host_not_routed strike on ANOTHER node's lane in ANOTHER env: this lane's first create excludes it, logged as fleet", async () => {
+        const h = harness();
+        const { exclude, line } = await newReleaseAfter(h, async () => {
+          await pastStrike(
+            h,
+            "provider-aes",
+            "host_not_routed: version 404 for 60s",
+            "app",
+            { nodeId: OTHER_NODE, env: "preview" }
+          );
+        });
+        expect(exclude).toEqual(["provider-2", "provider-1", "provider-aes"]);
+        expect(line?.fields.fleetExcluded).toEqual(["provider-aes"]);
+        expect(line?.fields.remembered).toEqual([]);
+        expect(String(line?.fields.reason)).toContain(
+          "fleet host_not_routed: provider-aes"
+        );
+      });
+
+      it("proof_timeout keeps its per-lane rule; a host_not_routed strike older than 24h is forgotten", async () => {
+        const h = harness();
+        const { exclude, line } = await newReleaseAfter(h, async () => {
+          await pastStrike(h, "provider-old", "host_not_routed: 404", "app", {
+            nodeId: OTHER_NODE,
+          });
+          h.clock.advance(25 * 60 * 60_000);
+          for (let i = 0; i < 2; i++)
+            await pastStrike(h, "provider-slow", undefined, "app", {
+              nodeId: OTHER_NODE,
+            });
+        });
+        expect(exclude).not.toContain("provider-old");
+        expect(exclude).not.toContain("provider-slow");
+        expect(line?.fields.fleetExcluded).toEqual([]);
+      });
+
+      it("NO LOCKOUT: a provider that served THIS lane is never excluded by a fleet strike (retired, and lost with no blue)", async () => {
+        const h = harness();
+        await stateUp(h); // provider-1
+        await deployApp(h, SHA_1); // provider-2
+        await deployApp(h, SHA_2); // provider-3 active, provider-2 retired
+        for (const p of ["provider-2", "provider-3"])
+          await pastStrike(h, p, "host_not_routed: 404", "app", {
+            nodeId: OTHER_NODE,
+          });
+        const blue = (await h.store.attemptsFor(APP)).find(
+          (a) => a.phase === "active"
+        );
+        await h.store.updateAttempt(blue?.id ?? "", { phase: "lost" }); // no blue now
+        const before = h.payer.createRequests.length;
+        await deployApp(h, SHA_3);
+        expect(h.payer.createRequests[before]?.excludeProviders).toEqual([
+          "provider-1",
+        ]);
+      });
+
+      it("NO LOCKOUT: fleet memory never excludes the last admitted provider (appProviders)", async () => {
+        const h = harness({ appProviders: ["provider-x", "provider-y"] });
+        const { exclude, line } = await newReleaseAfter(h, async () => {
+          for (const p of ["provider-x", "provider-y"])
+            await pastStrike(h, p, "host_not_routed: 404", "app", {
+              nodeId: OTHER_NODE,
+            });
+        });
+        const admitted = exclude.filter(
+          (p) => p === "provider-x" || p === "provider-y"
+        );
+        expect(admitted).toHaveLength(1);
+        expect(line?.fields.fleetExcluded).toEqual(admitted);
+      });
+
+      it("wire cap 16: blue and hairpin first, then the newest fleet strikes; lane memory is dropped first", async () => {
+        const h = harness();
+        const { exclude, line } = await newReleaseAfter(h, async () => {
+          for (let i = 0; i < 2; i++) await pastStrike(h, "provider-lane"); // proof_timeout x2 on this lane
+          for (let i = 0; i < 20; i++) {
+            h.clock.advance(1_000);
+            await pastStrike(
+              h,
+              `provider-f${i}`,
+              "host_not_routed: 404",
+              "app",
+              {
+                nodeId: OTHER_NODE,
+              }
+            );
+          }
+        });
+        expect(exclude).toHaveLength(16);
+        expect(exclude.slice(0, 2)).toEqual(["provider-2", "provider-1"]);
+        expect(exclude[2]).toBe("provider-f19"); // newest strike first
+        expect(exclude).not.toContain("provider-f0"); // oldest dropped
+        expect(exclude).not.toContain("provider-lane");
+        expect(line?.fields.fleetExcluded).toHaveLength(14);
+        expect(line?.fields.remembered).toEqual([]);
+      });
+
+      it("a state workload is not touched by fleet host memory (it is not routed by host)", async () => {
+        const h = harness();
+        await pastStrike(h, "provider-aes", "host_not_routed: 404", "app", {
+          nodeId: OTHER_NODE,
+        });
+        await stateUp(h);
+        expect(
+          h.payer.createRequests.find((r) => r.spec.name === "canary-db")
+            ?.excludeProviders
+        ).toBeUndefined();
+      });
     });
   });
 
