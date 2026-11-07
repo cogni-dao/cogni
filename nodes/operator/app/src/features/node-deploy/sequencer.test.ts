@@ -59,6 +59,7 @@ function harness(
     namespace: "cogni-production",
     environment: ENV,
     retainMs: 120_000,
+    publicStreak: 1, // bug.5587: one public read per tick; sequencer.test.ts tests the 8-read streak
     ...cfg,
   };
   const deps = {
@@ -111,7 +112,36 @@ async function stateUp(h: H) {
 
 async function deployApp(h: H, sha: string) {
   await h.release(canaryApp(), sha);
-  return h.seq.step(APP);
+  return stepUntilSettled(h);
+}
+
+/** A new runner over the same durable state (store, payer, DNS) with none of the old one's memory. */
+function restart(h: H) {
+  return new NodeDeploySequencer({
+    store: h.store,
+    payer: h.payer,
+    edge: new EdgeRouter(h.dns, WORKLOAD_ZONE),
+    probe: h.probe,
+    secrets: h.secrets,
+    chain: h.chain,
+    clock: h.clock,
+    log: h.log,
+    config: h.config,
+  });
+}
+
+/**
+ * bug.5587: a step makes ONE proof round or public read; step the workload `pollMs` apart (a tick) until
+ * its newest attempt leaves `proving` / `proven`.
+ */
+async function stepUntilSettled(h: H, key = APP) {
+  for (let i = 0; i < 10_000; i++) {
+    const outcome = await h.seq.step(key);
+    const phase = (await h.store.attemptsFor(key))[0]?.phase;
+    if (phase !== "proving" && phase !== "proven") return outcome;
+    h.clock.advance(h.config.pollMs);
+  }
+  throw new Error(`${key.workload} still proving`);
 }
 
 /**
@@ -218,7 +248,7 @@ describe("app deploy", () => {
   });
 
   it("first deploy: binding + RELEASE_SHA injected, host accepted, edge moved, public readback, active", async () => {
-    const h = harness();
+    const h = harness({ publicStreak: 8 });
     await stateUp(h);
     expect(await deployApp(h, SHA_1)).toBe("driven");
     const req = h.payer.createRequests.at(-1);
@@ -321,6 +351,237 @@ describe("app deploy", () => {
     expect(failedAt - leasedAt).toBeGreaterThanOrEqual(h.config.proofMs);
   });
 
+  it("bug.5587: a pending proof does not hold the next tick; another workload converges while it proves, and the proof still fails at its bound", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    h.payer.onLease = (l) => {
+      if (l.env.RELEASE_SHA === SHA_2) l.serveSha = "f".repeat(40); // A's green never proves
+    };
+    // Workload B's release arrives while A proves (A's first proof probe).
+    const DB2 = { ...DB, workload: "canary-db-2" };
+    const probe = h.probe.hostRouted.bind(h.probe);
+    let bRecorded = false;
+    h.probe.hostRouted = async (ingress, host, path) => {
+      if (!bRecorded) {
+        bRecorded = true;
+        await h.release(canaryDb({ name: "canary-db-2" }), SHA_1);
+      }
+      return probe(ingress, host, path);
+    };
+    await h.release(canaryApp(), SHA_2);
+    await h.seq.tick(); // A: create, lease, ONE probe round; B is recorded meanwhile
+    await h.seq.tick(); // B converges on the very next tick
+    const a = (await h.store.attemptsFor(APP))[0];
+    const b = (await h.store.attemptsFor(DB2))[0];
+    expect(b?.phase).toBe("active");
+    expect(a?.phase).toBe("proving");
+    const leasedAt = a?.leasedAt?.getTime() ?? 0;
+    expect(h.clock.now() - leasedAt).toBeLessThan(h.config.proofMs);
+    // A keeps proving tick by tick and still fails proof_timeout at its durable bound.
+    await stepUntilSettled(h);
+    const failed = (await h.store.attemptsFor(APP))[0];
+    expect(failed?.id).toBe(a?.id);
+    expect(failed?.error).toMatch(/^proof_timeout: version 200/);
+    expect(
+      (failed?.updatedAt.getTime() ?? 0) - leasedAt
+    ).toBeGreaterThanOrEqual(h.config.proofMs);
+    expect(h.payer.byDseq("1002").state).toBe("active"); // blue serves throughout
+  });
+
+  it("bug.5587: a pending public readback does not hold the next tick; activation still waits for the full streak", async () => {
+    const h = harness({ publicStreak: 8 });
+    await stateUp(h);
+    await deployApp(h, SHA_1); // blue: lease 1002
+    h.probe.publicReads.length = 0;
+    h.probe.publicStaleReads = 5;
+    h.probe.stale = "ingress-1002.provider-2.example"; // blue still answers the public host
+    await h.release(canaryApp(), SHA_2);
+    const start = h.clock.now();
+    await h.seq.tick(); // A: create, prove, edge moved, ONE public read
+    const DB2 = { ...DB, workload: "canary-db-2" };
+    await h.release(canaryDb({ name: "canary-db-2" }), SHA_1);
+    await h.seq.tick(); // B converges on the next tick while A's readback is pending
+    expect((await h.store.attemptsFor(DB2))[0]?.phase).toBe("active");
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("proven");
+    expect([...h.dns.records.values()][0]?.content).toBe(
+      "ingress-1003.provider-3.example"
+    );
+    expect(h.payer.byDseq("1002").state).toBe("active"); // blue not retired before the streak
+    expect(h.clock.now() - start).toBeLessThan(h.config.publicMs);
+    await stepUntilSettled(h);
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
+    expect(h.probe.publicReads).toHaveLength(5 + 8); // stale reads, then 8 consecutive exact reads
+  });
+
+  it("bug.5587 review B1: a restart between the edge move and the readback never closes green while the edge may point at it", async () => {
+    const h = harness({ publicStreak: 8 });
+    await stateUp(h);
+    await deployApp(h, SHA_1); // blue: lease 1002
+    const blueTarget = "ingress-1002.provider-2.example";
+    const greenTarget = "ingress-1003.provider-3.example";
+    await h.release(canaryApp(), SHA_2);
+    await h.seq.step(APP); // green proven, edge moved, 1 of 8 public reads
+    const green = (await h.store.attemptsFor(APP))[0];
+    expect(green?.phase).toBe("proven");
+    expect([...h.dns.records.values()][0]?.content).toBe(greenTarget);
+    // The runner restarts (its memory is gone) and every DNS write now fails: the re-point AND the restore.
+    const restarted = restart(h);
+    const update = h.dns.update.bind(h.dns);
+    let dnsDown = true;
+    h.dns.update = async (id, input) => {
+      if (dnsDown) throw new Error("dns write down");
+      return update(id, input);
+    };
+    await restarted.step(APP);
+    const phaseOfGreen = async () =>
+      (await h.store.attemptsFor(APP)).find((a) => a.id === green?.id)?.phase;
+    expect(await phaseOfGreen()).toBe("proven"); // NOT closed while the edge points at it
+    expect(h.payer.byDseq("1003").state).toBe("active");
+    expect([...h.dns.records.values()][0]?.content).toBe(greenTarget);
+    expect(h.log.alerts()).toContain("edge_restore_failed");
+    // The next tick retries only the restore; once it lands, green is closed and blue serves.
+    dnsDown = false;
+    await restarted.step(APP);
+    expect([...h.dns.records.values()][0]?.content).toBe(blueTarget);
+    expect(await phaseOfGreen()).toBe("failed");
+    expect(h.payer.byDseq("1003").state).toBe("closed");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+    expect(
+      (await h.store.attemptsFor(APP)).find((a) => a.id === green?.id)?.error
+    ).toMatch(/^cutover_failed: dns write down/);
+  });
+
+  it("bug.5587 re-review N1: a decided rollback is durable; a restarted runner never re-points the edge at the failed green", async () => {
+    const h = harness({ publicStreak: 8, publicMs: 20_000 });
+    await stateUp(h);
+    await deployApp(h, SHA_1); // blue: lease 1002
+    const blueTarget = "ingress-1002.provider-2.example";
+    const greenTarget = "ingress-1003.provider-3.example";
+    h.probe.publicStaleReads = 1_000;
+    h.probe.stale = "ingress-9999.nowhere.example"; // the public host never serves green's sha
+    await h.release(canaryApp(), SHA_2);
+    await h.seq.step(APP); // green proven, edge moved
+    const green = (await h.store.attemptsFor(APP))[0];
+    expect([...h.dns.records.values()][0]?.content).toBe(greenTarget);
+    // DNS writes fail from now on; every attempted target is recorded.
+    const update = h.dns.update.bind(h.dns);
+    const writes: string[] = [];
+    let dnsDown = true;
+    h.dns.update = async (id, input) => {
+      writes.push(input.content);
+      if (dnsDown) throw new Error("dns write down");
+      return update(id, input);
+    };
+    const greenRow = async () =>
+      (await h.store.attemptsFor(APP)).find((a) => a.id === green?.id);
+    for (let i = 0; i < 20; i++) {
+      h.clock.advance(h.config.pollMs);
+      await h.seq.step(APP);
+      if ((await greenRow())?.error?.startsWith("rollback_pending: ")) break;
+    }
+    // The readback window passed: rollback decided on the attempt, restore failed, green kept.
+    expect((await greenRow())?.phase).toBe("proven");
+    expect((await greenRow())?.error).toMatch(
+      /^rollback_pending: cutover_failed: public host/
+    );
+    expect(h.payer.byDseq("1003").state).toBe("active");
+    expect(h.log.alerts()).toContain("edge_restore_failed");
+    // A new runner (no memory) retries ONLY the restore: it never writes green's target again.
+    writes.length = 0;
+    const restarted = restart(h);
+    await restarted.step(APP);
+    expect(writes).toEqual([blueTarget]);
+    expect((await greenRow())?.phase).toBe("proven");
+    dnsDown = false;
+    await restarted.step(APP);
+    expect(writes).toEqual([blueTarget, blueTarget]);
+    expect([...h.dns.records.values()][0]?.content).toBe(blueTarget);
+    expect((await greenRow())?.phase).toBe("failed");
+    expect((await greenRow())?.error).toMatch(/^cutover_failed: public host/);
+    expect(h.payer.byDseq("1003").state).toBe("closed");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+  });
+
+  it("bug.5587 re-review N3: after a restart an unreadable edge counts as pointing at green; blue is restored before green closes", async () => {
+    const h = harness({ publicStreak: 8 });
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    const blueTarget = "ingress-1002.provider-2.example";
+    await h.release(canaryApp(), SHA_2);
+    await h.seq.step(APP); // green proven, edge moved
+    const green = (await h.store.attemptsFor(APP))[0];
+    // The edge cannot be read twice: the restarted re-point's read, then rollBack's own read.
+    const find = h.dns.findByName.bind(h.dns);
+    let unreadable = 2;
+    h.dns.findByName = async (name) => {
+      if (unreadable-- > 0) throw new Error("edge read down");
+      return find(name);
+    };
+    await restart(h).step(APP);
+    expect([...h.dns.records.values()][0]?.content).toBe(blueTarget);
+    const row = (await h.store.attemptsFor(APP)).find(
+      (a) => a.id === green?.id
+    );
+    expect(row?.phase).toBe("failed");
+    expect(row?.error).toMatch(/^cutover_failed: edge read down/);
+    expect(h.payer.byDseq("1003").state).toBe("closed");
+    expect(h.payer.byDseq("1002").state).toBe("active");
+  });
+
+  it("bug.5587: an unconfirmed close does not hold the next tick", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    h.payer.onLease = (l) => {
+      if (l.env.RELEASE_SHA === SHA_2) l.serveSha = "f".repeat(40);
+    };
+    h.payer.failDelete = true;
+    await deployApp(h, SHA_2); // A's green fails its proof and its close is not confirmed
+    const a = (await h.store.attemptsFor(APP))[0];
+    expect(a?.phase).toBe("closing");
+    const DB2 = { ...DB, workload: "canary-db-2" };
+    await h.release(canaryDb({ name: "canary-db-2" }), SHA_1);
+    const start = h.clock.now();
+    await h.seq.tick();
+    expect((await h.store.attemptsFor(DB2))[0]?.phase).toBe("active");
+    expect(
+      (await h.store.attemptsFor(APP)).find((x) => x.id === a?.id)?.phase
+    ).toBe("closing");
+    expect(h.clock.now()).toBe(start); // no in-step close window ran
+    h.payer.failDelete = false;
+    h.clock.advance(h.config.closeConfirmMs); // the close is re-sent once per window
+    await h.seq.step(APP);
+    expect(
+      (await h.store.attemptsFor(APP)).find((x) => x.id === a?.id)?.phase
+    ).toBe("failed");
+    expect(h.payer.byDseq("1003").state).toBe("closed");
+  });
+
+  it("bug.5587: the host_not_routed window survives across ticks and a restart only delays it", async () => {
+    const h = harness();
+    await stateUp(h);
+    await deployApp(h, SHA_1);
+    h.payer.onLease = (l) => {
+      if (l.provider === "provider-3") l.routeStatus = () => 404;
+    };
+    await h.release(canaryApp(), SHA_2);
+    await h.seq.step(APP); // first 404 starts the window
+    h.clock.advance(h.config.hostNotRoutedMs - 1);
+    await h.seq.step(APP);
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("proving");
+    // A restarted sequencer has no window yet: it never strikes early.
+    const restarted = restart(h);
+    h.clock.advance(1);
+    await restarted.step(APP); // window restarts here
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("proving");
+    h.clock.advance(h.config.hostNotRoutedMs);
+    await restarted.step(APP);
+    const failed = (await h.store.attemptsFor(APP))[0];
+    expect(failed?.phase).toBe("failed");
+    expect(failed?.error).toMatch(/^host_not_routed: version 404/);
+  });
+
   it("bug.5569: /version 404 for 60s (host not routed) fails host_not_routed fast; green closed, blue and edge untouched; the provider is excluded next", async () => {
     const h = harness();
     await stateUp(h);
@@ -418,7 +679,7 @@ describe("app deploy", () => {
   });
 
   it("an unchanged streak requirement: one stale read mid-streak resets it", async () => {
-    const h = harness();
+    const h = harness({ publicStreak: 8 });
     await stateUp(h);
     await deployApp(h, SHA_1);
     h.probe.publicReads.length = 0;
@@ -459,8 +720,8 @@ describe("provider exclusion and alert hygiene", () => {
       l.serveSha = "f".repeat(40);
     };
     await h.release(canaryApp(), SHA_1);
-    await h.seq.step(APP);
-    await h.seq.step(APP);
+    await stepUntilSettled(h); // bug.5587: a failed proof spans ticks
+    await stepUntilSettled(h);
     h.payer.onLease = undefined;
     await deployApp(h, SHA_2);
     const appCreates = h.payer.createRequests.filter(
@@ -840,7 +1101,7 @@ describe("provider exclusion and alert hygiene", () => {
       l.serveSha = "f".repeat(40);
     };
     await h.release(canaryApp(), SHA_1);
-    for (let i = 0; i < 3; i++) await h.seq.step(APP);
+    for (let i = 0; i < 3; i++) await stepUntilSettled(h); // bug.5587
     for (let i = 0; i < 50; i++) {
       await h.seq.step(APP);
       h.clock.advance(4_000);
@@ -1324,7 +1585,7 @@ describe("keys and parking", () => {
     await h.release(canaryApp(), SHA_1);
     const outcomes: string[] = [];
     for (let i = 0; i < 6; i++) {
-      outcomes.push(await h.seq.step(APP));
+      outcomes.push(await stepUntilSettled(h)); // bug.5587: one attempt's proof spans ticks
       h.clock.advance(24 * 3_600_000);
     }
     expect(outcomes).toEqual([
@@ -1738,12 +1999,16 @@ describe("crash safety", () => {
     h.payer.failDelete = true;
     await deployApp(h, SHA_1);
     expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("closing");
-    expect(h.log.alerts()).toContain("close_unconfirmed");
+    // bug.5587: one confirm read per tick; the alert waits for a full closeConfirmMs window
+    expect(h.log.alerts()).not.toContain("close_unconfirmed");
+    h.clock.advance(h.config.closeConfirmMs);
     expect(await h.seq.step(APP)).toBe("close_pending");
+    expect(h.log.alerts()).toContain("close_unconfirmed");
     expect(
       h.payer.createRequests.filter((r) => r.spec.name === "canary")
     ).toHaveLength(1);
     h.payer.failDelete = false;
+    h.clock.advance(h.config.closeConfirmMs); // bug.5587: the close is re-sent once per window
     expect(await h.seq.step(APP)).toBe("driven"); // janitor confirmed, a fresh attempt follows
   });
 

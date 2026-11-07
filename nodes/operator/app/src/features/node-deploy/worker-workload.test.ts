@@ -274,6 +274,7 @@ function harness(slug = "red", all: readonly string[] = ["red", "poly"]) {
       namespace: "cogni-production",
       environment: ENV,
       retainMs: 120_000,
+      publicStreak: 1, // bug.5587: one public read per tick; sequencer.test.ts tests the 8-read streak
     } as SequencerConfig,
   });
   return { store, payer, bucket, seq };

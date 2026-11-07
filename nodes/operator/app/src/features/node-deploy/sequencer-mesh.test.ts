@@ -405,6 +405,7 @@ function harness(
         namespace: "cogni-production",
         environment: ENV,
         retainMs: 120_000,
+        publicStreak: 1, // bug.5587: one public read per tick; sequencer.test.ts tests the 8-read streak
       },
     });
   let seq = build();
@@ -474,6 +475,16 @@ const appCreates = (h: H) =>
   h.payer.createRequests.filter((r) => r.spec.name === "app");
 const meshLogs = (h: H, msg: string) =>
   h.log.lines.filter((l) => l.msg === msg);
+
+/** bug.5587: a step probes a proof ONCE; step `pollMs` apart until the attempt leaves `proving`. */
+async function stepUntilProved(h: H, slug: Slug): Promise<void> {
+  for (let i = 0; i < 10_000; i++) {
+    await h.seq.step(h.key(slug));
+    if ((await h.attempts(slug))[0]?.phase !== "proving") return;
+    h.clock.advance(DEFAULT_SEQUENCER_CONFIG.pollMs);
+  }
+  throw new Error(`${slug} still proving`);
+}
 
 /** Open minting (first pass), then deploy one release of `slug` to active. */
 async function deployed(h: H, slug: Slug, sha = SHA_1): Promise<AttemptRow> {
@@ -727,7 +738,7 @@ describe("HR 3, 16, 21: the companions carry exactly the derived ports", () => {
       l.notReady = true; // attempt 1 fails its proof
     };
     await h.release("poly");
-    await h.seq.step(h.key("poly"));
+    await stepUntilProved(h, "poly");
     const [first] = await h.attempts("poly");
     expect(first?.phase).toBe("failed");
     const pinned = {
@@ -871,7 +882,7 @@ describe("HR 6: revoke on close; a blue is revoked only after it retires", () =>
       l.notReady = true;
     };
     await h.release("poly");
-    await h.seq.step(h.key("poly"));
+    await stepUntilProved(h, "poly");
     const [failed] = await h.attempts("poly");
     expect(failed?.phase).toBe("failed");
     const keyId = failed?.mesh?.headscaleKeyId;
