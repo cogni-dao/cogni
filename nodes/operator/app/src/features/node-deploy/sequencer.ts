@@ -903,6 +903,12 @@ export class NodeDeploySequencer {
               "ambiguous create resolved to nothing; next ordinal"
             );
             return;
+          } else if (a.unhealthySince) {
+            // A healthy observe ends an `observe_unavailable` run: a later blip starts a new one, so
+            // blips spread over a long unpaid wait never add up to `orphan_suspect` (bug.5585).
+            a = await this.d.store.updateAttempt(a.id, {
+              unhealthySince: null,
+            });
           }
         } catch (error) {
           a = await this.observeUnavailable(
@@ -1357,6 +1363,9 @@ export class NodeDeploySequencer {
     attempt: AttemptRow,
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
+    // WALLET_WAIT_IS_NOT_AN_ATTEMPT: read the wallet wait start before any writer (mesh prep, the
+    // dispatch marker) replaces the error; the busy branch below writes it back.
+    const busySince = walletBusySince(attempt);
     const refusal = this.d.httpAdmissionRefusal;
     if (release.spec.kind === "app" && refusal) {
       await this.emit(key, release, attempt, "dependency", "waiting", {
@@ -1416,8 +1425,9 @@ export class NodeDeploySequencer {
       fleet,
       fleetConfirmedBy,
     } = await this.exclusion(key, release, blue, true);
+    // Repeated on every create retry (a busy wallet retries each tick): one line per minute per attempt.
     if (excludeProviders.length > 0)
-      await this.emit(key, release, attempt, "providers_excluded", "ok", {
+      await this.emitGrace(key, release, attempt, "providers_excluded", "ok", {
         providers: excludeProviders,
         remembered,
         fleetExcluded: fleet,
@@ -1440,12 +1450,17 @@ export class NodeDeploySequencer {
     const requiredCountryCodes =
       w.kind === "app" ? runtime.requiredCountryCodes : [];
     if (allowProviders.length > 0 || requiredCountryCodes.length > 0)
-      await this.emit(key, release, attempt, "placement_constrained", "ok", {
-        providers: allowProviders,
-        reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
-      });
-    // The dispatch marker below replaces the error, so the wallet wait start is read first.
-    const busySince = walletBusySince(attempt);
+      await this.emitGrace(
+        key,
+        release,
+        attempt,
+        "placement_constrained",
+        "ok",
+        {
+          providers: allowProviders,
+          reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
+        }
+      );
     // Durable before native IO: runner loss cannot make a paid call look never-paid. The actuator can
     // outlive this sequencer process, so the marker opens the same in-flight grace as a transport failure.
     attempt = await this.d.store.updateAttempt(attempt.id, {

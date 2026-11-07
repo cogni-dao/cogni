@@ -1415,31 +1415,69 @@ describe("a busy wallet waits without using an attempt (bug.5585)", () => {
     ]);
   });
 
-  it("a restart keeps the wait start; the wait log is one line per minute per attempt", async () => {
-    const h = harness();
+  it("a restart keeps the wait start; every per-retry line is one per minute per attempt", async () => {
+    const h = harness({ appProviders: ["provider-x", "provider-y"] });
     await stateUp(h);
+    await deployApp(h, SHA_1); // blue: its provider is excluded on every green create
     h.payer.createFault = () => busy();
-    await h.release(canaryApp(), SHA_1);
+    await h.release(canaryApp(), SHA_2);
     const since = h.clock.now();
-    // 5 s ticks for 2 minutes: 25 tries, 3 log lines (0 s, 60 s, 120 s)
+    const from = h.log.lines.length;
+    // 5 s ticks for 2 minutes: 25 tries, 3 lines of each per-retry step (0 s, 60 s, 120 s)
     for (let i = 0; i <= 24; i++) {
       await h.seq.step(APP);
       h.clock.advance(5_000);
     }
-    expect(
-      h.log.steps().filter((s) => s === "create:wallet_busy")
-    ).toHaveLength(3);
+    const lines = (step: string) =>
+      h.log.lines
+        .slice(from)
+        .filter((l) => l.msg === "node_deploy_step" && l.fields.step === step)
+        .length;
+    expect([
+      lines("create"),
+      lines("providers_excluded"),
+      lines("placement_constrained"),
+    ]).toEqual([3, 3, 3]);
+    const green = async () =>
+      (await h.store.attemptsFor(APP)).filter((x) => x.phase === "planned");
     h.clock.advance(20 * 60_000);
     const restarted = h.restart();
     await restarted.step(APP);
-    expect((await h.store.attemptsFor(APP))[0]?.error).toBe(
-      `unpaid: wallet_busy@${since}`
-    );
+    expect((await green()).map((x) => [x.attempt, x.error])).toEqual([
+      [1, `unpaid: wallet_busy@${since}`],
+    ]);
     expect(walletAlerts(h)).toHaveLength(0);
     h.clock.advance(h.config.walletWaitMs - 20 * 60_000);
     await restarted.step(APP);
     expect(walletAlerts(h)).toHaveLength(1);
-    expect((await h.store.attemptsFor(APP)).map((x) => x.attempt)).toEqual([1]);
+    expect((await green()).map((x) => x.attempt)).toEqual([1]);
+  });
+
+  it("observe blips spread over a long wait never fail the attempt as orphan_suspect", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.createFault = () => busy();
+    await deployApp(h, SHA_1); // first busy reply
+    h.clock.advance(60_000);
+    h.payer.observeThrows = true; // blip
+    await h.seq.step(APP);
+    h.payer.observeThrows = false; // heal: 20 minutes of healthy observes, still busy
+    for (let i = 0; i < 10; i++) {
+      h.clock.advance(120_000);
+      await h.seq.step(APP);
+    }
+    h.payer.observeThrows = true; // blip again, > observeUnavailableMs after the first
+    await h.seq.step(APP);
+    expect(
+      (await h.store.attemptsFor(APP)).map((a) => [a.attempt, a.phase])
+    ).toEqual([[1, "planned"]]);
+    expect(h.log.alerts()).not.toContain("orphan_suspect");
+    h.payer.observeThrows = false;
+    h.payer.createFault = undefined;
+    await h.seq.step(APP);
+    expect(
+      (await h.store.attemptsFor(APP)).map((a) => [a.attempt, a.phase])
+    ).toEqual([[1, "active"]]);
   });
 });
 
