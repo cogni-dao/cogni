@@ -428,6 +428,13 @@
       "when": 1794015406580,
       "tag": "0060_metric_observations",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1794048308191,
+      "tag": "0061_execution_request_structured_output",
+      "breakpoints": true
     }
   ]
 }
