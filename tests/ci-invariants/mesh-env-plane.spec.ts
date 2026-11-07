@@ -512,7 +512,9 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     // the limit there: its budget is pinned AT today's total (1 x 108Mi instance + 3 x 24Mi Headscale =
     // 180Mi), so any growth must restate it in review. preview (read 2026-11-07) 717 MiB, no Headscale
     // (its coordinator runs in production): pinned AT 1 x 108Mi (609 MiB margin). The limits proof (every Headscale at its limit) is
-    // a live check, not this one.
+    // a live check, not this one. An instance overlay may raise a workload's resources (story.5146: the production and
+    // preview forwarders, OOM-killed at 12Mi under fleet load); that patch counts here at its patched request, and the
+    // VM's budget is restated with it: production 108 + 296 (forwarders) + 72 = 476Mi; preview 108 + 296 = 404Mi.
     const mib = (v: unknown): number => {
       const m = /^(\d+)Mi$/.exec(String(v));
       if (!m) throw new Error(`memory request not in Mi: ${String(v)}`);
@@ -529,6 +531,33 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         0
       );
     expect(perInstance).toBeLessThanOrEqual(108);
+    // An instance overlay's `replace .../containers/0/resources` patch on a base Deployment adds its delta.
+    const baseRequest = (name: string): number =>
+      mib(
+        (
+          workloads.find((w) => w.metadata.name === name)?.spec.template.spec
+            .containers[0]?.resources?.requests as
+            | { memory?: string }
+            | undefined
+        )?.memory
+      );
+    const instanceRequest = (r: Row): number => {
+      const k = parse<{
+        patches?: { target: { kind: string; name: string }; patch: string }[];
+      }>(`${overlayDir(r)}/kustomization.yaml`);
+      let total = perInstance;
+      for (const p of k.patches ?? []) {
+        if (p.target.kind !== "Deployment") continue;
+        for (const op of yaml.parse(p.patch) as {
+          path: string;
+          value: { requests?: { memory?: string } };
+        }[]) {
+          expect(op.path).toBe("/spec/template/spec/containers/0/resources");
+          total += mib(op.value.requests?.memory) - baseRequest(p.target.name);
+        }
+      }
+      return total;
+    };
     const headscaleOn = (vm: string): number[] =>
       TABLE.filter((r) => r.coordinator_env === vm).map((r) => {
         const patch = parse<Doc>(
@@ -543,19 +572,21 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
       });
     const BUDGET_MI: Record<string, number> = {
       "candidate-a": 240,
-      preview: 108,
-      production: 180,
+      preview: 404,
+      production: 476,
     };
     // Only a VM whose cluster runs a sequencer with coordinators must count Headscale (a preview instance's
     // coordinator runs in production, so the preview VM counts none).
     const coordinatorVms = new Set(TABLE.map((r) => r.coordinator_env));
     for (const vm of new Set(INSTANCES.map((r) => r.vm_env))) {
-      const instances = INSTANCES.filter((r) => r.vm_env === vm).length;
+      const instances = INSTANCES.filter((r) => r.vm_env === vm).reduce(
+        (sum, r) => sum + instanceRequest(r),
+        0
+      );
       const headscale = headscaleOn(vm);
       if (coordinatorVms.has(vm))
         expect(headscale.length, vm).toBeGreaterThan(0);
-      const total =
-        perInstance * instances + headscale.reduce((a, b) => a + b, 0);
+      const total = instances + headscale.reduce((a, b) => a + b, 0);
       expect(total, vm).toBeLessThanOrEqual(BUDGET_MI[vm] ?? 0);
     }
     const pc = parse<Doc>(`${BASE}/priorityclass.yaml`);

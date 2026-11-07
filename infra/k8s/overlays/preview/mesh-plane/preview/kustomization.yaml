@@ -52,6 +52,23 @@ patches:
       - op: replace
         path: /spec/egress/1/to/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name
         value: cogni-preview
+  # Forwarder load fix (story.5146): socat forks one child per open connection (~0.75 MiB RSS each plus
+  # its socket buffers). The base 12Mi/20m cap is sized for an idle instance. On 2026-11-07 the six
+  # production node lanes moved onto this tailnet; from 22:34Z the kernel killed substrate-fwd 47 times
+  # in 35 min (memcg usage 12288kB = limit, oom.group kills every listener). The relay listener died with
+  # them, so substrate-gw lost its relay and every node lost Postgres, Doltgres and Temporal. These VMs
+  # have the headroom (see the budget in tests/ci-invariants/mesh-env-plane.spec.ts); candidate-a has not,
+  # so the base stays small. Guaranteed QoS kept (requests = limits).
+  - target: { kind: Deployment, name: substrate-fwd }
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value: { requests: { cpu: 250m, memory: 256Mi }, limits: { cpu: 250m, memory: 256Mi } }
+  - target: { kind: Deployment, name: mesh-control-fwd }
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources
+        value: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 50m, memory: 64Mi } }
 replacements:
   # hostAliases ips = the forwarder Services' ClusterIPs (one source; after the patches above).
   - source: { kind: Service, name: mesh-control-fwd, fieldPath: spec.clusterIP }
