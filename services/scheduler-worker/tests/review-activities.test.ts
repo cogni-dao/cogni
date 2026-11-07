@@ -540,3 +540,86 @@ describe("postReviewResultActivity — review fixes (story.5102)", () => {
     expect(block.citations).toEqual(["r"]);
   });
 });
+
+describe("postRoutingDiagnosticActivity — dev-triggered honours fail_on_error (story.5102)", () => {
+  const base = {
+    owner: "org",
+    repo: "repo",
+    prNumber: 9,
+    headSha: "a".repeat(40),
+    installationId: 1,
+    checkRunId: 88,
+    changedFiles: [] as string[],
+  };
+
+  it.each([
+    [
+      "routing_conflict",
+      {
+        kind: "conflict" as const,
+        nodes: [
+          { nodeId: "poly", path: "nodes/poly" },
+          { nodeId: "resy", path: "nodes/resy" },
+        ],
+        operatorPaths: [],
+      },
+    ],
+    ["routing_miss", { kind: "miss" as const }],
+  ])("%s → failure + COULD NOT EVALUATE + machine block", async (reason, owningNode) => {
+    const acts = makeActivities();
+    await acts.postRoutingDiagnosticActivity({
+      ...base,
+      owningNode,
+      requestId: "req-9",
+      model: "gemini-3.7-flash",
+      operatorBuildSha: "c".repeat(40),
+      failOnError: true,
+    });
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+      title: string;
+      summary: string;
+    };
+    expect(call.conclusion).toBe("failure");
+    expect(call.title).toBe("PR Review: COULD NOT EVALUATE");
+    expect(machineBlock(call.summary)).toEqual({
+      requestId: "req-9",
+      buildSha: "c".repeat(40),
+      model: "gemini-3.7-flash",
+      conclusion: "failure",
+      couldNotEvaluate: reason,
+      citations: [],
+      evidence: { files: [], entries: [] },
+    });
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "review.could_not_evaluate", reason }),
+      "review.could_not_evaluate"
+    );
+  });
+
+  it("stays neutral with fail_on_error false, and legacy (no requestId) is unchanged", async () => {
+    const acts = makeActivities();
+    await acts.postRoutingDiagnosticActivity({
+      ...base,
+      owningNode: { kind: "miss" },
+      requestId: "req-10",
+      failOnError: false,
+    });
+    await acts.postRoutingDiagnosticActivity({
+      ...base,
+      owningNode: { kind: "miss" },
+    });
+    const [dev, legacy] = client.updateCheckRun.mock.calls.map(
+      (c) => c[0] as { conclusion: string; title: string; summary: string }
+    );
+    expect(dev?.conclusion).toBe("neutral");
+    expect(machineBlock(dev?.summary ?? "").couldNotEvaluate).toBe(
+      "routing_miss"
+    );
+    expect(legacy).toMatchObject({
+      conclusion: "neutral",
+      title: "PR Review: No recognizable scope",
+    });
+    expect(legacy?.summary).not.toContain("cogni-review-result");
+  });
+});

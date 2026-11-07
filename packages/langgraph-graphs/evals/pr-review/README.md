@@ -19,7 +19,7 @@ EVAL_API_KEY=<candidate key> GITHUB_TOKEN=<read token> pnpm eval:pr-review -- --
 3. Citation: for `breaks-rule`, `citations` contains the case's `ruleId`, and that id is in `evidence.entries` (it was read this run).
 4. Reading: `evidence.files` has a path outside the PR diff, and `evidence.entries` is not empty.
 
-A timeout, a missing or malformed block, a block for another request, or a "could not evaluate" block is **unscorable**. Preflight is unscorable too: the `ruleId` must be in the candidate's governing index (`GET /api/v1/cognition` → `governingIndex`), and a refused verb (401/403 — the key's user lacks `node.flight` on the operator) never counts as a fail. Exit code: 0 = both cases pass; 1 = a case fails; 3 = unscorable; 2 = bad config (for example a case without a PR number). `--out` writes the scorecard (build SHA, case head SHAs, request ids, model, verdicts); don't commit it.
+A timeout, a missing or malformed block, a block for another request, or a "could not evaluate" block is **unscorable**. Preflight is unscorable too: the eval key's account must have credits (`GET /api/v1/payments/credits/summary` `balanceCredits > 0`, else `unfunded_eval_account`), the `ruleId` must be in the candidate's governing index (`GET /api/v1/cognition` → `governingIndex`), and a refused verb (401/403 — the key's user lacks `node.flight` on the operator) never counts as a fail. Exit code: 0 = both cases pass; 1 = a case fails; 3 = unscorable; 2 = bad config (for example a case without a PR number). `--out` writes the scorecard (build SHA, case head SHAs, request ids, model, verdicts); don't commit it.
 
 ## Fixture (create once, on the candidate's GitHub org)
 

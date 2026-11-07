@@ -170,6 +170,10 @@ async function devTriggeredReview(input: PrReviewWorkflowInput): Promise<void> {
       checkRunId,
       owningNode: context.owningNode,
       changedFiles: context.changedFiles,
+      requestId,
+      model: context.modelRef.modelId,
+      operatorBuildSha: context.operatorBuildSha ?? null,
+      failOnError: context.gatesConfig.failOnError,
     });
     return;
   }

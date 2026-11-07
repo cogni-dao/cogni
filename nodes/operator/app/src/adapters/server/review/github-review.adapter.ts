@@ -68,6 +68,8 @@ export const DEFAULT_REVIEW_MODELREF = {
   providerKey: "platform",
   modelId: "gemini-3.7-flash",
 } as const;
+/** The verb path (POST /api/v1/vcs/review) is a user request: every GitHub call is bounded. */
+const VERB_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_PATCH_BYTES_PER_FILE = 100_000;
 const MAX_TOTAL_PATCH_BYTES = 500_000;
 const MAX_FILES_WITH_PATCHES = 30;
@@ -178,6 +180,7 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
           Authorization: `Bearer ${token}`,
           Accept: "application/vnd.github+json",
         },
+        signal: AbortSignal.timeout(VERB_REQUEST_TIMEOUT_MS),
       }
     );
     if (!response.ok) {
@@ -189,10 +192,16 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
       );
     }
     const installationId = ((await response.json()) as { id: number }).id;
-    const pr = await octokitFor(installationId).request(
-      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
-      { owner: target.owner, repo: target.repo, pull_number: target.prNumber }
-    );
+    const pr = await createInstallationOctokit(
+      installationId,
+      appId,
+      privateKeyBase64,
+      VERB_REQUEST_TIMEOUT_MS
+    ).request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+      owner: target.owner,
+      repo: target.repo,
+      pull_number: target.prNumber,
+    });
     return {
       installationId,
       headSha: pr.data.head.sha,

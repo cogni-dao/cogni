@@ -194,6 +194,27 @@ describe("collectReviewEvidence (EVIDENCE_FROM_OWN_TOOL_RESULTS)", () => {
     ]);
   });
 
+  it("does not count a knowledge_read domain listing (mode list), only single-entry body reads", () => {
+    const messages = [
+      call("l1", "core__knowledge_read", { domain: "method" }),
+      result("l1", "core__knowledge_read", {
+        mode: "list",
+        entries: [
+          { id: "listed-rule-a", content: "full body a" },
+          { id: "listed-rule-b", content: "full body b" },
+        ],
+        totalFound: 2,
+      }),
+      call("g1", "core__knowledge_read", { id: "listed-rule-a" }),
+      result("g1", "core__knowledge_read", {
+        mode: "get",
+        entries: [{ id: "listed-rule-a", content: "full body a" }],
+        totalFound: 1,
+      }),
+    ];
+    expect(collectReviewEvidence(messages).entries).toEqual(["listed-rule-a"]);
+  });
+
   it("counts files only when read with content, and ignores unpaired tool messages", () => {
     const messages = [
       call("f1", "core__node_code_read", { path: "src/a.ts" }),

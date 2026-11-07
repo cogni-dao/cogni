@@ -204,6 +204,15 @@ describe("POST /api/v1/vcs/review", () => {
     });
   });
 
+  it("401: refuses an unauthenticated caller before any authz or read", async () => {
+    mockGetSessionUser.mockResolvedValue(null);
+    const res = await post({ nodeId: "operator", prNumber: 165 });
+    expect(res.status).toBe(401);
+    expect(mockGate).not.toHaveBeenCalled();
+    expect(mockResolvePullRequest).not.toHaveBeenCalled();
+    expect(mockWorkflowStart).not.toHaveBeenCalled();
+  });
+
   it("400: rejects an invalid body before any authz", async () => {
     const res = await post({ nodeId: "operator", prNumber: "165" });
     expect(res.status).toBe(400);

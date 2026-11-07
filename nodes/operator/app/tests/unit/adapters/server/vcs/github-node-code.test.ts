@@ -16,7 +16,9 @@ import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { NodeCodeGitRequest } from "@/adapters/server/vcs/github-node-code.adapter";
 import {
+  admittedNodeCodePath,
   GitHubNodeCodeAdapter,
+  isKeyMaterialFile,
   REVIEW_NODE_CODE_POLICY,
 } from "@/adapters/server/vcs/github-node-code.adapter";
 import { GitHubVcsAdapter } from "@/adapters/server/vcs/github-vcs.adapter";
@@ -603,6 +605,61 @@ describe("review admission policy (story.5102)", () => {
         reason: "node_code_path_denied",
       });
     }
+  });
+
+  // KEY_MATERIAL_IS_ONE_LIST: every name below is refused by the review policy AND the serving
+  // policy (case-insensitive), because both are built on the same key-material list.
+  it.each([
+    "id_rsa",
+    "id_rsa.pub",
+    "id_dsa",
+    "id_dsa.pub",
+    "id_ecdsa",
+    "id_ecdsa.pub",
+    "id_ed25519",
+    "id_ed25519.pub",
+    "ID_ED25519",
+    "server.pem",
+    "SERVER.PEM",
+    "tls.key",
+    "store.p12",
+    "store.pfx",
+    "app.jks",
+    "release.keystore",
+    "terraform.tfstate",
+    "prod.tfvars",
+    ".envrc",
+    ".npmrc",
+    ".netrc",
+    "credentials.json",
+    ".env",
+    ".ENV",
+    ".env.local",
+    ".env.production",
+  ])("refuses key material %s in both policies", async (name) => {
+    expect(isKeyMaterialFile(name)).toBe(true);
+    expect(REVIEW_NODE_CODE_POLICY.admits(`config/${name}`, false)).toBe(false);
+    expect(
+      admittedNodeCodePath(
+        { roots: ["packages"], manifests: [] },
+        `packages/${name}`
+      )
+    ).toBe(false);
+    expect(await reader.read({ path: `config/${name}` })).toMatchObject({
+      content: null,
+      reason: "node_code_path_denied",
+    });
+  });
+
+  it.each([
+    ".env.example",
+    ".ENV.EXAMPLE",
+    "id_rsa_rotation.ts",
+    "keys.ts",
+    "credentials-schema.ts",
+  ])("the review policy still reads %s", (name) => {
+    expect(isKeyMaterialFile(name)).toBe(false);
+    expect(REVIEW_NODE_CODE_POLICY.admits(`src/${name}`, false)).toBe(true);
   });
 
   it("lists every top-level root and dot-dir except .git, omitting secret files", async () => {

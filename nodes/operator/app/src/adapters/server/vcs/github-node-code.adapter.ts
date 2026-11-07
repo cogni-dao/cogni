@@ -92,16 +92,45 @@ function safePathShape(path: string): string[] | null {
 
 const REVIEW_MAX_FILE_BYTES = 262_144;
 
+/**
+ * KEY_MATERIAL_IS_ONE_LIST (story.5102): the secret files EVERY reader refuses. Both the serving
+ * policy and the review policy are built on this list, so they cannot drift apart. The serving
+ * policy additionally refuses its broader SECRET name pattern.
+ */
+export const KEY_MATERIAL_EXTENSIONS = [
+  "pem",
+  "key",
+  "p12",
+  "pfx",
+  "jks",
+  "keystore",
+  "tfstate",
+  "tfvars",
+] as const;
+export const KEY_MATERIAL_NAMES = [
+  ".env",
+  ".envrc",
+  ".npmrc",
+  ".netrc",
+  "credentials.json",
+] as const;
+const KEY_MATERIAL_EXT = new RegExp(
+  `\\.(?:${KEY_MATERIAL_EXTENSIONS.join("|")})$`,
+  "i"
+);
+const SSH_KEY = /^id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?$/i;
+
+/** True for key material (case-insensitive). `.env.*` is refused except `*.example`. */
+export function isKeyMaterialFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  if ((KEY_MATERIAL_NAMES as readonly string[]).includes(lower)) return true;
+  if (lower.startsWith(".env.")) return !lower.endsWith(".example");
+  return KEY_MATERIAL_EXT.test(lower) || SSH_KEY.test(lower);
+}
+
 /** Real secret material only; secret-handling code and specs stay readable. */
 export function isReviewSecretFile(name: string): boolean {
-  if (name === ".env") return true;
-  if (name.startsWith(".env.")) return !name.endsWith(".example");
-  return (
-    /\.pem$/i.test(name) ||
-    /\.key$/i.test(name) ||
-    /\.p12$/i.test(name) ||
-    /^id_rsa/i.test(name)
-  );
+  return isKeyMaterialFile(name);
 }
 
 /**
@@ -144,7 +173,9 @@ export function admittedNodeCodePath(
     parts.length > 16 ||
     /[\\%]/.test(path) ||
     [...path].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) ||
-    parts.some((p) => !p || p.startsWith(".") || SECRET.test(p))
+    parts.some(
+      (p) => !p || p.startsWith(".") || SECRET.test(p) || isKeyMaterialFile(p)
+    )
   )
     return false;
   if (binding.manifests.includes(path)) return !directory;
