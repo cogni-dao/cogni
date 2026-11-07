@@ -496,7 +496,7 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
       expect(declared(env), env).toEqual((expected[env] ?? []).sort());
   });
 
-  it("each operator's lanes use the mesh in the design order: candidate-a first, on its own tailnet (task.5428)", () => {
+  it("each operator flips exactly its candidate-a lane to the mesh, on its own tailnet (task.5428)", () => {
     const transports = (env: string) =>
       read(`infra/k8s/overlays/${env}/operator/kustomization.yaml`).match(
         /name: NODE_DEPLOY_SUBSTRATE_TRANSPORTS\n\s+value: "?([^"\n]+)"?/

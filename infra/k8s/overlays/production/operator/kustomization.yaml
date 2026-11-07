@@ -260,7 +260,7 @@ patches:
                   # apps get a per-attempt mesh key, the socket /var/run/headscale/candidate-a/headscale.sock and
                   # the control URL https://mesh-candidate-a.cognidao.org (env-lanes.ts), and this sequencer approves
                   # the candidate-a VM's substrate-gw (HR11; MESH_LANES_ONLY). preview and production are unlisted, so
-                  # they stay egress until their own lane flip. Rollback: remove the entry; the lane drains.
+                  # they stay egress until their own lane flip. Rollback: revert this PR; the lane drains.
                   # node-deploy-mesh-coordinators.spec.ts pins every mesh lane to a coordinator this overlay runs
                   # and to that tailnet's VM env-plane instance on main.
                   - name: NODE_DEPLOY_SUBSTRATE_TRANSPORTS
