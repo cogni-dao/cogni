@@ -16,6 +16,10 @@
  *     An ambiguous create is RESOLVED through `observe(cogniKey)`, never blindly repeated.
  *   - PARK_AFTER_3: after 3 consecutive failed attempts of one release no further paid create happens
  *     until a new release arrives. No clock resets that count.
+ *   - WALLET_WAIT_IS_NOT_AN_ATTEMPT (bug.5585): a create refused `wallet_allocation_blocked` claimed nothing.
+ *     Its attempt stays `planned` and unpaid and retries every tick: it never fails, so a wait never
+ *     advances PARK_AFTER_3. Past `walletWaitMs` of waiting the release parks on its own reason
+ *     (`WALLET_WAIT_EXCEEDED`, `alert/release_parked`), not on an attempt count.
  *   - TERMINAL_ADMISSION: refusal fences every resumed phase before proof/cutover. Old paid effects
  *     keep observation/adoption and confirmed stateless cleanup; retained state keeps custody.
  *   - PROVE_BEFORE_CUTOVER: the edge never moves until the green lease serves the exact sha
@@ -161,6 +165,13 @@ export interface SequencerConfig {
   readonly environment: string;
   /** Lease must report active + an endpoint within this of lease creation. */
   readonly leaseReadyMs: number;
+  /**
+   * WALLET_WAIT_IS_NOT_AN_ATTEMPT (bug.5585): how long one attempt may wait, unpaid, for a busy wallet
+   * slot before its release parks (`WALLET_WAIT_EXCEEDED`). 30 min: the existing release-level unpaid wait
+   * bound (`imageAlertMs`), and longer than one slot can legitimately be held (the payer's 10 min create
+   * timeout plus the 15 min `inflightGraceMs` before a lost create is settled).
+   */
+  readonly walletWaitMs: number;
   /** Proof deadline, counted from lease creation (design: 10 min). */
   readonly proofMs: number;
   /**
@@ -218,6 +229,7 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
   "namespace" | "environment"
 > = {
   leaseReadyMs: 240_000,
+  walletWaitMs: 1_800_000,
   proofMs: 600_000,
   hostNotRoutedMs: 60_000,
   publicMs: 300_000,
@@ -483,7 +495,13 @@ export class NodeDeploySequencer {
     }
 
     const ofRelease = all.filter((a) => a.releaseId === release.id);
-    if (ofRelease.some((a) => a.error?.startsWith("artifact_bundle_invalid")))
+    if (
+      ofRelease.some(
+        (a) =>
+          a.error?.startsWith("artifact_bundle_invalid") ||
+          a.error === WALLET_WAIT_EXCEEDED
+      )
+    )
       return "parked";
     const failures = consecutiveFailures(ofRelease);
     if (failures >= this.d.config.maxFailedAttempts) {
@@ -1457,21 +1475,32 @@ export class NodeDeploySequencer {
     } catch (error) {
       if (error instanceof PayerError) {
         if (error.code === "wallet_allocation_blocked") {
-          // The slot was busy and this key claimed nothing: safe to try again on the next tick,
-          // until the attempt is older than a lease is allowed to take.
-          if (
-            this.d.clock.now() - attempt.createdAt.getTime() <
-            this.d.config.leaseReadyMs
-          ) {
+          // WALLET_WAIT_IS_NOT_AN_ATTEMPT: the slot was busy and this key claimed nothing. The attempt
+          // waits unpaid and retries next tick; a wait never fails it, so it never counts to a park.
+          const waitedMs = this.d.clock.now() - attempt.createdAt.getTime();
+          if (waitedMs < this.d.config.walletWaitMs) {
             await this.emit(key, release, attempt, "create", "wallet_busy");
             return this.d.store.updateAttempt(attempt.id, {
               error: "unpaid: wallet_busy",
             });
           }
+          // A wedged wallet: the release parks on this reason (step() reads it), never on a count.
           attempt = await this.d.store.updateAttempt(attempt.id, {
             error: "unpaid: wallet_busy",
           });
-          return this.failAttempt(key, release, attempt, "wallet_busy_timeout");
+          const parked = await this.failAttempt(
+            key,
+            release,
+            attempt,
+            WALLET_WAIT_EXCEEDED,
+            { createEnded: true }
+          );
+          if (parked.phase === "failed")
+            await this.alert(key, release, parked, "release_parked", {
+              reason: WALLET_WAIT_EXCEEDED,
+              waitedMs,
+            });
+          return parked;
         }
         if (error.ambiguous) {
           const marked = await this.d.store.updateAttempt(attempt.id, {
@@ -3566,6 +3595,9 @@ export class NodeDeploySequencer {
 
 /** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
 const REFUSED_PREFIX = "create refused: ";
+
+/** WALLET_WAIT_IS_NOT_AN_ATTEMPT: the error of an attempt that waited `walletWaitMs` for the wallet. */
+export const WALLET_WAIT_EXCEEDED = "unpaid: wallet_wait_exceeded";
 
 /**
  * KEY_STORED_BEFORE_PAY: a mesh attempt waiting for its key (`mesh_key_pending: <reason>`). Written only

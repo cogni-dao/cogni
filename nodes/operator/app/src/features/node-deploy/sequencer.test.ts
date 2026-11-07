@@ -17,6 +17,7 @@ import {
   DEFAULT_SEQUENCER_CONFIG,
   NodeDeploySequencer,
   type SequencerConfig,
+  WALLET_WAIT_EXCEEDED,
 } from "./sequencer";
 import {
   canaryApp,
@@ -1342,6 +1343,66 @@ describe("keys and parking", () => {
     await h.release(canaryApp(), SHA_2);
     expect(await h.seq.step(APP)).toBe("driven");
     expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("active");
+  });
+});
+
+describe("a busy wallet waits without using an attempt (bug.5585)", () => {
+  const busy = () => new PayerError("wallet_allocation_blocked", "busy", false);
+
+  it("waits far past leaseReadyMs and maxFailedAttempts worth of ticks, then lands on attempt 1", async () => {
+    const h = harness();
+    await stateUp(h);
+    let walletBusy = true;
+    h.payer.createFault = () => (walletBusy ? busy() : undefined);
+    await h.release(canaryApp(), SHA_1);
+    // 20 minutes of ticks: 5x leaseReadyMs, enough to burn and park all 3 attempts on the old rule
+    const outcomes: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      outcomes.push(await h.seq.step(APP));
+      h.clock.advance(120_000);
+    }
+    expect(outcomes.every((o) => o === "driven")).toBe(true);
+    const waiting = await h.store.attemptsFor(APP);
+    expect(waiting.map((a) => [a.attempt, a.phase, a.error])).toEqual([
+      [1, "planned", "unpaid: wallet_busy"],
+    ]);
+    expect(h.log.steps().filter((s) => s === "create:wallet_busy").length).toBe(
+      10
+    );
+    expect(h.log.steps().some((s) => s.startsWith("attempt_failed:"))).toBe(
+      false
+    );
+    expect(h.log.alerts()).not.toContain("release_parked");
+
+    walletBusy = false;
+    expect(await h.seq.step(APP)).toBe("driven");
+    const landed = await h.store.attemptsFor(APP);
+    expect(landed.map((a) => [a.attempt, a.phase])).toEqual([[1, "active"]]);
+  });
+
+  it("past walletWaitMs the release parks on its own reason, never as a counted attempt failure", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.createFault = () => busy();
+    await h.release(canaryApp(), SHA_1);
+    expect(await h.seq.step(APP)).toBe("driven");
+    h.clock.advance(h.config.walletWaitMs - 1_000);
+    expect(await h.seq.step(APP)).toBe("driven");
+    expect((await h.store.attemptsFor(APP))[0]?.phase).toBe("planned");
+    h.clock.advance(2_000);
+    await h.seq.step(APP);
+    const [only, ...rest] = await h.store.attemptsFor(APP);
+    expect(rest).toHaveLength(0);
+    expect(only?.phase).toBe("failed");
+    expect(only?.error).toBe(WALLET_WAIT_EXCEEDED);
+    expect(h.log.alerts()).toContain("release_parked");
+    const creates = h.payer.createRequests.length;
+    for (let i = 0; i < 3; i++) {
+      h.clock.advance(24 * 3_600_000);
+      expect(await h.seq.step(APP)).toBe("parked");
+    }
+    expect(h.payer.createRequests).toHaveLength(creates);
+    expect((await h.store.attemptsFor(APP)).length).toBe(1);
   });
 });
 
