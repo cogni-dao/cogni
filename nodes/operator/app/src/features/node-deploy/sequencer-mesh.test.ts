@@ -39,6 +39,7 @@ import {
   type NodeMeshPort,
   type NodeRuntimeSecretsPort,
   type PayerCreateRequest,
+  PayerError,
   type PublishedSubstrateRequest,
   type StoredMeshKey,
   type SubstrateTransport,
@@ -1207,6 +1208,36 @@ describe("HR 10, 11: a wiped Headscale recovers by derivation, with no person", 
 // ---------------------------------------------------------------------------------------------
 // Review #3050: B4 one Headscale writer, B5 drain after a switch-back
 // ---------------------------------------------------------------------------------------------
+
+describe("bug.5585: a busy wallet keeps its wait start across mesh prep", () => {
+  it("a mesh attempt waits on a busy wallet, alerts at walletWaitMs, then lands on the same attempt", async () => {
+    const h = harness();
+    await h.seq.reconcileAll();
+    let walletBusy = true;
+    h.payer.createFault = () =>
+      walletBusy
+        ? new PayerError("wallet_allocation_blocked", "busy", false)
+        : undefined;
+    await h.release("poly");
+    const since = h.clock.now();
+    for (let i = 0; i < 18; i++) {
+      await h.seq.step(h.key("poly"));
+      h.clock.advance(120_000);
+    }
+    const waiting = await h.attempts("poly");
+    expect(
+      waiting.map((a) => [a.attempt, a.phase, a.transport, a.error])
+    ).toEqual([[1, "planned", "mesh", `unpaid: wallet_busy@${since}`]]);
+    expect(
+      h.log.alerts().filter((a) => a === "wallet_wait_exceeded")
+    ).toHaveLength(1);
+    walletBusy = false;
+    await h.seq.step(h.key("poly"));
+    expect((await h.attempts("poly")).map((a) => [a.attempt, a.phase])).toEqual(
+      [[1, "active"]]
+    );
+  });
+});
 
 describe("review fixes", () => {
   it("B4: a concurrent mesh pass and mint serialize; the new key is granted and never swept", async () => {

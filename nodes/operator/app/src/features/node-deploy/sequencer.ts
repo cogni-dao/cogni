@@ -16,6 +16,12 @@
  *     An ambiguous create is RESOLVED through `observe(cogniKey)`, never blindly repeated.
  *   - PARK_AFTER_3: after 3 consecutive failed attempts of one release no further paid create happens
  *     until a new release arrives. No clock resets that count.
+ *   - WALLET_WAIT_IS_NOT_AN_ATTEMPT (bug.5585): a create refused `wallet_allocation_blocked` claimed nothing.
+ *     Its attempt stays `planned` and unpaid and retries every tick: it never fails or parks, so a wait
+ *     never advances PARK_AFTER_3, and it lands on the same attempt once the wallet frees. The wait is
+ *     timed from the FIRST busy reply, stamped durably in the marker (`unpaid: wallet_busy@<ms>`); past
+ *     `walletWaitMs` it raises a throttled `alert/wallet_wait_exceeded` and keeps waiting. A newer
+ *     release still supersedes the waiting attempt.
  *   - TERMINAL_ADMISSION: refusal fences every resumed phase before proof/cutover. Old paid effects
  *     keep observation/adoption and confirmed stateless cleanup; retained state keeps custody.
  *   - PROVE_BEFORE_CUTOVER: the edge never moves until the green lease serves the exact sha
@@ -161,6 +167,13 @@ export interface SequencerConfig {
   readonly environment: string;
   /** Lease must report active + an endpoint within this of lease creation. */
   readonly leaseReadyMs: number;
+  /**
+   * WALLET_WAIT_IS_NOT_AN_ATTEMPT (bug.5585): after one attempt has waited this long (from its first busy
+   * reply), unpaid, for a busy wallet slot, it raises `alert/wallet_wait_exceeded` (throttled) and keeps
+   * waiting, like `imageAlertMs`. 30 min: longer than one slot can legitimately be held (the payer's
+   * 10 min create timeout plus the 15 min `inflightGraceMs` before a lost create is settled).
+   */
+  readonly walletWaitMs: number;
   /** Proof deadline, counted from lease creation (design: 10 min). */
   readonly proofMs: number;
   /**
@@ -218,6 +231,7 @@ export const DEFAULT_SEQUENCER_CONFIG: Omit<
   "namespace" | "environment"
 > = {
   leaseReadyMs: 240_000,
+  walletWaitMs: 1_800_000,
   proofMs: 600_000,
   hostNotRoutedMs: 60_000,
   publicMs: 300_000,
@@ -889,6 +903,12 @@ export class NodeDeploySequencer {
               "ambiguous create resolved to nothing; next ordinal"
             );
             return;
+          } else if (a.unhealthySince) {
+            // A healthy observe ends an `observe_unavailable` run: a later blip starts a new one, so
+            // blips spread over a long unpaid wait never add up to `orphan_suspect` (bug.5585).
+            a = await this.d.store.updateAttempt(a.id, {
+              unhealthySince: null,
+            });
           }
         } catch (error) {
           a = await this.observeUnavailable(
@@ -1343,6 +1363,9 @@ export class NodeDeploySequencer {
     attempt: AttemptRow,
     blue: AttemptRow | undefined
   ): Promise<AttemptRow> {
+    // WALLET_WAIT_IS_NOT_AN_ATTEMPT: read the wallet wait start before any writer (mesh prep, the
+    // dispatch marker) replaces the error; the busy branch below writes it back.
+    const busySince = walletBusySince(attempt);
     const refusal = this.d.httpAdmissionRefusal;
     if (release.spec.kind === "app" && refusal) {
       await this.emit(key, release, attempt, "dependency", "waiting", {
@@ -1402,8 +1425,9 @@ export class NodeDeploySequencer {
       fleet,
       fleetConfirmedBy,
     } = await this.exclusion(key, release, blue, true);
+    // Repeated on every create retry (a busy wallet retries each tick): one line per minute per attempt.
     if (excludeProviders.length > 0)
-      await this.emit(key, release, attempt, "providers_excluded", "ok", {
+      await this.emitGrace(key, release, attempt, "providers_excluded", "ok", {
         providers: excludeProviders,
         remembered,
         fleetExcluded: fleet,
@@ -1426,10 +1450,17 @@ export class NodeDeploySequencer {
     const requiredCountryCodes =
       w.kind === "app" ? runtime.requiredCountryCodes : [];
     if (allowProviders.length > 0 || requiredCountryCodes.length > 0)
-      await this.emit(key, release, attempt, "placement_constrained", "ok", {
-        providers: allowProviders,
-        reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
-      });
+      await this.emitGrace(
+        key,
+        release,
+        attempt,
+        "placement_constrained",
+        "ok",
+        {
+          providers: allowProviders,
+          reason: `allow=${allowProviders.length} countries=${requiredCountryCodes.join(",") || "none"}`,
+        }
+      );
     // Durable before native IO: runner loss cannot make a paid call look never-paid. The actuator can
     // outlive this sequencer process, so the marker opens the same in-flight grace as a transport failure.
     attempt = await this.d.store.updateAttempt(attempt.id, {
@@ -1457,21 +1488,24 @@ export class NodeDeploySequencer {
     } catch (error) {
       if (error instanceof PayerError) {
         if (error.code === "wallet_allocation_blocked") {
-          // The slot was busy and this key claimed nothing: safe to try again on the next tick,
-          // until the attempt is older than a lease is allowed to take.
-          if (
-            this.d.clock.now() - attempt.createdAt.getTime() <
-            this.d.config.leaseReadyMs
-          ) {
-            await this.emit(key, release, attempt, "create", "wallet_busy");
-            return this.d.store.updateAttempt(attempt.id, {
-              error: "unpaid: wallet_busy",
-            });
-          }
-          attempt = await this.d.store.updateAttempt(attempt.id, {
-            error: "unpaid: wallet_busy",
+          // WALLET_WAIT_IS_NOT_AN_ATTEMPT: the slot was busy and this key claimed nothing. The attempt
+          // waits unpaid and retries next tick; a wait never fails or parks it. The wait start is the
+          // first busy reply, kept in the marker so a restart does not reset it.
+          const now = this.d.clock.now();
+          const since = busySince ?? now;
+          const waitedMs = now - since;
+          const waiting = await this.d.store.updateAttempt(attempt.id, {
+            error: `${WALLET_BUSY_PREFIX}${since}`,
           });
-          return this.failAttempt(key, release, attempt, "wallet_busy_timeout");
+          await this.emitGrace(key, release, waiting, "create", "wallet_busy", {
+            waitedMs,
+          });
+          if (waitedMs >= this.d.config.walletWaitMs)
+            await this.alert(key, release, waiting, "wallet_wait_exceeded", {
+              waitedMs,
+              reason: error.message,
+            });
+          return waiting;
         }
         if (error.ambiguous) {
           const marked = await this.d.store.updateAttempt(attempt.id, {
@@ -3567,6 +3601,9 @@ export class NodeDeploySequencer {
 /** Persisted on an attempt whose create was refused, so a re-drive fails it instead of replaying the key. */
 const REFUSED_PREFIX = "create refused: ";
 
+/** WALLET_WAIT_IS_NOT_AN_ATTEMPT: an unpaid attempt waiting for the wallet, stamped with its first busy reply. */
+const WALLET_BUSY_PREFIX = "unpaid: wallet_busy@";
+
 /**
  * KEY_STORED_BEFORE_PAY: a mesh attempt waiting for its key (`mesh_key_pending: <reason>`). Written only
  * before the dispatch marker, so an attempt carrying it never reached a paid call.
@@ -3584,6 +3621,12 @@ function ambiguousMarker(code: string, now: number): string {
   return code === "network"
     ? `ambiguous: network@${now}`
     : `ambiguous: ${code}`;
+}
+
+/** When this attempt first met a busy wallet (its marker stamp); undefined when it is not waiting. */
+function walletBusySince(attempt: AttemptRow): number | undefined {
+  const m = /^unpaid: wallet_busy@(\d+)$/u.exec(attempt.error ?? "");
+  return m ? Number(m[1]) : undefined;
 }
 
 /** When a create entered native IO or failed in transit (stamp, else legacy createdAt). */
