@@ -13,14 +13,14 @@ description: "DNS operations for Cogni multi-node infrastructure. Node app DNS i
 
 The candidate operator and disposable test workloads intentionally use different DNS zones:
 
-| Concern                             | Canonical value                                                             | Authority                                                                                                 |
-| ----------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| candidate operator/control endpoint | `test.cognidao.org`                                                         | production `cognidao.org` zone; do not move it                                                            |
-| test-org Akash workload             | `<node>-test.cogni-testing.org` (candidate-a)                               | isolated `cogni-testing.org` zone                                                                         |
-| workload public-domain input        | `NODE_DEPLOY_WORKLOAD_ZONE=cogni-testing.org` on the test operator          | operator config; no `DOMAIN` fallback                                                                     |
-| shared substrate root               | `FORK_DOMAIN_ROOT=cognidao.org` (or its existing default)                   | names candidate-a's VM services; it is **not** the workload DNS zone                                      |
-| DNS zone id                         | `cogni-testing.org` zone id                                                 | public identifier; the sequencer finds it by zone name at boot                                            |
-| DNS writer credential               | token scoped only to `cogni-testing.org`                                    | candidate-a OpenBao `cogni/candidate-a/operator/CLOUDFLARE_API_TOKEN` → ESO `operator-env-secrets`        |
+| Concern                             | Canonical value                                                    | Authority                                                                                          |
+| ----------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| candidate operator/control endpoint | `test.cognidao.org`                                                | production `cognidao.org` zone; do not move it                                                     |
+| test-org Akash workload             | `<node>-test.cogni-testing.org` (candidate-a)                      | isolated `cogni-testing.org` zone                                                                  |
+| workload public-domain input        | `NODE_DEPLOY_WORKLOAD_ZONE=cogni-testing.org` on the test operator | operator config; no `DOMAIN` fallback                                                              |
+| shared substrate root               | `FORK_DOMAIN_ROOT=cognidao.org` (or its existing default)          | names candidate-a's VM services; it is **not** the workload DNS zone                               |
+| DNS zone id                         | `cogni-testing.org` zone id                                        | public identifier; the sequencer finds it by zone name at boot                                     |
+| DNS writer credential               | token scoped only to `cogni-testing.org`                           | candidate-a OpenBao `cogni/candidate-a/operator/CLOUDFLARE_API_TOKEN` → ESO `operator-env-secrets` |
 
 Cloudflare API-token permissions are zone-wide; they cannot be restricted to a record prefix. Therefore a test-fleet token for the `cognidao.org` zone is not isolated, even if an agent promises to write only `*-test` records. Never put the production-zone token, VM SSH key, or any other production credential in `cogni-test-org`.
 
@@ -92,12 +92,12 @@ await removeDnsRecord(cf, "cognidao.org", "<node>-test", "A");
 
 ## Troubleshooting
 
-| Symptom                                                   | Fix                                                                                                                                                                   |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `<node>-<env>` `NXDOMAIN` just after a release            | Negative-cache. `dig <host> +short @1.1.1.1`; flush local (`sudo dscacheutil -flushcache`). If the release logged `edge_moved`, the record exists.                   |
-| Node host resolves but page 000/unreachable               | Not DNS. Read the release API: the lease behind the edge died or the release rolled back. For the operator's own hosts, check the edge Caddy route (`reconcile-edge-caddy.remote.sh`). |
-| A node never gets a record                                | The release shows `edge_not_configured` (zone-scoped `CLOUDFLARE_API_TOKEN` missing, or the zone lookup by name failed), OR the node's catalog `compute_api[<env>]` is not `node-deploy`. |
-| `PROTECTED: refusing to modify`                           | You targeted `@`/`www`. Use the dashboard.                                                                                                                            |
-| `403` from Cloudflare                                     | Token lacks Zone · DNS · Edit. Recreate.                                                                                                                              |
+| Symptom                                        | Fix                                                                                                                                                                                       |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<node>-<env>` `NXDOMAIN` just after a release | Negative-cache. `dig <host> +short @1.1.1.1`; flush local (`sudo dscacheutil -flushcache`). If the release logged `edge_moved`, the record exists.                                        |
+| Node host resolves but page 000/unreachable    | Not DNS. Read the release API: the lease behind the edge died or the release rolled back. For the operator's own hosts, check the edge Caddy route (`reconcile-edge-caddy.remote.sh`).    |
+| A node never gets a record                     | The release shows `edge_not_configured` (zone-scoped `CLOUDFLARE_API_TOKEN` missing, or the zone lookup by name failed), OR the node's catalog `compute_api[<env>]` is not `node-deploy`. |
+| `PROTECTED: refusing to modify`                | You targeted `@`/`www`. Use the dashboard.                                                                                                                                                |
+| `403` from Cloudflare                          | Token lacks Zone · DNS · Edit. Recreate.                                                                                                                                                  |
 
 > Legacy note: `packages/dns-ops/scripts/create-node.ts` creates a `<slug>.nodes.cognidao.org` formation/node-spec record — a separate, pre-Axiom-21 path, NOT the per-env app host. App-host DNS is the catalog-driven flow above; do not use create-node.ts for it.
