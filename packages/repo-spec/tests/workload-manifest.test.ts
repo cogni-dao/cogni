@@ -35,8 +35,10 @@ import {
   lowerWorkloadManifests,
   MAX_WORKLOAD_MANIFEST_BYTES,
   parseWorkloadManifest,
+  placementCountriesOf,
   quantityToCpu,
   quantityToMi,
+  resolvePlacementCountries,
   type WorkloadManifestError,
   type WorkloadManifestIssueCode,
 } from "../src/workload-manifest";
@@ -669,6 +671,133 @@ describe("lowering rules", () => {
     expect(findLiteralSecret("create table x(id serial primary key)")).toBe(
       undefined
     );
+  });
+});
+
+describe("placement countries (story.5141, hub node-choose-placement-region)", () => {
+  const BASE = "cogni.dev/placement-countries";
+  const withPlacement = (annotations: Record<string, string>): Doc => {
+    const d = canaryDoc();
+    Object.assign(d.metadata.annotations, annotations);
+    return d;
+  };
+
+  it("a base set applies to every env", () => {
+    const m = parseWorkloadManifest(
+      stringify(withPlacement({ [BASE]: "FI,NL,PT" }))
+    );
+    const placement = placementCountriesOf(m);
+    expect(placement).toEqual({ default: ["FI", "NL", "PT"], byEnv: {} });
+    for (const env of ["candidate-a", "preview", "production"])
+      expect(resolvePlacementCountries(placement, env)).toEqual([
+        "FI",
+        "NL",
+        "PT",
+      ]);
+  });
+
+  it("a per-env set replaces the base for that env only", () => {
+    const m = parseWorkloadManifest(
+      stringify(
+        withPlacement({
+          [BASE]: "FI,NL,PT",
+          [`${BASE}-candidate-a`]: "BE",
+        })
+      )
+    );
+    const placement = placementCountriesOf(m);
+    expect(placement).toEqual({
+      default: ["FI", "NL", "PT"],
+      byEnv: { "candidate-a": ["BE"] },
+    });
+    expect(resolvePlacementCountries(placement, "candidate-a")).toEqual(["BE"]);
+    expect(resolvePlacementCountries(placement, "production")).toEqual([
+      "FI",
+      "NL",
+      "PT",
+    ]);
+  });
+
+  it("a per-env set alone leaves the other envs unconstrained", () => {
+    const placement = placementCountriesOf(
+      parseWorkloadManifest(
+        stringify(withPlacement({ [`${BASE}-production`]: "PT" }))
+      )
+    );
+    expect(resolvePlacementCountries(placement, "production")).toEqual(["PT"]);
+    expect(resolvePlacementCountries(placement, "preview")).toBeUndefined();
+  });
+
+  it("the app lowers with the set for the release env; the state workload never carries one", () => {
+    const m = parseWorkloadManifest(
+      stringify(
+        withPlacement({ [BASE]: "FI,NL,PT", [`${BASE}-candidate-a`]: "BE" })
+      )
+    );
+    const [db, prod] = lowerWorkloadManifest(m, { env: "production" });
+    expect(prod?.placement).toEqual({
+      requiredCountryCodes: ["FI", "NL", "PT"],
+    });
+    expect(db?.placement).toBeUndefined();
+    const [, cand] = lowerWorkloadManifest(m, { env: "candidate-a" });
+    expect(cand?.placement).toEqual({ requiredCountryCodes: ["BE"] });
+  });
+
+  it("a declared set needs the release env at lowering (never dropped in silence)", () => {
+    const m = parseWorkloadManifest(stringify(withPlacement({ [BASE]: "FI" })));
+    expect(() => lowerWorkloadManifest(m)).toThrow(/release env/);
+    // the base set applies to any env (a local `dev` harness included); per-env keys exist for three
+    expect(lowerWorkloadManifest(m, { env: "dev" })[1]?.placement).toEqual({
+      requiredCountryCodes: ["FI"],
+    });
+  });
+
+  it("no annotation lowers with no placement field, in every env", () => {
+    const m = parseWorkloadManifest(CANARY);
+    expect(placementCountriesOf(m)).toEqual({ byEnv: {} });
+    const [, canary] = lowerWorkloadManifest(m, { env: "production" });
+    expect(canary && "placement" in canary).toBe(false);
+  });
+
+  it.each<[string, Record<string, string>, WorkloadManifestIssueCode]>([
+    ["a lowercase code", { [BASE]: "fi,NL" }, "invalid_annotation"],
+    ["a three-letter code", { [BASE]: "FIN" }, "invalid_annotation"],
+    ["a digit in a code", { [BASE]: "F1" }, "invalid_annotation"],
+    ["a space after a comma", { [BASE]: "FI, NL" }, "invalid_annotation"],
+    ["an empty set", { [BASE]: "" }, "invalid_annotation"],
+    ["an empty member", { [BASE]: "FI,,NL" }, "invalid_annotation"],
+    ["a trailing comma", { [BASE]: "FI," }, "invalid_annotation"],
+    ["a duplicate code", { [BASE]: "FI,NL,FI" }, "invalid_annotation"],
+    [
+      "an invalid per-env set",
+      { [`${BASE}-production`]: "pt" },
+      "invalid_annotation",
+    ],
+    [
+      "an unknown env suffix",
+      { [`${BASE}-staging`]: "PT" },
+      "unknown_annotation",
+    ],
+    [
+      "a misspelled key",
+      { "cogni.dev/placement-country": "PT" },
+      "unknown_annotation",
+    ],
+  ])("refuses %s", (_label, annotations, code) => {
+    expect(
+      refusals((d) => Object.assign(d.metadata.annotations, annotations))
+    ).toEqual([code]);
+  });
+
+  it("refuses more than 32 codes", () => {
+    const codes = Array.from({ length: 33 }, (_, i) =>
+      String.fromCharCode(65 + Math.floor(i / 26), 65 + (i % 26))
+    ).join(",");
+    expect(
+      refusals((d) => {
+        d.metadata.annotations[BASE] = codes;
+      })
+    ).toEqual(["invalid_annotation"]);
   });
 });
 

@@ -564,6 +564,24 @@ export const nodeWorkloadSpecSchema = z
      * distinct node-app service), NEVER by a manifest. Absent = the node app.
      */
     runtimeProfile: z.literal("worker").optional(),
+    /**
+     * The node's own hard placement set for THIS release's env (story.5141): ISO 3166-1 alpha-2, from the
+     * manifest's `cogni.dev/placement-countries-<env>`, else `cogni.dev/placement-countries`. Set by the
+     * operator when it lowers a manifest at a source sha, so the release pins it (CD3). App only. Absent =
+     * the node declares no set.
+     */
+    placement: z
+      .object({
+        requiredCountryCodes: z
+          .array(z.string().regex(/^[A-Z]{2}$/))
+          .min(1)
+          .max(32)
+          .refine((codes) => new Set(codes).size === codes.length, {
+            message: "country codes must be unique",
+          }),
+      })
+      .strict()
+      .optional(),
     /** REQUIRED, no default (CD6): does this workload do work only one live instance may do? */
     exclusive: z.boolean(),
     health: z
@@ -670,6 +688,12 @@ export const nodeWorkloadSpecSchema = z
         code: "custom",
         path: ["health"],
         message: "an app workload must declare health {version, ready}",
+      });
+    if (w.kind === "state" && w.placement)
+      ctx.addIssue({
+        code: "custom",
+        path: ["placement"],
+        message: "only an app workload carries a placement set",
       });
     if (w.kind === "state" && w.bindings.length > 0)
       ctx.addIssue({

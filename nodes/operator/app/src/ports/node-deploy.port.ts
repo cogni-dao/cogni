@@ -265,8 +265,8 @@ export function consecutiveFailures(
 export interface PayerSpec {
   readonly name: string;
   /**
-   * Hard placement requirement (ISO 3166-1 alpha-2), from the node's catalog policy
-   * `required_placement_countries[<env>]` (task.5405). Absent = the actuator's default screening.
+   * Hard placement requirement (ISO 3166-1 alpha-2): the release's manifest set (story.5141), else the
+   * node's catalog `required_placement_countries[<env>]` (task.5405). Absent = the actuator's default screening.
    */
   readonly placement?: { readonly requiredCountryCodes: readonly string[] };
   readonly services: readonly {
