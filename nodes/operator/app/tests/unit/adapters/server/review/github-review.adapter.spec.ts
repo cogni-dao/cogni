@@ -38,6 +38,13 @@ vi.mock("@/adapters/server/review/github-auth", () => ({
 
 import { createGithubReviewAdapter } from "@/adapters/server/review/github-review.adapter";
 
+/**
+ * The platform catalog's designated free tier (`is_free: true`, `default_free: true` in
+ * `infra/compose/runtime/configs/litellm.config.yaml`). Kept as a named constant so the intent
+ * ("the free model the catalog serves") survives a future catalog re-curation.
+ */
+const FREE_TIER_MODEL_ID = "gpt-oss-120b";
+
 const mockLogger = {
   info: vi.fn(),
   warn: vi.fn(),
@@ -251,7 +258,13 @@ describe("fetchPrContext — review on/off + model (repo-spec driven)", () => {
     });
 
     expect(result.reviewEnabled).toBe(true);
-    expect(result.modelRef.modelId).toBe("gpt-4o-mini");
+    // Pin the BEHAVIOUR, not the literal: the operator default must be a model the platform catalog
+    // actually serves, and should be the free tier so review costs nothing per PR. This assertion
+    // previously hardcoded "gpt-4o-mini" — a model absent from the catalog — so the test actively
+    // protected bug.5327 and fixing the default required changing the test. Per the
+    // `check-reads-not-record` corollary: pin behaviour, or CI guards the defect.
+    expect(result.modelRef.modelId).toBe(FREE_TIER_MODEL_ID);
+    expect(result.modelRef.providerKey).toBe("platform");
   });
 
   it("propagates review.enabled=false (node opts out)", async () => {

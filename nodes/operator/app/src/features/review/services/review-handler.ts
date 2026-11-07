@@ -28,8 +28,15 @@ import { runGates } from "../gate-orchestrator";
 import { formatCheckRunSummary, formatPrComment } from "../summary-formatter";
 import type { EvidenceBundle, ReviewContext } from "../types";
 
-/** Default model for PR review. */
-const DEFAULT_REVIEW_MODEL = "gpt-4o-mini";
+/**
+ * Default model for PR review when the target repo-spec omits `review.model`.
+ *
+ * MUST be a model id the platform catalog actually serves. The prior default, `gpt-4o-mini`, was
+ * absent from the LiteLLM catalog, so omitting `review.model` was just as broken as pinning the dead
+ * id (bug.5327). `gpt-oss-120b` is the designated free tier (`default_free: true`), which also makes
+ * the safe default the free one.
+ */
+const DEFAULT_REVIEW_MODEL = "gpt-oss-120b";
 
 /**
  * Dependencies for the review handler.
@@ -157,6 +164,10 @@ export async function handlePrReview(
       model,
       log,
       loadRule,
+      // FAIL_ON_ERROR_IS_HONOURED (bug.5327): the target repo-spec's `fail_on_error` was parsed into
+      // gatesConfig and then read by nobody, so a spec that asked for loud failures still got silent
+      // `neutral`. Thread it through.
+      failOnError: gatesConfig.failOnError,
     });
 
     // 7. Build DAO deep link (for Check Run "View Details" page)
