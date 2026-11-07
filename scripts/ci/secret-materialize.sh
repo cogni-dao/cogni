@@ -291,6 +291,9 @@ bao_get_field() {
   case "$authority" in
     target) f="${CACHE_DIR}/${svc}/${key}" ;;
     owner) f="${CACHE_DIR}/__owners__/${SECRETS_CONTROL_ENV}/${svc}/${key}" ;;
+    # The LANE's own bank in this (writing) vault: cogni/<lane>/<svc>. The lane Doltgres
+    # superuser is read here, never from the control env's bank (story.5098).
+    lane-owner) f="${CACHE_DIR}/__owners__/${DEPLOY_ENVIRONMENT}/${svc}/${key}" ;;
     *) fail "unknown secret bank authority" ;;
   esac
   # Missing is missing in THIS authority. Never retry under a greater owner.
@@ -372,9 +375,9 @@ key_is_agent_generated() {
 # sole-source cutover, complete for both planes:
 #   DATABASE_URL / DATABASE_SERVICE_URL  from per-node app_<node>/service_<node>
 #     passwords (source:agent at cogni/<env>/<node>);
-#   DOLTGRES_URL                         from DOLTGRES_PASSWORD — the env Doltgres
-#     superuser, derived from POSTGRES_ROOT_PASSWORD and materialized per-node just
-#     above it in NODE_BASELINE_KEYS (the pod connects as that superuser because
+#   DOLTGRES_URL                         from DOLTGRES_PASSWORD — the LANE env's Doltgres
+#     superuser (cogni/<lane>/operator, story.5098) on the lane's own host, materialized
+#     per-node just above it in NODE_BASELINE_KEYS (the pod connects as that superuser because
 #     Doltgres 0.56.3 RBAC is table-DML-only — databases.md §5.2).
 # Nothing is deferred: materialize is the SOLE OpenBao writer of all per-node DSNs,
 # reconcile is read-only. The DSN_DEFER mechanism is retained (empty) so a future
@@ -382,8 +385,8 @@ key_is_agent_generated() {
 DSN_DEFER_KEYS=" "
 
 # The per-node Postgres DSNs are COMPOSED from the per-node app_<node>/service_<node>
-# role (#1584). DOLTGRES_URL is composed from the operator-canonical Doltgres
-# superuser (cogni/<env>/operator/DOLTGRES_PASSWORD), which is shared env-wide and
+# role (#1584). DOLTGRES_URL is composed from the lane's operator-canonical Doltgres
+# superuser (cogni/<lane>/operator/DOLTGRES_PASSWORD), which is shared env-wide and
 # immutable post-init (Doltgres 0.56.3 can't ALTER it; databases.md §5.2).
 #
 # All three DSNs are recomposed authoritatively every run and overwritten ONLY on
@@ -420,12 +423,13 @@ inherited_key_value() {
   [[ -f "$file" ]] && cat "$file" || true
 }
 prefetch_path "$TARGET_NODE"
-# Keep the control operator for DB/LiteLLM reads. Every inherited key uses its
+# Keep the control operator for DB/LiteLLM reads, and the LANE operator for its own
+# Doltgres superuser (story.5098; `lane-owner` authority). Every inherited key uses its
 # exact typed reference, cached by BOTH environment and service.
 while IFS=$'\t' read -r owner_env svc; do
   prefetch_path "$svc" "$owner_env" "__owners__/${owner_env}/${svc}"
-done < <(jq -r --arg control "$SECRETS_CONTROL_ENV" \
-  '[.[], {environment:$control,service:"operator"}] | unique_by([.environment,.service])[] | [.environment,.service] | @tsv' \
+done < <(jq -r --arg control "$SECRETS_CONTROL_ENV" --arg lane "$DEPLOY_ENVIRONMENT" \
+  '[.[], {environment:$control,service:"operator"}, {environment:$lane,service:"operator"}] | unique_by([.environment,.service])[] | [.environment,.service] | @tsv' \
   <<<"$INHERITED_OWNERS_JSON")
 
 # Same canonical writer loads applied cell custody before composing any runtime URL.
