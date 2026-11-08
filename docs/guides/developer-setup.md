@@ -110,35 +110,17 @@ Receipts appear in `/gov/epoch` within seconds. The seeded open epoch covers the
 
 ## PR Review Bot (optional)
 
-Runs automated AI-powered code review on PRs. Requires the GitHub App from above with `Checks:write` + `Pull requests:write` permissions. See [GitHub App + Webhook Setup](./github-app-webhook-setup.md) for credentials.
+Runs a hub-grounded AI review of one PR when a developer calls `POST /api/v1/vcs/review`. No PR event starts a review. The operator's GitHub App posts the `Cogni Git PR Review` Check Run at the PR head and a PR comment. App credentials: [GitHub App + Webhook Setup](./github-app-webhook-setup.md).
 
-**Environment variables** (`.env.local`):
-
-```bash
-GH_REVIEW_APP_ID=<your app id>
-GH_REVIEW_APP_PRIVATE_KEY_BASE64=<base64-encoded private key>
-GH_REPOS=<owner/repo>
-GH_WEBHOOK_SECRET=<webhook secret>
-GH_WEBHOOK_PROXY_URL=<smee channel url>
-```
-
-**Run it:**
+Request it from a deployed operator: `https://cognidao.org` for `cogni-dao/cogni` PRs, `https://test.cognidao.org` for `cogni-test-org` PRs. Use that operator's API key; the caller needs `node.flight` on the node. v0 reviews operator PRs only. A local `pnpm dev:stack` cannot authorize the call: it starts no OpenFGA.
 
 ```bash
-# Terminal 1: dev stack
-pnpm dev:stack
-
-# Terminal 2: smee proxy for GitHub webhooks
-npx smee -u $GH_WEBHOOK_PROXY_URL --path /api/internal/webhooks/github --port 3000
+curl -X POST https://cognidao.org/api/v1/vcs/review \
+  -H "Authorization: Bearer $COGNI_NODE_API_KEY" -H 'content-type: application/json' \
+  -d '{"nodeId":"<operator node id>","prNumber":<PR number>}'
 ```
 
-Push a branch and open a PR on the configured repo. The review bot creates a Check Run, runs LLM-powered gate evaluations, posts a PR comment with results. Click "View Details" on the Check Run to see the full review summary.
-
-**Automated external tests** (requires credentials + running stack + smee):
-
-```bash
-pnpm test:external
-```
+Click "View Details" on the Check Run for the full review.
 
 ## On-Chain Governance (optional)
 
