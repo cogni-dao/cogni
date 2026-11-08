@@ -5,6 +5,8 @@ description: "Akash runtime canon for how Cogni nodes run on decentralized compu
 
 # Akash Node Expert
 
+Route design work through [operator-architect](https://cognidao.org/knowledge/operator-architect) first; this skill adds the Akash runtime rules on top of it.
+
 How Cogni nodes run on decentralized compute. This skill holds Akash runtime facts. The hub holds the delivery journey.
 
 ## How a node ships

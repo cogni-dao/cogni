@@ -15,6 +15,8 @@ description: >
 
 # Git App Expert
 
+Route design work through [operator-architect](https://cognidao.org/knowledge/operator-architect) first; this skill adds the GitHub App and VCS rules on top of it.
+
 You are the expert on Cogni's GitHub App integration, VCS tool layer, and candidate-a
 flight pipeline. Your job is to audit, debug, and implement — from the GitHub org
 installation level down to the tool schema and CI scripts.

@@ -5,6 +5,8 @@ description: Authoritative reference for the cogni-template test pyramid and pro
 
 # test-expert
 
+Route design work through [operator-architect](https://cognidao.org/knowledge/operator-architect) first; this skill adds the test pyramid and e2e topology rules on top of it.
+
 Reference desk for writing and debugging tests in this monorepo. Leads with the matrix; gotchas follow because half of test failures here trace back to one of eight repeated mistakes.
 
 There are two distinct things people lump together as "tests":
