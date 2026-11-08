@@ -118,12 +118,12 @@ spec:
             - { name: HOME, value: /tmp }
             # Not a Kubernetes-aware tailscale: no API discovery, no kube state store.
             - { name: KUBERNETES_SERVICE_HOST, value: "" }
-          # Guaranteed QoS (B17).
           # Guaranteed QoS (B17). Sized by networking-expert rule 4 from live cgroup anon memory
           # (bug.5601, 2026-11-08): base 7.4 MiB + 2.3 MiB per tailnet peer (production 23.5 MiB at 7
           # peers, preview 14.3 at 3, candidate-a 19.8 at 6). Peak = 13 peers (6 production lanes, each
           # with a second attempt during a release burst, plus itself): (7.4 + 13 x 2.3) x 1.5 = 56 MiB,
-          # rounded up to 64Mi. memory.current also counts reclaimable page cache; read anon, not current.
+          # rounded up to 64Mi (about 14 devices). A seventh production lane means re-measure and re-size.
+          # memory.current also counts reclaimable page cache; read anon, not current.
           resources:
             requests: { cpu: 100m, memory: 64Mi }
             limits: { cpu: 100m, memory: 64Mi }
@@ -148,7 +148,7 @@ spec:
           ports:
             - { name: publish, containerPort: 8080, protocol: TCP }
           # Sized by networking-expert rule 4: caddy file-server anon 9.7 MiB + slab 0.7, flat in every
-          # env (bug.5601, 2026-11-08); x 1.5 = 15.6 MiB, so 16Mi had no room -> 24Mi.
+          # env (bug.5601, 2026-11-08); x 1.5 = 15.6 MiB, at the old 16Mi edge -> 24Mi margin.
           resources:
             requests: { cpu: 20m, memory: 24Mi }
             limits: { cpu: 20m, memory: 24Mi }
