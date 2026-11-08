@@ -58,7 +58,6 @@ async function nodeBrand(slug: string): Promise<NodeBrand> {
       return {
         title: node.title,
         icon: node.icon ?? null,
-        thumbnailUrl: node.thumbnailUrl ?? null,
         brandColor: node.brandColor ?? null,
       };
     }
@@ -68,7 +67,6 @@ async function nodeBrand(slug: string): Promise<NodeBrand> {
   return {
     title: titleCase(slug),
     icon: null,
-    thumbnailUrl: null,
     brandColor: null,
   };
 }
