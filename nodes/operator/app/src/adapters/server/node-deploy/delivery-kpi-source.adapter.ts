@@ -38,7 +38,7 @@ import type {
  * built, whose date serializers/parsers are pass-through: send instants as ISO text with a cast, and
  * read timestamps back through `new Date(...)`.
  */
-async function cancellable<T extends readonly Row[]>(
+export async function cancellable<T extends readonly Row[]>(
   query: PendingQuery<T>,
   signal: AbortSignal
 ): Promise<T> {
