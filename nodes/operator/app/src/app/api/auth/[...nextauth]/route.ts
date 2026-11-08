@@ -5,7 +5,7 @@
  * Module: `@app/api/auth/[...nextauth]`
  * Purpose: Expose NextAuth handlers for signin/session routes. Wraps handler with
  *   AsyncLocalStorage to propagate link intent to signIn callback.
- * Scope: On callback routes only, reads link_intent cookie, decodes JWT, populates linkIntentStore with pending or failed intent, delegates to NextAuth, and clears cookie via raw Set-Cookie header. Non-callback routes (/providers, /session, /signout) pass through unmodified. Does not perform DB verification or binding.
+ * Scope: On callback routes only, reads link_intent cookie and the existing session (signedInSessionStore), decodes JWT, populates linkIntentStore with pending or failed intent, delegates to NextAuth, and clears cookie via raw Set-Cookie header. Non-callback routes (/providers, /session, /signout) pass through unmodified. Does not perform DB verification or binding.
  * Invariants: Public infrastructure endpoint; session cookies managed by NextAuth.
  *   Link intent is fail-closed: if JWT decode fails, the intent is rejected (never ignored).
  * Side-effects: IO (NextAuth DB operations via Drizzle client, cookie read/clear)
@@ -16,8 +16,12 @@
 import { type LinkIntent, linkIntentStore } from "@cogni/node-shared";
 import type { NextRequest } from "next/server";
 import NextAuth from "next-auth";
-import { decode } from "next-auth/jwt";
+import { decode, getToken } from "next-auth/jwt";
 import { authOptions, authSecret } from "@/auth";
+import {
+  type SignedInSession,
+  signedInSessionStore,
+} from "@/shared/identity/signed-in-session-store";
 
 export const runtime = "nodejs";
 
@@ -66,9 +70,27 @@ async function handler(
     }
   }
 
+  // Does a valid session already exist? The signIn callback must know, so an OAuth
+  // callback can never replace the signed-in account (bug.5603). Callback routes only.
+  let signedIn: SignedInSession | null = null;
+  if (isCallback) {
+    try {
+      const token = await getToken({ req, secret: authSecret });
+      if (token) {
+        // A decodable session without an id is still a session: fail closed.
+        signedIn = {
+          userId: typeof token.id === "string" ? token.id : "",
+        };
+      }
+    } catch {
+      // Undecodable cookie is not a session — NextAuth ignores it too.
+      signedIn = null;
+    }
+  }
+
   // Run NextAuth within AsyncLocalStorage context
-  const res = await linkIntentStore.run(linkIntent, () =>
-    nextAuthHandler(req, context)
+  const res = await signedInSessionStore.run(signedIn, () =>
+    linkIntentStore.run(linkIntent, () => nextAuthHandler(req, context))
   );
 
   // Clear link_intent cookie after processing (success or failure)
