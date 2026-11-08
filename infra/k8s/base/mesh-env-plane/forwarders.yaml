@@ -1,0 +1,178 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — substrate-gw's only two ways off its pod, each a stock socat with fixed, NAMED targets
+# from the overlay's mesh-env ConfigMap. Their names resolve to the DNS records the operator writes
+# (scripts/ci/reconcile-node-dns.sh for mesh-<env>, provision for the VM alias), so no address is
+# typed anywhere. End-to-end TLS stays with tailscaled (SNI + public certificate check).
+#
+#   mesh-control-fwd  :443 -> MESH_CONTROL_HOST:443   (this tailnet's Headscale, on its coordinator's edge)
+#   substrate-fwd     :443 -> MESH_RELAY_HOST:443     (this tailnet's relay, behind this VM's edge Caddy)
+#                     :5432/:5435/:6379/:4000/:7233/:30900 -> MESH_VM_HOST:<same>  (the shared
+#                     services and scheduler-worker health, a reviewed mesh-grantable port (T5),
+#                     reached exactly like the env overlays' ExternalName substrate Services)
+#
+# Fixed ClusterIPs in the k3s STATIC band (10.43.0.16-10.43.0.254 of the /16 service CIDR; k8s >= 1.26
+# allocates dynamic IPs above it, and .1 = apiserver, .10 = kube-dns), so no dynamic Service can hold
+# them. They are the ONE source of substrate-gw's hostAliases (kustomize replacements in each
+# instance overlay); tests/ci-invariants/node-deploy-mesh-plane.spec.ts checks no other manifest uses
+# them. A second per-tailnet instance patches both Services to its own static pair.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mesh-control-fwd
+  labels:
+    app.kubernetes.io/name: mesh-control-fwd
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mesh-control-fwd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mesh-control-fwd
+        app.kubernetes.io/part-of: cogni-mesh
+    spec:
+      priorityClassName: cogni-mesh-critical
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: socat
+          image: alpine/socat@sha256:466c8a0383e16463fabdb7df01008292fb78d07da60224a46cb5d3142ce122ed
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MESH_CONTROL_HOST
+              valueFrom:
+                { configMapKeyRef: { name: mesh-env, key: MESH_CONTROL_HOST } }
+          args:
+            - -d
+            - TCP-LISTEN:8443,fork,reuseaddr
+            - TCP:$(MESH_CONTROL_HOST):443
+          ports:
+            - { name: control, containerPort: 8443, protocol: TCP }
+          # Guaranteed QoS (B17), right-sized: socat measured 5.8 MiB with 7 listeners -> 12Mi. Each
+          # concurrent connection forks a child. This one has a single listener and carries only each
+          # node's long-lived Headscale control connection, so it stays at 12Mi (no OOM seen on
+          # 2026-11-07). Raise it if its restarts ever show OOMKilled.
+          resources:
+            requests: { cpu: 20m, memory: 12Mi }
+            limits: { cpu: 20m, memory: 12Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mesh-control-fwd
+  labels:
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  type: ClusterIP
+  clusterIP: 10.43.0.41
+  selector:
+    app.kubernetes.io/name: mesh-control-fwd
+  ports:
+    - { name: control, port: 443, targetPort: control, protocol: TCP }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: substrate-fwd
+  labels:
+    app.kubernetes.io/name: substrate-fwd
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: substrate-fwd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: substrate-fwd
+        app.kubernetes.io/part-of: cogni-mesh
+    spec:
+      priorityClassName: cogni-mesh-critical
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: socat
+          image: alpine/socat@sha256:466c8a0383e16463fabdb7df01008292fb78d07da60224a46cb5d3142ce122ed
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MESH_VM_HOST
+              valueFrom:
+                { configMapKeyRef: { name: mesh-env, key: MESH_VM_HOST } }
+            - name: MESH_RELAY_HOST
+              valueFrom:
+                { configMapKeyRef: { name: mesh-env, key: MESH_RELAY_HOST } }
+          command: [/bin/sh, -c]
+          # One listener per declared port; the container exits (and restarts) if any listener dies.
+          args:
+            - |
+              socat -d TCP-LISTEN:8443,fork,reuseaddr "TCP:${MESH_RELAY_HOST}:443" &
+              for p in 5432 5435 6379 4000 7233 30900; do
+                socat -d "TCP-LISTEN:$p,fork,reuseaddr" "TCP:${MESH_VM_HOST}:$p" &
+              done
+              wait -n
+          ports:
+            - { name: relay, containerPort: 8443, protocol: TCP }
+            - { name: postgres, containerPort: 5432, protocol: TCP }
+            - { name: doltgres, containerPort: 5435, protocol: TCP }
+            - { name: redis, containerPort: 6379, protocol: TCP }
+            - { name: litellm, containerPort: 4000, protocol: TCP }
+            - { name: temporal, containerPort: 7233, protocol: TCP }
+            - { name: worker-health, containerPort: 30900, protocol: TCP }
+          # Guaranteed QoS (B17). Sized for real all-node load: 128Mi / 100m (task.5428). It was 12Mi / 20m
+          # (socat measured 5.8 MiB idle). Each concurrent connection forks a socat child, and every node
+          # app pools Postgres, Doltgres, Redis, LiteLLM and Temporal connections through this pod. On
+          # 2026-11-07 22:20-23:15Z, once all production node apps routed through the mesh, it was
+          # OOMKilled 11 times at 12Mi. Every node's /readyz?deep=1 failed "Temporal connection timeout"
+          # until a live patch to 128Mi at 23:14Z. Raise it again at the next load gate, never
+          # lower it without a measured peak.
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 100m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: substrate-fwd
+  labels:
+    app.kubernetes.io/part-of: cogni-mesh
+spec:
+  type: ClusterIP
+  clusterIP: 10.43.0.42
+  selector:
+    app.kubernetes.io/name: substrate-fwd
+  ports:
+    - { name: relay, port: 443, targetPort: relay, protocol: TCP }
+    - { name: postgres, port: 5432, targetPort: postgres, protocol: TCP }
+    - { name: doltgres, port: 5435, targetPort: doltgres, protocol: TCP }
+    - { name: redis, port: 6379, targetPort: redis, protocol: TCP }
+    - { name: litellm, port: 4000, targetPort: litellm, protocol: TCP }
+    - { name: temporal, port: 7233, targetPort: temporal, protocol: TCP }
+    - {
+        name: worker-health,
+        port: 30900,
+        targetPort: worker-health,
+        protocol: TCP,
+      }

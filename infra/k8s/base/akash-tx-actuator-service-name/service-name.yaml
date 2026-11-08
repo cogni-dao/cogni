@@ -6,11 +6,9 @@
 # transformer, which is the only supported way to keep ONE object out of the overlay's
 # `operator-` prefix.
 #
-# Why this must exist: the Crossplane Composition derives the actuator URL as
-# `http://akash-tx-actuator.<ns>.svc.cluster.local:8080` from the XR's namespace alone. It
-# cannot know a per-node kustomize prefix, and it lives in the control-plane lane
-# (infra/crossplane/**), which cannot ship in the same PR as this app-lane tree. So the
-# Service name is a fixed wire contract and the prefix is what has to give.
+# Why this must exist: every caller (the node-deploy sequencer, the lease-log pump) dials the
+# bare `http://akash-tx-actuator:8080`. They cannot know a kustomize prefix, so the Service
+# name is a fixed wire contract and the prefix is what has to give.
 #
 # Scoped by label, not by the prefixed name, so it stays correct if the prefix ever changes.
 # It is a no-op in any kustomization that does not contain this Service.

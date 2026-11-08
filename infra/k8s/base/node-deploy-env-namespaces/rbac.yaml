@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# story.5137 — the sequencer's Role + RoleBinding in each EXTRA env namespace it serves. The rules are
+# byte-identical to base/node-deploy-sequencer/rbac.yaml (the production namespace's Role): secrets
+# get/create/delete (task.5430: delete is name-bounded to mesh attempt keys by the cluster-wide
+# base/node-deploy-sequencer/attempt-secret-delete-policy.yaml), externalsecrets get/create/patch/update, this
+# namespace only, never a ClusterRole.
+# tests/ci-invariants/node-deploy-sequencer-admission.spec.ts pins the rules to the base copy.
+# The subject is the sequencer ServiceAccount in the wallet namespace (`operator-` prefix from the operator overlay).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: node-deploy-sequencer
+  namespace: cogni-node-deploy-candidate-a
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create, delete]
+  - apiGroups: [external-secrets.io]
+    resources: [externalsecrets]
+    verbs: [get, create, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: node-deploy-sequencer
+  namespace: cogni-node-deploy-candidate-a
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: node-deploy-sequencer
+subjects:
+  - kind: ServiceAccount
+    name: operator-node-deploy-sequencer
+    namespace: cogni-production
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: node-deploy-sequencer
+  namespace: cogni-node-deploy-preview
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create, delete]
+  - apiGroups: [external-secrets.io]
+    resources: [externalsecrets]
+    verbs: [get, create, patch, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: node-deploy-sequencer
+  namespace: cogni-node-deploy-preview
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: node-deploy-sequencer
+subjects:
+  - kind: ServiceAccount
+    name: operator-node-deploy-sequencer
+    namespace: cogni-production

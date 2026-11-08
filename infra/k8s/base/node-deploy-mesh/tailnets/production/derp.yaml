@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+# SPDX-FileCopyrightText: 2026 Cogni-DAO
+#
+# task.5428 — the `production` relay map: ONLY this tailnet's own relay (hard requirements 9 and 21). The
+# relay is this tailnet's derper on its env VM, behind that VM's edge Caddy on 443 at its own DNS-only
+# host (public ACME certificate). No STUN (relay-only): stunport -1 disables it, so clients never probe
+# UDP. No ipv4 pin: clients resolve the host.
+regions:
+  903:
+    regionid: 903
+    regioncode: cogni-production
+    regionname: Cogni production relay
+    nodes:
+      - name: 903a
+        regionid: 903
+        hostname: derp-production.cognidao.org
+        stunport: -1
+        stunonly: false
+        derpport: 443
