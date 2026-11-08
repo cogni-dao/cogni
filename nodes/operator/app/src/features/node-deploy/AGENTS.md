@@ -13,7 +13,7 @@ The node-deploy blue/green sequencer (task.5400, story.5127) and its read model.
 
 ## Pointers
 
-- [Sequencer](sequencer.ts) · [Read model](release-view.ts) · [Fakes](testing.ts) · [Delivery KPIs](delivery-kpis.ts) (goal-metric calculators `deploy.serving-drift@1`, `deploy.release-success@1`, `deploy.lead-time@1` over the release store; task.5442)
+- [Sequencer](sequencer.ts) · [Read model](release-view.ts) · [Fakes](testing.ts) · [Delivery KPIs](delivery-kpis.ts) (goal-metric calculators `deploy.serving-drift@1`, `deploy.release-success@1`, `deploy.lead-time@1` over the release store; task.5442) · [Fleet KPIs](fleet-kpis.ts) (`fleet.lanes-down@1`, `fleet.substrate-reach@1`, `fleet.uptime@1`) over the one per-tick [probe snapshot](fleet-probe-snapshot.ts) that drift also reads; task.5457
 - [Contract](../../contracts/deploy.workloads.v1.contract.ts) · [Store port](../../ports/node-deploy.port.ts)
 - [Release routes](../../app/api/v1/deploy/workloads/) · [Log proxy scope](../nodes/observability-logs.ts)
 - [Dashboard](../../../../../infra/grafana/dashboards/operator/node-deploy.json) · [Alerts](../../../../../infra/grafana/alerts/node-deploy.alerts.yaml)

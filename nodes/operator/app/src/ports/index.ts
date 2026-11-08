@@ -228,6 +228,10 @@ export type {
 export type { EpochsRead } from "./epochs-read.port";
 export { EpochsReadError } from "./epochs-read.port";
 export type {
+  FleetLanesDownReading,
+  FleetObservationReaderPort,
+} from "./fleet-observation.port";
+export type {
   GovernanceRun,
   GovernanceStatusPort,
   UpcomingRun,
