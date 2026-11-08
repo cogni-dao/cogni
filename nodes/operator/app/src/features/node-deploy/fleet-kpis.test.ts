@@ -45,6 +45,9 @@ const NODE = "11111111-1111-4111-8111-111111111111";
 const SHA_A = "a".repeat(40);
 const CONTROL = "cognidao.org";
 
+/** The host of a recorded `host/path` probe. */
+const hostOf = (probe: string) => probe.split("/")[0];
+
 const ok = (body: unknown = {}): DeliveryProbeResult => ({
   kind: "response",
   status: 200,
@@ -643,9 +646,11 @@ describe("the shared per-tick probe snapshot", () => {
     expect(driftSample).toMatchObject({ complete: true, value: 0 });
     expect(src.laneReads).toBe(1);
     expect(
-      src.probes.filter((p) => p.startsWith("a.cognidao.org/readyz"))
+      src.probes.filter(
+        (p) => hostOf(p) === "a.cognidao.org" && p.includes("/readyz")
+      )
     ).toHaveLength(1);
-    expect(src.probes.filter((p) => p.startsWith(CONTROL))).toHaveLength(1);
+    expect(src.probes.filter((p) => hostOf(p) === CONTROL)).toHaveLength(1);
     expect(src.probes).toHaveLength(1 + 2 * 2);
   });
   it("different envs are different snapshots", async () => {
@@ -700,7 +705,7 @@ describe("the shared per-tick probe snapshot", () => {
     const f = fleet(down);
     await run(f.calcs, LANES_DOWN_ID, lanesDown());
     await run(f.calcs, LANES_DOWN_ID, lanesDown());
-    expect(down.probes.filter((p) => p.startsWith(CONTROL))).toHaveLength(2);
+    expect(down.probes.filter((p) => hostOf(p) === CONTROL)).toHaveLength(2);
   });
 });
 
