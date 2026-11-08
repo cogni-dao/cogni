@@ -208,13 +208,13 @@ describe("OAuth signIn callback — DB paths", () => {
     });
     mockGetStore.mockReturnValue({ txId, userId: TEST_USER_ID_2 });
 
-    const { result, userId } = await callSignInWithUser({
+    const { result } = await callSignInWithUser({
       account: makeOAuthAccount("github", providerAccountId),
       profile: makeOAuthProfile("linker"),
     });
 
-    expect(result).toBe(true);
-    expect(userId).toBe(TEST_USER_ID_2);
+    // Server-decided outcome (bug.5603); the existing session is kept, not re-minted.
+    expect(result).toBe("/profile?linked=github");
 
     // Verify new binding was created pointing to seeded user
     const binding = await db.query.userBindings.findFirst({
@@ -251,12 +251,11 @@ describe("OAuth signIn callback — DB paths", () => {
       where: eq(userBindings.userId, TEST_USER_ID_3),
     });
 
-    const { result, userId } = await callSignInWithUser({
+    const { result } = await callSignInWithUser({
       account: makeOAuthAccount("github", providerAccountId),
     });
 
-    expect(result).toBe(true);
-    expect(userId).toBe(TEST_USER_ID_3);
+    expect(result).toBe("/profile?linked=github");
 
     // No new binding rows
     const bindingsAfter = await db.query.userBindings.findMany({
