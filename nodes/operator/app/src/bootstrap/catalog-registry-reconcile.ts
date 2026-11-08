@@ -10,6 +10,9 @@
  *   - FIRST_SUCCESS_BARRIER: callers can await the first successful projection before starting
  *     consumers whose routing depends on the projected registry.
  *   - POLL_HEALS_MISSED_TRIGGERS: a ten-minute interval re-reads merged git through the App.
+ *   - BACKOFF_ON_FAILURE: pre-success retries double from 15s up to the ten-minute cadence, with at
+ *     most one retry timer pending. A permanent failure (bug.5596: App not installed on a private
+ *     catalog repo) costs one read per cadence, not a request storm.
  *   - NO_OVERLAP: concurrent triggers coalesce; the job also has a cross-replica advisory lock.
  *   - TEST_INERT: automatic timers never start in tests.
  * Side-effects: schedules detached asynchronous work outside tests.
@@ -23,7 +26,15 @@ const FALLBACK_INTERVAL_MS = 10 * 60 * 1000;
 // cost seconds, not a 10-minute tick (bug.5164 second finding, 2026-09-15 502 window).
 const PRE_SUCCESS_RETRY_MS = 15 * 1000;
 
+/** Delay before the Nth consecutive pre-success retry: 15s, 30s, 60s ... capped at the poll cadence. */
+export function nextRetryDelayMs(consecutiveFailures: number): number {
+  const exponent = Math.min(Math.max(consecutiveFailures - 1, 0), 16);
+  return Math.min(PRE_SUCCESS_RETRY_MS * 2 ** exponent, FALLBACK_INTERVAL_MS);
+}
+
 let _started = false;
+let _failures = 0;
+let _retryTimer: ReturnType<typeof setTimeout> | null = null;
 let _running: Promise<void> | null = null;
 let _rerunRequested = false;
 let _firstSuccess: Promise<void> | null = null;
@@ -73,11 +84,13 @@ export function triggerCatalogRegistryReconcile(): void {
       // The job records the error. Until first success, retry fast — readiness waits on
       // us; after first success the (self-clearing) fallback interval is the only driver.
       if (_resolveFirstSuccess) {
-        const t = setTimeout(
-          triggerCatalogRegistryReconcile,
-          PRE_SUCCESS_RETRY_MS
-        );
-        t.unref();
+        _failures += 1;
+        if (_retryTimer) clearTimeout(_retryTimer);
+        _retryTimer = setTimeout(() => {
+          _retryTimer = null;
+          triggerCatalogRegistryReconcile();
+        }, nextRetryDelayMs(_failures));
+        _retryTimer.unref();
       }
     })
     .finally(() => {
@@ -97,6 +110,11 @@ async function runReconcile(): Promise<void> {
   await runCatalogNodeRegistryReconcileJob();
   _resolveFirstSuccess?.();
   _resolveFirstSuccess = null;
+  _failures = 0;
+  if (_retryTimer) {
+    clearTimeout(_retryTimer);
+    _retryTimer = null;
+  }
   if (_fallbackTimer) {
     clearInterval(_fallbackTimer);
     _fallbackTimer = null;

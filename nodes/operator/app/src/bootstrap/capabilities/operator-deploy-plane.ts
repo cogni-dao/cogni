@@ -10,7 +10,12 @@
  * @internal
  */
 
-import { GitHubRepoWriter } from "@/adapters/server";
+import {
+  AppOrPublicDeclarationReader,
+  GitHubPublicReader,
+  GitHubRepoWriter,
+  listCatalogNodesVia,
+} from "@/adapters/server";
 import type { DeployPlanePort } from "@/ports";
 import type { ServerEnv } from "@/shared/env";
 
@@ -37,4 +42,27 @@ export function createOperatorDeployPlane(env: ServerEnv): DeployPlanePort {
     // ${DOMAIN:-${FORK_DOMAIN_ROOT:-cognidao.org}} precedence (test-fleet-parity-boundary).
     forkDomainRoot: env.DOMAIN ?? env.FORK_DOMAIN_ROOT,
   });
+}
+
+let cachedCatalogReader: AppOrPublicDeclarationReader | undefined;
+
+/**
+ * Catalog node lister for the env's canonical catalog repo (bug.5596). The operator App reads it
+ * where installed; where the App is NOT installed (the candidate's test App on the public
+ * cogni-dao/cogni) the same read goes anonymously to raw.githubusercontent.com / api.github.com.
+ * Private repos keep the App-only behavior: App-not-installed + not public reads as absent, never
+ * with a credential. One process-wide reader remembers which repos the App is not installed on, so
+ * the install lookup is paid once rather than on every read.
+ */
+export function createCatalogNodeLister(
+  env: ServerEnv
+): Pick<DeployPlanePort, "listCatalogNodes"> {
+  cachedCatalogReader ??= new AppOrPublicDeclarationReader(
+    createOperatorDeployPlane(env),
+    new GitHubPublicReader()
+  );
+  const reader = cachedCatalogReader;
+  return {
+    listCatalogNodes: (input) => listCatalogNodesVia(reader, input),
+  };
 }
