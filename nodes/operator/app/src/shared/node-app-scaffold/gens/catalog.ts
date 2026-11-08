@@ -21,21 +21,6 @@
 import { NODE_FORMATION_ACTIVITY_ENV, NODE_FORMATION_ENVS } from "./envs";
 
 /**
- * V0 provider egress admitted to the shared substrate for every wizard birth.
- * This is the same narrow fleet-standard declaration carried by node-template
- * and every live Akash node. Keep the provenance beside the value: these are
- * provider NATs, not node identities, and widening them changes the substrate
- * firewall trust boundary.
- */
-export const WIZARD_AKASH_COMPUTE_EGRESS_CIDRS = [
-  {
-    cidr: "80.200.246.35/32",
-    comment:
-      "shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)",
-  },
-] as const;
-
-/**
  * Render `infra/catalog/<slug>.yaml` for a new `type:node` entry. `port` is the container port (3200
  * on the template); `nodePort` is the scarce k3s Service NodePort. No `node_id` (schema-forbidden).
  */
@@ -110,16 +95,6 @@ export function renderCatalog(
   const placementBlock = offCluster
     ? `deployment_provider:\n${envs.map((env) => `  ${env}: akash\n`).join("")}`
     : "";
-  // SUBSTRATE_REACHABILITY_AT_BIRTH (bug.5382) — an Akash workload cannot reach the
-  // shared Postgres/Doltgres/Redis/LiteLLM/Temporal ports unless its provider NAT is in
-  // the catalog-derived firewall allowlist. Red and toks5 both needed manual repairs
-  // because the birth generator omitted this block. Emit the same code-owned fleet
-  // standard as node-template for external births; an inline/k3s row opens no hole.
-  const computeEgressBlock = offCluster
-    ? `compute_egress_cidrs:\n${WIZARD_AKASH_COMPUTE_EGRESS_CIDRS.map(
-        ({ cidr, comment }) => `  - cidr: ${cidr}\n    comment: ${comment}\n`
-      ).join("")}`
-    : "";
   // ONE_WRITER_PER_NODE_LANE (story.5137 CD4, task.5411) — every birth env is handed to the
   // node-deploy verb (POST /api/v1/deploy/workloads): it is that lane's only writer. Nothing
   // renders an AppSet or overlay for a born node.
@@ -161,6 +136,6 @@ ${computeApiBlock}# story.5025 — birth authority is PRODUCTION, the only envir
 activity_env: ${NODE_FORMATION_ACTIVITY_ENV}
 # Stable binding only; the reconciler resolves an env-local users.id by wallet.
 owner_wallet: "${input.ownerWallet}"
-${computeEgressBlock}path_prefix: nodes/${slug}/
+path_prefix: nodes/${slug}/
 ${nodeIdLine}`;
 }

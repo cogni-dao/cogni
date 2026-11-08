@@ -197,7 +197,7 @@ describe("buildRegionPlan — no lease_generation", () => {
       current: current(
         catalogWith(
           ["production"],
-          "deployment_provider:\n  production: akash\ncompute_api:\n  production: node-deploy\ncompute_egress_cidrs:\n  - cidr: 1.2.3.4/32\n"
+          "deployment_provider:\n  production: akash\ncompute_api:\n  production: node-deploy\n"
         )
       ),
     });

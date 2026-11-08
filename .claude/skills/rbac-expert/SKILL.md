@@ -5,6 +5,8 @@ description: "Authorization/RBAC navigation for cogni-template — points at the
 
 # RBAC Expert
 
+Route the work through [operator-architect](https://cognidao.org/knowledge/operator-architect) first; this skill adds the authorization rules on top of it.
+
 Navigation for authorization in cogni-template. **This file deliberately does NOT restate the model, the invariant text, the action map, or the roadmap — those live in canon and rot if copied. It points at canon and captures what isn't obvious once you're reading it.**
 
 ## Read the canon (don't duplicate it here)

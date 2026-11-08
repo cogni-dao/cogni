@@ -569,7 +569,15 @@ function createInProcProvider(
     () =>
       container.knowledgeStorePort
         ? container.knowledgeStorePort.listGoverningIndex()
-        : Promise.resolve([])
+        : Promise.resolve([]),
+    // Host-owned architect body (pr-review opt-in): same knowledge store, full entry body.
+    container.knowledgeStorePort
+      ? {
+          read: async (id: string) =>
+            (await container.knowledgeStorePort?.getKnowledge(id))?.content ??
+            null,
+        }
+      : undefined
   );
 }
 

@@ -74,6 +74,9 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
       "- If a change truly belongs in the shared baseline, first weigh whether it improves every node, then raise it upstream rather than forking it locally. Keep mission code separate so updates keep merging.\n\n" +
       "## Ship through the operator: do not reinvent delivery\n" +
       "- CI/CD, flight, validation, merge, promotion, secrets, runtime and logs are operator-owned, not in your code. Use `operator-service-index` (it points to the canonical operator atoms) and `knowledge-contribution-flow` to ship.\n\n" +
+      "## Experts for each concern\n" +
+      "- An expert skill owns one concern under this map. List each of this node's experts here as `| concern | expert |` rows, and read the expert for each concern you change.\n" +
+      "- A new expert adds its row here. Its opening says to route the work through `<slug>-architect` first, then adds only its own rules. Its Related line names this architect as read first. The operator's `networking-expert` is the model. This is a soft standard.\n\n" +
       "## Compare and prove\n" +
       "- For each change name the target, the current evidence, the delta, and whether it is convergence or a regression; a regression blocks approval. Hold durable knowledge to `knowledge-syntropy-protocol`.\n" +
       "- Review before shipping (the repo's `/review-design`, `/review-implementation`); never approve your own work. Prove live before->after at the exact build SHA; green CI or a merged PR is not proof.",

@@ -49,7 +49,7 @@
  *     remove) yields an EMPTY op list (`{ kind: "no_changes" }`), so the adapter opens no PR.
  *   - PLACEMENT_IS_A_LANE_SWITCH (story.5016 T5) — `buildPlacementPlan` edits ONLY
  *     `deployment_provider.<env>` in the catalog (+ the scheduler-worker routing patch,
- *     PLACEMENT_DECIDES_THE_ADDRESS below). `envs:` and `compute_egress_cidrs` are untouched.
+ *     PLACEMENT_DECIDES_THE_ADDRESS below). `envs:` is untouched.
  *   - PLACEMENT_DECIDES_THE_ADDRESS (bug.5094) applies to the placement lever too — the
  *     scheduler-worker's routed URL for `slug` must move with the flip (in-cluster Service DNS ⇄
  *     the node's public host), or the routing map keeps dialing the lane the node just left.
@@ -396,10 +396,8 @@ export type RegionDeltaResult =
  *   - REGION_BINDS_ON_THE_NEXT_RELEASE (task.5411): Akash refuses in-place placement change, and the
  *     node-deploy sequencer mints a fresh lease per release, so the requirement binds on the next
  *     `POST /api/v1/deploy/workloads`. No generation counter moves with it.
- *   - EGRESS_COUPLING_OR_REFUSE: the row must already declare `compute_egress_cidrs`, because a
- *     provider admitted by this requirement whose NAT is absent there boots a workload that then
- *     cannot reach the env VM's substrate ports — a mystery outage, not a config error (the
- *     bug.5191 class). Mirrors the same rule in `infra/catalog/_schema.json`.
+ *   - NO_EGRESS_COUPLING (task.5428): a lease reaches the shared substrate over its env mesh, so a
+ *     country set owes no provider egress declaration.
  *   - NOT_A_GUARANTEE: the screener compares a provider's ADVERTISED/ingress country, which is not
  *     proven to equal the egress identity its workload presents to a third party. This narrows the
  *     candidate pool; only the workload's own outbound probe proves reachability.
@@ -451,15 +449,6 @@ export function buildRegionPlan(input: {
     throw new EnvPlanError(
       "region_requires_akash",
       `cannot set a placement region for '${env}' on '${slug}': that env is not placed on akash, and only a marketplace placement screens provider bids. Place it first (placement:"akash").`,
-      422
-    );
-  }
-
-  // EGRESS_COUPLING_OR_REFUSE — see the invariant above.
-  if (!/^compute_egress_cidrs:/m.test(current.catalog)) {
-    throw new EnvPlanError(
-      "region_requires_egress_cidrs",
-      `cannot set a placement region for '${env}' on '${slug}': the catalog row declares no compute_egress_cidrs, so a provider this requirement admits could boot and then be unable to reach the environment's substrate ports.`,
       422
     );
   }

@@ -38,6 +38,7 @@ import {
   graphReportDelta,
   graphReportLogFields,
   LangGraphInProcProvider,
+  selectArchitectEntryId,
 } from "@/adapters/server/ai/langgraph/inproc.provider";
 import type { GraphRunRequest } from "@/ports";
 import { EVENT_NAMES } from "@/shared/observability";
@@ -282,6 +283,42 @@ describe("LangGraphInProcProvider", () => {
       });
       expect(typeof config.onAuthzDecision).toBe("function");
       expect(config).not.toHaveProperty("authz");
+    });
+  });
+
+  describe("host architect selection (task.5455)", () => {
+    const row = (id: string) => ({ id });
+
+    it("picks the one -architect entry in the index", () => {
+      expect(
+        selectArchitectEntryId([
+          row("no-secrets-in-logs"),
+          row("operator-architect"),
+        ])
+      ).toBe("operator-architect");
+    });
+
+    it("skips when none, or when several and no slug is known", () => {
+      expect(selectArchitectEntryId([row("a-rule")])).toBeNull();
+      expect(
+        selectArchitectEntryId([
+          row("operator-architect"),
+          row("node-template-architect"),
+        ])
+      ).toBeNull();
+    });
+
+    it("prefers the slug-named architect when several exist and the slug matches", () => {
+      const index = [row("operator-architect"), row("node-template-architect")];
+      expect(selectArchitectEntryId(index, "operator")).toBe(
+        "operator-architect"
+      );
+      expect(selectArchitectEntryId(index, "poly")).toBeNull();
+    });
+
+    it("the pr-review catalog entry opts in; other graphs do not", () => {
+      expect(LANGGRAPH_CATALOG["pr-review"]?.hostArchitect).toBe(true);
+      expect(LANGGRAPH_CATALOG.poet?.hostArchitect).toBeUndefined();
     });
   });
 

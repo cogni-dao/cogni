@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
-/** Compact repo-spec-projected node identity mark for operational surfaces. */
+/**
+ * Compact repo-spec-projected node identity mark. Uses the declared icon only (Lucide name or an
+ * image URL); never the homepage thumbnail, which is a large banner, not a mark.
+ */
 
 import type { NodeOperationsOverview } from "@cogni/node-contracts";
 import { cn } from "@cogni/node-ui-kit/util/cn";
@@ -9,10 +12,7 @@ import type { ReactElement } from "react";
 
 import { isBrandImageMark, resolveBrandIcon } from "@/shared/brand/brandIcons";
 
-type NodeBrand = Pick<
-  NodeOperationsOverview,
-  "title" | "icon" | "thumbnailUrl" | "brandColor"
->;
+type NodeBrand = Pick<NodeOperationsOverview, "title" | "icon" | "brandColor">;
 
 export function NodeBrandMark({
   node,
@@ -21,9 +21,7 @@ export function NodeBrandMark({
   node: NodeBrand;
   className?: string;
 }): ReactElement {
-  const imageUrl = isBrandImageMark(node.icon)
-    ? node.icon
-    : (node.thumbnailUrl ?? null);
+  const imageUrl = isBrandImageMark(node.icon) ? node.icon : null;
 
   if (imageUrl) {
     return (
