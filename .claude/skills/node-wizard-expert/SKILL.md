@@ -5,6 +5,8 @@ description: Use when designing, debugging, or operating the Cogni node formatio
 
 # Node Wizard Expert
 
+Route the work through [operator-architect](https://cognidao.org/knowledge/operator-architect) first; this skill adds the node formation wizard rules on top of it.
+
 ## Primary Pointer
 
 For any live throwaway-node launch, start with

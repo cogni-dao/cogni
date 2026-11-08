@@ -5,6 +5,8 @@ description: Use whenever working on Cogni USDC credit top-ups, payment intent c
 
 # Payments Expert
 
+Route the work through [operator-architect](https://cognidao.org/knowledge/operator-architect) first; this skill adds the payment rail rules on top of it.
+
 Use this as the orientation layer before changing or validating Cogni payment rails. The core failure to avoid is calling a config/startup proof a money-loop proof. Payments are live only when the repo-spec economics, deployed Split, payment-intent guard, settlement path, and observed ledger/provider effects all agree.
 
 ## First Rule
