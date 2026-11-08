@@ -225,9 +225,11 @@ export {
 } from "./repo";
 // Review GitHub plane (worker-delegated PR review — bug.5000)
 export {
+  CHECK_RUN_NAME as REVIEW_CHECK_RUN_NAME,
   createGithubReviewAdapter,
   type GithubReviewAdapter,
 } from "./review/github-review.adapter";
+export { GitHubReviewKpiSource } from "./review/review-kpi-source.adapter";
 // Node self-serve secrets — OpenBao writer adapter (design.node-self-serve-secrets).
 export {
   OpenBaoSecretsAdapter,
@@ -258,6 +260,7 @@ export {
   type ForkFromTemplateInput,
   GitHubRepoWriter,
   type GitHubRepoWriterConfig,
+  listCatalogNodesVia,
   type OpenNodeAppPrInput,
   type OpenNodeAppPrResult,
   type PackageImageTagExistsInput,

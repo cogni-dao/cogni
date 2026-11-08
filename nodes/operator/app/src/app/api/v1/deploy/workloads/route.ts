@@ -14,8 +14,9 @@
  *   actuator and never touches DNS: the sequencer executes the intent.
  * Invariants:
  *   - AUTHZ_BEFORE_SIDE_EFFECT: production needs `node.promote_production` (`can_promote_production`);
- *     candidate-a and preview need `node.manage_envs` (`can_manage_envs`) — the promote route's pattern —
- *     checked before any GitHub read or write. GET uses the same gate.
+ *     preview needs `node.manage_envs` (`can_manage_envs`) — the promote route's pattern; candidate-a
+ *     needs `node.flight` (`can_flight` <- developer) OR `node.manage_envs`, its self-service proving
+ *     lane (bug.5574) — checked before any GitHub read or write. GET uses the same gate.
  *   - ONE_FRONT_DOOR (story.5137): the production operator serves candidate-a, preview and production
  *     for canonical Akash nodes; only `env` differs. `_lib/lane.ts` `envNotServed` refuses (a) an env this
  *     deployment's sequencer does not serve (`NODE_DEPLOY_ENVS`) and (b) a node another fleet owns (catalog

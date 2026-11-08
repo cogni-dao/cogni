@@ -85,6 +85,13 @@ export interface PromoteNodeInput {
    * checkout ref (`source_sha`); never crossed between the two.
    */
   readonly sourceSha: string;
+  /**
+   * An in-repo catalog SERVICE of the operator lane (e.g. scheduler-worker) promoted on its OWN
+   * lane instead of the operator app (OPERATOR_SERVICES_RELEASE_INDEPENDENTLY, CD5). Only valid
+   * when `slug` is the operator; validated against `infra/catalog/<service>.yaml` at main
+   * (`type: service`, no `source_repo`, `envs` containing the target env). Absent = the node's own app.
+   */
+  readonly service?: string;
   /** Explicit authorized escape hatch for a deliberate rollback to an older commit on main. */
   readonly allowRollback?: boolean;
 }
@@ -93,6 +100,13 @@ export interface PromoteNodeFromPreviewInput {
   readonly parentOwner: string;
   readonly parentRepo: string;
   readonly slug: string;
+  /**
+   * An in-repo catalog SERVICE of the operator lane (e.g. scheduler-worker) promoted on its OWN
+   * lane instead of the operator app (OPERATOR_SERVICES_RELEASE_INDEPENDENTLY, CD5). Only valid
+   * when `slug` is the operator; validated against `infra/catalog/<service>.yaml` at main
+   * (`type: service`, no `source_repo`, `envs` containing the target env). Absent = the node's own app.
+   */
+  readonly service?: string;
   /** Explicit authorized escape hatch for a deliberate rollback to an older commit on main. */
   readonly allowRollback?: boolean;
 }
@@ -316,7 +330,8 @@ export interface DeployPlanePort {
   ): Promise<PreparedNodeRefCandidateFlight>;
 
   /**
-   * App-read every merged `type:node` catalog row for registry projection. Includes operator +
+   * App-read (or, for a public repo the App is not installed on, anonymously read via the bootstrap
+   * `createCatalogNodeLister`) every merged `type:node` catalog row for registry projection. Includes operator +
    * node-template and fails loud on a malformed node row: one bad file must never be mistaken for
    * an empty catalog.
    */
@@ -509,6 +524,8 @@ export interface DeployPlanePort {
     repo: string;
     env: string;
     slug: string;
+    /** Operator-lane service to promote instead of the app (CD5); see PromoteNodeInput.service. */
+    service?: string;
     sourceSha?: string;
     nodeSourceSha?: string;
   }): Promise<ObservedWorkflowDispatchResult>;

@@ -131,6 +131,20 @@ describe("resolveAttestationTarget", () => {
     expect(mockIssue).not.toHaveBeenCalled();
   });
 
+  it("reports an unregistered node origin as invalid_target_origin before GitHub", async () => {
+    mockResolveNode.mockRejectedValueOnce(
+      new MockAttestationPreconditionError("invalid_target_origin")
+    );
+    await expect(
+      resolveAttestationTarget({
+        request: REQUEST,
+        returnTo: "https://node-template.cognidao.org/profile",
+      })
+    ).rejects.toMatchObject<AttestationBrokerError>({
+      code: "invalid_target_origin",
+    });
+  });
+
   it("rejects an open redirect before the user is sent to GitHub", async () => {
     await expect(
       resolveAttestationTarget({
@@ -205,7 +219,7 @@ describe("issueBrowserIdentityAttestation", () => {
     expect(mockIssue).toHaveBeenCalledOnce();
   });
 
-  it("rejects a canonical env origin not registered for that node", async () => {
+  it("reports a canonical env origin not registered for that node as invalid_target_origin", async () => {
     mockIssue.mockRejectedValueOnce(
       new MockAttestationPreconditionError("invalid_target_origin")
     );
@@ -220,7 +234,7 @@ describe("issueBrowserIdentityAttestation", () => {
         returnTo: "https://toks4-test.cognidao.org/profile",
       })
     ).rejects.toMatchObject<AttestationBrokerError>({
-      code: "invalid_return_to",
+      code: "invalid_target_origin",
     });
     expect(mockIssue).toHaveBeenCalledOnce();
   });

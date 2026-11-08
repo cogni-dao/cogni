@@ -22,7 +22,7 @@
  *     VM env-plane instance (overlays/<env>/mesh-plane/<tailnet>) and its Argo Application are in the repo, so CI is red
  *     until the gateway the lane needs is on main.
  *   - LANE_FLIPS_ARE_PINNED: each operator overlay's NODE_DEPLOY_SUBSTRATE_TRANSPORTS equals its pinned value
- *     (production operator: its candidate-a and production lanes on their own tailnets; candidate-a test operator: its own
+ *     (production operator: its candidate-a, preview and production lanes on their own tailnets; candidate-a test operator: its own
  *     test-candidate-a tailnet), so a lane flip is a reviewed edit of this spec.
  * Side-effects: IO (reads committed files; optional local kubectl kustomize)
  * Links: task.5428, task.5384, bug.5579, hub node-service-delivery, infra/k8s/base/node-deploy-mesh/
@@ -503,7 +503,7 @@ describe("mesh coordinators: one Component per tailnet, pinned to the tailnet ta
       )?.[1];
     // Unlisted lanes are egress (env-lanes.ts). A lane flip edits this pin in the same reviewed PR.
     expect(transports("production")).toBe(
-      "candidate-a=mesh:candidate-a,production=mesh:production"
+      "candidate-a=mesh:candidate-a,preview=mesh:preview,production=mesh:production"
     );
     expect(transports("candidate-a")).toBe("candidate-a=mesh:test-candidate-a");
   });

@@ -44,10 +44,11 @@ const vmHost = (env: string): string =>
   env === "production"
     ? "cogni.vm.cognidao.org"
     : `cogni-${env}.vm.cognidao.org`;
-// Each env's control plane ref: candidate-a runs the reviewed control-plane ref before merge; production
-// runs only main (its siblings in infra/k8s/argocd/control-plane/production/).
+// Each env's control plane ref: candidate-a runs the reviewed control-plane ref before merge; preview and
+// production run only main (their siblings in infra/k8s/argocd/control-plane/{preview,production}/).
 const CONTROL_PLANE_REF: Record<string, string> = {
   "candidate-a": "deploy/candidate-a-control-plane",
+  preview: "main",
   production: "main",
 };
 const BASE = "infra/k8s/base/mesh-env-plane";
@@ -75,16 +76,7 @@ const TABLE: Row[] = (
   .map(
     (r) => Object.fromEntries(r.split("|").map((v, i) => [FIELDS[i], v])) as Row
   );
-// CD6 (qualify before exposure): a VM row's edge site and hardener drop ship and reach the VM BEFORE the
-// instance that opens its NodePorts. A tailnet listed here has its VM row (edge + firewall, T1p b1) but no
-// instance yet; the instance PR (T1p b2) removes it from this list in the same change that adds the overlay.
-const EDGE_BEFORE_INSTANCE = new Set(["preview"]);
-const INSTANCES = TABLE.filter(
-  (r) => r.vm_env !== "" && !EDGE_BEFORE_INSTANCE.has(r.tailnet)
-);
-const PENDING = TABLE.filter(
-  (r) => r.vm_env !== "" && EDGE_BEFORE_INSTANCE.has(r.tailnet)
-);
+const INSTANCES = TABLE.filter((r) => r.vm_env !== "");
 const REGISTRY_PORTS = ["30900", "4000", "5432", "5435", "6379", "7233"];
 
 interface Port {
@@ -156,9 +148,10 @@ const find = (docs: Doc[], kind: string, name: string) =>
   docs.find((d) => d.kind === kind && d.metadata.name === name);
 
 describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
-  it("the candidate-a VM serves the canonical and the test-operator tailnets; the production VM its own (T1p)", () => {
+  it("the candidate-a VM serves the canonical and the test-operator tailnets; preview and production VMs their own (T1p)", () => {
     expect(INSTANCES.map((r) => `${r.vm_env}/${r.tailnet}`)).toEqual([
       "candidate-a/candidate-a",
+      "preview/preview",
       "production/production",
       "candidate-a/test-candidate-a",
     ]);
@@ -312,41 +305,6 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     }
   });
 
-  it.each(
-    PENDING.map((r) => [r.tailnet, r] as const)
-  )("edge before instance %s: a firewall-only VM row; no instance and no manifest opens its NodePorts yet (CD6)", (name, r) => {
-    expect(r.relay_np).not.toBe("");
-    expect(r.publish_np).not.toBe("");
-    const exists = (rel: string): boolean => {
-      try {
-        readFileSync(path.join(root, rel));
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    expect(exists(`${overlayDir(r)}/kustomization.yaml`)).toBe(false);
-    expect(
-      exists(
-        `infra/k8s/argocd/control-plane/${r.vm_env}/${r.vm_env}-mesh-plane-${name}-application.yaml`
-      )
-    ).toBe(false);
-    for (const port of [r.relay_np, r.publish_np]) {
-      // git grep exits 1 when nothing matches: that is the passing case.
-      let hits = "";
-      try {
-        hits = execFileSync(
-          "git",
-          ["grep", "-l", "-w", "-e", port, "--", "infra/k8s"],
-          { cwd: root, encoding: "utf8" }
-        ).trim();
-      } catch (e) {
-        if ((e as { status?: number }).status !== 1) throw e;
-      }
-      expect(hits, port).toBe("");
-    }
-  });
-
   // CD6 (qualify before exposure): an instance's Application syncs from git (production from `main`), so
   // merging it opens its NodePorts at once. The pre-NAT drop that hides them must already be on main (and
   // reconciled onto the VM: that readback is a merge precondition, not a CI fact). Both sides come from
@@ -410,7 +368,7 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         r.coordinator_np,
         [`infra/k8s/base/node-deploy-mesh/tailnets/${r.tailnet}/service.yaml`],
       ],
-      ...(r.vm_env && !EDGE_BEFORE_INSTANCE.has(r.tailnet)
+      ...(r.vm_env
         ? ([
             [
               r.relay_np,
@@ -547,13 +505,18 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         }
       }
     }
-    // Right-sized to measured footprints (task.5428): one instance requests at most 108Mi. Each VM's budget
+    // Sized to real load (task.5428): one instance requests at most 276Mi (12 control-fwd + 128
+    // substrate-fwd + 64 derper + 56 gw + 16 caddy). substrate-fwd was 12Mi until the 2026-11-07
+    // OOM outage (OOMKilled x11 under all-node load); derper went 12Mi -> 64Mi with it. Each VM's budget
     // counts every mesh request on it: its env-plane instances AND the Headscale containers of the
-    // sequencer on that VM's cluster (coordinator_env). 7-day minimum MemAvailable (node_exporter, read
-    // 2026-11-06): candidate-a 271 MiB -> 240Mi (31 MiB margin). production 7278 MiB, so headroom is not
-    // the limit there: its budget is pinned AT today's total (1 x 108Mi instance + 3 x 24Mi Headscale =
-    // 180Mi), so any growth must restate it in review. The limits proof (every Headscale at its limit) is
-    // a live check, not this one.
+    // sequencer on that VM's cluster (coordinator_env). Budgets are pinned AT today's totals, so any
+    // growth must restate them in review: candidate-a 2 x 276Mi + 1 x 24Mi Headscale = 576Mi; preview
+    // 1 x 276Mi (no Headscale, its coordinator runs in production); production 276Mi + 3 x 24Mi
+    // Headscale = 348Mi. 7-day minimum MemAvailable (node_exporter): production 7278 MiB and preview
+    // 717 MiB (read 2026-11-07) fit with wide margin. candidate-a read 271 MiB on 2026-11-06, so its
+    // 576Mi is a worst-case reservation, not measured use: forwarder RSS stays far under its limit
+    // at test-fleet load. Re-read candidate-a headroom before raising any mesh limit again. The limits
+    // proof (every Headscale at its limit) is a live check, not this one.
     const mib = (v: unknown): number => {
       const m = /^(\d+)Mi$/.exec(String(v));
       if (!m) throw new Error(`memory request not in Mi: ${String(v)}`);
@@ -569,7 +532,7 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
           ),
         0
       );
-    expect(perInstance).toBeLessThanOrEqual(108);
+    expect(perInstance).toBeLessThanOrEqual(276);
     const headscaleOn = (vm: string): number[] =>
       TABLE.filter((r) => r.coordinator_env === vm).map((r) => {
         const patch = parse<Doc>(
@@ -583,8 +546,9 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         );
       });
     const BUDGET_MI: Record<string, number> = {
-      "candidate-a": 240,
-      production: 180,
+      "candidate-a": 576,
+      preview: 276,
+      production: 348,
     };
     // Only a VM whose cluster runs a sequencer with coordinators must count Headscale (a preview instance's
     // coordinator runs in production, so the preview VM counts none).

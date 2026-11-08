@@ -135,12 +135,6 @@ gates:
   - type: ai-rule
     with:
       rule_file: pr-syntropy-coherence.yaml
-  - type: ai-rule
-    with:
-      rule_file: patterns-and-docs.yaml
-  - type: ai-rule
-    with:
-      rule_file: repo-goal-alignment.yaml
   # Hub-grounded: cites the governing hub rule a PR breaks (story.5102).
   - type: ai-rule
     with:

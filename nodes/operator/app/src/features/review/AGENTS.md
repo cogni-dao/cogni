@@ -39,6 +39,7 @@ PR review feature: deterministic gate orchestrator evaluates PRs against `.cogni
   - `GateStatus`, `GateResult`, `ReviewResult` — gate evaluation results
   - `EvidenceBundle` — pre-fetched PR diff + file patches
   - `ReviewContext` — owner/repo/prNumber/headSha/installationId
+- **Goal-metric calculators (`review-kpis.ts`, task.5450):** `review.merge-coverage@1` and `review.fail-fix-rate@1` (unit `ratio`, param `days`, default 7) over `ReviewKpiSourcePort`; registered in `bootstrap/capabilities/goal-metrics.ts`. Count only check runs the review App wrote; neutral is not a pass; unknown is unavailable, never 0.
 - **Env/Config keys:** none (all deps injected)
 - **Files considered API:** `public.server.ts`, `types.ts`
 

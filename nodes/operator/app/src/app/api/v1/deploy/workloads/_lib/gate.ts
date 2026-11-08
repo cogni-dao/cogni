@@ -7,8 +7,9 @@
  *   billing account, the per-env authorization gate, and the node's image-baked catalog row (task.5400).
  * Scope: Request-time checks only; reads nothing from GitHub and writes nothing.
  * Invariants:
- *   - AUTHZ_BEFORE_SIDE_EFFECT: production -> `node.promote_production`; candidate-a/preview ->
- *     `node.manage_envs`. A denial or an unavailable authorizer is a refusal.
+ *   - AUTHZ_BEFORE_SIDE_EFFECT: production -> `node.promote_production`; preview -> `node.manage_envs`;
+ *     candidate-a -> `node.flight` OR `node.manage_envs` (the developer proving lane, additive for
+ *     env managers, bug.5574). A denial or an unavailable authorizer is a refusal. See `./authz`.
  *   - CATALOG_ROW_AFTER_AUTHZ: the node's catalog row (the lane refusals in `./lane` decide from it) is
  *     read from the image only after the authorization check allows.
  * Side-effects: IO (Postgres reads, authz check)
@@ -23,6 +24,7 @@ import { createNodeCatalog } from "@/bootstrap/capabilities/node-catalog";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { nodes } from "@/shared/db/nodes";
+import { authzActionsForEnv, gateDecisionFromResults } from "./authz";
 
 export type Gate =
   | {
@@ -72,15 +74,21 @@ export async function gate(
         { status: 503 }
       ),
     };
-  const decision = await authorization.check({
-    actorId: `user:${userId}`,
-    action:
-      env === "production" ? "node.promote_production" : "node.manage_envs",
-    resource: `node:${node.id}`,
-    context: { tenantId: billing.id, nodeId: node.id },
-  });
-  if (decision.decision !== "allow") {
-    const code: AuthzDecisionCode = decision.code;
+  // candidate-a allows node.flight OR node.manage_envs; short-circuit on the first allow.
+  const results = [];
+  for (const action of authzActionsForEnv(env)) {
+    const decision = await authorization.check({
+      actorId: `user:${userId}`,
+      action,
+      resource: `node:${node.id}`,
+      context: { tenantId: billing.id, nodeId: node.id },
+    });
+    results.push(decision);
+    if (decision.decision === "allow") break;
+  }
+  const verdict = gateDecisionFromResults(results);
+  if (!verdict.ok) {
+    const code: AuthzDecisionCode = verdict.code;
     return {
       ok: false,
       response: NextResponse.json(
