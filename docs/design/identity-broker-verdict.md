@@ -15,7 +15,7 @@ tags: [identity, oauth, design, task-5024]
 # Identity broker: design verdict
 
 > As-built behaviour lives in [`decentralized-user-identity.md`](../spec/decentralized-user-identity.md).
-> Registration steps live in [`oauth-app-setup.md`](../guides/oauth-app-setup.md).
+> Registration steps live in the hub entry [OAuth setup](https://cognidao.org/knowledge/oauth-per-env-proxy).
 > This file holds the **why**, including the paths not taken.
 
 ## The defect this exists to prevent

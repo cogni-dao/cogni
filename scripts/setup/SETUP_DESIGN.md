@@ -135,7 +135,7 @@ pnpm setup github --env production
          - `DOLT_CREDS_KEYID` — the keyid from `dolt creds new`
        - `DOLTHUB_API_TOKEN` (from dolthub.com → Settings → API Tokens, scope `api_read_write`; **REST/SQL HTTP API only** — does not authenticate the Dolt push protocol. Used by future librarian / x402 reads. Per task.5069 spike findings.)
        - `DOLTHUB_OAUTH_CLIENT_ID` + `DOLTHUB_OAUTH_CLIENT_SECRET` (from dolthub.com → Settings → OAuth Apps; **reserved for v1 per-user identity** — librarian / x402 flow, not used by v0 push job. Redirect URIs: `https://cognidao.org/api/v1/dolt/oauth/callback`, `https://test.cognidao.org/api/v1/dolt/oauth/callback`, `http://localhost:3000/api/v1/dolt/oauth/callback`. Scope: `api_read_write`. **Node-fork bootstrap requirement** — flag for `docs/runbooks/fork-quickstart.md` when it lands (node-template PR #46))
-       - See [OAuth App Setup Guide](../../docs/guides/oauth-app-setup.md) for step-by-step
+       - See [OAuth setup](https://cognidao.org/knowledge/oauth-per-env-proxy) in the operator knowledge hub for step-by-step
      - `SCHEDULER_API_TOKEN` (generated random, ≥32 chars — scheduler-worker → app API bearer auth)
      - `BILLING_INGEST_TOKEN` (generated random, ≥32 chars — LiteLLM callback → billing ingest bearer auth)
      - `INTERNAL_OPS_TOKEN` (generated random, ≥32 chars — deploy-time bearer auth for `/api/internal/ops/governance/schedules/sync`)
