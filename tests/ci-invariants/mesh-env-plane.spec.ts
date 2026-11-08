@@ -505,16 +505,17 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         }
       }
     }
-    // Sized to real load (task.5428): one instance requests at most 276Mi (12 control-fwd + 128
-    // substrate-fwd + 64 derper + 56 gw + 16 caddy). substrate-fwd was 12Mi until the 2026-11-07
-    // OOM outage (OOMKilled x11 under all-node load); derper went 12Mi -> 64Mi with it. Each VM's budget
+    // Sized to real load (task.5428, bug.5601): one instance requests at most 292Mi (12 control-fwd +
+    // 128 substrate-fwd + 64 derper + 64 gw + 24 caddy). substrate-fwd was 12Mi until the 2026-11-07
+    // OOM outage (OOMKilled x11 under all-node load); derper went 12Mi -> 64Mi with it. gw 56 -> 64Mi
+    // and caddy 16 -> 24Mi on 2026-11-08 from measured anon memory (networking-expert rule 4). Each VM's budget
     // counts every mesh request on it: its env-plane instances AND the Headscale containers of the
     // sequencer on that VM's cluster (coordinator_env). Budgets are pinned AT today's totals, so any
-    // growth must restate them in review: candidate-a 2 x 276Mi + 1 x 24Mi Headscale = 576Mi; preview
-    // 1 x 276Mi (no Headscale, its coordinator runs in production); production 276Mi + 3 x 24Mi
-    // Headscale = 348Mi. 7-day minimum MemAvailable (node_exporter): production 7278 MiB and preview
-    // 717 MiB (read 2026-11-07) fit with wide margin. candidate-a read 271 MiB on 2026-11-06, so its
-    // 576Mi is a worst-case reservation, not measured use: forwarder RSS stays far under its limit
+    // growth must restate them in review: candidate-a 2 x 292Mi + 1 x 24Mi Headscale = 608Mi; preview
+    // 1 x 292Mi (no Headscale, its coordinator runs in production); production 292Mi + 3 x 24Mi
+    // Headscale = 364Mi. 7-day minimum MemAvailable (node_exporter): production 7278 MiB and preview
+    // 717 MiB (read 2026-11-07) fit with wide margin. candidate-a read 271 MiB (7-day minimum, re-read
+    // 2026-11-08) with node memory requests at 48% of allocatable, so its 608Mi is a worst-case reservation, not measured use: forwarder RSS stays far under its limit
     // at test-fleet load. Re-read candidate-a headroom before raising any mesh limit again. The limits
     // proof (every Headscale at its limit) is a live check, not this one.
     const mib = (v: unknown): number => {
@@ -532,7 +533,7 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
           ),
         0
       );
-    expect(perInstance).toBeLessThanOrEqual(276);
+    expect(perInstance).toBeLessThanOrEqual(292);
     const headscaleOn = (vm: string): number[] =>
       TABLE.filter((r) => r.coordinator_env === vm).map((r) => {
         const patch = parse<Doc>(
@@ -546,9 +547,9 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         );
       });
     const BUDGET_MI: Record<string, number> = {
-      "candidate-a": 576,
-      preview: 276,
-      production: 348,
+      "candidate-a": 608,
+      preview: 292,
+      production: 364,
     };
     // Only a VM whose cluster runs a sequencer with coordinators must count Headscale (a preview instance's
     // coordinator runs in production, so the preview VM counts none).
