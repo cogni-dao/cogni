@@ -3,7 +3,7 @@
 
 /**
  * Module: `@bootstrap/capabilities/goal-metrics`
- * Purpose: Operator composition of the published @cogni-dao/metrics 0.4.0 goal-metric service.
+ * Purpose: Operator composition of the published @cogni-dao/metrics 0.6.0 goal-metric service.
  * Scope: Binds this node's id and registers the operator's node-local calculators: delivery
  *   (`deploy.serving-drift@1`, `deploy.release-success@1`, `deploy.lead-time@1`, task.5442) over the
  *   node-deploy release store, and PR review (`review.merge-coverage@1`, `review.fail-fix-rate@1`,

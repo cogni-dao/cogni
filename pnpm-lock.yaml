@@ -1933,7 +1933,7 @@ packages:
         optional: true
 
   '@cogni-dao/money-plane@https://github.com/cogni-dao/node-template/releases/download/money-plane-v0.2.0/cogni-dao-money-plane-0.2.0.tgz':
-    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/money-plane-v0.2.0/cogni-dao-money-plane-0.2.0.tgz}
+    resolution: {integrity: sha512-meo7aO8VqwM2lqiqmNmohnvQa4Qby2DZGiZo4eaQqcsQil3Tw9gIDHH9yts9Qe1uvCnHADlI0T4MxpaclrcsRA==, tarball: https://github.com/cogni-dao/node-template/releases/download/money-plane-v0.2.0/cogni-dao-money-plane-0.2.0.tgz}
     version: 0.2.0
     peerDependencies:
       react: ^19.0.0
