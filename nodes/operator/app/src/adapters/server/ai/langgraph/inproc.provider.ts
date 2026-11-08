@@ -91,6 +91,36 @@ interface ProviderCatalogEntry {
   readonly systemPrompt?: string;
   /** Graph-owned run report to log + echo on the stream (CatalogEntry.report). */
   readonly report?: GraphReportDecl;
+  /** HOST_OWNED_ARCHITECT (task.5455): host injects the node's `*-architect` entry body. */
+  readonly hostArchitect?: true;
+}
+
+/** Governing-index row fields architect selection needs. */
+type ArchitectIndexRow = { readonly id: string };
+
+/**
+ * HOST_OWNED_ARCHITECT: pick the reviewed node's architect entry from the governing index.
+ * Exactly one id ending in `-architect` wins; with several, `${nodeSlug}-architect` wins when a
+ * slug is known; otherwise none (never guess between nodes).
+ */
+export function selectArchitectEntryId(
+  index: ReadonlyArray<ArchitectIndexRow>,
+  nodeSlug?: string
+): string | null {
+  const ids = index.map((r) => r.id).filter((id) => id.endsWith("-architect"));
+  if (ids.length === 1) return ids[0] ?? null;
+  if (ids.length > 1 && nodeSlug) {
+    const want = `${nodeSlug}-architect`;
+    return ids.includes(want) ? want : null;
+  }
+  return null;
+}
+
+/** Host-owned reader of one knowledge entry's full body (null when absent). */
+export interface ArchitectBodyReader {
+  /** Node slug used to break a tie between several `*-architect` entries. */
+  readonly nodeSlug?: string;
+  readonly read: (id: string) => Promise<string | null>;
 }
 
 /** CatalogEntry.report: the registered event name for the graph's telemetry. */
@@ -140,7 +170,9 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         readonly entryType: string;
         readonly useWhen: string;
       }>
-    >
+    >,
+    /** Host-owned architect body reader; used only for catalog entries with `hostArchitect`. */
+    private readonly architectReader?: ArchitectBodyReader
   ) {
     this.log = makeLogger({
       component: "LangGraphInProcProvider",
@@ -377,6 +409,51 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
             return [];
           })
         : [];
+      // HOST_OWNED_ARCHITECT (task.5455): opt-in graphs get the node's architect body from the
+      // host, so grounding does not depend on the model choosing to read it. Best-effort: any
+      // failure omits it (one structured warn) and the review proceeds without.
+      let architect:
+        | { id: string; content: string; sourceRef: string }
+        | undefined;
+      if (entry.hostArchitect === true && this.architectReader) {
+        const architectId = selectArchitectEntryId(
+          governingIndex,
+          this.architectReader.nodeSlug
+        );
+        let reason: string | undefined;
+        let readError: unknown;
+        if (!architectId) {
+          reason = "no_unique_architect_entry";
+        } else {
+          try {
+            const content = await this.architectReader.read(architectId);
+            if (content?.trim()) {
+              architect = {
+                id: architectId,
+                content,
+                sourceRef: `hub:${architectId}`,
+              };
+            } else {
+              reason = "empty_body";
+            }
+          } catch (error) {
+            reason = "read_failed";
+            readError = error;
+          }
+        }
+        if (reason) {
+          this.log.warn(
+            {
+              runId,
+              graphName,
+              reason,
+              ...(architectId ? { architectId } : {}),
+              ...(readError ? { err: readError } : {}),
+            },
+            "host architect not injected; proceeding without it"
+          );
+        }
+      }
       const runner = createInProcGraphRunner({
         createGraph: entry.graphFactory,
         ...(this.nodeId && this.nodeOrigin
@@ -386,6 +463,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
                 origin: this.nodeOrigin,
                 ...(this.nodeMission ? { mission: this.nodeMission } : {}),
                 ...(governingIndex.length ? { governingIndex } : {}),
+                ...(architect ? { architect } : {}),
               },
             }
           : {}),

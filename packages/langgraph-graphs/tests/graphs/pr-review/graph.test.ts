@@ -55,6 +55,7 @@ describe("PR Review Graph", () => {
       );
       expect(entry.toolIds).toEqual([...PR_REVIEW_TOOL_IDS]);
       expect(entry.codeSubject).toBe(true);
+      expect(entry.hostArchitect).toBe(true);
       expect(typeof entry.graphFactory).toBe("function");
     });
   });
@@ -117,6 +118,54 @@ describe("host preamble (shared with cogni)", () => {
     ).toBe(
       "P\n\nHost-owned node mission (.cogni/repo-spec.yaml#intent.mission; serving build abc):\nRun the node network.\n\nC"
     );
+  });
+
+  describe("host-owned architect (task.5455)", () => {
+    const withArchitect = {
+      ...sourceContext,
+      architect: {
+        id: "operator-architect",
+        content: "ARCHITECT BODY",
+        sourceRef: "hub:operator-architect",
+      },
+    };
+
+    it("renders after the mission when provided and opted in", () => {
+      const text = buildHostPreambleText({
+        sourceContext: withArchitect,
+        prompt: "P",
+        coverage: "C",
+        includeArchitect: true,
+      });
+      expect(text).toBe(
+        "P\n\nHost-owned node mission (.cogni/repo-spec.yaml#intent.mission; serving build abc):\nRun the node network.\n\nHost-owned node architect (operator-architect):\nARCHITECT BODY\n\nC"
+      );
+    });
+
+    it("is not rendered without the opt-in flag (cogni stays byte-stable)", () => {
+      expect(
+        buildHostPreambleText({
+          sourceContext: withArchitect,
+          prompt: "P",
+          coverage: "C",
+        })
+      ).toBe(
+        "P\n\nHost-owned node mission (.cogni/repo-spec.yaml#intent.mission; serving build abc):\nRun the node network.\n\nC"
+      );
+    });
+
+    it("opted in without an architect renders exactly as before", () => {
+      expect(
+        buildHostPreambleText({
+          sourceContext,
+          prompt: "P",
+          coverage: "C",
+          includeArchitect: true,
+        })
+      ).toBe(
+        buildHostPreambleText({ sourceContext, prompt: "P", coverage: "C" })
+      );
+    });
   });
 
   it("fails closed without node identity or mission", () => {
