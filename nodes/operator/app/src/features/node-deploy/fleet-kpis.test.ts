@@ -354,7 +354,6 @@ describe("classifyReach", () => {
   it("200 reaches every dependency", () => {
     for (const dep of [
       "postgres",
-      "doltgres",
       "temporal",
       "scheduler-worker",
       "evm-rpc",
@@ -365,7 +364,7 @@ describe("classifyReach", () => {
     const r = status(503, { unreachable: ["temporal", "postgres"] });
     expect(classifyReach(r, "postgres")).toBe("unreached");
     expect(classifyReach(r, "temporal")).toBe("unreached");
-    expect(classifyReach(r, "doltgres")).toBe("reached");
+    expect(classifyReach(r, "scheduler-worker")).toBe("reached");
     expect(classifyReach(status(503, { unreachable: [] }), "postgres")).toBe(
       "reached"
     );
@@ -433,7 +432,7 @@ describe(SUBSTRATE_REACH_ID, () => {
         })
       ).calcs,
       SUBSTRATE_REACH_ID,
-      { env: "production", dependency: "doltgres" }
+      { env: "production", dependency: "evm-rpc" }
     );
     expect(s).toMatchObject({ complete: false, reason: "zero_denominator" });
   });
@@ -465,6 +464,9 @@ describe(SUBSTRATE_REACH_ID, () => {
     const calc = fleet(source({})).calcs.find(
       (c) => c.id === SUBSTRATE_REACH_ID
     ) as MetricCalculator;
+    expect(() =>
+      calc.paramsSchema.parse({ env: "production", dependency: "doltgres" })
+    ).toThrow();
     expect(() =>
       calc.paramsSchema.parse({ env: "production", dependency: "redis" })
     ).toThrow();

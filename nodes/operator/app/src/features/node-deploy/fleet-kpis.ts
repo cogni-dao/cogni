@@ -59,10 +59,12 @@ export const LANES_DOWN_ID = "fleet.lanes-down@1";
 export const SUBSTRATE_REACH_ID = "fleet.substrate-reach@1";
 export const UPTIME_ID = "fleet.uptime@1";
 
-/** The shared dependencies a lane's deep readyz may name as unreachable. */
+/**
+ * The shared dependencies a lane's deep readyz may name as unreachable. Doltgres is deliberately absent: the
+ * template readyz does not check it, so a 200 would count it reachable while it may be down (a false green).
+ */
 export const SUBSTRATE_DEPENDENCIES = [
   "postgres",
-  "doltgres",
   "temporal",
   "scheduler-worker",
   "evm-rpc",
