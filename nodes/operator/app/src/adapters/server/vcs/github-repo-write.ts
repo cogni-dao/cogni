@@ -31,6 +31,10 @@
  *     heads with a bounded path class; control-plane trees also require the invariant self-object.
  *   - ONE_CANDIDATE_INFRA_LANE: reviewed candidate changes classify as Compose OR control-plane;
  *     mixed/unsupported paths fail before dispatch/ref mutation.
+ *   - OPERATOR_SERVICES_RELEASE_INDEPENDENTLY (CD5, bug.5599): an in-repo operator service
+ *     (scheduler-worker) promotes on its own lane, `nodes: <service>`, with its own pin and forward
+ *     check. It is never bundled into an operator promote: an app update must not replace an unrelated
+ *     worker merely because they share CI. `service` is validated against the catalog at main.
  *   - BRANCH_HEAD_IS_LEASE: divergent reviewed trees are serialized by a synthetic commit parented
  *     on the observed deploy-ref head and a non-force ref update; stale writers fail closed.
  * Side-effects: IO (GitHub REST API)
@@ -566,6 +570,20 @@ const PromoteDiscriminatorSchema = z.object({
   name: z.string(),
   source_repo: z.string().url().optional(),
 });
+
+/** Fields that qualify a catalog row as an operator-lane service (bug.5599). */
+const OperatorServiceRowSchema = z.object({
+  name: z.string(),
+  type: z.string().optional(),
+  source_repo: z.string().optional(),
+  envs: z.array(z.string()).optional(),
+});
+
+/** Mirrors features/compute OPERATOR_LANE_SLUG (adapters may not import features). */
+const OPERATOR_PROMOTE_SLUG = "operator";
+
+/** A catalog slug: lowercase kebab, so it can never traverse out of `infra/catalog/`. */
+const SERVICE_SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 function parseGhcrImageRepository(imageRepository: string): {
   owner: string;
@@ -1492,7 +1510,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
       env,
       parentOwner,
       parentRepo,
-      slug,
       sourceSha,
       allowRollback = false,
     } = input;
@@ -1503,6 +1520,13 @@ export class GitHubRepoWriter implements DeployPlanePort {
         400
       );
     }
+    const slug = await this.resolvePromoteSlug({
+      parentOwner,
+      parentRepo,
+      slug: input.slug,
+      service: input.service,
+      env,
+    });
 
     const source = await this.resolvePromotionSource({
       parentOwner,
@@ -1545,7 +1569,14 @@ export class GitHubRepoWriter implements DeployPlanePort {
   async promoteNodeFromPreview(
     input: PromoteNodeFromPreviewInput
   ): Promise<CandidateFlightDispatchResult> {
-    const { parentOwner, parentRepo, slug, allowRollback = false } = input;
+    const { parentOwner, parentRepo, allowRollback = false } = input;
+    const slug = await this.resolvePromoteSlug({
+      parentOwner,
+      parentRepo,
+      slug: input.slug,
+      service: input.service,
+      env: "production",
+    });
     const previewPin = await this.fetchDeployPin({
       parentOwner,
       parentRepo,
@@ -1580,6 +1611,70 @@ export class GitHubRepoWriter implements DeployPlanePort {
       env: "production",
       slug,
     });
+  }
+
+  /**
+   * The catalog slug one promote actually deploys (OPERATOR_SERVICES_RELEASE_INDEPENDENTLY, CD5).
+   * No `service` = the node's own app. A `service` is allowed only on the operator lane and must be
+   * an in-repo catalog row at main: `type: service`, no `source_repo`, target env in `envs`. The
+   * catalog is the SSOT, so no service name is hardcoded here.
+   */
+  private async resolvePromoteSlug(input: {
+    parentOwner: string;
+    parentRepo: string;
+    slug: string;
+    service: string | undefined;
+    env: "preview" | "production";
+  }): Promise<string> {
+    const { service } = input;
+    if (service === undefined) return input.slug;
+    if (input.slug !== OPERATOR_PROMOTE_SLUG) {
+      throw deployPlaneError(
+        "service_not_on_operator_lane",
+        `service promotes are only valid on the ${OPERATOR_PROMOTE_SLUG} lane, not ${input.slug}`,
+        400
+      );
+    }
+    if (!SERVICE_SLUG_PATTERN.test(service)) {
+      throw deployPlaneError(
+        "invalid_service",
+        "service must be a lowercase catalog slug",
+        400
+      );
+    }
+    const text = await this.fetchFileText({
+      owner: input.parentOwner,
+      repo: input.parentRepo,
+      path: `infra/catalog/${service}.yaml`,
+      ref: "main",
+    });
+    if (!text) {
+      throw deployPlaneError(
+        "service_not_found",
+        `no catalog entry for service ${service}`,
+        404
+      );
+    }
+    const row = OperatorServiceRowSchema.safeParse(parseYaml(text));
+    if (!row.success || row.data.name !== service) {
+      throw deployPlaneError(
+        "invalid_catalog",
+        `invalid catalog entry for service ${service}`,
+        409
+      );
+    }
+    if (
+      row.data.type !== "service" ||
+      row.data.source_repo !== undefined ||
+      !row.data.envs?.includes(input.env)
+    ) {
+      throw deployPlaneError(
+        "invalid_service",
+        `${service} is not an in-repo operator service deployable to ${input.env}`,
+        400
+      );
+    }
+    return service;
   }
 
   private async resolvePromotionSource(input: {
@@ -2348,13 +2443,21 @@ export class GitHubRepoWriter implements DeployPlanePort {
     repo: string;
     env: string;
     slug: string;
+    service?: string;
     sourceSha?: string;
     nodeSourceSha?: string;
   }): Promise<ObservedWorkflowDispatchResult> {
+    const slug = await this.resolvePromoteSlug({
+      parentOwner: input.owner,
+      parentRepo: input.repo,
+      slug: input.slug,
+      service: input.service,
+      env: input.env === "production" ? "production" : "preview",
+    });
     const octokit = await this.getOctokit(input.owner, input.repo);
     const inputs: Record<string, string> = {
       environment: input.env,
-      nodes: input.slug,
+      nodes: slug,
       // APP_PROMOTE_IS_NO_INFRA: the agent-facing promote endpoint reconciles the
       // app digest only — orthogonal to substrate, mirroring candidate-flight (no
       // deploy-infra job). Set explicitly, not via the workflow default, so the
@@ -2411,7 +2514,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     return {
       dispatched: true,
       workflowUrl: `https://github.com/${input.owner}/${input.repo}/actions/workflows/promote-and-deploy.yml`,
-      message: `Promote dispatched: ${input.slug} → ${input.env}.`,
+      message: `Promote dispatched: ${slug} → ${input.env}.`,
       runId,
       runUrl,
       runApiUrl,
