@@ -71,6 +71,16 @@ export interface CreateReactAgentGraphOptions {
      * id · domain · entryType · useWhen metadata held in context so an agent selects its
      * guidance and reads each body on demand (guidance-routing-design progressive disclosure).
      */
+    /**
+     * Host-owned architect entry of the reviewed node (its governing-index `*-architect` entry,
+     * full body). Set by the host only for graphs whose catalog entry declares `hostArchitect`;
+     * rendered into the preamble only when the graph opts in (`includeArchitect`).
+     */
+    readonly architect?: {
+      readonly id: string;
+      readonly content: string;
+      readonly sourceRef: string;
+    };
     readonly governingIndex?: ReadonlyArray<{
       readonly id: string;
       readonly domain: string;
