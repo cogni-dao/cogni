@@ -45,6 +45,7 @@ import { ATTESTATION_RETURN_PATHS } from "@/shared/identity/broker-config";
 export type AttestationBrokerErrorCode =
   | "attestation_unavailable"
   | "invalid_return_to"
+  | "invalid_target_origin"
   | "unknown_node";
 
 export class AttestationBrokerError extends Error {
@@ -118,9 +119,9 @@ function resolveBrokerConfig(): BrokerConfig {
 
 function mapPreconditionError(error: unknown): never {
   if (error instanceof AttestationPreconditionError) {
-    throw new AttestationBrokerError(
-      error.code === "invalid_target_origin" ? "invalid_return_to" : error.code
-    );
+    // Pass the precondition code through: "this origin is not registered for the node" is a
+    // different fault from "return_to is malformed" and needs its own error page (bug.5596).
+    throw new AttestationBrokerError(error.code);
   }
   throw new AttestationBrokerError("attestation_unavailable");
 }

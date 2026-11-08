@@ -54,6 +54,7 @@ import type {
   CandidateFlightDispatchResult,
   CatalogNodeDefinition,
   ClassifyEnvManagerPrInput,
+  DeclarationReadPort,
   DeployPlanePort,
   EnvManagerPrClassificationResult,
   NodeInfraReconcileResult,
@@ -1126,6 +1127,115 @@ export function rulesetGetToPutPayload(
       bypass_mode: a.bypass_mode ?? "always",
     })),
   };
+}
+
+/**
+ * Project every merged `type:node` catalog row through ANY declaration reader. The App reader
+ * keeps the original behavior; the composed App-or-public reader lets an env whose App is not
+ * installed on a PUBLIC canonical catalog repo still read it (bug.5596).
+ */
+export async function listCatalogNodesVia(
+  reader: DeclarationReadPort,
+  input: {
+    parentOwner: string;
+    parentRepo: string;
+    sourceRef: string;
+  }
+): Promise<readonly CatalogNodeDefinition[]> {
+  const { parentOwner, parentRepo, sourceRef } = input;
+  // `null` is a 404 on the directory: absent, or neither App-readable nor public.
+  const entries = await reader.listDirectoryEntries({
+    owner: parentOwner,
+    repo: parentRepo,
+    path: "infra/catalog",
+    ref: sourceRef,
+  });
+  if (!entries) {
+    throw deployPlaneError(
+      "catalog_missing",
+      `${parentOwner}/${parentRepo} has no readable infra/catalog directory at ${sourceRef}`,
+      404
+    );
+  }
+
+  const definitions: CatalogNodeDefinition[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "file" || !entry.name.endsWith(".yaml")) continue;
+    const slug = entry.name.replace(/\.yaml$/, "");
+    const text = await reader.fetchFileText({
+      owner: parentOwner,
+      repo: parentRepo,
+      path: `infra/catalog/${entry.name}`,
+      ref: sourceRef,
+    });
+    if (!text) {
+      throw deployPlaneError(
+        "catalog_read_failed",
+        `infra/catalog/${entry.name} disappeared while reading ${sourceRef}`,
+        409
+      );
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = parseYaml(text);
+    } catch (error) {
+      throw deployPlaneError(
+        "invalid_catalog",
+        `infra/catalog/${entry.name} is invalid YAML: ${String(error)}`,
+        409
+      );
+    }
+    if ((parsed as { type?: unknown })?.type !== "node") continue;
+    const row = CatalogRegistryRowSchema.safeParse(parsed);
+    if (!row.success || row.data.name !== slug) {
+      throw deployPlaneError(
+        "invalid_catalog",
+        `infra/catalog/${entry.name} cannot project a node registry row: ${row.success ? "name must match filename" : row.error.message}`,
+        409
+      );
+    }
+
+    const source = row.data.source_repo
+      ? parseGithubRepoUrl(row.data.source_repo)
+      : { owner: parentOwner, repo: parentRepo };
+    let nodeId = row.data.node_id;
+    if (!nodeId) {
+      const specPath = `${row.data.path_prefix}.cogni/repo-spec.yaml`;
+      const specText = await reader.fetchFileText({
+        owner: parentOwner,
+        repo: parentRepo,
+        path: specPath,
+        ref: sourceRef,
+      });
+      if (!specText) {
+        throw deployPlaneError(
+          "repo_spec_missing",
+          `${specPath} is required to project in-repo node '${slug}'`,
+          409
+        );
+      }
+      try {
+        nodeId = parseRepoSpecNodeId(specText);
+      } catch (error) {
+        throw invalidRepoSpecError(error);
+      }
+    }
+
+    definitions.push({
+      nodeId,
+      slug,
+      repoUrl: `https://github.com/${source.owner}/${source.repo}`,
+      repoOwner: source.owner,
+      repoName: source.repo,
+      deployEnvs: row.data.envs,
+      activityEnv: row.data.activity_env,
+      ownerWallet: row.data.owner_wallet,
+      deploymentProviders: row.data.deployment_provider ?? {},
+    });
+  }
+
+  return definitions;
 }
 
 export class GitHubRepoWriter implements DeployPlanePort {
@@ -2664,111 +2774,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
     parentRepo: string;
     sourceRef: string;
   }): Promise<readonly CatalogNodeDefinition[]> {
-    const { parentOwner, parentRepo, sourceRef } = input;
-    const octokit = await this.getOctokit(parentOwner, parentRepo);
-    let entries: Array<{ name: string; type: string }>;
-    try {
-      const { data } = await octokit.request(
-        "GET /repos/{owner}/{repo}/contents/{path}",
-        {
-          owner: parentOwner,
-          repo: parentRepo,
-          path: "infra/catalog",
-          ref: sourceRef,
-        }
-      );
-      entries = Array.isArray(data)
-        ? (data as Array<{ name: string; type: string }>)
-        : [];
-    } catch (error) {
-      if ((error as { status?: number })?.status === 404) {
-        throw deployPlaneError(
-          "catalog_missing",
-          `${parentOwner}/${parentRepo} has no infra/catalog directory at ${sourceRef}`,
-          404
-        );
-      }
-      throw error;
-    }
-
-    const definitions: CatalogNodeDefinition[] = [];
-    for (const entry of entries) {
-      if (entry.type !== "file" || !entry.name.endsWith(".yaml")) continue;
-      const slug = entry.name.replace(/\.yaml$/, "");
-      const text = await this.fetchFileText({
-        owner: parentOwner,
-        repo: parentRepo,
-        path: `infra/catalog/${entry.name}`,
-        ref: sourceRef,
-      });
-      if (!text) {
-        throw deployPlaneError(
-          "catalog_read_failed",
-          `infra/catalog/${entry.name} disappeared while reading ${sourceRef}`,
-          409
-        );
-      }
-
-      let parsed: unknown;
-      try {
-        parsed = parseYaml(text);
-      } catch (error) {
-        throw deployPlaneError(
-          "invalid_catalog",
-          `infra/catalog/${entry.name} is invalid YAML: ${String(error)}`,
-          409
-        );
-      }
-      if ((parsed as { type?: unknown })?.type !== "node") continue;
-      const row = CatalogRegistryRowSchema.safeParse(parsed);
-      if (!row.success || row.data.name !== slug) {
-        throw deployPlaneError(
-          "invalid_catalog",
-          `infra/catalog/${entry.name} cannot project a node registry row: ${row.success ? "name must match filename" : row.error.message}`,
-          409
-        );
-      }
-
-      const source = row.data.source_repo
-        ? parseGithubRepoUrl(row.data.source_repo)
-        : { owner: parentOwner, repo: parentRepo };
-      let nodeId = row.data.node_id;
-      if (!nodeId) {
-        const specPath = `${row.data.path_prefix}.cogni/repo-spec.yaml`;
-        const specText = await this.fetchFileText({
-          owner: parentOwner,
-          repo: parentRepo,
-          path: specPath,
-          ref: sourceRef,
-        });
-        if (!specText) {
-          throw deployPlaneError(
-            "repo_spec_missing",
-            `${specPath} is required to project in-repo node '${slug}'`,
-            409
-          );
-        }
-        try {
-          nodeId = parseRepoSpecNodeId(specText);
-        } catch (error) {
-          throw invalidRepoSpecError(error);
-        }
-      }
-
-      definitions.push({
-        nodeId,
-        slug,
-        repoUrl: `https://github.com/${source.owner}/${source.repo}`,
-        repoOwner: source.owner,
-        repoName: source.repo,
-        deployEnvs: row.data.envs,
-        activityEnv: row.data.activity_env,
-        ownerWallet: row.data.owner_wallet,
-        deploymentProviders: row.data.deployment_provider ?? {},
-      });
-    }
-
-    return definitions;
+    return listCatalogNodesVia(this, input);
   }
 
   /** Refresh a living PR's title + body (openOrFindPr only sets them on create). */

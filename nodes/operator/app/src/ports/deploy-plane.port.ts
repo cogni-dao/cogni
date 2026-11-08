@@ -330,7 +330,8 @@ export interface DeployPlanePort {
   ): Promise<PreparedNodeRefCandidateFlight>;
 
   /**
-   * App-read every merged `type:node` catalog row for registry projection. Includes operator +
+   * App-read (or, for a public repo the App is not installed on, anonymously read via the bootstrap
+   * `createCatalogNodeLister`) every merged `type:node` catalog row for registry projection. Includes operator +
    * node-template and fails loud on a malformed node row: one bad file must never be mistaken for
    * an empty catalog.
    */
