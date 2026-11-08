@@ -93,6 +93,7 @@ export const REASON_TEXT = {
     "The baseline reading is missing or incompatible.",
   fixed_prediction_and_baseline_required:
     "This bet needs a fixed prediction and baseline.",
+  target_breached: "The latest reading misses the target.",
 } as const satisfies Record<KpiReason, string>;
 
 export function reasonText(reason: KpiReason | null): string | null {
@@ -285,7 +286,7 @@ export function observationHref(
  * says which reading it is: final, at the deadline, latest or last good.
  */
 export function heroLabel(
-  a: Pick<KpiAssessment, "status" | "value" | "observedAt">,
+  a: Pick<KpiAssessment, "status" | "reason" | "value" | "observedAt">,
   nowIso: string
 ): string | null {
   if (a.value === null || !a.observedAt) return null;
@@ -299,6 +300,10 @@ export function heroLabel(
     case "on_track":
     case "behind":
       return `Latest · ${time}`;
+    case "failing":
+      return a.reason === "target_breached"
+        ? `Latest · ${time}`
+        : `Last good · ${time}`;
     default:
       return `Last good · ${time}`;
   }
