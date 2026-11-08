@@ -166,7 +166,10 @@ export const SERVED_ATTEMPT_PHASES: readonly AttemptPhase[] = [
   "lost",
 ];
 
-/** `egress` = source-IP admission (catalog `compute_egress_cidrs`); `mesh` = the env tailnet. */
+/**
+ * `egress` = source-IP admission (its catalog `compute_egress_cidrs` firewall rows were deleted by
+ * task.5428, so only drain and rollback history use it); `mesh` = the env tailnet.
+ */
 export type SubstrateTransport = "egress" | "mesh";
 
 /**

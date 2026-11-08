@@ -36,18 +36,3 @@ activity_env: candidate-a
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/spawny-boi/
 node_id: d520f82e-486a-40f1-9e4f-c8ef7a016e9a
-# Candidate-a provider egress, copied from node-template.yaml's candidate-a rows.
-compute_egress_cidrs:
-  - cidr: 80.200.246.35/32
-    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
-  - cidr: 89.207.152.9/32
-    envs: [candidate-a]
-    ports: [5432, 5435, 6379, 4000, 7233]
-    comment: UA ithub egress (copied from node-template, task.5384); the node-deploy sequencer's admitted provider set
-  - cidr: 95.217.139.183/32
-    envs: [candidate-a]
-    ports: [5432]
-    comment: Candidate PostgreSQL SYN source observed on the lane VM (copied from node-template, bug.5533)
-  - cidr: 2.29.118.117/32
-    envs: [candidate-a]
-    comment: Hetzner lease NAT measured on the candidate-a VM (copied from node-template, bug.5550)

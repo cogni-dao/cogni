@@ -42,7 +42,7 @@ A 2026-10-01 session produced five wrong root causes for one node by inferring t
 
 ## Placement narrows a pool; it is not egress
 
-- `required_placement_countries` filters bids on the provider's declared ingress country. That is not egress. Measure egress from inside a lease. Never derive `compute_egress_cidrs` from the registry.
+- `required_placement_countries` filters bids on the provider's declared ingress country. That is not egress. Measure egress from inside a lease when a third party geo-fences by IP.
 - Placement lives in the workload's placement spec, not the SDL. Changing the country set does not change the SDL.
 - `featEndpointCustomDomain` is optional. Many audited providers publish `false` and never serve a custom host. Both Swiss providers declare `false`.
 - `activeLeases > 0` is not a quality signal (bug.5334). It made a provider's first lease unwinnable.
@@ -77,7 +77,6 @@ Never use the production actuator account. A manual mint has no `akash_tx_alloca
 
 - Gen-24 and gen-25 failed `provider_rejected` with zero FI, NL or PT bids, although the same spec drew FI bids from the dev wallet. Gen-26 leased RHITE FI. The cause is unknown. Read the provider roster first, then probe with the dev key.
 - Providers froggy (RO) and metz (CH) returned nginx 404 for every host. Do not keep a static list of them. PR #3056 set the provider allowlist (`AKASH_ALLOWED_PROVIDERS`) to empty. Instead, a new app create skips each provider with one confirmed `host_not_routed` strike on any lane in the last 24 hours (PR #3061, bug.5586). The no-lockout rules in `nodes/operator/app/src/features/node-deploy/AGENTS.md` (Provider memory) still apply.
-- RHITE FI and BG h6i egress IP varies per pod. Do not pin a `compute_egress_cidrs` /32 to them. UA ithub `89.207.152.9` and FI m3a `95.217.72.142` were stable.
 - The Polymarket CLOB geoblock covers only Crimea, Donetsk and Luhansk in UA. UA providers are usable.
 
 ## Operator only: control and state substrate
@@ -86,4 +85,4 @@ The operator, the scheduler-worker and the Compose substrate (Postgres, Doltgres
 
 ## Open edges
 
-Check work items before you assume. A second audited provider is needed (task.5075). `compute_egress_cidrs` has no TS writer and is hand-edited (#2175). The shared services admit Akash providers by egress IP (task.5384). Database migrations before a release serves: task.5408. No stop verb exists. If you need one, open a new work item.
+Check work items before you assume. A second audited provider is needed (task.5075). Every lane reaches the shared substrate over its env mesh; the VM firewall admits no provider egress IP (task.5428). Database migrations before a release serves: task.5408. No stop verb exists. If you need one, open a new work item.
