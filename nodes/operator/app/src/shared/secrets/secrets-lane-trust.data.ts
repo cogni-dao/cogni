@@ -30,9 +30,9 @@ export type SecretsLane = "candidate-a" | "preview" | "production";
 /**
  * Lanes each serving environment may custody in the default production-controlled fleet.
  *
- * `production` is the multi-lane custodian because it is the PAYING cluster: the
- * Crossplane Composition interpolates every lane's secrets into the lease production's
- * Console account is billed for, so those values must live in production's own vault.
+ * `production` is the multi-lane custodian because it is the PAYING cluster: every lane's
+ * secrets go into a lease production's Console account is billed for, so those values must
+ * live in production's own vault.
  * The alternative — production READING a pre-prod vault — inverts trust: a cluster that
  * runs unmerged control-plane trees would become the source of values production pays
  * for. Refused.

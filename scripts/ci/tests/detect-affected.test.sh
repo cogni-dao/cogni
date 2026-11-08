@@ -271,24 +271,8 @@ if grep -q 'Selection reason: substrate-machinery:' <<< "$unrelated_output"; the
   exit 1
 fi
 
-# The compute-workload controller is deployed by the operator image. A
-# controller-manifest-only change must therefore build exactly operator at the
-# same source SHA; otherwise candidate flight would pair new manifests with an
-# older image or fail because the exact sha-* artifact does not exist.
-printf '%s\n' 'infra/k8s/base/compute-workload-controller/rbac.yaml' > "$tmpdir/controller-paths.txt"
-controller_output=$(
-  TURBO_SCM_BASE=origin/main \
-  TURBO_SCM_HEAD=HEAD \
-  CHANGED_PATHS_FILE="$tmpdir/controller-paths.txt" \
-  bash scripts/ci/detect-affected.sh
-)
-grep -q 'Selection reason: operator-image-input:infra/k8s/base/compute-workload-controller/rbac.yaml' <<< "$controller_output"
-grep -q '^Targets: operator$' <<< "$controller_output"
-grep -q '^Flight targets: operator$' <<< "$controller_output"
-
-
-# task.5102 — same coupling for the Akash transaction actuator: it is a second process
-# artifact inside the SAME operator image, so a manifest-only change must build operator
+# task.5102 — the Akash transaction actuator is a second process artifact inside the
+# SAME operator image, so a manifest-only change must build operator
 # at that source SHA rather than flight new manifests against an older artifact.
 printf '%s\n' 'infra/k8s/base/akash-tx-actuator/deployment.yaml' > "$tmpdir/actuator-paths.txt"
 actuator_output=$(

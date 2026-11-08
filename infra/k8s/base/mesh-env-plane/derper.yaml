@@ -63,10 +63,12 @@ spec:
             - -verify-client-url-fail-open=true
           ports:
             - { name: derp-http, containerPort: 3340, protocol: TCP }
-          # Guaranteed QoS (B17), right-sized: measured 3.0 MiB idle (stock image, local) -> 12Mi.
+          # Guaranteed QoS (B17). 3.0 MiB idle (stock image, local), but derper relays every node's DERP
+          # traffic and holds per-client buffers in a Go heap. After the 2026-11-07 substrate-fwd OOM
+          # (12Mi, all-node load, task.5428) it gets 64Mi too, so it cannot be the next to fail.
           resources:
-            requests: { cpu: 50m, memory: 12Mi }
-            limits: { cpu: 50m, memory: 12Mi }
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 50m, memory: 64Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }

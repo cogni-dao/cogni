@@ -238,8 +238,8 @@ _resolve_node_value() {
 # Unpinning a lane therefore moves both at once, which is the only safe pairing.
 #
 # POSTGRES ONLY. `_doltgres_db_suffix` below is the deliberate exception: the Doltgres DSN
-# still dials ${VM_IP}, so its NAME must keep keying on the control env, or an unpin would
-# point a lane at the CONTROL env's live `knowledge_<node>`.
+# keeps the `knowledge_<node>_<lane>` name on the lane VM, so it never collides with that
+# VM's own env's `knowledge_<node>`.
 _lane_db_suffix() {
   local node="${1:-}" lane="${DEPLOY_ENV:-}" control="${SECRETS_CONTROL_ENV:-${DEPLOY_ENV:-}}"
   if [ -n "$node" ] && [ -n "$lane" ] && command -v lane_db_vm_env >/dev/null 2>&1; then
@@ -252,21 +252,15 @@ _lane_db_suffix() {
   printf '_%s' "${lane//-/_}"
 }
 
-# THE DOLTGRES SUFFIX STAYS ON THE CONTROL ENV — bug.5299's scope line, in code.
+# THE DOLTGRES NAME KEEPS THE CONTROL-ENV SUFFIX (story.5098).
 #
-# This is `_lane_db_suffix`'s pre-resolver body, kept as its own function on purpose rather
-# than shared. Postgres residency moves with `lane_db_vm_env`; DOLTGRES RESIDENCY DOES NOT
-# MOVE AT ALL in bug.5299 (its superuser is immutable — Doltgres 0.56.3 RBAC is table-DML
-# only, databases.md §5.2 — so a lane's DSN would embed the wrong env's unrotatable
-# credential, which needs its own decision). `DOLTGRES_URL` therefore keeps dialing
-# ${VM_IP}, the control VM's own Doltgres.
-#
-# IF THE TWO SHARED ONE SUFFIX, DELETING A PIN WOULD BE DESTRUCTIVE ON THE DOLTGRES PLANE:
-# the suffix would collapse while the host stayed ${VM_IP}, pointing the lane at the CONTROL
-# env's LIVE `knowledge_<node>` — bug.5207's exact shape, on the plane this item is not
-# moving. Identical output to `_lane_db_suffix` for every pair today (every misresident pair
-# is pinned), so this split is inert; it only diverges at the moment a pin is deleted, which
-# is precisely when it must.
+# This is `_lane_db_suffix`'s pre-resolver body, kept as its own function on purpose. The
+# Doltgres HOST is the lane's own VM (`${pg_host}`, the same host as Postgres) and its
+# superuser is the lane's own (`_lane_doltgres_superuser`). Only the NAME keeps the
+# control-env suffix: a foreign-custodied lane uses `knowledge_<node>_<lane>`, because the
+# lane VM's Doltgres can also hold its own env's unsuffixed `knowledge_<node>` (candidate-a's
+# serves the test fleet), and the suffix keeps the two apart. reconcile-node-substrate.sh
+# creates that exact name on the lane VM; `lane_doltgres_assert_agreement` proves it.
 _doltgres_db_suffix() {
   local lane="${DEPLOY_ENV:-}" control="${SECRETS_CONTROL_ENV:-${DEPLOY_ENV:-}}"
   if command -v lane_db_suffix >/dev/null 2>&1; then
@@ -274,6 +268,32 @@ _doltgres_db_suffix() {
   fi
   [ -n "$lane" ] && [ "$control" != "$lane" ] || return 0
   printf '_%s' "${lane//-/_}"
+}
+
+# THE LANE'S OWN DOLTGRES SUPERUSER (story.5098).
+#
+# A node's DOLTGRES_URL dials its lane's own Doltgres (the `${pg_host}` its Postgres DSNs
+# carry), so it must embed THAT server's superuser. The carrier is the one bug.5299 uses for
+# the lane's Postgres credentials: the writing vault holds the lane's bank at `cogni/<lane>/…`,
+# so the superuser is read from `cogni/<lane>/operator/DOLTGRES_PASSWORD` (authority
+# `lane-owner`; the ssh variant of bao_get_field already reads `cogni/${DEPLOY_ENV}/…`).
+# It used to read `cogni/<control>/operator` — production's superuser for every
+# production-custodied candidate-a/preview lane. That broke database-expert axiom 1:
+# nonproduction never gains production credentials.
+#
+# FAIL CLOSED. When the writer's vault is foreign (SECRETS_CONTROL_ENV != DEPLOY_ENV) and the
+# lane superuser is absent, refuse: never fall back to the writer's superuser, and never to
+# `derive_secret`, whose input is the writer env's POSTGRES_ROOT_PASSWORD. The genesis
+# derive stays ONLY for a local writer (the env seeding its own first operator).
+_lane_doltgres_superuser() {
+  local lane="${DEPLOY_ENV:-}" writer="${SECRETS_CONTROL_ENV:-${DEPLOY_ENV:-}}" pw
+  pw="$(bao_get_field operator DOLTGRES_PASSWORD lane-owner)"
+  if [[ -n "$pw" ]]; then printf '%s' "$pw"; return 0; fi
+  if [[ -z "$lane" || "$writer" != "$lane" ]]; then
+    echo "::error::Doltgres superuser for lane '${lane}' is absent at cogni/${lane}/operator/DOLTGRES_PASSWORD in ${writer}'s vault — refusing to compose a node Doltgres credential from ${writer}'s superuser (story.5098). Seed the lane's own superuser into that path first." >&2
+    return 1
+  fi
+  derive_secret doltgres-root
 }
 
 # THE HOST A POSTGRES DSN CARRIES (bug.5299 B1, call site 1).
@@ -291,7 +311,7 @@ _doltgres_db_suffix() {
 # byte-identically to the pre-resolver code. The fail-loud guard belongs where a FOREIGN
 # host could be invented, which is inside `lane_db_dsn_host`, not here.
 #
-# DOLTGRES_URL below keeps `${VM_IP}` — see `_doltgres_db_suffix`.
+# DOLTGRES_URL uses the same lane host (story.5098) — see `_lane_doltgres_superuser`.
 _compose_node_value() {
   local node="$1" k="$2" kind source shared service db sfx dg_sfx pg_host
   if declare -F cell_placement_composed_value >/dev/null && cell_placement_composed_value "$node" "$k"; then return 0; fi
@@ -339,22 +359,20 @@ _compose_node_value() {
       # It is NOT the source of truth: post-init the field is stored + reconciled to the
       # live volume via `pnpm secrets:set <env> operator DOLTGRES_PASSWORD` (immutable
       # superuser, Doltgres 0.56.3 can't ALTER it — databases.md §5.2), never re-derived.
-      local _dg; _dg="$(bao_get_field operator DOLTGRES_PASSWORD owner)"
-      [[ -n "$_dg" ]] && { printf '%s' "$_dg"; return 0; }
-      derive_secret doltgres-root; return 0 ;;
+      # The superuser is the LANE's own (story.5098) — see `_lane_doltgres_superuser`.
+      _lane_doltgres_superuser; return $? ;;
     DOLTGRES_URL)
       # Per-node knowledge_<node> DB, reached as the shared `postgres` superuser
-      # (Doltgres 0.56.3 RBAC is table-DML-only — databases.md §5.2). Embed the
+      # (Doltgres 0.56.3 RBAC is table-DML-only — databases.md §5.2). Embed the LANE's
       # operator-canonical superuser SSOT — never the per-node value (which can lag a
-      # volume restore). Same resolution as the DOLTGRES_PASSWORD branch (operator
-      # SSOT, else genesis derive) so the URL never embeds an empty password before
-      # operator is seeded. Composed, never derived inline, never from .env.
-      local _dgu; _dgu="$(bao_get_field operator DOLTGRES_PASSWORD owner)"
-      [[ -n "$_dgu" ]] || _dgu="$(derive_secret doltgres-root)"
-      # ${VM_IP} + ${dg_sfx}, NOT ${pg_host}/${sfx}: Doltgres residency is out of scope
-      # for bug.5299 and must not move when a Postgres pin is deleted.
+      # volume restore), and never the writing vault's own env's superuser. Same
+      # resolution as the DOLTGRES_PASSWORD branch. Composed, never from .env.
+      local _dgu; _dgu="$(_lane_doltgres_superuser)" || return 1
+      # ${pg_host}: the lane's own VM, the SAME host its Postgres DSNs carry (story.5098).
+      # Every env is composed the same way; nonproduction never dials production's Doltgres.
+      # ${dg_sfx} keeps the knowledge_<node>_<lane> name a foreign-custodied lane was born with.
       printf 'postgresql://postgres:%s@%s:5435/knowledge_%s%s?sslmode=disable' \
-        "$_dgu" "${VM_IP}" "${node//-/_}" "${dg_sfx}"; return 0 ;;
+        "$_dgu" "${pg_host}" "${node//-/_}" "${dg_sfx}"; return 0 ;;
   esac
   kind=$(_cat_field "$k" '.generate.kind')
   source=$(_cat_field "$k" '.source')

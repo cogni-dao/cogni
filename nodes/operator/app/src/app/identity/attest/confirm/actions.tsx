@@ -13,66 +13,91 @@
  * Invariants:
  *   - NO_AUTO_SUBMIT: nothing fires without a human click. This screen is the account
  *     intent gate (task.5024); an auto-submit would defeat its entire purpose.
- *   - ONE_SUBMIT: once a choice is made all three are disabled, so a double-click cannot
- *     race two terminal actions against one consume-once broker cookie.
+ *   - ONE_SUBMIT: guard later submissions while preserving the native submitter.
  * Side-effects: navigation (form POST)
  * @public
  */
 
 import { Spinner } from "@cogni/node-ui-kit/shadcn/spinner";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components";
 
 export function ConfirmActions({
-  login,
   mode,
+  consentBinding,
 }: {
-  login: string;
   mode: "signin" | "link";
+  consentBinding: string;
 }) {
   const [pending, setPending] = useState<string | null>(null);
+  const submitted = useRef(false);
+
+  useEffect(() => {
+    const revalidate = (event: PageTransitionEvent) => {
+      if (event.persisted) window.location.replace("/identity/attest/confirm");
+    };
+    window.addEventListener("pageshow", revalidate);
+    return () => window.removeEventListener("pageshow", revalidate);
+  }, []);
 
   return (
     <form
       action="/api/auth/attest/confirm"
-      className="flex flex-wrap items-center gap-2"
+      aria-busy={pending !== null}
+      className="flex w-full flex-col gap-2"
       method="post"
       onSubmit={(e) => {
-        const action = (e.nativeEvent as SubmitEvent).submitter as
-          | HTMLButtonElement
-          | undefined;
-        setPending(action?.value ?? "confirm");
+        if (submitted.current) {
+          e.preventDefault();
+          return;
+        }
+        submitted.current = true;
+        const submitter = (e.nativeEvent as SubmitEvent).submitter;
+        setPending(
+          submitter instanceof HTMLButtonElement ? submitter.value : "none"
+        );
       }}
     >
+      <input type="hidden" name="consentBinding" value={consentBinding} />
       <Button
-        disabled={pending !== null}
+        className="w-full"
+        disabled={pending !== null && pending !== "confirm"}
         name="action"
         type="submit"
         value="confirm"
       >
         {pending === "confirm" ? <Spinner /> : null}
-        {mode === "signin" ? "Continue" : `Link ${login}`}
+        {mode === "signin" ? "Continue" : "Link GitHub"}
       </Button>
       <Button
-        disabled={pending !== null}
+        className="w-full"
+        disabled={pending !== null && pending !== "switch"}
         name="action"
         type="submit"
         value="switch"
         variant="ghost"
       >
         {pending === "switch" ? <Spinner /> : null}
-        Switch account
+        Use a different GitHub account
       </Button>
       <Button
-        disabled={pending !== null}
+        className="w-full"
+        disabled={pending !== null && pending !== "cancel"}
         name="action"
         type="submit"
         value="cancel"
         variant="ghost"
       >
+        {pending === "cancel" ? <Spinner /> : null}
         Cancel
       </Button>
+      {pending !== null ? (
+        <output className="text-muted-foreground text-sm">
+          Continuing. If this page does not change, reload it or start again
+          from your node.
+        </output>
+      ) : null}
     </form>
   );
 }

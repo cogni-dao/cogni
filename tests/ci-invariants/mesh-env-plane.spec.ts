@@ -39,8 +39,18 @@ const parse = <T>(relative: string): T => yaml.parse(read(relative)) as T;
 const parseAll = <T>(relative: string): T[] =>
   yaml.parseAllDocuments(read(relative)).map((d) => d.toJS() as T);
 
-// The VM alias records live in the production zone (vm_host_for_env).
-const VM_ZONE = "cognidao.org";
+// The VM alias records live in the production zone (scripts/setup/lib/fork-identity.sh vm_host_for_env).
+const vmHost = (env: string): string =>
+  env === "production"
+    ? "cogni.vm.cognidao.org"
+    : `cogni-${env}.vm.cognidao.org`;
+// Each env's control plane ref: candidate-a runs the reviewed control-plane ref before merge; preview and
+// production run only main (their siblings in infra/k8s/argocd/control-plane/{preview,production}/).
+const CONTROL_PLANE_REF: Record<string, string> = {
+  "candidate-a": "deploy/candidate-a-control-plane",
+  preview: "main",
+  production: "main",
+};
 const BASE = "infra/k8s/base/mesh-env-plane";
 const FIELDS = [
   "tailnet",
@@ -66,16 +76,7 @@ const TABLE: Row[] = (
   .map(
     (r) => Object.fromEntries(r.split("|").map((v, i) => [FIELDS[i], v])) as Row
   );
-// CD6 (qualify before exposure): a VM row's edge site and hardener drop ship and reach the VM BEFORE the
-// instance that opens its NodePorts. A tailnet listed here has its VM row (edge + firewall, T1p b1) but no
-// instance yet; the instance PR (T1p b2) removes it from this list in the same change that adds the overlay.
-const EDGE_BEFORE_INSTANCE = new Set(["production"]);
-const INSTANCES = TABLE.filter(
-  (r) => r.vm_env !== "" && !EDGE_BEFORE_INSTANCE.has(r.tailnet)
-);
-const PENDING = TABLE.filter(
-  (r) => r.vm_env !== "" && EDGE_BEFORE_INSTANCE.has(r.tailnet)
-);
+const INSTANCES = TABLE.filter((r) => r.vm_env !== "");
 const REGISTRY_PORTS = ["30900", "4000", "5432", "5435", "6379", "7233"];
 
 interface Port {
@@ -107,6 +108,7 @@ interface Doc {
         securityContext?: { runAsUser?: number };
       };
     };
+    type?: string;
     clusterIP?: string;
     ports?: { name: string; port: number; nodePort?: number }[];
     podSelector?: unknown;
@@ -146,9 +148,11 @@ const find = (docs: Doc[], kind: string, name: string) =>
   docs.find((d) => d.kind === kind && d.metadata.name === name);
 
 describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
-  it("the candidate-a VM serves exactly the canonical and the test-operator tailnets", () => {
+  it("the candidate-a VM serves the canonical and the test-operator tailnets; preview and production VMs their own (T1p)", () => {
     expect(INSTANCES.map((r) => `${r.vm_env}/${r.tailnet}`)).toEqual([
       "candidate-a/candidate-a",
+      "preview/preview",
+      "production/production",
       "candidate-a/test-candidate-a",
     ]);
   });
@@ -167,9 +171,7 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     );
     expect(app.metadata.name).toBe(`${r.vm_env}-mesh-plane-${name}`);
     expect(app.spec.source.path).toBe(overlayDir(r));
-    expect(app.spec.source.targetRevision).toBe(
-      `deploy/${r.vm_env}-control-plane`
-    );
+    expect(app.spec.source.targetRevision).toBe(CONTROL_PLANE_REF[r.vm_env]);
     expect(app.spec.destination).toEqual({
       server: "https://kubernetes.default.svc",
       namespace: `cogni-mesh-${name}`,
@@ -192,7 +194,7 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
       MESH_TAILNET: name,
       MESH_CONTROL_HOST: `${r.control_label}.${r.zone}`,
       MESH_RELAY_HOST: `${r.relay_label}.${r.zone}`,
-      MESH_VM_HOST: `cogni-${r.vm_env}.vm.${VM_ZONE}`,
+      MESH_VM_HOST: vmHost(r.vm_env),
       MESH_WIREGUARD_PORT: r.wireguard_port,
       SUBSTRATE_GW_MAP_POLL_BOUND_SECONDS: "14400",
     });
@@ -303,38 +305,60 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
     }
   });
 
-  it.each(
-    PENDING.map((r) => [r.tailnet, r] as const)
-  )("edge before instance %s: a firewall-only VM row; no instance and no manifest opens its NodePorts yet (CD6)", (name, r) => {
-    expect(r.relay_np).not.toBe("");
-    expect(r.publish_np).not.toBe("");
-    const exists = (rel: string): boolean => {
-      try {
-        readFileSync(path.join(root, rel));
-        return true;
-      } catch {
-        return false;
+  // CD6 (qualify before exposure): an instance's Application syncs from git (production from `main`), so
+  // merging it opens its NodePorts at once. The pre-NAT drop that hides them must already be on main (and
+  // reconciled onto the VM: that readback is a merge precondition, not a CI fact). Both sides come from
+  // files: each instance's NodePorts from the base Services + its overlay patches, the drop range from the
+  // hardener as committed on origin/main (CI's unit job checks out with fetch-depth 0).
+  it("CD6: every NodePort an instance opens is inside the hardener drop range already on origin/main", () => {
+    let mainHardener: string;
+    try {
+      mainHardener = execFileSync(
+        "git",
+        [
+          "show",
+          "origin/main:infra/provision/cherry/harden-docker-public-ports.sh",
+        ],
+        { cwd: root, encoding: "utf8" }
+      );
+    } catch (e) {
+      throw new Error(
+        `origin/main hardener unreadable (fetch origin main): ${String(e)}`
+      );
+    }
+    const range = /^MESH_EDGE_ONLY_PORTS="([^"]*)"$/m.exec(mainHardener)?.[1];
+    expect(range, "MESH_EDGE_ONLY_PORTS on origin/main").toBeTruthy();
+    const dropped = new Set<number>();
+    for (const part of (range ?? "").split(",")) {
+      const [lo = "", hi = lo] = part.split(":");
+      for (let p = Number(lo); p <= Number(hi); p++) dropped.add(p);
+    }
+    const baseServices = ["derper.yaml", "substrate-gw.yaml", "forwarders.yaml"]
+      .flatMap((f) => parseAll<Doc>(`${BASE}/${f}`))
+      .filter((d) => d.kind === "Service" && d.spec.type === "NodePort");
+    expect(baseServices.length).toBeGreaterThan(0);
+    for (const r of INSTANCES) {
+      const k = parse<{
+        patches: { target: { kind: string; name: string }; patch: string }[];
+      }>(`${overlayDir(r)}/kustomization.yaml`);
+      for (const svc of baseServices) {
+        const ops = yaml.parse(
+          k.patches.find(
+            (p) =>
+              p.target.kind === "Service" && p.target.name === svc.metadata.name
+          )?.patch ?? "[]"
+        ) as { path: string; value: number }[];
+        (svc.spec.ports ?? []).forEach((port, i) => {
+          const np = Number(
+            ops.find((o) => o.path === `/spec/ports/${i}/nodePort`)?.value ??
+              port.nodePort
+          );
+          expect(
+            dropped.has(np),
+            `${r.tailnet} ${svc.metadata.name} NodePort ${np} is not in origin/main's drop range ${range}: merge the hardener first and reconcile it onto the ${r.vm_env} VM`
+          ).toBe(true);
+        });
       }
-    };
-    expect(exists(`${overlayDir(r)}/kustomization.yaml`)).toBe(false);
-    expect(
-      exists(
-        `infra/k8s/argocd/control-plane/${r.vm_env}/${r.vm_env}-mesh-plane-${name}-application.yaml`
-      )
-    ).toBe(false);
-    for (const port of [r.relay_np, r.publish_np]) {
-      // git grep exits 1 when nothing matches: that is the passing case.
-      let hits = "";
-      try {
-        hits = execFileSync(
-          "git",
-          ["grep", "-l", "-w", "-e", port, "--", "infra/k8s"],
-          { cwd: root, encoding: "utf8" }
-        ).trim();
-      } catch (e) {
-        if ((e as { status?: number }).status !== 1) throw e;
-      }
-      expect(hits, port).toBe("");
     }
   });
 
@@ -344,7 +368,7 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         r.coordinator_np,
         [`infra/k8s/base/node-deploy-mesh/tailnets/${r.tailnet}/service.yaml`],
       ],
-      ...(r.vm_env && !EDGE_BEFORE_INSTANCE.has(r.tailnet)
+      ...(r.vm_env
         ? ([
             [
               r.relay_np,
@@ -481,10 +505,19 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
         }
       }
     }
-    // Right-sized to measured footprints (task.5428): one instance requests at most 108Mi. The candidate-a
-    // VM's budget counts every mesh request on it: its env-plane instances AND the test operator's Headscale
-    // (P3, coordinator_env candidate-a). The total stays at or under 240Mi, a 31 MiB margin below the VM's
-    // 7-day minimum MemAvailable (271 MiB).
+    // Sized to real load (task.5428, bug.5601): one instance requests at most 292Mi (12 control-fwd +
+    // 128 substrate-fwd + 64 derper + 64 gw + 24 caddy). substrate-fwd was 12Mi until the 2026-11-07
+    // OOM outage (OOMKilled x11 under all-node load); derper went 12Mi -> 64Mi with it. gw 56 -> 64Mi
+    // and caddy 16 -> 24Mi on 2026-11-08 from measured anon memory (networking-expert rule 4). Each VM's budget
+    // counts every mesh request on it: its env-plane instances AND the Headscale containers of the
+    // sequencer on that VM's cluster (coordinator_env). Budgets are pinned AT today's totals, so any
+    // growth must restate them in review: candidate-a 2 x 292Mi + 1 x 24Mi Headscale = 608Mi; preview
+    // 1 x 292Mi (no Headscale, its coordinator runs in production); production 292Mi + 3 x 24Mi
+    // Headscale = 364Mi. 7-day minimum MemAvailable (node_exporter): production 7278 MiB and preview
+    // 717 MiB (read 2026-11-07) fit with wide margin. candidate-a read 271 MiB (7-day minimum, re-read
+    // 2026-11-08) with node memory requests at 48% of allocatable, so its 608Mi is a worst-case reservation, not measured use: forwarder RSS stays far under its limit
+    // at test-fleet load. Re-read candidate-a headroom before raising any mesh limit again. The limits
+    // proof (every Headscale at its limit) is a live check, not this one.
     const mib = (v: unknown): number => {
       const m = /^(\d+)Mi$/.exec(String(v));
       if (!m) throw new Error(`memory request not in Mi: ${String(v)}`);
@@ -500,24 +533,36 @@ describe("env-VM mesh plane: one instance per tailnet (task.5428 P4)", () => {
           ),
         0
       );
-    expect(perInstance).toBeLessThanOrEqual(108);
-    const perVm = INSTANCES.filter((r) => r.vm_env === "candidate-a").length;
-    const headscale = TABLE.filter(
-      (r) => r.coordinator_env === "candidate-a"
-    ).map((r) => {
-      const patch = parse<Doc>(
-        `infra/k8s/base/node-deploy-mesh/tailnets/${r.tailnet}/deployment-patch.yaml`
-      );
-      const c = patch.spec.template.spec.containers.find(
-        (x) => x.name === `headscale-${r.tailnet}`
-      );
-      return mib(
-        (c?.resources?.requests as { memory?: string } | undefined)?.memory
-      );
-    });
-    expect(headscale.length).toBeGreaterThan(0);
-    const total = perInstance * perVm + headscale.reduce((a, b) => a + b, 0);
-    expect(total).toBeLessThanOrEqual(240);
+    expect(perInstance).toBeLessThanOrEqual(292);
+    const headscaleOn = (vm: string): number[] =>
+      TABLE.filter((r) => r.coordinator_env === vm).map((r) => {
+        const patch = parse<Doc>(
+          `infra/k8s/base/node-deploy-mesh/tailnets/${r.tailnet}/deployment-patch.yaml`
+        );
+        const c = patch.spec.template.spec.containers.find(
+          (x) => x.name === `headscale-${r.tailnet}`
+        );
+        return mib(
+          (c?.resources?.requests as { memory?: string } | undefined)?.memory
+        );
+      });
+    const BUDGET_MI: Record<string, number> = {
+      "candidate-a": 608,
+      preview: 292,
+      production: 364,
+    };
+    // Only a VM whose cluster runs a sequencer with coordinators must count Headscale (a preview instance's
+    // coordinator runs in production, so the preview VM counts none).
+    const coordinatorVms = new Set(TABLE.map((r) => r.coordinator_env));
+    for (const vm of new Set(INSTANCES.map((r) => r.vm_env))) {
+      const instances = INSTANCES.filter((r) => r.vm_env === vm).length;
+      const headscale = headscaleOn(vm);
+      if (coordinatorVms.has(vm))
+        expect(headscale.length, vm).toBeGreaterThan(0);
+      const total =
+        perInstance * instances + headscale.reduce((a, b) => a + b, 0);
+      expect(total, vm).toBeLessThanOrEqual(BUDGET_MI[vm] ?? 0);
+    }
     const pc = parse<Doc>(`${BASE}/priorityclass.yaml`);
     expect(pc.value).toBeGreaterThan(0);
     expect(pc.value).toBeLessThan(1_000_000_000);

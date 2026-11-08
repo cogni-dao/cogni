@@ -5,7 +5,7 @@
  * Module: `@features/governance/services/signal-dispatch`
  * Purpose: Fire-and-forget dispatch for on-chain signal execution from Alchemy webhooks.
  * Scope: Resolves deps (RPC client, Octokit factory, DAO config) and dispatches signal handling; does not decode signals or execute actions.
- *   Same pattern as dispatchPrReview() — errors logged, never thrown.
+ *   Fire-and-forget workflow start — errors logged, never thrown.
  * Invariants: Fire-and-forget — errors logged, never block webhook response.
  * Side-effects: IO (async signal execution)
  * Links: docs/spec/governance-signal-execution.md

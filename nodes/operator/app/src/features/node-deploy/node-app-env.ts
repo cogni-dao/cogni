@@ -5,7 +5,8 @@
  * Module: `@features/node-deploy/node-app-env`
  * Purpose: The runtime env a node APP workload receives from the node-deploy sequencer — the SAME env
  *   the retired Crossplane lane rendered for the `cogni-node-app-v1` service
- *   (`infra/crossplane/xcomputeworkload/composition.yaml`, the `$isApp` blocks), with OpenBao as the
+ *   (`infra/crossplane/xcomputeworkload/composition.yaml` at `37fbd413f1^`, the `$isApp` blocks;
+ *   deleted by task.5411), with OpenBao as the
  *   custodian of every secret value (task.5405, story.5127).
  * Scope: Pure. The caller reads the node's bucket (`NodeRuntimeSecretsPort`) and the catalog row; this
  *   module only decides WHICH keys become env and WHAT each non-secret value is.
@@ -51,7 +52,7 @@
  *     mesh attempt needs `substrateAddresses`: with none, Doltgres is refused and nothing is paid.
  *   - EGRESS_UNCHANGED: an absent transport is `egress`, byte for byte the composition env above.
  * Side-effects: none
- * Links: infra/crossplane/xcomputeworkload/composition.yaml, packages/repo-spec/src/node-app-deployment.ts,
+ * Links: infra/crossplane/xcomputeworkload/composition.yaml@37fbd413f1^ (deleted), packages/repo-spec/src/node-app-deployment.ts,
  *   shared/secrets/node-secrets-reserved.data.ts, task.5405
  * @internal
  */

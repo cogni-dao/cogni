@@ -18,7 +18,7 @@
  *     code. Placement is DECLARED DATA (`infra/catalog/<slug>.yaml` `deployment_provider.<env>`,
  *     projected into the node registry), never a node name in a branch.
  *   - OFF_CLUSTER_ADDRESS_IS_THE_PUBLIC_HOST: an off-cluster node is reached at the SAME host its
- *     ComputeWorkload publishes — `hostForEnv` over the env's ROOT domain — so there is one host
+ *     node-deploy release publishes — `hostForEnv` over the env's ROOT domain — so there is one host
  *     convention for DNS, the workload's ingress, liveness probes, and this resolution.
  *   - FAIL_LOUD_WITHOUT_A_DOMAIN: an off-cluster node with no resolvable base domain throws. Falling
  *     back to in-cluster DNS would silently reproduce the ENOTFOUND this module exists to remove.

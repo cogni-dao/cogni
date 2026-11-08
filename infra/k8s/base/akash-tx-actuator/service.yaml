@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 #
-# THE ADDRESS IS THE CONTRACT. infra/crossplane/xcomputeworkload/composition.yaml builds
-# `http://akash-tx-actuator.<ns>.svc.cluster.local:8080` from the XR's namespace alone, so
-# this Service must be named EXACTLY `akash-tx-actuator` in every environment namespace.
+# THE ADDRESS IS THE CONTRACT. Every caller (the node-deploy sequencer, the lease-log pump)
+# dials the bare `http://akash-tx-actuator:8080` (AKASH_TX_ACTUATOR_URL default), so this
+# Service must be named EXACTLY `akash-tx-actuator` in every environment namespace.
 # The operator overlays apply `namePrefix: operator-`, which would render it as
-# `operator-akash-tx-actuator` and leave every OBSERVE at connection-refused — see
+# `operator-akash-tx-actuator` and leave every call at connection-refused — see
 # ../akash-tx-actuator-service-name for the transformer that restores the name.
 #
 # ClusterIP and nothing else: bearer-authed private wallet writer. Never an Ingress, never a

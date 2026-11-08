@@ -29,7 +29,7 @@
  *     never reaches preview's vault. Per secrets-management.md Invariant 1 the
  *     blast-radius boundary is `<service>`; the env prefix is a lane label. Required by
  *     the north star: the PAYING cluster must custody every lane's secrets, because the
- *     Composition interpolates them into the lease that cluster's account is billed for.
+ *     node-deploy sequencer puts them into the lease that cluster's account is billed for.
  *     The enforcing gate is the `<env>-node-secrets-writer` OpenBao policy, not this
  *     check — this one only fails fast and names the rule.
  *   - PATH_FROM_AUTHORIZED_RESOURCE: node slug from the registry-resolved node; lane

@@ -46,6 +46,9 @@ put_secret() {
 }
 
 # Explicit shared integration owners differ from the ordinary target.
+# story.5098: a node bank still holding another env's Doltgres superuser must be
+# overwritten with its own lane's superuser (recompose on drift, like the DSNs).
+put_secret node-template DOLTGRES_PASSWORD stale-foreign-doltgres-superuser
 put_secret operator POSTHOG_API_KEY phc_existing
 put_secret operator POSTHOG_HOST https://us.i.posthog.com
 put_secret operator TAVILY_API_KEY tvly-owner-fixture
@@ -390,6 +393,11 @@ test -f "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL" \
   || { echo "materialize did not compose DOLTGRES_URL" >&2; exit 1; }
 grep -qE '://postgres:[^@]+@[^/]+/knowledge_node_template\?' "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL" \
   || { echo "DOLTGRES_URL must reach knowledge_node_template as the postgres superuser (non-empty pw)" >&2; exit 1; }
+node_dg_password="$(cat "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_PASSWORD")"
+[ "$node_dg_password" != stale-foreign-doltgres-superuser ] \
+  || { echo "a stale foreign DOLTGRES_PASSWORD survived materialize (story.5098)" >&2; exit 1; }
+grep -qF "://postgres:${node_dg_password}@" "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL" \
+  || { echo "DOLTGRES_URL and DOLTGRES_PASSWORD must carry the same lane superuser" >&2; exit 1; }
 
 # Per-node LiteLLM key: exact format, distinct from the fleet master, and the
 # explicit value's hash is registered under the repo-spec identity alias.
@@ -482,8 +490,8 @@ if grep -qF "$PLATFORM_TOKEN" "$TMPROOT/out-platform.txt"; then
   exit 1
 fi
 
-# 5. Idempotent: a second owner-leg run must preserve the token (rotating it under a live
-#    Crossplane Composition would break the provider-http placeholder mid-flight).
+# 5. Idempotent: a second owner-leg run must preserve the token (rotating it under live
+#    callers would break every in-flight actuator call).
 env \
   VM_HOST=fake \
   DOMAIN=test.cognidao.org \
@@ -986,6 +994,10 @@ mkdir -p "$BAO_ROOT/cogni/production/operator"
 cp "$BAO_ROOT/cogni/candidate-a/operator/"* "$BAO_ROOT/cogni/production/operator/"
 printf '%s' control-scheduler-fixture > "$BAO_ROOT/cogni/production/operator/SCHEDULER_API_TOKEN"
 printf '%s' control-billing-fixture > "$BAO_ROOT/cogni/production/operator/BILLING_INGEST_TOKEN"
+# story.5098: the writing (production) vault holds the LANE's own Doltgres superuser at
+# cogni/candidate-a/operator; the control superuser differs and must never be composed.
+printf '%s' lane-doltgres-superuser-fixture > "$BAO_ROOT/cogni/candidate-a/operator/DOLTGRES_PASSWORD"
+printf '%s' control-doltgres-superuser-fixture > "$BAO_ROOT/cogni/production/operator/DOLTGRES_PASSWORD"
 printf '%s' control-scheduler-fixture > "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
 auth_before="$(cat "$BAO_ROOT/cogni/candidate-a/node-template/AUTH_SECRET")"
 run_foreign_inheritance() {
@@ -1000,6 +1012,14 @@ run_foreign_inheritance() {
     bash scripts/ci/secret-materialize.sh candidate-a node-template
 }
 run_foreign_inheritance > "$TMPROOT/out-foreign.txt"
+[[ "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL")" == \
+  'postgresql://postgres:lane-doltgres-superuser-fixture@10.0.0.2:5435/knowledge_node_template_candidate_a?sslmode=disable' ]] \
+  || { echo 'foreign lane DOLTGRES_URL must use the lane host and lane superuser (story.5098)' >&2; exit 1; }
+[[ "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_PASSWORD")" == lane-doltgres-superuser-fixture ]] \
+  || { echo 'foreign lane DOLTGRES_PASSWORD must be the lane superuser (story.5098)' >&2; exit 1; }
+if grep -rq control-doltgres-superuser-fixture "$BAO_ROOT/cogni/candidate-a/node-template" "$TMPROOT/out-foreign.txt"; then
+  echo 'the control Doltgres superuser reached a nonproduction lane' >&2; exit 1
+fi
 cmp "$BAO_ROOT/cogni/candidate-a/operator/SCHEDULER_API_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/SCHEDULER_API_TOKEN"
 cmp "$BAO_ROOT/cogni/production/operator/BILLING_INGEST_TOKEN" "$BAO_ROOT/cogni/candidate-a/node-template/BILLING_INGEST_TOKEN"
 [[ "$(cat "$BAO_ROOT/cogni/candidate-a/node-template/AUTH_SECRET")" == "$auth_before" ]] \

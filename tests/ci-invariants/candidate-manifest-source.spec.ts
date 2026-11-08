@@ -756,7 +756,7 @@ describe("candidate-a manifest source", () => {
       reconcile.match(/--profile bootstrap run --rm --no-deps/g)
     ).toHaveLength(2);
     expect(reconcile).toContain(
-      "bao_get_field operator DOLTGRES_PASSWORD owner"
+      "bao_get_field operator DOLTGRES_PASSWORD lane-owner"
     );
     for (const source of [runner, reconcile]) {
       expect(source).toContain(

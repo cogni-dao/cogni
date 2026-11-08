@@ -10,8 +10,8 @@
  *   the subject from anywhere else.
  * Invariants:
  *   - CONFIRM_BEFORE_SIGN: reachable only by an explicit POST from the confirm screen.
- *   - BROKER_STATE_IS_CONSUMED: the cookie is cleared on every terminal outcome, so one
- *     authorization cannot be confirmed twice.
+ *   - TERMINAL_COOKIE_CLEAR: successful confirm and explicit cancel clear the cookie;
+ *     refusals preserve it, and the relying node atomically consumes its nonce.
  *   - SWITCH_RE_AUTHENTICATES: "use a different account" restarts the GitHub leg with a
  *     fresh state + PKCE pair rather than reusing the previous authentication.
  *   - SITS_WITH_NEXTAUTH: unauthenticated by design — its authority is the signed
@@ -21,10 +21,14 @@
  * @public
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   IDENTITY_ATTESTATION_V1_PROTOCOL_SHA256,
+  IdentityAttestationOriginSchema,
   IdentityAttestationRequestSchema,
 } from "@cogni/node-contracts";
+import { parseRepoSpec } from "@cogni/repo-spec";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import {
@@ -46,6 +50,7 @@ import {
   BROKER_STATE_TTL_SECONDS,
   decodeBrokerState,
   encodeBrokerState,
+  matchesConsentBinding,
 } from "@/shared/identity/broker-state";
 import {
   buildGithubAuthorizeUrl,
@@ -60,19 +65,20 @@ export const runtime = "nodejs";
  * Broker observability. These are the tier-1 markers `/validate-candidate` queries;
  * without them the broker is invisible in Loki and the feature cannot be proven at a
  * SHA. Deliberately NEVER logged: the authorization code, the access token, the PKCE
- * verifier, and the broker cookie. `githubLogin` IS logged — proving WHICH account was
- * attested is the entire point of task.5024.
+ * verifier, and the broker cookie. Confirmation logs contain fixed categories and the
+ * signed request node identifier only.
  */
 function brokerLog(): ReturnType<typeof makeLogger> {
   return makeLogger({ nodeId: getNodeId(), service: "identity-broker" });
 }
 
-function failure(errorCode: string): NextResponse {
+function failure(errorCode: string, requestNodeId?: string): NextResponse {
   brokerLog().info(
     {
       event: EVENT_NAMES.IDENTITY_BROKER_REJECTED,
       leg: "confirm",
       errorCode,
+      ...(requestNodeId ? { requestNodeId } : {}),
     },
     "Identity broker confirmation rejected"
   );
@@ -85,30 +91,93 @@ function failure(errorCode: string): NextResponse {
   );
 }
 
-export async function POST(request: Request): Promise<NextResponse> {
-  const cookieStore = await cookies();
-  const brokerState = await decodeBrokerState(
-    cookieStore.get(BROKER_STATE_COOKIE)?.value,
-    authSecret
+/** The regular node lookup may itself require a valid serverEnv on a cold start. */
+function earlyEmitterNodeId(): string {
+  try {
+    return getNodeId();
+  } catch {
+    // Same configured repo and parser as getNodeId, without full env validation.
+    // biome-ignore lint/style/noProcessEnv: attribution must survive invalid serverEnv
+    const root = process.env.COGNI_REPO_PATH;
+    if (!root) throw new Error("Operator identity unavailable");
+    return parseRepoSpec(
+      readFileSync(join(root, ".cogni", "repo-spec.yaml"), "utf8")
+    ).node_id;
+  }
+}
+
+/** Emit a fixed refusal without reading the request or requiring a redirect base. */
+function refuseEarly(
+  errorCode: "invalid_configuration" | "invalid_origin",
+  status: 403 | 503
+): NextResponse {
+  try {
+    makeLogger({
+      nodeId: earlyEmitterNodeId(),
+      service: "identity-broker",
+    }).info(
+      {
+        event: EVENT_NAMES.IDENTITY_BROKER_REJECTED,
+        leg: "confirm",
+        errorCode,
+        status,
+      },
+      "Identity broker confirmation rejected"
+    );
+  } catch {
+    // A logging failure must not change this controlled refusal.
+  }
+  return new NextResponse(
+    status === 503 ? "Service unavailable" : "Request refused",
+    { status }
   );
+}
+
+export async function POST(request: Request): Promise<NextResponse> {
+  let env: ReturnType<typeof serverEnv>;
+  try {
+    env = serverEnv();
+  } catch {
+    return refuseEarly("invalid_configuration", 503);
+  }
+  const origin = IdentityAttestationOriginSchema.safeParse(env.APP_BASE_URL);
+  if (!origin.success) return refuseEarly("invalid_configuration", 503);
+  if (request.headers.get("origin") !== origin.data) {
+    return refuseEarly("invalid_origin", 403);
+  }
+  const cookieStore = await cookies();
+  const token = cookieStore.get(BROKER_STATE_COOKIE)?.value;
+  const brokerState = await decodeBrokerState(token, authSecret);
   if (!brokerState?.github) {
     return failure("broker_request_expired");
   }
 
   const form = await request.formData().catch(() => null);
-  const action = form?.get("action");
-  const env = serverEnv();
+  if (!form) return failure("invalid_request", brokerState.nodeId);
+  const bindings = form.getAll("consentBinding");
+  if (
+    !token ||
+    bindings.length !== 1 ||
+    !matchesConsentBinding(token, bindings[0])
+  ) {
+    return failure("consent_review_required", brokerState.nodeId);
+  }
+  const actions = form.getAll("action");
+  const action =
+    actions.length === 1 && typeof actions[0] === "string" ? actions[0] : null;
+
+  if (action !== "confirm" && action !== "switch" && action !== "cancel") {
+    return failure("invalid_request", brokerState.nodeId);
+  }
 
   if (action === "switch") {
     if (!isAttestableProvider(brokerState.provider)) {
-      cookieStore.delete(BROKER_STATE_COOKIE);
       return failure("invalid_request");
     }
     const provider = brokerState.provider;
     // Re-authenticate from scratch: fresh state + PKCE, no carried-over identity.
     const client = resolveGithubOauthClient(env);
     if (!client) {
-      cookieStore.delete(BROKER_STATE_COOKIE);
       return failure("attestation_unavailable");
     }
     const challenge = createAuthorizationChallenge();
@@ -146,10 +215,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  cookieStore.delete(BROKER_STATE_COOKIE);
-
   if (action !== "confirm") {
-    return failure("cancelled");
+    cookieStore.delete(BROKER_STATE_COOKIE);
+    return failure("cancelled", brokerState.nodeId);
   }
 
   const parsed = IdentityAttestationRequestSchema.safeParse({
@@ -168,14 +236,12 @@ export async function POST(request: Request): Promise<NextResponse> {
       request: parsed.data,
       returnTo: brokerState.returnTo,
     });
+    cookieStore.delete(BROKER_STATE_COOKIE);
     brokerLog().info(
       {
         event: EVENT_NAMES.IDENTITY_BROKER_COMPLETE,
-        nodeId: brokerState.nodeId,
-        nodeSlug: brokerState.nodeSlug,
-        githubId: brokerState.github.id,
-        githubLogin: brokerState.github.login,
-        targetOrigin: brokerState.targetOrigin,
+        requestNodeId: brokerState.nodeId,
+        action: "confirm",
       },
       "Identity broker issued an attestation for a human-confirmed GitHub account"
     );

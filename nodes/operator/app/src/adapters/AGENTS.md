@@ -29,6 +29,8 @@ Infrastructure implementations of ports including server/, worker/, cli/, and te
 
 ## Public Surface
 
+- Delivery KPI source (`server/node-deploy/delivery-kpi-source.adapter.ts`, task.5442): `DeliveryKpiSource` implements `DeliveryKpiSourcePort`: read-only SQL over the node-deploy release store plus one bounded public HTTPS GET per probe, for the goal-metric calculators in `features/node-deploy/delivery-kpis.ts`. Goal metrics, not telemetry.
+- Review KPI source (`server/review/review-kpi-source.adapter.ts`, task.5450): `GitHubReviewKpiSource` implements `ReviewKpiSourcePort`: bounded read-only GitHub GraphQL pages of PRs with the review App's `Cogni Git PR Review` check runs (suites filtered by `GH_REVIEW_APP_ID`), for the calculators in `features/review/review-kpis.ts`. Goal metrics, not telemetry.
 - Node mesh (`server/node-deploy/headscale.adapter.ts`, task.5429): `HeadscaleSocketAdapter` implements `NodeMeshPort` over ONE env Headscale v0.29.7's unix socket (gRPC, no API key, bounded deadlines, normalized payload-free errors). Its schema is `headscale-v0.29.7.descriptor.ts`, drift-pinned to the vendored protos in `headscale-proto-v0.29.7/` (BSD-3-Clause, LICENSE beside them). Contract test: `tests/component/node-deploy/headscale.adapter.int.test.ts`. Not exported through `@/adapters/server`; the sequencer bootstrap wires it (T4).
 
 - App-private `AkashNativeStateReader` (exported through `@/adapters/server`) reads only fixed public Akash deployment/lease GETs. Bootstrap injects public owner and transport; full identities, pagination, bytes, concurrency and deadlines are bounded. It returns observations, never closure or recovery policy.

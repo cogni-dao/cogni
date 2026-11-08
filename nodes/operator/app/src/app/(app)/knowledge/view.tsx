@@ -5,14 +5,15 @@
  * Module: `@app/(app)/knowledge/view`
  * Purpose: Client knowledge dashboard. Single ReUI DataGrid that switches between
  *   Browse mode (knowledge entries on `main`) and Inbox mode (open external-agent
- *   contributions). One segmented toggle, URL-driven filters/sort/mode.
+ *   contributions), plus Graph, Chains, Domains and Goals peers. One segmented
+ *   toggle, URL-driven filters/sort/mode.
  * Scope: Presentation. Fetches data via React Query; mutates via direct fetch.
  * Invariants:
  *   - HEADER_OWNS_SORT_AND_FILTER (column dropdowns).
  *   - SINGLE_COLUMNS_TOGGLE (toolbar, not per-column).
  *   - URL_DRIVEN_STATE (mode + filters persist in URL).
  *   - Cookie-session merges only — no Bearer header is ever sent from this page.
- * Side-effects: IO (GET /knowledge, GET /knowledge/contributions, POST .../merge, POST .../close).
+ * Side-effects: IO (GET /knowledge, GET /knowledge/contributions, GET /metrics/goals, POST .../merge, POST .../close).
  * Links: docs/spec/knowledge-syntropy.md, [/work view](../work/view.tsx)
  * @public
  */
@@ -34,6 +35,7 @@ import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data
 import { DataGridPagination } from "@cogni/node-ui-kit/reui/data-grid/data-grid-pagination";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
 import { Skeleton } from "@cogni/node-ui-kit/shadcn/skeleton";
+import type { GoalsProgress } from "@cogni-dao/metrics/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
@@ -55,11 +57,13 @@ import {
   Plus,
   Settings2,
   Tags,
+  Target,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
 import { Button, Input } from "@/components";
+import { GoalsBoard } from "@/features/goals";
 
 import { closeContribution } from "./_api/closeContribution";
 import { fetchContributions } from "./_api/fetchContributions";
@@ -75,7 +79,7 @@ import { domainColumns } from "./_components/domain-columns";
 import { GraphView } from "./_components/GraphView";
 import { KnowledgeDetail } from "./_components/KnowledgeDetail";
 
-type ViewMode = "browse" | "domains" | "inbox" | "chains" | "graph";
+type ViewMode = "browse" | "domains" | "inbox" | "chains" | "graph" | "goals";
 
 const EDO_ENTRY_TYPES: ReadonlySet<string> = new Set([
   "hypothesis",
@@ -90,7 +94,8 @@ function isMode(v: string | null): v is ViewMode {
     v === "domains" ||
     v === "inbox" ||
     v === "chains" ||
-    v === "graph"
+    v === "graph" ||
+    v === "goals"
   );
 }
 
@@ -105,12 +110,15 @@ interface KnowledgeDashboardViewProps {
   readonly initialDomains?: DomainsListResponse | undefined;
   /** SSR-seeded graph — only present on a `?mode=graph` deep-link. */
   readonly initialGraph?: KnowledgeGraphResponse | undefined;
+  /** SSR-seeded goal progress — only present on a `?mode=goals` deep-link. */
+  readonly initialGoals?: GoalsProgress | undefined;
 }
 
 export function KnowledgeDashboardView({
   initialList,
   initialDomains,
   initialGraph,
+  initialGoals,
 }: KnowledgeDashboardViewProps = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -235,6 +243,12 @@ export function KnowledgeDashboardView({
               icon={<GitBranch className="size-3.5" />}
             />
             <ModeButton
+              active={mode === "goals"}
+              onClick={() => setModeUrl("goals")}
+              label="Goals"
+              icon={<Target className="size-3.5" />}
+            />
+            <ModeButton
               active={mode === "domains"}
               onClick={() => setModeUrl("domains")}
               label="Domains"
@@ -251,6 +265,7 @@ export function KnowledgeDashboardView({
         </div>
       </div>
 
+      {mode === "goals" && <GoalsBoard initialData={initialGoals} />}
       {mode === "browse" && (
         <BrowsePanel
           rows={knowledgeQuery.data?.items ?? []}

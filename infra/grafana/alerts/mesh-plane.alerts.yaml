@@ -14,6 +14,8 @@
 # The rules marked `slice: T2` read events the sequencer emits once slice T2 ships; apply them with T2,
 # because their no-data state is Alerting by design (an absent coordinator health stream must page).
 # The rule marked `slice: P4` reads the env-plane substrate-gw (task.5428 P4); apply it with P4.
+# The rule marked `slice: T1p` reads the production env-plane substrate-gw; apply it only after that
+# instance's first heartbeat is in Loki (its no-data state pages).
 #
 # Source events:
 #   substrate-gw (Loki {env,namespace="cogni-mesh",service="substrate-gw"} via the k3s pod-log source;
@@ -147,6 +149,68 @@ groups:
         annotations:
           summary: "No substrate_gw_watchdog line from candidate-a in 5 minutes: the env gateway (or its fail-closed watchdog) is not running, or its logs are not shipped. Check the cogni-mesh-<tailnet>/substrate-gw pods on the env VM's k3s (Argo apps candidate-a-mesh-plane-<tailnet>)."
         labels: { severity: critical, plane: mesh, slice: P4 }
+        noDataState: Alerting
+        execErrState: Alerting
+
+      # The production VM's one substrate-gw (cogni-mesh-production). Its own rule, so the candidate-a rule
+      # above never pages for a production rollout and this one never pages for candidate-a.
+      # slice: T1p — apply it only AFTER a substrate_gw_watchdog line from cogni-mesh-production is in Loki:
+      # its no-data state pages, so applying it earlier pages critical for an instance that does not exist.
+      - uid: mesh-substrate-gw-no-heartbeat-production
+        title: The production substrate-gw watchdog heartbeat missing for 5 minutes
+        condition: THRESHOLD
+        for: 0s
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'count(sum by (namespace) (count_over_time({env="production",service="substrate-gw",namespace="cogni-mesh-production"} | json | msg="substrate_gw_watchdog" [5m])))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: THRESHOLD
+        annotations:
+          summary: "No substrate_gw_watchdog line from production in 5 minutes: the production env gateway (or its fail-closed watchdog) is not running, or its logs are not shipped. Check cogni-mesh-production/substrate-gw on the production VM's k3s (Argo app production-mesh-plane-production)."
+        labels: { severity: critical, plane: mesh, slice: T1p }
+        noDataState: Alerting
+        execErrState: Alerting
+
+      # The preview VM's one substrate-gw (cogni-mesh-preview). Its own rule, so the other env rules never
+      # page for a preview rollout and this one never pages for them (same shape as production).
+      # slice: T1v — apply it only AFTER a substrate_gw_watchdog line from cogni-mesh-preview is in Loki:
+      # its no-data state pages, so applying it earlier pages critical for an instance that does not exist.
+      - uid: mesh-substrate-gw-no-heartbeat-preview
+        title: The preview substrate-gw watchdog heartbeat missing for 5 minutes
+        condition: THRESHOLD
+        for: 0s
+        data:
+          - refId: COUNT
+            datasourceUid: grafanacloud-logs
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              datasource: { type: loki, uid: grafanacloud-logs }
+              expr: 'count(sum by (namespace) (count_over_time({env="preview",service="substrate-gw",namespace="cogni-mesh-preview"} | json | msg="substrate_gw_watchdog" [5m])))'
+              queryType: instant
+              refId: COUNT
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: COUNT
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: THRESHOLD
+        annotations:
+          summary: "No substrate_gw_watchdog line from preview in 5 minutes: the preview env gateway (or its fail-closed watchdog) is not running, or its logs are not shipped. Check cogni-mesh-preview/substrate-gw on the preview VM's k3s (Argo app preview-mesh-plane-preview)."
+        labels: { severity: critical, plane: mesh, slice: T1v }
         noDataState: Alerting
         execErrState: Alerting
 

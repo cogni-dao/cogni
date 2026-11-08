@@ -82,6 +82,7 @@ import type { ScheduleRunReader } from "@cogni/scheduling";
 import { PostgresScheduleRunReader } from "@cogni/scheduling/adapters/postgres";
 import type { WorkItemQueryPort } from "@cogni/work-items";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
+import type { GoalsProgress, MetricService } from "@cogni-dao/metrics";
 import {
   Client as TemporalClient,
   Connection as TemporalConnection,
@@ -177,6 +178,10 @@ import {
   type LeaseReadCapability,
 } from "@/bootstrap/capabilities/compute-leases";
 import { createDeployCapability } from "@/bootstrap/capabilities/deploy";
+import {
+  createGoalMetrics,
+  createGoalProgressReader,
+} from "@/bootstrap/capabilities/goal-metrics";
 import { createKnowledgeContributionReadCapability } from "@/bootstrap/capabilities/knowledge-contribution-read";
 import {
   createMetricsCapability,
@@ -194,7 +199,10 @@ import { startCatalogRegistryReconcileOnBoot } from "@/bootstrap/catalog-registr
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
-import { startGovernanceSyncOnBoot } from "@/bootstrap/startup-reconcile";
+import {
+  startGovernanceSyncOnBoot,
+  startMetricsSyncOnBoot,
+} from "@/bootstrap/startup-reconcile";
 import {
   type AttributionProfileResolver,
   createAttributionProfileResolver,
@@ -355,6 +363,10 @@ export interface Container {
   knowledgeContributionService: ContributionService | undefined;
   /** Direct knowledge store port — exposed for the cookie-only browse endpoint. Undefined when DOLTGRES_URL is unset. */
   knowledgeStorePort: KnowledgeStorePort | undefined;
+  /** Goal-metric service (@cogni-dao/metrics). Undefined when DOLTGRES_URL is unset. */
+  goalMetrics: MetricService | undefined;
+  /** The node's one goal-progress read; the HTTP route and the Goals view share it. */
+  goalProgress: () => Promise<GoalsProgress>;
   /** EDO hypothesis-loop capability for the langgraph tool bindings AND the bearer-auth REST routes under /api/v1/edo. Always present (stubs throw when DOLTGRES_URL is unset). */
   edoCapability: EdoCapability;
   /** Thread persistence scoped to a user (RLS enforced) */
@@ -471,6 +483,8 @@ export function getContainer(): Container {
     // SELF_FIRST (task.5282): the operator's OWN charters come from its image repo-spec and need
     // no GitHub/catalog read, so they activate now, independent of the fleet registry.
     startGovernanceSyncOnBoot("self");
+    // Goal-metric refresh clock (story.0021): independent of governance reconcile.
+    if (_container.goalMetrics) startMetricsSyncOnBoot();
     // Project merged catalog intent into THIS environment's Postgres + OpenFGA.
     // Detached and single-writer guarded; a periodic App-read heals missed push triggers. Only
     // start the routable-node ("all") sync after the first successful projection: that set is a
@@ -911,6 +925,7 @@ function createContainer(): Container {
   let edoCapability: EdoCapability;
   let knowledgeContributionService: ContributionService | undefined;
   let knowledgeStorePort: KnowledgeStorePort | undefined;
+  let goalMetrics: MetricService | undefined;
   if (env.DOLTGRES_URL) {
     const doltClient = buildDoltgresClient({
       connectionString: env.DOLTGRES_URL,
@@ -931,6 +946,31 @@ function createContainer(): Container {
       writerSession: knowledgeWriter,
     });
     knowledgeStorePort = knowledgePort;
+    goalMetrics = createGoalMetrics({
+      knowledgeSql: doltClient,
+      observationsSql: serviceDb.$client,
+      // The node-deploy release store lives in the same operator Postgres (task.5442).
+      releaseStoreSql: serviceDb.$client,
+      // The operator's own public host: the serving-drift egress control probe (task.5442).
+      controlHost: env.APP_BASE_URL
+        ? new URL(env.APP_BASE_URL).host
+        : undefined,
+      // The review KPIs (task.5450): the parent repo and the review App, both from env.
+      review: {
+        repo:
+          env.NODE_SUBMODULE_PARENT_OWNER && env.NODE_SUBMODULE_PARENT_REPO
+            ? {
+                owner: env.NODE_SUBMODULE_PARENT_OWNER,
+                repo: env.NODE_SUBMODULE_PARENT_REPO,
+              }
+            : undefined,
+        appId: env.GH_REVIEW_APP_ID,
+        privateKeyBase64: env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
+      },
+      environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
+      // Compute receipts and skipped invalid definitions must reach Loki.
+      log: (event) => log.info(event, "metric.event"),
+    });
     knowledgeCapability = {
       ...createKnowledgeCapability(knowledgePort),
       // ONE_GOAL_LIST (dao-goals-design): the store's goal reader, for core__goal_list. Cap-agnostic: any
@@ -1081,6 +1121,12 @@ function createContainer(): Container {
     scheduleCapability,
     vcsCapability,
     workItemCapability,
+  });
+  const goalProgress = createGoalProgressReader({
+    metrics: () => goalMetrics,
+    knowledge: () => knowledgeStorePort,
+    // Same fallback as createGoalMetrics, so payload environment == observation scope.
+    environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
   });
   const operatorToolBundle = [...OPERATOR_CORE_TOOL_BUNDLE, ...VCS_TOOL_BUNDLE];
   const toolSource = createBoundToolSource(operatorToolBundle, toolBindings);
@@ -1339,6 +1385,8 @@ function createContainer(): Container {
     toolSource,
     knowledgeContributionService,
     knowledgeStorePort,
+    goalMetrics,
+    goalProgress,
     edoCapability,
     threadPersistenceForUser: (userId: UserId) =>
       new DrizzleThreadPersistenceAdapter(db, userActor(userId)),

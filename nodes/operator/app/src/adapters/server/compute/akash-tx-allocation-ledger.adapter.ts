@@ -134,8 +134,8 @@ export class DrizzleAkashTxAllocationLedger
    * @param walletScope opaque identity of the Console wallet this ledger serializes. One
    *   scope = one writer. Two actuators pointed at the SAME Console wallet MUST share a
    *   scope and a database, or cursor-based recovery is unsound. Callers MUST obtain this
-   *   from `resolveAkashTxWallet`, which refuses any credential the legacy ComputeWorkload
-   *   controller already spends from (ONE_WALLET_ONE_WRITER).
+   *   from `resolveAkashTxWallet`, which holds exactly one wallet and has no input for the
+   *   retired controller's key (THE_ACTUATOR_HOLDS_EXACTLY_ONE_WALLET, ONE_WALLET_ONE_WRITER).
    */
   constructor(
     private readonly getDb: () => Promise<Database>,
@@ -642,10 +642,10 @@ export class DrizzleAkashTxAllocationLedger
   }
 
   /**
-   * Every-state enumeration for generation derivation (task.5132) — same scoping as
-   * `listAllocated` (walletScope always, optional `(node_id, environment)` narrowing), no state
-   * or handle predicate: terminal `released`/`failed` receipts are exactly the evidence
-   * `requiredLeaseGeneration` exists to count, and the allocated-only view hid them.
+   * Every-state enumeration (task.5132) — same scoping as `listAllocated` (walletScope always,
+   * optional `(node_id, environment)` narrowing), no state or handle predicate: terminal
+   * `released`/`failed` receipts are evidence the allocated-only view hides (the actuator's
+   * recovery tried-set and the deploy-state route read them).
    */
   async listReceipts(input: {
     nodeId?: string;

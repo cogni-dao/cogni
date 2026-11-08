@@ -2083,6 +2083,267 @@ describe("GitHubRepoWriter.promoteNodeFromPreview", () => {
   });
 });
 
+describe("GitHubRepoWriter operator services promote on their own lane (bug.5599, CD5)", () => {
+  const DISPATCH =
+    "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
+  const COMPARE = "GET /repos/{owner}/{repo}/compare/{basehead}";
+  const sha = "0123456789012345678901234567890123456789";
+  const previewSha = "cccccccccccccccccccccccccccccccccccccccc";
+  const rows: Record<string, string> = {
+    "operator.yaml":
+      "name: operator\ntype: node\npath_prefix: nodes/operator/\nenvs: [candidate-a, preview, production]\n",
+    "scheduler-worker.yaml":
+      "name: scheduler-worker\ntype: service\npath_prefix: services/scheduler-worker/\nenvs: [candidate-a, preview, production]\n",
+    // service without production in envs
+    "preview-only-svc.yaml":
+      "name: preview-only-svc\ntype: service\nenvs: [candidate-a, preview]\n",
+    // service with a remote source
+    "remote-svc.yaml":
+      "name: remote-svc\ntype: service\nsource_repo: https://github.com/cogni-dao/remote-svc.git\nenvs: [production, preview]\n",
+    "beacon.yaml":
+      "name: beacon\ntype: node\nsource_repo: https://github.com/cogni-dao/beacon.git\nenvs: [production, preview]\n",
+  };
+
+  function encode(text: string): string {
+    return Buffer.from(text, "utf-8").toString("base64");
+  }
+
+  function contentsHandler(
+    pins: Record<string, string> = {}
+  ): (params: Record<string, unknown>) => unknown {
+    return (params) => {
+      const path = String(params.path);
+      const row = /^infra\/catalog\/(.+\.yaml)$/.exec(path)?.[1];
+      if (row && rows[row]) {
+        return { type: "file", encoding: "base64", content: encode(rows[row]) };
+      }
+      if (path === ".promote-state/source-sha-by-app.json") {
+        const ref = String(params.ref);
+        const pin = pins[ref];
+        if (!pin) throw statusError(404, "Not Found");
+        const slug = ref.replace(/^deploy\/(preview|production)-/, "");
+        return {
+          type: "file",
+          encoding: "base64",
+          content: encode(JSON.stringify({ [slug]: pin })),
+        };
+      }
+      throw statusError(404, `not found: ${path}`);
+    };
+  }
+
+  function dispatchedInputs(): Record<string, string> {
+    const dispatch = requests.find((r) => r.route === DISPATCH);
+    return dispatch?.params.inputs as Record<string, string>;
+  }
+
+  function pinRefs(): unknown[] {
+    return requests
+      .filter(
+        (r) =>
+          r.route === "GET /repos/{owner}/{repo}/contents/{path}" &&
+          r.params.path === ".promote-state/source-sha-by-app.json"
+      )
+      .map((r) => r.params.ref);
+  }
+
+  it("promoteNode(operator, service=scheduler-worker, sourceSha) dispatches nodes=scheduler-worker, forward-checked against the worker's own pin", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(),
+      [COMPARE]: () => ({ status: "ahead" }),
+      [DISPATCH]: observedPromoteDispatch,
+    };
+
+    const result = await makeWriter().promoteNode({
+      env: "production",
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
+      service: "scheduler-worker",
+      sourceSha: sha,
+    });
+
+    expect(result).toMatchObject({
+      status: "dispatched",
+      sourceAddressing: "in_repo",
+    });
+    expect(dispatchedInputs()).toMatchObject({
+      environment: "production",
+      nodes: "scheduler-worker",
+      source_sha: sha,
+      skip_infra: "true",
+    });
+    expect(pinRefs()).toEqual(["deploy/production-scheduler-worker"]);
+  });
+
+  it("promoteNode(service) refuses a worker target that does not descend from the worker's pin", async () => {
+    const pinned = "dddddddddddddddddddddddddddddddddddddddd";
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler({
+        "deploy/production-scheduler-worker": pinned,
+      }),
+      [COMPARE]: (params) =>
+        String(params.basehead).startsWith(`${pinned}...${sha}`)
+          ? { status: "behind" }
+          : { status: "ahead" },
+      [DISPATCH]: observedPromoteDispatch,
+    };
+
+    await expect(
+      makeWriter().promoteNode({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        service: "scheduler-worker",
+        sourceSha: sha,
+      })
+    ).rejects.toMatchObject({ code: "non_forward_promotion", status: 409 });
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+  });
+
+  it("promoteNodeFromPreview(operator, service) forwards ONLY the worker's own preview pin", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler({
+        "deploy/preview-scheduler-worker": previewSha,
+      }),
+      [COMPARE]: () => ({ status: "ahead" }),
+      [DISPATCH]: observedPromoteDispatch,
+    };
+
+    await makeWriter().promoteNodeFromPreview({
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
+      service: "scheduler-worker",
+    });
+
+    expect(dispatchedInputs().nodes).toBe("scheduler-worker");
+    expect(dispatchedInputs().source_sha).toBeUndefined();
+    expect(dispatchedInputs().node_source_sha).toBeUndefined();
+    expect(pinRefs()).toEqual([
+      "deploy/preview-scheduler-worker",
+      "deploy/production-scheduler-worker",
+    ]);
+  });
+
+  it("promoteNodeFromPreview(service) refuses when the worker has no preview pin", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler({
+        "deploy/preview-operator": previewSha,
+      }),
+      [COMPARE]: () => ({ status: "ahead" }),
+      [DISPATCH]: observedPromoteDispatch,
+    };
+
+    await expect(
+      makeWriter().promoteNodeFromPreview({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        service: "scheduler-worker",
+      })
+    ).rejects.toMatchObject({ code: "preview_pin_missing", status: 409 });
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+  });
+
+  it("dispatchNodePromote(operator, preview, service) dispatches nodes=scheduler-worker", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(),
+      [DISPATCH]: observedPromoteDispatch,
+    };
+
+    await makeWriter().dispatchNodePromote({
+      owner: "Cogni-DAO",
+      repo: "cogni",
+      env: "preview",
+      slug: "operator",
+      service: "scheduler-worker",
+    });
+    expect(dispatchedInputs().nodes).toBe("scheduler-worker");
+  });
+
+  it("rejects unknown, remote-source, node-type and env-less services without dispatching", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(),
+      [COMPARE]: () => ({ status: "ahead" }),
+      [DISPATCH]: observedPromoteDispatch,
+    };
+    const promote = (service: string) =>
+      makeWriter().promoteNode({
+        env: "production",
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "operator",
+        service,
+        sourceSha: sha,
+      });
+
+    await expect(promote("nope")).rejects.toMatchObject({
+      code: "service_not_found",
+      status: 404,
+    });
+    await expect(promote("remote-svc")).rejects.toMatchObject({
+      code: "invalid_service",
+      status: 400,
+    });
+    await expect(promote("beacon")).rejects.toMatchObject({
+      code: "invalid_service",
+      status: 400,
+    });
+    await expect(promote("operator")).rejects.toMatchObject({
+      code: "invalid_service",
+      status: 400,
+    });
+    await expect(promote("preview-only-svc")).rejects.toMatchObject({
+      code: "invalid_service",
+      status: 400,
+    });
+    await expect(promote("../operator")).rejects.toMatchObject({
+      code: "invalid_service",
+      status: 400,
+    });
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+  });
+
+  it("refuses a service on a non-operator slug", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler(),
+      [DISPATCH]: observedPromoteDispatch,
+    };
+    await expect(
+      makeWriter().promoteNodeFromPreview({
+        parentOwner: "Cogni-DAO",
+        parentRepo: "cogni",
+        slug: "beacon",
+        service: "scheduler-worker",
+      })
+    ).rejects.toMatchObject({
+      code: "service_not_on_operator_lane",
+      status: 400,
+    });
+    expect(requests.some((r) => r.route === DISPATCH)).toBe(false);
+  });
+
+  it("default path unchanged: an operator promote without service dispatches nodes=operator and never reads the catalog directory", async () => {
+    routeHandlers = {
+      "GET /repos/{owner}/{repo}/contents/{path}": contentsHandler({
+        "deploy/preview-operator": previewSha,
+      }),
+      [COMPARE]: () => ({ status: "ahead" }),
+      [DISPATCH]: observedPromoteDispatch,
+    };
+
+    await makeWriter().promoteNodeFromPreview({
+      parentOwner: "Cogni-DAO",
+      parentRepo: "cogni",
+      slug: "operator",
+    });
+    expect(dispatchedInputs().nodes).toBe("operator");
+    expect(requests.some((r) => r.params.path === "infra/catalog")).toBe(false);
+  });
+});
+
 describe("GitHubRepoWriter.reconcileNodeInfra", () => {
   const DISPATCH =
     "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches";
@@ -2388,8 +2649,8 @@ spec:
     const nextDeploySha = "cccccccccccccccccccccccccccccccccccccccc";
     routeHandlers = {
       ...candidateReviewHandlers([
-        "infra/crossplane/install/packages/provider-http.yaml",
-        "tests/ci-invariants/crossplane-dormant-substrate.spec.ts",
+        "infra/k8s/argocd/control-plane/candidate-a/candidate-a-appsets-application.yaml",
+        "tests/ci-invariants/akash-tx-actuator-runtime.spec.ts",
       ]),
       "GET /repos/{owner}/{repo}/git/commits/{commit_sha}": (params) =>
         params.commit_sha === candidateSourceSha
@@ -2499,7 +2760,7 @@ spec:
 
   it("rejects a reviewed PR that crosses the candidate control-plane path boundary", async () => {
     routeHandlers = candidateReviewHandlers([
-      "infra/k8s/argocd/control-plane/candidate-a/crossplane-core-application.yaml",
+      "infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml",
       ".github/workflows/promote-and-deploy.yml",
     ]);
 
@@ -2871,7 +3132,7 @@ spec:
   ])("rejects mixed control-plane and Compose path %s before any mutation", async (path) => {
     routeHandlers = candidateReviewHandlers([
       path,
-      "infra/k8s/argocd/control-plane/candidate-a/crossplane-core-application.yaml",
+      "infra/k8s/argocd/control-plane/candidate-a/candidate-a-control-plane-application.yaml",
     ]);
 
     await expect(

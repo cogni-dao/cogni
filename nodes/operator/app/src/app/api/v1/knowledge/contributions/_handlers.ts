@@ -27,6 +27,7 @@ import {
   EmptyKnowledgePatchError,
   HypothesisMissingEvaluateAtError,
   KnowledgeBusyError,
+  type KnowledgeContributionEdit,
   KnowledgeGateError,
   KnowledgeWriteConflictError,
   KnowledgeWriteOutcomeUnknownError,
@@ -44,6 +45,12 @@ import {
   ContributionsListQuerySchema,
 } from "@cogni/node-contracts";
 import type { SessionUser } from "@cogni/node-shared";
+import { calculatorShape } from "@cogni-dao/metrics";
+import {
+  displayFits,
+  KpiBindingsSchema,
+  StoredMetricSpecSchema,
+} from "@cogni-dao/metrics/contracts";
 import { NextResponse } from "next/server";
 
 import { getContainer } from "@/bootstrap/container";
@@ -171,6 +178,8 @@ export async function handleCreate(
       { error: "invalid input", issues: parsed.error.issues },
       { status: 400 }
     );
+  const invalidMetric = validateMetricEdits(parsed.data.edits ?? []);
+  if (invalidMetric) return invalidMetric;
 
   const principal = sessionUserToPrincipal(sessionUser, authSource(request));
   const createBody = {
@@ -277,6 +286,8 @@ export async function handleAppendCommit(
       { error: "invalid input", issues: parsed.error.issues },
       { status: 400 }
     );
+  const invalidMetric = validateMetricEdits(parsed.data.edits ?? []);
+  if (invalidMetric) return invalidMetric;
 
   const principal = sessionUserToPrincipal(sessionUser, authSource(request));
   try {
@@ -485,4 +496,82 @@ export async function handleClose(
   } catch (e) {
     return mapError(e);
   }
+}
+
+/**
+ * Goal-metric configuration gate (story.0021): a `metricSpec` must parse strictly, name a
+ * registered @cogni-dao/metrics calculator, and carry a display its unit can honour;
+ * `kpiBindings` must parse, and hypothesis bindings must pin evaluation + baseline.
+ */
+function validateMetricEdits(
+  edits: readonly KnowledgeContributionEdit[]
+): NextResponse | null {
+  for (const edit of edits) {
+    if (edit.op !== "insert" && edit.op !== "update") continue;
+    const entry = edit.entry;
+    if (entry.metricSpec != null) {
+      const invalid = validateMetricSpec(
+        entry.metricSpec,
+        edit.op === "update" ? edit.targetRowId : entry.id,
+        entry.title
+      );
+      if (invalid) return invalid;
+    }
+    if (entry.kpiBindings == null) continue;
+    const bindings = KpiBindingsSchema.safeParse(entry.kpiBindings);
+    if (!bindings.success)
+      return NextResponse.json(
+        { error: "invalid KPI bindings" },
+        { status: 400 }
+      );
+    if (
+      entry.entryType === "hypothesis" &&
+      bindings.data.length > 0 &&
+      !bindings.data.every((b) => b.evaluationAt && b.baselineObservationId)
+    )
+      return NextResponse.json(
+        {
+          error:
+            "hypothesis KPI bindings require a fixed evaluation and baseline observation",
+        },
+        { status: 422 }
+      );
+  }
+  return null;
+}
+
+function validateMetricSpec(
+  stored: unknown,
+  id: string,
+  title: string
+): NextResponse | null {
+  const parsed = StoredMetricSpecSchema.safeParse(stored);
+  if (!parsed.success)
+    return NextResponse.json(
+      { error: "invalid metric definition", issues: parsed.error.issues },
+      { status: 400 }
+    );
+  const { display, ...spec } = parsed.data;
+  const registry = getContainer().goalMetrics?.registry;
+  try {
+    registry?.validate({ id, title, revision: "proposed", spec });
+  } catch {
+    return NextResponse.json(
+      { error: "unsupported calculator or parameters" },
+      { status: 422 }
+    );
+  }
+  if (
+    display &&
+    registry &&
+    !displayFits(
+      display,
+      calculatorShape(registry.get(spec.calculatorId), spec.params).unit
+    )
+  )
+    return NextResponse.json(
+      { error: "display does not fit the metric unit (slo needs %)" },
+      { status: 422 }
+    );
+  return null;
 }

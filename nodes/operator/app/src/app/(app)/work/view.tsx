@@ -3,16 +3,21 @@
 
 /**
  * Module: `@app/(app)/work/view`
- * Purpose: Client-side work dashboard. ReUI DataGrid with per-column header
- *          dropdowns owning sort + filter, single top-right Columns toggle,
- *          search input, URL-driven state, detail panel.
- * Scope: Presentation. Fetches data via React Query.
+ * Purpose: Client-side work dashboard composing the published work board
+ *          capability (`@cogni/knowledge-base-ui`) and the ReUI DataGrid over
+ *          one TanStack filter, sort, search and detail-navigation model.
+ * Scope: Route composition. Fetches data via React Query and maps table state
+ *        to URL params; board controls, columns and cards come from the package.
  * Invariants:
- *   - HEADER_OWNS_SORT_AND_FILTER — sort + per-column facet filter live in
- *     the column header dropdown (see `_components/columns.tsx`).
- *   - SINGLE_COLUMNS_TOGGLE — visibility lives in one toolbar button
+ *   - BOARD_FROM_PACKAGE — board mode renders only `WorkBoardToolbar` and
+ *     `WorkBoardView` from `@cogni/knowledge-base-ui` (task.0044).
+ *   - HEADER_OWNS_SORT_AND_FILTER — sort + per-column facet filter live in the
+ *     package column headers and board filter bar.
+ *   - SINGLE_COLUMNS_TOGGLE — table visibility lives in one toolbar button
  *     (`DataGridColumnVisibility`), not on every column dropdown.
- *   - URL_DRIVEN_STATE — filters / sort / search persist in URL params.
+ *   - URL_DRIVEN_STATE — filters / sort / search / rank range / view / board
+ *     columns persist in URL params (see `_lib/workItemNavigation.ts`).
+ *   - TABLE_IS_DEFAULT — only `view=board` selects the board.
  *   - CONTRACTS_ARE_TRUTH — types derived from `WorkItemDto`.
  * Side-effects: IO (fetches from /api/v1/work/items)
  * Links: [WorkPage](./page.tsx), [fetchWorkItems](./_api/fetchWorkItems.ts)
@@ -21,6 +26,14 @@
 
 "use client";
 
+import {
+  createWorkItemColumns,
+  type WorkBoardGoalLink,
+  WorkBoardToolbar,
+  WorkBoardView,
+  type WorkTableMeta,
+  workItemGlobalFilterFn,
+} from "@cogni/knowledge-base-ui";
 import type { WorkItemDto } from "@cogni/node-contracts";
 import {
   DataGrid,
@@ -29,9 +42,11 @@ import {
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
 import { DataGridPagination } from "@cogni/node-ui-kit/reui/data-grid/data-grid-pagination";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
+import { useIsMobile } from "@cogni/node-ui-kit/util/use-is-mobile";
 import { useQuery } from "@tanstack/react-query";
 import {
   type ColumnFiltersState,
+  functionalUpdate,
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
@@ -42,29 +57,44 @@ import {
   useReactTable,
   type VisibilityState,
 } from "@tanstack/react-table";
-import { Settings2 } from "lucide-react";
+import { Columns3, List, Settings2 } from "lucide-react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, Input } from "@/components";
+import { Button } from "@/components";
 
 import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
-import { columns } from "./_components/columns";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
 import {
   closeWorkItemPermalink,
   openWorkItemPermalink,
-  workListStateSearchParams,
+  readBoardColumns,
+  readWorkFilters,
+  readWorkSorting,
+  writeWorkListState,
 } from "./_lib/workItemNavigation";
 
-const ACTIVE_STATUSES = [
-  "needs_triage",
-  "needs_research",
-  "needs_design",
-  "needs_implement",
-  "needs_closeout",
-  "needs_merge",
-  "blocked",
-];
+const columns = createWorkItemColumns<WorkItemDto>();
+
+// bug.0006: phones show Item (title + id) and Status; the Columns toggle can
+// still reveal the rest. Explicit user choices win over this default.
+const MOBILE_HIDDEN_COLUMNS: VisibilityState = {
+  priority: false,
+  rankScore: false,
+  type: false,
+  projectId: false,
+  updatedAt: false,
+  estimate: false,
+};
+
+/** Renders a board goal pointer with this node's router link. */
+function WorkGoalLink({ href, className, label }: WorkBoardGoalLink) {
+  return (
+    <Link href={href} prefetch={false} className={className}>
+      {label}
+    </Link>
+  );
+}
 
 export function WorkDashboardView({
   selectedItemId,
@@ -73,6 +103,7 @@ export function WorkDashboardView({
 } = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const isMobile = useIsMobile();
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["work-items"],
@@ -81,6 +112,11 @@ export function WorkDashboardView({
   });
 
   const items = data?.items ?? [];
+  const boardView = searchParams.get("view") === "board";
+  const visibleStatuses = useMemo(
+    () => readBoardColumns(searchParams),
+    [searchParams]
+  );
 
   const selectedItemQuery = useQuery({
     queryKey: ["work-item", selectedItemId],
@@ -90,63 +126,49 @@ export function WorkDashboardView({
     staleTime: 30_000,
   });
 
-  const initialFilters = useMemo((): ColumnFiltersState => {
-    const filters: ColumnFiltersState = [];
-    const typeParam = searchParams.get("type");
-    if (typeParam) filters.push({ id: "type", value: typeParam.split(",") });
-    const statusParam = searchParams.get("status");
-    if (statusParam) {
-      filters.push({ id: "status", value: statusParam.split(",") });
-    } else {
-      filters.push({ id: "status", value: ACTIVE_STATUSES });
-    }
-    const projectParam = searchParams.get("project");
-    if (projectParam)
-      filters.push({ id: "projectId", value: projectParam.split(",") });
-    return filters;
-  }, [searchParams]);
-
-  const initialSorting = useMemo((): SortingState => {
-    const sortParam = searchParams.get("sort");
-    if (sortParam) {
-      const desc = sortParam.startsWith("-");
-      const id = desc ? sortParam.slice(1) : sortParam;
-      return [{ id, desc }];
-    }
-    return [{ id: "priority", desc: false }];
-  }, [searchParams]);
-
-  const [sorting, setSorting] = useState<SortingState>(initialSorting);
-  const [columnFilters, setColumnFilters] =
-    useState<ColumnFiltersState>(initialFilters);
+  const [sorting, setSorting] = useState<SortingState>(() =>
+    readWorkSorting(searchParams)
+  );
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(() =>
+    readWorkFilters(searchParams)
+  );
   const [globalFilter, setGlobalFilter] = useState(searchParams.get("q") ?? "");
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+  const tableColumnVisibility = useMemo(
+    () =>
+      isMobile
+        ? { ...MOBILE_HIDDEN_COLUMNS, ...columnVisibility }
+        : columnVisibility,
+    [isMobile, columnVisibility]
+  );
 
-  const syncUrl = useCallback(
-    (
-      newFilters: ColumnFiltersState,
-      newSorting: SortingState,
-      newQuery: string
-    ) => {
-      const params = workListStateSearchParams(searchParams);
-      for (const f of newFilters) {
-        const key = f.id === "projectId" ? "project" : f.id;
-        if (Array.isArray(f.value) && f.value.length > 0) {
-          params.set(key, (f.value as string[]).join(","));
-        }
-      }
-      if (newSorting.length > 0 && newSorting[0]) {
-        const s = newSorting[0];
-        params.set("sort", s.desc ? `-${s.id}` : s.id);
-      }
-      if (newQuery) params.set("q", newQuery);
+  const replaceParams = useCallback(
+    (params: URLSearchParams) => {
       const qs = params.toString();
       const basePath = selectedItemId
         ? `/work/items/${encodeURIComponent(selectedItemId)}`
         : "/work";
       router.replace(qs ? `${basePath}?${qs}` : basePath, { scroll: false });
     },
-    [router, searchParams, selectedItemId]
+    [router, selectedItemId]
+  );
+
+  // Reads the live URL so edits made in one tick compose instead of overwriting.
+  const syncUrl = useCallback(
+    (
+      newFilters: ColumnFiltersState,
+      newSorting: SortingState,
+      newQuery: string
+    ) => {
+      replaceParams(
+        writeWorkListState(new URLSearchParams(window.location.search), {
+          filters: newFilters,
+          sorting: newSorting,
+          query: newQuery,
+        })
+      );
+    },
+    [replaceParams]
   );
 
   const openItem = useCallback(
@@ -160,22 +182,41 @@ export function WorkDashboardView({
     closeWorkItemPermalink(router, searchParams);
   }, [router, searchParams]);
 
+  const setView = useCallback(
+    (view: "board" | "table") => {
+      const params = new URLSearchParams(window.location.search);
+      if (view === "board") params.set("view", "board");
+      else params.delete("view");
+      replaceParams(params);
+    },
+    [replaceParams]
+  );
+
   const table = useReactTable({
     data: items,
     columns,
-    state: { sorting, columnFilters, globalFilter, columnVisibility },
+    meta: { isLoading } satisfies WorkTableMeta,
+    state: {
+      sorting,
+      columnFilters,
+      globalFilter,
+      columnVisibility: tableColumnVisibility,
+    },
     onSortingChange: (updater) => {
-      const next = typeof updater === "function" ? updater(sorting) : updater;
+      const next = functionalUpdate(updater, sorting);
       setSorting(next);
       syncUrl(columnFilters, next, globalFilter);
     },
     onColumnFiltersChange: (updater) => {
-      const next =
-        typeof updater === "function" ? updater(columnFilters) : updater;
+      const next = functionalUpdate(updater, columnFilters);
       setColumnFilters(next);
       syncUrl(next, sorting, globalFilter);
     },
-    onGlobalFilterChange: setGlobalFilter,
+    onGlobalFilterChange: (updater) => {
+      const next = functionalUpdate(updater, globalFilter);
+      setGlobalFilter(next);
+      syncUrl(columnFilters, sorting, next);
+    },
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -183,15 +224,9 @@ export function WorkDashboardView({
     getPaginationRowModel: getPaginationRowModel(),
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
-    globalFilterFn: (row, _columnId, filterValue: string) => {
-      const q = filterValue.toLowerCase();
-      const d = row.original;
-      return (
-        d.id.toLowerCase().includes(q) ||
-        d.title.toLowerCase().includes(q) ||
-        d.labels.some((l: string) => l.toLowerCase().includes(q))
-      );
-    },
+    // The board shows every filtered, sorted item; only the table paginates.
+    manualPagination: boardView,
+    globalFilterFn: workItemGlobalFilterFn,
   });
 
   const rows = table.getRowModel().rows;
@@ -206,6 +241,7 @@ export function WorkDashboardView({
       )
         return;
       if (rows.length === 0) return;
+      if (boardView && e.key !== "/" && e.key !== "Escape") return;
 
       switch (e.key) {
         case "j":
@@ -241,40 +277,51 @@ export function WorkDashboardView({
 
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
-  }, [rows, focusedRowIndex, selectedItemId, openItem, closeItem]);
-
-  const hasActiveFilters = columnFilters.length > 0;
+  }, [rows, focusedRowIndex, selectedItemId, openItem, closeItem, boardView]);
 
   return (
-    <div className="flex flex-col gap-4 p-5 md:p-6">
+    <div className="flex min-w-0 flex-col gap-4 p-5 md:p-6">
       <h1 className="font-semibold text-xl tracking-tight md:text-2xl">
         Work Dashboard
       </h1>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          data-search-input
-          className="h-9 w-full sm:w-56"
-          placeholder="Search id, title, labels... ( / )"
-          value={globalFilter}
-          onChange={(e) => {
-            setGlobalFilter(e.target.value);
-            syncUrl(columnFilters, sorting, e.target.value);
-          }}
-        />
-        {hasActiveFilters && (
-          <button
-            type="button"
-            className="text-muted-foreground text-xs underline hover:text-foreground"
-            onClick={() => {
-              setColumnFilters([]);
-              syncUrl([], sorting, globalFilter);
-            }}
+      <WorkBoardToolbar
+        table={table}
+        visibleStatuses={visibleStatuses}
+        onVisibleStatusesChange={(updater) => {
+          const params = new URLSearchParams(window.location.search);
+          const next = functionalUpdate(updater, readBoardColumns(params));
+          params.set("columns", next.join(","));
+          replaceParams(params);
+        }}
+        showBoardColumns={boardView}
+      >
+        <fieldset
+          className="inline-flex min-w-0 rounded-lg border bg-muted/30 p-1"
+          aria-label="Work view"
+        >
+          <Button
+            variant={boardView ? "secondary" : "ghost"}
+            size="sm"
+            className="h-7 gap-1.5"
+            aria-pressed={boardView}
+            onClick={() => setView("board")}
           >
-            Clear filters
-          </button>
-        )}
-        <div className="ml-auto">
+            <Columns3 className="size-3.5" />
+            Board
+          </Button>
+          <Button
+            variant={boardView ? "ghost" : "secondary"}
+            size="sm"
+            className="h-7 gap-1.5"
+            aria-pressed={!boardView}
+            onClick={() => setView("table")}
+          >
+            <List className="size-3.5" />
+            Table
+          </Button>
+        </fieldset>
+        {!boardView && (
           <DataGridColumnVisibility
             table={table}
             trigger={
@@ -284,8 +331,8 @@ export function WorkDashboardView({
               </Button>
             }
           />
-        </div>
-      </div>
+        )}
+      </WorkBoardToolbar>
 
       {error && (
         <p className="py-8 text-center text-destructive">
@@ -293,14 +340,26 @@ export function WorkDashboardView({
         </p>
       )}
 
-      {!error && (
+      {!error && boardView && (
+        <WorkBoardView
+          table={table}
+          visibleStatuses={visibleStatuses}
+          isLoading={isLoading}
+          onOpenItem={openItem}
+          renderGoalLink={WorkGoalLink}
+        />
+      )}
+
+      {!error && !boardView && (
         <DataGrid
           table={table}
-          recordCount={items.length}
+          recordCount={table.getFilteredRowModel().rows.length}
           isLoading={isLoading}
           loadingMode="skeleton"
           onRowClick={openItem}
           tableLayout={{
+            // Auto layout on phones lets the visible columns share the viewport.
+            width: isMobile ? "auto" : "fixed",
             headerSticky: true,
             headerBackground: true,
             rowBorder: true,

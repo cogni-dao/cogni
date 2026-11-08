@@ -421,6 +421,27 @@
       "when": 1793935228898,
       "tag": "0059_node_workload_attempt_mesh",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1794015406580,
+      "tag": "0060_metric_observations",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1794053534099,
+      "tag": "0061_node_workload_attempt_activated_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1794061465148,
+      "tag": "0062_execution_request_structured_output",
+      "breakpoints": true
     }
   ]
 }

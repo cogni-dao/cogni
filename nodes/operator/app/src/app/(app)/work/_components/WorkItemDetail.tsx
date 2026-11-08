@@ -3,6 +3,7 @@
 
 "use client";
 
+import { StatusPill, TypeIcon } from "@cogni/knowledge-base-ui";
 import type { WorkItemDto } from "@cogni/node-contracts";
 import type { ReactElement } from "react";
 import {
@@ -17,7 +18,6 @@ import {
 import { EntityCitationLinks } from "../../_components/EntityCitationLinks";
 import { WorkItemFetchError } from "../_api/fetchWorkItems";
 import { hasScores, WorkItemScoresRadar } from "./WorkItemScoresRadar";
-import { StatusPill, TypeIcon } from "./work-item-icons";
 
 type SubjectRef = WorkItemDto["assignees"][number];
 

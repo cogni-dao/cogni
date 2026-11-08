@@ -73,7 +73,7 @@ cf_a_record_proxied() {
 # Echo the record TYPE (A / CNAME / …) of the first record named $fqdn across ALL
 # types, or empty when the name is unclaimed. DNS_ONE_WRITER_PER_HOST: a host whose
 # live record is not an A belongs to a different reconciler (an externally-placed
-# node's host is a CNAME written by the operator's ComputeWorkload DNS adapter), so
+# node's host is a CNAME written by the node-deploy sequencer's DNS adapter), so
 # callers need to tell "absent" from "owned by someone else" — a `?type=A` read
 # cannot.
 #   cf_record_type TOKEN ZONE_ID FQDN
@@ -97,7 +97,7 @@ cf_upsert_a_record() {
     return 2
   fi
   # PLACEMENT-CORRECT PROBE: read the name across ALL record types, never `?type=A`.
-  # A live CNAME (what the ComputeWorkload controller writes for an externally
+  # A live CNAME (what the node-deploy sequencer writes for an externally
   # placed node) is invisible to a type-A read, so the old probe decided "create"
   # and POSTed an A that Cloudflare rejects (81053 — a CNAME is exclusive on its
   # name), surfacing only as a bare "upsert failed".
@@ -128,7 +128,7 @@ else:
   case "$decision" in
     conflict\ *)
       echo "[ERROR] cloudflare-dns: '${fqdn}' already holds a ${decision#conflict } record — another writer owns this host." >&2
-      echo "[ERROR] An externally-placed node's host is a CNAME owned by the ComputeWorkload controller; refusing to overwrite it with an A record." >&2
+      echo "[ERROR] An externally-placed node's host is a CNAME owned by the node-deploy sequencer; refusing to overwrite it with an A record." >&2
       return 3
       ;;
     noop)

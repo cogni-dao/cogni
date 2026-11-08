@@ -22,6 +22,7 @@
 import {
   agentMeOperation,
   flightOperation,
+  reviewOperation,
   workItemsCreateOperation,
   workItemsPatchOperation,
 } from "@cogni/node-contracts";
@@ -123,10 +124,14 @@ export async function GET(request: Request) {
       // CI/CD plane. flight + promote are OPERATOR-ONLY (task.5411, CD4
       // ONE_WRITER_PER_NODE_LANE): they deploy the operator control plane itself and
       // refuse every other node with 409 `node_on_deploy_verb`. Every other node
-      // deploys through `deployWorkloads` below. infraReconcile is the separate,
+      // deploys through `deployWorkloads` below. Promote also takes an optional `service`: an in-repo
+      // operator catalog service (e.g. scheduler-worker) promotes on its own lane, never bundled into
+      // an operator promote (CD5, bug.5599). infraReconcile is the separate,
       // operator-node-only production substrate lever. Grant the role via the
       // access-request → owner-approve loop below.
       flight: `${origin}/api/v1/vcs/flight`,
+      // Developer-requested PR review (story.5102) — the ONLY review trigger; no webhook starts one.
+      review: `${origin}/api/v1/vcs/review`,
       promote: `${origin}/api/v1/deploy/promote`,
       // Node-deploy verb (task.5400): POST records intent to blue/green-deploy one declared
       // workload at a sha; GET reads desired + releaseState (queued|deploying|active|parked|
@@ -166,6 +171,19 @@ export async function GET(request: Request) {
         },
         inputSchema: z.toJSONSchema(flightOperation.input),
         outputSchema: z.toJSONSchema(flightOperation.output),
+      },
+      // REVIEW_IS_DEV_TRIGGERED (story.5102): a developer asks for a PR review; the requester is
+      // the run actor and pays. The check run carries `external_id = requestId` and its summary
+      // ends with one machine-readable block (marker `<!-- cogni-review-result v1 -->`).
+      requestReview: {
+        method: "POST",
+        endpoint: `${origin}/api/v1/vcs/review`,
+        auth: {
+          type: "bearer",
+          capability: "node.flight",
+        },
+        inputSchema: z.toJSONSchema(reviewOperation.input),
+        outputSchema: z.toJSONSchema(reviewOperation.output),
       },
       // WRITE_SEAM_IS_DISCOVERABLE: `endpoints.workItems` is only a URL — it cannot
       // tell an agent that the route accepts POST, what body it takes, or that the

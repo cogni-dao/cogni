@@ -28,7 +28,10 @@ export { UserDrizzleAccountService } from "./accounts/drizzle.adapter";
 export type { AgentCatalogProvider } from "./ai/agent-catalog.provider";
 // Agent discovery infrastructure
 export { AggregatingAgentCatalog } from "./ai/aggregating-agent-catalog";
-export type { ExecutionScope } from "./ai/execution-scope";
+export type {
+  ExecutionCodeSubject,
+  ExecutionScope,
+} from "./ai/execution-scope";
 // Execution scope (ALS) — per-run billing + actor context for tools
 export { getExecutionScope, runInScope } from "./ai/execution-scope";
 export {
@@ -92,7 +95,6 @@ export {
 } from "./compute/cherry-compute.adapter";
 export { DrizzleComputeCostStore } from "./compute/compute-cost-store.adapter";
 export {
-  DormantComputeWorkloadMigrationAdapter,
   KubernetesMigrationJobAdapter,
   migrationJobName,
 } from "./compute/kubernetes-migration-job.adapter";
@@ -172,6 +174,7 @@ export {
   CloudflareDnsRecords,
   resolveCloudflareZoneId,
 } from "./node-deploy/cloudflare-dns.adapter";
+export { DeliveryKpiSource } from "./node-deploy/delivery-kpi-source.adapter";
 export { HttpProbe } from "./node-deploy/http-probe.adapter";
 export { ImageCatalogNodes } from "./node-deploy/image-catalog.adapter";
 export { ImageCatalogNodeSource } from "./node-deploy/image-catalog-source.adapter";
@@ -222,9 +225,11 @@ export {
 } from "./repo";
 // Review GitHub plane (worker-delegated PR review — bug.5000)
 export {
+  CHECK_RUN_NAME as REVIEW_CHECK_RUN_NAME,
   createGithubReviewAdapter,
   type GithubReviewAdapter,
 } from "./review/github-review.adapter";
+export { GitHubReviewKpiSource } from "./review/review-kpi-source.adapter";
 // Node self-serve secrets — OpenBao writer adapter (design.node-self-serve-secrets).
 export {
   OpenBaoSecretsAdapter,
@@ -245,16 +250,21 @@ export {
   AppOrPublicDeclarationReader,
   GitHubPublicReader,
 } from "./vcs/github-declaration-reader.adapter";
+// VCS capability (GitHub App adapter)
+export {
+  type NodeCodeAdmissionPolicy,
+  REVIEW_NODE_CODE_POLICY,
+} from "./vcs/github-node-code.adapter";
 // Operator-only GitHub-App repo writer — node formation + candidate-flight prep.
 export {
   type ForkFromTemplateInput,
   GitHubRepoWriter,
   type GitHubRepoWriterConfig,
+  listCatalogNodesVia,
   type OpenNodeAppPrInput,
   type OpenNodeAppPrResult,
   type PackageImageTagExistsInput,
 } from "./vcs/github-repo-write";
-// VCS capability (GitHub App adapter)
 export {
   GitHubVcsAdapter,
   type GitHubVcsAdapterConfig,

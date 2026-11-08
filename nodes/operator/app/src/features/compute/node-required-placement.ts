@@ -69,9 +69,9 @@ const catalogRequiredPlacementSchema = z
  * dependency refuses some jurisdictions". The two compose: a bid must satisfy the fleet
  * boundary AND this requirement.
  *
- * Read it at the same moment as the rest of the row (promote/flight materialize time), because
- * the requirement binds only on a fresh lease CREATE — Akash refuses in-place placement change,
- * so editing this cell does nothing until `lease_generation` is bumped.
+ * Read it at the same moment as the rest of the row, because the requirement binds only on a
+ * fresh lease CREATE — Akash refuses in-place placement change. The node-deploy sequencer mints a
+ * fresh lease per release, so an edit binds on the node's next release (task.5411).
  */
 export function resolveNodeRequiredPlacement(input: {
   readonly catalog: unknown;

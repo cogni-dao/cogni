@@ -337,6 +337,51 @@ describe("DoltgresKnowledgeContributionAdapter", () => {
     ).toBe(true);
   });
 
+  it("surfaces a bindings-only goal edit so the node-admin gate sees it (story.0021)", async () => {
+    const row = {
+      diff_type: "modified",
+      from_id: "goal-x",
+      to_id: "goal-x",
+      from_title: "Goal: x",
+      to_title: "Goal: x",
+      from_content: "body",
+      to_content: "body",
+      from_entry_type: "goal",
+      to_entry_type: "goal",
+      from_domain: "strategy",
+      to_domain: "strategy",
+      from_kpi_bindings: JSON.stringify([
+        {
+          metricId: "a",
+          comparator: "gte",
+          target: { value: 1, unit: "items" },
+        },
+      ]),
+      to_kpi_bindings: JSON.stringify([
+        {
+          metricId: "a",
+          comparator: "gte",
+          target: { value: 5, unit: "items" },
+        },
+      ]),
+    };
+    const entries = await adapterFor(new FakeDiffSql([row], [])).diff(
+      "contrib-agent-1-abc123"
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      changeType: "modified",
+      rowId: "goal-x",
+    });
+    // Identical bindings stay a phantom and are suppressed.
+    const same = { ...row, to_kpi_bindings: row.from_kpi_bindings };
+    expect(
+      await adapterFor(new FakeDiffSql([same], [])).diff(
+        "contrib-agent-1-abc123"
+      )
+    ).toHaveLength(0);
+  });
+
   it("surfaces citation adds as links and suppresses phantom modified (bug.5004)", async () => {
     // knowledge diff returns a `modified` row whose DISPLAYED fields are identical
     // (a citation confidence-recompute side-effect); citations diff returns one add.

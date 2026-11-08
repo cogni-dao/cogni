@@ -118,12 +118,15 @@ spec:
             - { name: HOME, value: /tmp }
             # Not a Kubernetes-aware tailscale: no API discovery, no kube state store.
             - { name: KUBERNETES_SERVICE_HOST, value: "" }
-          # Guaranteed QoS (B17).
-          # Guaranteed QoS (B17), right-sized: a joined userspace tailscaled measured 41.5 MiB with traffic
-          # forced through our relay (local proof) -> 56Mi.
+          # Guaranteed QoS (B17). Sized by networking-expert rule 4 from live cgroup anon memory
+          # (bug.5601, 2026-11-08): base 7.4 MiB + 2.3 MiB per tailnet peer (production 23.5 MiB at 7
+          # peers, preview 14.3 at 3, candidate-a 19.8 at 6). Peak = 13 peers (6 production lanes, each
+          # with a second attempt during a release burst, plus itself): (7.4 + 13 x 2.3) x 1.5 = 56 MiB,
+          # rounded up to 64Mi (about 14 devices). A seventh production lane means re-measure and re-size.
+          # memory.current also counts reclaimable page cache; read anon, not current.
           resources:
-            requests: { cpu: 100m, memory: 56Mi }
-            limits: { cpu: 100m, memory: 56Mi }
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: 100m, memory: 64Mi }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
@@ -144,10 +147,11 @@ spec:
             - { name: XDG_CONFIG_HOME, value: /tmp/config }
           ports:
             - { name: publish, containerPort: 8080, protocol: TCP }
-          # Right-sized: caddy file-server measured 12.6 MiB idle -> 16Mi.
+          # Sized by networking-expert rule 4: caddy file-server anon 9.7 MiB + slab 0.7, flat in every
+          # env (bug.5601, 2026-11-08); x 1.5 = 15.6 MiB, at the old 16Mi edge -> 24Mi margin.
           resources:
-            requests: { cpu: 20m, memory: 16Mi }
-            limits: { cpu: 20m, memory: 16Mi }
+            requests: { cpu: 20m, memory: 24Mi }
+            limits: { cpu: 20m, memory: 24Mi }
           securityContext:
             allowPrivilegeEscalation: false
             # The stock caddy binary carries cap_net_bind_service as a file capability; exec fails

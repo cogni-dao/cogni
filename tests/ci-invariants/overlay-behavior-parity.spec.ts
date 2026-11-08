@@ -327,6 +327,16 @@ const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
       pattern:
         /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_MESH_DNS_RECORDS\]\.(name|value)$/,
     },
+    {
+      why:
+        "EACH OPERATOR FLIPS ONLY THE LANES IT SERVES (task.5428, test-fleet parity): the test operator's " +
+        "candidate-a lane reaches the substrate over its own test-candidate-a tailnet; the production " +
+        "operator's production lane reaches it over the production tailnet. Both overlays set the var, so " +
+        "only the value differs. tests/ci-invariants/node-deploy-mesh-coordinators.spec.ts pins both values " +
+        "and each named tailnet to a coordinator its overlay runs.",
+      pattern:
+        /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_SUBSTRATE_TRANSPORTS\]\.value$/,
+    },
   ],
   "scheduler-worker": [
     {

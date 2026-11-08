@@ -1076,7 +1076,8 @@ export class AkashComputeAdapter
    * The irreducible paid transaction: create the deployment (escrow opens), publish the
    * allocated handle through `onAllocated` BEFORE any further IO, screen bids, and lease.
    * Returns as soon as the lease exists — boot convergence is the caller's level problem
-   * (task.5095: Crossplane owns retry/backoff/readiness; this call owns only the tx).
+   * (task.5095: the caller — today the node-deploy sequencer through the actuator — owns
+   * retry/backoff/readiness; this call owns only the tx).
    */
   async allocateAndLease(p: {
     spec: ProvisionSpec;
@@ -1088,7 +1089,7 @@ export class AkashComputeAdapter
     onAllocated?: (leaseId: string) => Promise<void>;
     /**
      * Ledger-derived tried set for this generation's attempt family (task.5153).
-     * Crossplane re-invokes create per recovery ordinal, so anything in-memory here
+     * The caller re-invokes create per recovery attempt, so anything in-memory here
      * is empty on every call — which re-picked the same dead provider on every
      * bounded-recovery attempt. The caller derives this from allocation receipts.
      */

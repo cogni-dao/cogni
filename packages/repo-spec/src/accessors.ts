@@ -123,7 +123,7 @@ export interface NodeServiceConfig {
   /**
    * Per-service deployment-environment allow-list (story.5043). Absent = deploy to every
    * environment. When present, the manifest builder DROPS this service from any environment
-   * not listed here (see buildComputeWorkloadManifest).
+   * not listed here (see resolveNodeArtifactBundleForEnvironment).
    */
   readonly envs?: readonly ("candidate-a" | "preview" | "production")[];
   readonly runtimeProfile?: NodeServiceRuntimeProfileSpec;

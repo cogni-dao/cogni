@@ -39,18 +39,24 @@ export type {
   GateResult,
   GateStatus,
   ReviewResult,
+  ReviewResultBlock,
 } from "./domain/review.js";
 // Domain functions (review — pure, deterministic)
 export {
   aggregateGateStatuses,
   buildReviewUserMessage,
+  CHECK_SUMMARY_MAX_CHARS,
+  collectCitations,
+  composeCheckSummary,
   evaluateCriteria,
   findRequirement,
   formatCheckRunSummary,
   formatCrossDomainRefusal,
   formatNoScopeNeutral,
   formatPrComment,
+  formatReviewResultBlock,
   formatThreshold,
+  REVIEW_RESULT_MARKER,
 } from "./domain/review.js";
 export type { AttributionIngestRunV1 } from "./workflows/collect-epoch.workflow.js";
 // Workflow input/output types
@@ -73,6 +79,8 @@ export type { NodeTaskResult } from "./workflows/node-task.workflow.js";
 export {
   type PrReviewWorkflowInput,
   PrReviewWorkflowInputSchema,
+  type ReviewCodeSubject,
+  ReviewCodeSubjectSchema,
 } from "./workflows/pr-review.schema.js";
 export type { CollectSourcesInput } from "./workflows/stages/collect-sources.workflow.js";
 export type { EnrichAndAllocateInput } from "./workflows/stages/enrich-and-allocate.workflow.js";

@@ -69,8 +69,14 @@
  *     any point makes no second usable key and no second paid create; a row key id with no Secret is
  *     expired before a fresh mint. While no key can be minted the attempt waits (`mesh_key_pending`),
  *     unpaid, and is never observed or failed for it.
+ *   - NO_GATEWAY_NO_PAY (HR 23): the mint is refused unless the tailnet has exactly one online
+ *     `tag:substrate` device in the current coordinator epoch (`MeshPlane` GATEWAY_BEFORE_MINT). The
+ *     attempt then waits unpaid and `node_mesh_mint_refused` names the reason, so a release with no
+ *     gateway never pays for a lease that cannot reach its substrate.
  *   - MESH_PASS_UNDER_THE_LOCK (HR 4, 5, 6, 8): each reconcile pass, under the leader lock, first runs the
- *     env mesh pass: reconcile the derived policy (fail closed), approve the published `substrate-gw`,
+ *     env mesh pass: reconcile the derived policy (fail closed), recompute the one gateway (stateless:
+ *     an offline older gateway goes once a newer one is online; surplus online ones go as a mismatch),
+ *     approve the published `substrate-gw` (fresh verified auth id; exactly `[tag:substrate]`, else deleted),
  *     revoke every terminal attempt's key (expire, then delete its devices; a retiring blue only after it
  *     retires), delete a revoked attempt's Secret one pass later, sweep unstored keys, then the device
  *     check. A failed Headscale call stops every mesh write for that pass and resets the device window.
@@ -139,11 +145,7 @@ import {
   readAttemptDevices,
   substrateGateway,
 } from "./mesh-attempt";
-import {
-  type MeshPlane,
-  meshSecretName,
-  SUBSTRATE_NODE_KEY_ALERT_MS,
-} from "./mesh-plane";
+import { type MeshPlane, meshSecretName } from "./mesh-plane";
 import type { NodeSubstrateGrant } from "./mesh-policy";
 import {
   nodeAppEnv,
@@ -152,7 +154,11 @@ import {
   releaseIdentityEnv,
   workerEnv,
 } from "./node-app-env";
-import { nodeCatalogPolicy } from "./node-catalog-policy";
+import {
+  catalogDeclaresPlacement,
+  nodeCatalogPolicy,
+  placementConflictMessage,
+} from "./node-catalog-policy";
 import {
   asQualificationFailure,
   checkQualification,
@@ -385,7 +391,7 @@ class InvalidArtifactSet extends Error {}
 interface ResolvedRuntime {
   readonly env: Record<string, string>;
   readonly companionEnvs?: Record<string, Record<string, string>>;
-  /** Catalog `required_placement_countries[<env>]`; empty = unconstrained. */
+  /** The release's manifest set, else catalog `required_placement_countries[<env>]`; empty = unconstrained. */
   readonly requiredCountryCodes: readonly string[];
   /** True when the env is a non-operator node app's full runtime env (`nodeAppEnv`). */
   readonly nodeApp: boolean;
@@ -544,7 +550,14 @@ export class NodeDeploySequencer {
     if (failures >= this.d.config.maxFailedAttempts) {
       // Attached to the release's newest attempt so the park is a durable step on its timeline:
       // `release-view` reads `alert/release_parked` as the sequencer's own verdict.
-      await this.alert(key, release, ofRelease[0], "release_parked", {
+      const newest = ofRelease[0];
+      // Write-once park instant (task.5442): the alert repeats and its first step can fall off the
+      // 100-step timeline; delivery KPIs read this column instead.
+      if (newest && !newest.parkedAt)
+        await this.d.store.updateAttempt(newest.id, {
+          parkedAt: new Date(this.d.clock.now()),
+        });
+      await this.alert(key, release, newest, "release_parked", {
         failedAttempts: failures,
       });
       return "parked";
@@ -1011,7 +1024,9 @@ export class NodeDeploySequencer {
     const refusal = this.d.httpAdmissionRefusal;
     if (w.kind === "app" && refusal) throw new DependencyNotReady(refusal);
     const env: Record<string, string> = {};
-    let requiredCountryCodes: readonly string[] = [];
+    // The release pins the node's manifest set (CD3); a non-node app (the operator's own) uses it as is.
+    let requiredCountryCodes: readonly string[] =
+      w.kind === "app" ? (w.placement?.requiredCountryCodes ?? []) : [];
     let nodeApp = false;
     let companionEnvs: Record<string, Record<string, string>> = {};
     let substratePorts: readonly number[] = [];
@@ -1103,6 +1118,14 @@ export class NodeDeploySequencer {
     } catch (error) {
       throw new DependencyNotReady(`catalog policy: ${errText(error)}`);
     }
+    // ONE_PLACEMENT_WRITER (CD4, story.5141): the record refuses both sources; this backstop covers a
+    // catalog cell an operator deploy added after the record. Wait unpaid and say why.
+    const declaredCountries = w.placement?.requiredCountryCodes;
+    if (declaredCountries && catalogDeclaresPlacement(entry.row, key.env))
+      throw new DependencyNotReady(placementConflictMessage(key.env));
+    const requiredCountryCodes = [
+      ...(declaredCountries ?? policy.requiredCountryCodes),
+    ];
     if (w.runtimeProfile === "worker") {
       // WORKER_GETS_ITS_OWN_SECRETS_ONLY (task.5272): no node-app profile, no substrate, no database.
       let workerBucket: Readonly<Record<string, string>>;
@@ -1128,7 +1151,7 @@ export class NodeDeploySequencer {
             secretKeys: w.secretKeys ?? [],
             secrets: workerBucket,
           }),
-          requiredCountryCodes: [...policy.requiredCountryCodes],
+          requiredCountryCodes,
           nodeApp: false,
         };
       } catch (error) {
@@ -1176,7 +1199,7 @@ export class NodeDeploySequencer {
           ...substrate,
         }),
         substratePorts: nodeAppSubstrateBinding(substrate)?.ports ?? [],
-        requiredCountryCodes: [...policy.requiredCountryCodes],
+        requiredCountryCodes,
         nodeApp: true,
         companionEnvs: Object.fromEntries(
           (w.companions ?? []).map((c) => [
@@ -2012,6 +2035,8 @@ export class NodeDeploySequencer {
     const active = await this.d.store.updateAttempt(attempt.id, {
       phase: "active",
       unhealthySince: null,
+      // Write-once activation instant (task.5442): lead time survives the 100-step timeline cap.
+      activatedAt: new Date(this.d.clock.now()),
     });
     await this.emit(key, release, active, "activated", "ok", {
       dseq: active.externalName,
@@ -2895,8 +2920,20 @@ export class NodeDeploySequencer {
     }
     const live = this.meshView(await this.meshRows()).liveKeyIds;
     const minted = await mesh.plane.mintAttemptKey(ref, live, now);
-    if (minted.outcome !== "minted")
+    if (minted.outcome !== "minted") {
+      if (
+        minted.outcome === "refused" &&
+        (minted.reason.startsWith("gateway_") ||
+          minted.reason === "epoch_changed") &&
+        this.throttle(`mint_refused/${a.id}/${minted.reason}`)
+      )
+        // NO_GATEWAY_NO_PAY: the attempt waits unpaid; its lease would not reach the substrate.
+        await this.meshEvent("warn", "node_mesh_mint_refused", a, key, {
+          outcome: "refused",
+          reason: minted.reason,
+        });
       return { attempt: a, pending: `mint_${minted.reason}` };
+    }
     a = await this.d.store.updateAttempt(a.id, {
       mesh: {
         ...recordOf(a),
@@ -2997,8 +3034,13 @@ export class NodeDeploySequencer {
     const listed = await mesh.plane.listDevices();
     if (!listed.ok) return down("devices", listed.reason);
 
+    // ONE_GATEWAY_RECOMPUTED every pass with no state: a restart or a failed delete is retried here.
+    const sup = await mesh.plane.supersedeGateways();
+    await this.logSupersede(sup);
+    if (!sup.ok && sup.reason) return down("substrate_supersede", sup.reason);
+
     // HR 11: approve the env VM's published `substrate-gw` request, verified after the fact.
-    await this.approveGateway(mesh, listed.devices, startedAt);
+    await this.approveGateway(mesh, startedAt);
 
     // HR 6: a terminal attempt's key is expired, then its devices are deleted; read back. A retiring blue
     // is live (it still serves) and is revoked only after it retires.
@@ -3116,14 +3158,12 @@ export class NodeDeploySequencer {
   }
 
   /**
-   * HR 11 over the verified channel, both stages. Stage 1 approves a fresh published `authId` whose
-   * registered device has tags exactly `[tag:substrate]` and the published machine key. Stage 2 runs on
-   * every pass: the published node key must equal the gateway's, and a gateway approved before its node
-   * key was published must show it within the bound; otherwise it is deleted (`node_mesh_substrate_mismatch`).
+   * HR 11 over the verified channel. Approve a fresh published `authId` this process has not approved yet.
+   * The new device must be exactly `[tag:substrate]` (else deleted, `node_mesh_substrate_mismatch`); it then
+   * supersedes every older `tag:substrate` device (`node_mesh_substrate_superseded`). No key compare.
    */
   private async approveGateway(
     mesh: SequencerMeshDeps,
-    devices: readonly MeshDevice[],
     now: number
   ): Promise<void> {
     let request: Awaited<ReturnType<SubstrateRequestSourcePort["read"]>>;
@@ -3137,96 +3177,74 @@ export class NodeDeploySequencer {
         undefined,
         { outcome: "unreadable", reason: errText(error).slice(0, 200) }
       );
-      // An unreadable channel confirms nothing; the bound still runs.
-      request = null;
+      return; // an unreadable channel approves nothing
     }
-    const gateway = substrateGateway(devices);
-    // Stage 1. Already registered with this machine key: the publish lags a few seconds; nothing to do.
-    if (
-      request?.authId &&
-      !(gateway && gateway.machineKey === request.machineKey)
-    ) {
-      const r = await mesh.plane.approveSubstrateGateway(request, now);
-      if (r.outcome === "approved")
-        await this.meshEvent(
-          "info",
-          "node_mesh_substrate_approved",
-          undefined,
-          undefined,
-          {
-            outcome: "approved",
-            headscaleDeviceId: r.headscaleDeviceId,
-            expiryDisabled: r.expiryDisabled,
-            nodeKeyVerified: r.nodeKeyVerified,
-          }
-        );
-      else if (r.outcome === "mismatch")
-        await this.meshEvent(
-          "error",
-          "node_mesh_substrate_mismatch",
-          undefined,
-          undefined,
-          {
-            outcome: r.deleted ? "deleted" : "delete_failed",
-            stage: "approve",
-            headscaleDeviceId: r.headscaleDeviceId,
-            tagsExact: r.tagsExact,
-            machineKeyMatches: r.machineKeyMatches,
-            nodeKeyMatches: r.nodeKeyMatches,
-          }
-        );
-      else
-        await this.meshEvent(
-          "warn",
-          "node_mesh_substrate_refused",
-          undefined,
-          undefined,
-          { outcome: "refused", reason: r.reason }
-        );
-      return; // stage 2 runs on the next re-read, against the device list it lists then
-    }
-    // Stage 2.
-    const check = await mesh.plane.verifySubstrateNodeKey(
-      request,
-      devices,
-      now
-    );
-    if (check.outcome === "verified")
+    // Nothing pending, or a publish that still names an auth id we approved (it lags a few seconds).
+    if (!request?.authId || mesh.plane.approvedAuthId(request.authId)) return;
+    const r = await mesh.plane.approveSubstrateGateway(request, now);
+    if (r.outcome === "approved") {
       await this.meshEvent(
         "info",
-        "node_mesh_substrate_node_key_verified",
-        undefined,
-        undefined,
-        { outcome: "verified", headscaleDeviceId: check.headscaleDeviceId }
-      );
-    else if (
-      check.outcome === "unknown" &&
-      check.sinceMs >= SUBSTRATE_NODE_KEY_ALERT_MS &&
-      this.throttle(`node_key_unknown/${check.headscaleDeviceId}`)
-    )
-      // Design B19: silence is UNKNOWN, never a delete. It alerts so a person looks at the publisher.
-      await this.meshEvent(
-        "error",
-        "node_mesh_substrate_node_key_unknown",
+        "node_mesh_substrate_approved",
         undefined,
         undefined,
         {
-          outcome: "unknown",
-          headscaleDeviceId: check.headscaleDeviceId,
-          sinceMs: check.sinceMs,
+          outcome: "approved",
+          headscaleDeviceId: r.headscaleDeviceId,
+          expiryDisabled: r.expiryDisabled,
         }
       );
-    else if (check.outcome === "mismatch")
+      await this.logSupersede(r.supersede);
+    } else if (r.outcome === "mismatch")
       await this.meshEvent(
         "error",
         "node_mesh_substrate_mismatch",
         undefined,
         undefined,
         {
-          outcome: check.deleted ? "deleted" : "delete_failed",
-          stage: "node_key",
-          reason: check.reason,
-          headscaleDeviceId: check.headscaleDeviceId,
+          outcome: r.deleted ? "deleted" : "delete_failed",
+          reason: r.reason,
+          headscaleDeviceId: r.headscaleDeviceId,
+        }
+      );
+    else
+      await this.meshEvent(
+        "warn",
+        "node_mesh_substrate_refused",
+        undefined,
+        undefined,
+        { outcome: "refused", reason: r.reason }
+      );
+  }
+
+  /** One ONE_GATEWAY_RECOMPUTED outcome: superseded offline gateways and mismatch deletes (each only when non-empty). */
+  private async logSupersede(
+    sup: Awaited<ReturnType<MeshPlane["supersedeGateways"]>>
+  ): Promise<void> {
+    if (sup.superseded.length > 0 || sup.failed.length > 0)
+      await this.meshEvent(
+        "warn",
+        "node_mesh_substrate_superseded",
+        undefined,
+        undefined,
+        {
+          outcome: sup.failed.length > 0 ? "delete_failed" : "deleted",
+          keptDeviceId: sup.kept,
+          deletedDeviceIds: sup.superseded,
+          failedDeviceIds: sup.failed,
+          ...(sup.reason ? { reason: sup.reason } : {}),
+        }
+      );
+    if (sup.mismatched.length > 0)
+      await this.meshEvent(
+        "error",
+        "node_mesh_substrate_mismatch",
+        undefined,
+        undefined,
+        {
+          outcome: "deleted",
+          keptDeviceId: sup.kept,
+          deletedDeviceIds: sup.mismatched,
         }
       );
   }

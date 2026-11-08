@@ -9,11 +9,12 @@
 EVAL_API_KEY=<node key> pnpm eval:guidance-routing -- --mechanism A --ceiling-only
 
 # Selector run: mean of 2 blind selector runs, then the decision-table verdict.
-# Default selector: the node's own chat route, free gpt-oss-120b via the pr-review graph (0 credits).
-EVAL_API_KEY=<node key> pnpm eval:guidance-routing -- --mechanism A --out /tmp/guidance-routing.json
+# Selector: the node's own chat route (free gpt-oss-120b) through a tool-free graph you name with
+# EVAL_GRAPH, or any OpenAI-compatible endpoint via EVAL_COMPLETIONS_URL. One of them is required (exit 2 otherwise).
+EVAL_API_KEY=<node key> EVAL_GRAPH=<tool-free graph> pnpm eval:guidance-routing -- --mechanism A --out /tmp/guidance-routing.json
 ```
 
-`EVAL_BASE_URL` defaults to `https://cognidao.org` (use `https://test.cognidao.org` for a flighted candidate). Work-item text comes from `EVAL_WORK_BASE_URL` (default `https://cognidao.org`), so no internal text is committed. The node's chat route caps each message, not each request, at 4,000 characters, so the runner splits the prompt across consecutive user messages of at most `EVAL_MAX_MESSAGE_CHARS` (default 3,900). `EVAL_MODEL` and `EVAL_GRAPH` override the model and graph. `EVAL_COMPLETIONS_URL` plus `EVAL_COMPLETIONS_API_KEY` point the selector at any other OpenAI-compatible endpoint, sent as one message unless `EVAL_MAX_MESSAGE_CHARS` is set.
+`EVAL_BASE_URL` defaults to `https://cognidao.org` (use `https://test.cognidao.org` for a flighted candidate). Work-item text comes from `EVAL_WORK_BASE_URL` (default `https://cognidao.org`), so no internal text is committed. The node's chat route caps each message, not each request, at 4,000 characters, so the runner splits the prompt across consecutive user messages of at most `EVAL_MAX_MESSAGE_CHARS` (default 3,900). `EVAL_MODEL` overrides the model; `EVAL_GRAPH` names the selector graph on the node route and has no default (`pr-review` is a grounded, tool-using reviewer since story.5102 and is not blind). `EVAL_COMPLETIONS_URL` plus `EVAL_COMPLETIONS_API_KEY` point the selector at any other OpenAI-compatible endpoint, sent as one message unless `EVAL_MAX_MESSAGE_CHARS` is set.
 
 **Mechanisms.**
 

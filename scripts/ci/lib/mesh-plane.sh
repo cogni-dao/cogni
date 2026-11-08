@@ -31,7 +31,7 @@
 
 MESH_TAILNETS_TABLE='
 candidate-a|candidate-a|production|mesh-candidate-a|derp-candidate-a|32441|32340|32341|41641|901|cognidao.org
-preview||production|mesh-preview|derp-preview|32442||||902|cognidao.org
+preview|preview|production|mesh-preview|derp-preview|32442|32346|32347|41641|902|cognidao.org
 production|production|production|mesh-production|derp-production|32443|32344|32345|41641|903|cognidao.org
 test-candidate-a|candidate-a|candidate-a|mesh-test-candidate-a|derp-test-candidate-a|32444|32342|32343|41642|904|cogni-testing.org
 '

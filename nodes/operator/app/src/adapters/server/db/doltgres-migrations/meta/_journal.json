@@ -64,6 +64,13 @@
       "when": 1792736399740,
       "tag": "0008_work_item_scores",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794015339162,
+      "tag": "0009_knowledge_metric_columns",
+      "breakpoints": true
     }
   ]
 }

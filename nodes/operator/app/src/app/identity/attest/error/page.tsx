@@ -24,6 +24,8 @@ const REASONS: Record<string, string> = {
     "This environment is not configured to verify GitHub accounts for nodes.",
   broker_request_expired:
     "The verification request expired. Start again from the node's profile page.",
+  consent_review_required:
+    "This request changed. Review the current request before you continue.",
   cancelled: "Verification was cancelled. Nothing was shared with the node.",
   github_declined:
     "GitHub did not authorize the request. Nothing was shared with the node.",
@@ -32,6 +34,8 @@ const REASONS: Record<string, string> = {
   invalid_request: "The node's verification request was malformed.",
   invalid_return_to:
     "The node asked us to return to an address that is not registered for it.",
+  invalid_target_origin:
+    "This node's web address is not registered with this operator for this environment.",
   unknown_node: "That node is not registered with this operator.",
 };
 
@@ -49,6 +53,11 @@ export default async function IdentityAttestationErrorPage({
     <PageContainer maxWidth="xl">
       <SectionCard title="GitHub verification could not continue">
         <p className="text-sm">{reason}</p>
+        {code === "consent_review_required" ? (
+          <a href="/identity/attest/confirm" className="text-sm underline">
+            Review the current request
+          </a>
+        ) : null}
         <p className="text-muted-foreground text-sm">
           Return to the node and start again from your profile.
           {code ? (

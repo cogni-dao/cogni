@@ -47,7 +47,8 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
       "- DB creds come from ESO/OpenBao on every env; never write plaintext DB passwords.\n" +
       "- Deploys ship prebuilt images by SHA; verify the live build before validating.\n\n" +
       "## What to recall next\n" +
-      "- `cognition-substrate-bootstrap` (why the session bundle exists) and the skills index in the session bundle. Then create this node's `<slug>-agent-orientation` and cite this entry.\n\n" +
+      "- `cognition-substrate-bootstrap` (why the session bundle exists) and the skills index in the session bundle. Then create this node's `<slug>-agent-orientation` and cite this entry.\n" +
+      "- Create this node's `<slug>-architect` from the `cogni-architect` starter, then route every design or code change through it. The architect is required reading for nearly any design or code change; skip it only for wording-only edits. It is a foundational atom: every node has one.\n\n" +
       "## Work items belong to this node\n" +
       "- Resolve this node's base URL from `.cogni/repo-spec.yaml` and `/.well-known/agent.json`; never default writes to the operator apex.\n" +
       '- Discover the typed write contracts at `actions.createWorkItem` and `actions.updateWorkItem`. Create with `POST /api/v1/work/items`; progress or close with `PATCH /api/v1/work/items/{id}` using `{"set":{...}}`.\n' +
@@ -56,6 +57,35 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
     sourceType: "human",
     confidencePct: 60,
     tags: ["agent-orientation", "operating-map", "onboarding", "session-start"],
+  },
+  {
+    id: "cogni-architect",
+    domain: "meta",
+    title: "Node architect starter for this node",
+    entryType: "skill",
+    content:
+      "**Use when:** before any design or code change on this node. Skip only for wording-only edits.\n\n" +
+      "Starter architect every node inherits. Rename it to this node's own `<slug>-architect` and keep it linked to this node's real mission and architecture atoms as they grow. Read it first before you change behavior; it is a routing map, not a rulebook.\n\n" +
+      "## Serve the mission\n" +
+      "- Recall `<slug>-mission` and this node's own design and strategy atoms. Name the goal and the mission-loop stage the change serves; a change that serves no node goal is sprawl.\n" +
+      "- Link the node architecture atoms that own the area you touch, and grow this list.\n\n" +
+      "## node-template is your code baseline: be aware, do not edit it\n" +
+      "- node-template owns the shared code you inherit; know what it owns via `node-template-architect` (https://node-template.cognidao.org/knowledge/node-template-architect). You consume it from here, you do not edit it.\n" +
+      "- If a change truly belongs in the shared baseline, first weigh whether it improves every node, then raise it upstream rather than forking it locally. Keep mission code separate so updates keep merging.\n\n" +
+      "## Ship through the operator: do not reinvent delivery\n" +
+      "- CI/CD, flight, validation, merge, promotion, secrets, runtime and logs are operator-owned, not in your code. Use `operator-service-index` (it points to the canonical operator atoms) and `knowledge-contribution-flow` to ship.\n\n" +
+      "## Compare and prove\n" +
+      "- For each change name the target, the current evidence, the delta, and whether it is convergence or a regression; a regression blocks approval. Hold durable knowledge to `knowledge-syntropy-protocol`.\n" +
+      "- Review before shipping (the repo's `/review-design`, `/review-implementation`); never approve your own work. Prove live before->after at the exact build SHA; green CI or a merged PR is not proof.",
+    sourceType: "human",
+    confidencePct: 60,
+    tags: [
+      "architect",
+      "operating-map",
+      "onboarding",
+      "design-review",
+      "node-template-baseline",
+    ],
   },
   {
     id: "cogni-meta-confidence-convention",

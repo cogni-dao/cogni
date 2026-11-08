@@ -111,10 +111,11 @@ payments_out:
 # PR review on/off + model selection. The operator reads THIS block from the
 # target repo, so each node controls its own review with no operator-side hardcode.
 #   enabled: false → operator skips review entirely (no Check Run, no comment).
-#   model: any platform (LiteLLM-resolvable) model id; omit to use operator default.
+#   model: any platform (LiteLLM-resolvable) model id; omit to use the operator default
+#          (deepseek-v4-flash — served, fleet default_free, reliable tool calls; story.5102).
+# A review runs ONLY when a developer calls POST /api/v1/vcs/review — no PR event starts one.
 review:
   enabled: true
-  model: gpt-4o-mini
 
 # Gates run in the order they appear below.
 gates:
@@ -134,12 +135,10 @@ gates:
   - type: ai-rule
     with:
       rule_file: pr-syntropy-coherence.yaml
+  # Hub-grounded: cites the governing hub rule a PR breaks (story.5102).
   - type: ai-rule
     with:
-      rule_file: patterns-and-docs.yaml
-  - type: ai-rule
-    with:
-      rule_file: repo-goal-alignment.yaml
+      rule_file: hub-rule-compliance.yaml
 
   ## template for adding a new rule.
   # - type: ai-rule

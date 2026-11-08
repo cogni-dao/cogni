@@ -84,3 +84,40 @@ async function attemptReconcile(
     // Exhausted: the job logged the failure; the next deploy starts a fresh loop.
   }
 }
+
+let _metricsStarted = false;
+
+/**
+ * Kick the goal-metric refresh-schedule reconcile once per process, detached (story.0021).
+ * Same retry posture as governance: Temporal may not be reachable on first init. The
+ * reconcile is create-or-update by a fixed schedule id, so replicas and retries converge.
+ */
+export function startMetricsSyncOnBoot(): void {
+  if (_metricsStarted) return;
+  // biome-ignore lint/style/noProcessEnv: startup gate, before the config framework
+  if (process.env.APP_ENV === "test" || process.env.VITEST === "true") return;
+  _metricsStarted = true;
+  void attemptMetricsReconcile(1);
+}
+
+async function attemptMetricsReconcile(attempt: number): Promise<void> {
+  try {
+    // Dynamic import: the job statically imports getContainer (no static cycle).
+    const { ensureMetricsRefreshSchedule } = await import(
+      "@/bootstrap/jobs/metrics-refresh.job"
+    );
+    await ensureMetricsRefreshSchedule();
+  } catch (error) {
+    const { makeLogger } = await import("@/shared/observability");
+    makeLogger({ component: "startup-reconcile" }).warn(
+      { err: error, attempt, exhausted: attempt >= MAX_ATTEMPTS },
+      "Metrics refresh schedule reconcile failed"
+    );
+    if (attempt < MAX_ATTEMPTS) {
+      setTimeout(
+        () => void attemptMetricsReconcile(attempt + 1),
+        RETRY_DELAY_MS
+      );
+    }
+  }
+}

@@ -169,8 +169,12 @@ export {
   lowerWorkloadManifests,
   MAX_WORKLOAD_MANIFEST_BYTES,
   MAX_WORKLOAD_MANIFESTS,
+  PLACEMENT_ENVS,
+  type PlacementEnv,
   POSTGRES_DEDICATED_PROFILE_V1,
   parseWorkloadManifest,
+  placementCountriesOf,
+  resolvePlacementCountries,
   type ScoreWorkload,
   WORKLOAD_MANIFEST_DIR,
   WORKLOAD_MANIFEST_SUFFIX,
@@ -180,4 +184,5 @@ export {
   type WorkloadManifestFile,
   type WorkloadManifestIssue,
   type WorkloadManifestIssueCode,
+  type WorkloadPlacementCountries,
 } from "./workload-manifest.js";
