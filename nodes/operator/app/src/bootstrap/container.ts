@@ -955,6 +955,18 @@ function createContainer(): Container {
       controlHost: env.APP_BASE_URL
         ? new URL(env.APP_BASE_URL).host
         : undefined,
+      // The review KPIs (task.5450): the parent repo and the review App, both from env.
+      review: {
+        repo:
+          env.NODE_SUBMODULE_PARENT_OWNER && env.NODE_SUBMODULE_PARENT_REPO
+            ? {
+                owner: env.NODE_SUBMODULE_PARENT_OWNER,
+                repo: env.NODE_SUBMODULE_PARENT_REPO,
+              }
+            : undefined,
+        appId: env.GH_REVIEW_APP_ID,
+        privateKeyBase64: env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
+      },
       environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
       // Compute receipts and skipped invalid definitions must reach Loki.
       log: (event) => log.info(event, "metric.event"),
