@@ -4,7 +4,8 @@
 /**
  * Module: `@features/node-deploy/fleet-kpis`
  * Purpose: The operator's node-local goal-metric calculators for fleet uptime (task.5457, story.5146):
- *   `fleet.lanes-down@1` (lanes whose deep readyz is not good this tick, or how many were probed),
+ *   `fleet.lanes-down@1` (lanes whose deep readyz is not good this tick, how many were probed, or the
+ *   probed share of declared lanes),
  *   `fleet.substrate-reach@1` (share of known lanes that reach one shared dependency) and
  *   `fleet.uptime@1` (share of stored lane-probes that were good over a window). Registered through
  *   `@cogni-dao/metrics` 0.4 `createGoalMetrics({ nodeCalculators })`.
@@ -25,8 +26,9 @@
  *   - REACH_NEEDS_A_NAMED_LIST: only a 200 (reaches every dependency) or a 503 whose JSON body carries
  *     `unreachable: string[]` is a known reach reading. Every other answer is unknown for reach: excluded
  *     from numerator and denominator, counted. No free-text message parsing.
- *   - UPTIME_IS_STORED_FACTS: uptime = 100 x (1 - sum(down) / sum(probed)) over stored `ok` lanes-down
- *     readings with the `fleet:declared=,probed=,down=` evidence. Gaps stay gaps. Under 24 h of readings is
+ *   - UPTIME_IS_STORED_FACTS: uptime = 100 x (1 - sum(down) / sum(probed)) over stored `ok` SCHEDULED lanes-down
+ *     readings with the `fleet:declared=,probed=,down=` evidence, one per refresh slot. Gaps stay gaps. Under
+ *     24 h of readings, or under half of the window's expected slots (definition cadence, else 300 s), is
  *     `insufficient_history`.
  *   - PERCENT_FLOORS: percents floor to three decimals in integer arithmetic, so rounding never turns a
  *     breach into a pass at a target such as 99.9.
@@ -75,6 +77,10 @@ export type SubstrateDependency = (typeof SUBSTRATE_DEPENDENCIES)[number];
 export const MAX_UPTIME_READINGS = 12_000;
 /** Uptime needs this much recorded history before it speaks. */
 export const MIN_UPTIME_HISTORY_MS = 24 * 3_600_000;
+/** Uptime needs at least this share of the window's expected scheduled readings. */
+export const MIN_UPTIME_COVERAGE = 0.5;
+/** The refresh cadence assumed when the stored definition has none. */
+export const DEFAULT_CADENCE_SECONDS = 300;
 /** Evidence lists at most this many lanes or readings. */
 const MAX_EVIDENCE = 20;
 
@@ -239,13 +245,22 @@ export function createFleetCalculators(
   // ---- fleet.lanes-down: lanes not good this tick, or lanes probed --------------------------
   const lanesDownParams = z.strictObject({
     env: envSchema,
-    output: z.enum(["down", "probed"]),
+    output: z.enum(["down", "probed", "coverage"]),
   });
   const lanesDown: MetricCalculator = {
     id: LANES_DOWN_ID,
     unit: "lanes",
-    displayFor: (params) =>
-      lanesDownParams.parse(params).output === "down" ? "progress" : "volume",
+    // `coverage` is a percent (probed / declared), so it binds as an SLO ("= 100").
+    unitFor: (params) =>
+      lanesDownParams.parse(params).output === "coverage" ? "%" : "lanes",
+    displayFor: (params) => {
+      const { output } = lanesDownParams.parse(params);
+      return output === "down"
+        ? "progress"
+        : output === "coverage"
+          ? "slo"
+          : "volume";
+    },
     paramsSchema: lanesDownParams,
     budget: SNAPSHOT_BUDGET,
     async compute(params, ctx) {
@@ -253,7 +268,8 @@ export function createFleetCalculators(
       const scope: DeliveryScope = { env: p.env };
       const snap = await snapshots.get(scope, ctx);
       const head = [scopeRef(scope)];
-      const early = unjudgeable(snap, "lanes", head);
+      const unit = p.output === "coverage" ? "%" : "lanes";
+      const early = unjudgeable(snap, unit, head);
       if (early) return early;
       const outcomes = snap.lanes.map(({ lane, ready }) => ({
         lane,
@@ -264,14 +280,19 @@ export function createFleetCalculators(
       // Declared but nothing probable: there is no fleet to call up, so "0 down" would be a false pass.
       if (p.output === "down" && probed.length === 0)
         return unknownSample(
-          "lanes",
+          unit,
           "zero_denominator",
           snapshotWatermarks(snap),
           [...head, `fleet:declared=${snap.laneCount},probed=0,down=0`]
         );
       return {
-        value: p.output === "down" ? down.length : probed.length,
-        unit: "lanes",
+        value:
+          p.output === "down"
+            ? down.length
+            : p.output === "probed"
+              ? probed.length
+              : percentFloor3(probed.length, snap.laneCount),
+        unit,
         complete: true,
         sourceWatermarks: [...snapshotWatermarks(snap), probeWatermark(snap)],
         evidenceRefs: [
@@ -391,8 +412,11 @@ export function createFleetCalculators(
       let down = 0;
       let readings = 0;
       let unparseable = 0;
+      let duplicates = 0;
+      let cadenceSeconds: number | undefined;
       let first: Date | undefined;
       let last: Date | undefined;
+      const slots = new Set<number>();
       const worst: string[] = [];
       for (const r of read.rows) {
         const c = parseLaneCounts(r.evidence);
@@ -400,6 +424,14 @@ export function createFleetCalculators(
           unparseable++;
           continue;
         }
+        // One reading per refresh slot: a second definition or a retry of a slot never counts twice.
+        if (slots.has(r.scheduledFor.getTime())) {
+          duplicates++;
+          continue;
+        }
+        slots.add(r.scheduledFor.getTime());
+        if (r.cadenceSeconds && r.cadenceSeconds > 0)
+          cadenceSeconds = r.cadenceSeconds;
         readings++;
         probed += c.probed;
         down += c.down;
@@ -409,9 +441,14 @@ export function createFleetCalculators(
           worst.push(`obs:${r.observationId}:down=${c.down}/${c.probed}`);
       }
       const history = first ? to.getTime() - first.getTime() : 0;
+      const cadence = cadenceSeconds ?? DEFAULT_CADENCE_SECONDS;
+      const expected = Math.floor(
+        (to.getTime() - from.getTime()) / (cadence * 1000)
+      );
       const evidence = [
         ...head,
         `fleet:readings=${readings},probed=${probed},down=${down},unparseable=${unparseable}`,
+        `fleet:slots=${readings},expected=${expected},cadence_seconds=${cadence},duplicates=${duplicates}`,
         ...(first && last
           ? [
               `fleet:first=${first.toISOString()},last=${last.toISOString()},history_hours=${Math.floor(history / 3_600_000)}`,
@@ -423,6 +460,12 @@ export function createFleetCalculators(
         return unknownSample("%", "insufficient_history", watermarks, [
           ...evidence,
           "fleet:min_history_hours=24",
+        ]);
+      // A window with most of its slots missing would read a few probes as the whole week.
+      if (readings < expected * MIN_UPTIME_COVERAGE)
+        return unknownSample("%", "insufficient_history", watermarks, [
+          ...evidence,
+          `fleet:min_coverage=${MIN_UPTIME_COVERAGE}`,
         ]);
       if (probed === 0)
         return unknownSample("%", "zero_denominator", watermarks, evidence);

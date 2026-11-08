@@ -10,6 +10,8 @@
  * Invariants:
  *   - READ_ONLY: stored readings are immutable facts; this port never writes, refreshes or backfills one.
  *   - OK_ONLY: only readings with status `ok` are returned. A gap stays a gap; it is never filled.
+ *   - SCHEDULED_ONLY: only readings computed on the refresh grid (a `scheduled_for` slot) are returned. An
+ *     on-demand compute is off-grid and would add lane-probes that no tick owns.
  *   - BOUNDED: the read takes `maxRows` and reports `truncated` instead of dropping rows.
  * Side-effects: none
  * Links: features/node-deploy/fleet-kpis.ts, task.5457
@@ -22,6 +24,10 @@ export interface FleetLanesDownReading {
   readonly observationId: string;
   /** The evaluation instant of the reading (end of its window). */
   readonly at: Date;
+  /** The refresh slot the reading belongs to. One slot is one tick of the grid. */
+  readonly scheduledFor: Date;
+  /** The stored definition's `cadenceSeconds`, when it has one. */
+  readonly cadenceSeconds: number | undefined;
   /** The reading's `fleet:declared=…,probed=…,down=…` evidence line, parsed by the calculator. */
   readonly evidence: string;
 }

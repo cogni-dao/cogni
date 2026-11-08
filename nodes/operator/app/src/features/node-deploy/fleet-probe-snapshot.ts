@@ -16,6 +16,8 @@
  *     unverified is evicted, so the next caller probes again instead of inheriting the failure.
  *   - EGRESS_CONTROL: the operator's own public `/livez` is probed first. If it fails, no lane is probed and
  *     the snapshot says `egressUnverified`, so no calculator turns an operator-side outage into lane verdicts.
+ *   - LANE_PROBE_ERROR_IS_A_LANE_RESULT: a probe that throws for a lane while the caller is still live is
+ *     that lane's `unreachable/network`, never a failure of the whole snapshot. A caller abort still throws.
  *   - LANES_ARE_ALL_PROBED: every lane read is probed (its active-attempt state is the calculator's concern),
  *     so lanes-down sees lanes that drift skips.
  *   - UNKNOWN_IS_A_RESULT: truncated and empty lane reads are recorded as such, never as zero bad lanes.
@@ -154,24 +156,39 @@ export function createFleetProbeSnapshots(
       };
     const lanes = await Promise.all(
       read.lanes.map(async (lane): Promise<ProbedLane> => {
-        // A probe that cannot run (budget, abort) throws: the whole snapshot fails and is not cached.
+        // A caller abort or an exhausted budget throws out of `ctx.read` or the probe: the whole snapshot fails
+        // and is not cached. Any other probe error belongs to this lane only.
+        const laneProbe = async (
+          path: string,
+          signal: AbortSignal,
+          maxBytes: number
+        ): Promise<DeliveryProbeResult> => {
+          try {
+            return await source.probe({
+              host: lane.host,
+              path,
+              timeoutMs: PROBE_TIMEOUT_MS,
+              maxBytes,
+              signal,
+            });
+          } catch (error) {
+            if (signal.aborted) throw error;
+            return { kind: "unreachable", code: "network" };
+          }
+        };
         const [version, ready] = await ctx.read((signal, budget) =>
           Promise.all([
-            source.probe({
-              host: lane.host,
-              // Cache-buster: an edge-cached /version body could hide drift.
-              path: withQuery(lane.versionPath, `cb=${takenAtMs}`),
-              timeoutMs: PROBE_TIMEOUT_MS,
-              maxBytes: budget.maxResponseBytes,
+            // Cache-buster: an edge-cached /version body could hide drift.
+            laneProbe(
+              withQuery(lane.versionPath, `cb=${takenAtMs}`),
               signal,
-            }),
-            source.probe({
-              host: lane.host,
-              path: withQuery(lane.readyPath, "deep=1"),
-              timeoutMs: PROBE_TIMEOUT_MS,
-              maxBytes: budget.maxResponseBytes,
+              budget.maxResponseBytes
+            ),
+            laneProbe(
+              withQuery(lane.readyPath, "deep=1"),
               signal,
-            }),
+              budget.maxResponseBytes
+            ),
           ])
         );
         return { lane, version, ready };

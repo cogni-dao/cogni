@@ -171,7 +171,10 @@ async function run(
   return calc.compute(calc.paramsSchema.parse(params), ctx);
 }
 
-const lanesDown = (output: "down" | "probed" = "down", env = "production") => ({
+const lanesDown = (
+  output: "down" | "probed" | "coverage" = "down",
+  env = "production"
+) => ({
   env,
   output,
 });
@@ -215,6 +218,59 @@ describe(LANES_DOWN_ID, () => {
     );
     const s = await run(calcs, LANES_DOWN_ID, lanesDown("probed"));
     expect(s).toMatchObject({ complete: true, unit: "lanes", value: 3 });
+  });
+  it("output coverage is the probed share of declared lanes, floored, in % (binds as = 100)", async () => {
+    const all = await run(
+      fleet(source({ lanes: [lane("a"), lane("b")] })).calcs,
+      LANES_DOWN_ID,
+      lanesDown("coverage")
+    );
+    expect(all).toMatchObject({ complete: true, unit: "%", value: 100 });
+    // One of three declared hosts cannot be probed: 2 of 3 = 66.666, floored, never rounded up.
+    const partial = await run(
+      fleet(
+        source({
+          lanes: [lane("a"), lane("b"), lane("c", { host: "10.0.0.1" })],
+          ready: {
+            "10.0.0.1": { kind: "unreachable", code: "invalid_target" },
+          },
+        })
+      ).calcs,
+      LANES_DOWN_ID,
+      lanesDown("coverage")
+    );
+    expect(partial).toMatchObject({ complete: true, unit: "%", value: 66.666 });
+    // Nothing probable is a real 0 coverage (down and probed would be unknown or 0 lanes).
+    const none = await run(
+      fleet(
+        source({
+          lanes: [lane("c", { host: "10.0.0.1" })],
+          ready: {
+            "10.0.0.1": { kind: "unreachable", code: "invalid_target" },
+          },
+        })
+      ).calcs,
+      LANES_DOWN_ID,
+      lanesDown("coverage")
+    );
+    expect(none).toMatchObject({ complete: true, unit: "%", value: 0 });
+    // Same unjudgeable rules: a failing control is unavailable, in the percent unit.
+    const egress = await run(
+      fleet(source({ lanes: [lane("a")], control: timeout })).calcs,
+      LANES_DOWN_ID,
+      lanesDown("coverage")
+    );
+    expect(egress).toMatchObject({
+      complete: false,
+      unit: "%",
+      reason: "source_failed",
+    });
+    const calc = fleet(source({})).calcs.find(
+      (c) => c.id === LANES_DOWN_ID
+    ) as MetricCalculator;
+    expect(calc.unitFor?.(lanesDown("coverage"))).toBe("%");
+    expect(calc.displayFor?.(lanesDown("coverage"))).toBe("slo");
+    expect(calc.unitFor?.(lanesDown("down"))).toBe("lanes");
   });
   it("a 503 and a timeout are down with bounded per-lane reasons; the rest are up", async () => {
     const { calcs } = fleet(
@@ -495,10 +551,13 @@ describe(UPTIME_ID, () => {
   const reading = (
     i: number,
     counts: { declared?: number; probed?: number; down?: number },
-    atMs: number
+    atMs: number,
+    scheduledMs = atMs
   ): FleetLanesDownReading => ({
     observationId: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
     at: new Date(atMs),
+    scheduledFor: new Date(scheduledMs),
+    cadenceSeconds: 300,
     evidence: `fleet:declared=${counts.declared ?? 7},probed=${counts.probed ?? 7},down=${counts.down ?? 0}`,
   });
 
@@ -567,16 +626,74 @@ describe(UPTIME_ID, () => {
       reason: "insufficient_history",
     });
   });
-  it("exactly 24 h of history is enough", async () => {
-    const day = [
-      reading(1, { down: 1 }, NOW - 24 * HOUR),
-      reading(2, {}, NOW - 12 * HOUR),
-    ];
+  it("exactly 24 h of history is enough when the day's slots are all there", async () => {
+    // A 1-day window: 288 five-minute slots, the first with 1 of 7 lanes down.
+    const day = Array.from({ length: 288 }, (_, i) =>
+      reading(i, { down: i === 0 ? 1 : 0 }, NOW - 24 * HOUR + i * 5 * MIN)
+    );
     const s = await run(fleet(source({}), observations(day)).calcs, UPTIME_ID, {
       env: "production",
+      days: 1,
     });
-    // 1 down of 14 lane-probes.
-    expect(s).toMatchObject({ complete: true, value: 92.857 });
+    // 1 down of 2,016 lane-probes.
+    expect(s).toMatchObject({ complete: true, value: 99.95 });
+  });
+  it("a second reading of one refresh slot is ignored: one tick counts once", async () => {
+    const rows = [
+      ...replay(0),
+      // Same slot as the first reading, with every lane down: must not count.
+      reading(77777, { down: 7 }, NOW - 7 * DAY + 1000, NOW - 7 * DAY),
+    ];
+    const s = await run(
+      fleet(source({}), observations(rows)).calcs,
+      UPTIME_ID,
+      {
+        env: "production",
+      }
+    );
+    expect(s).toMatchObject({ complete: true, value: 100 });
+    expect(s.evidenceRefs).toContain(
+      "fleet:slots=2016,expected=2016,cadence_seconds=300,duplicates=1"
+    );
+  });
+  it("under half of the window's expected scheduled readings is insufficient_history; exactly half is enough", async () => {
+    // 7 days at 300 s expect 2,016 slots. The readings span the whole window (history >= 24 h) but are sparse.
+    const sparse = (n: number) =>
+      Array.from({ length: n }, (_, i) =>
+        reading(i, { down: 7 }, NOW - 7 * DAY + (i * 7 * DAY) / n)
+      );
+    const low = await run(
+      fleet(source({}), observations(sparse(1007))).calcs,
+      UPTIME_ID,
+      { env: "production", days: 7 }
+    );
+    expect(low).toMatchObject({
+      complete: false,
+      reason: "insufficient_history",
+    });
+    expect(low.evidenceRefs).toContain("fleet:min_coverage=0.5");
+    const half = await run(
+      fleet(source({}), observations(sparse(1008))).calcs,
+      UPTIME_ID,
+      { env: "production", days: 7 }
+    );
+    expect(half).toMatchObject({ complete: true, value: 0 });
+  });
+  it("uses the stored definition's cadence for the expected slots", async () => {
+    // 1-minute cadence expects 1,440 slots a day: 288 five-minute readings are 20%, not enough.
+    const rows = Array.from({ length: 288 }, (_, i) => ({
+      ...reading(i, {}, NOW - 24 * HOUR + i * 5 * MIN),
+      cadenceSeconds: 60,
+    }));
+    await expect(
+      run(fleet(source({}), observations(rows)).calcs, UPTIME_ID, {
+        env: "production",
+        days: 1,
+      })
+    ).resolves.toMatchObject({
+      complete: false,
+      reason: "insufficient_history",
+    });
   });
   it("a truncated read is unknown; unparseable readings are skipped and counted, never zero-filled", async () => {
     await expect(
@@ -604,13 +721,13 @@ describe(UPTIME_ID, () => {
     );
   });
   it("readings with nothing probed are unknown, not 100", async () => {
-    const rows = [
-      reading(1, { probed: 0, down: 0 }, NOW - 30 * HOUR),
-      reading(2, { probed: 0, down: 0 }, NOW - 1 * HOUR),
-    ];
+    const rows = Array.from({ length: 288 }, (_, i) =>
+      reading(i, { probed: 0, down: 0 }, NOW - 24 * HOUR + i * 5 * MIN)
+    );
     await expect(
       run(fleet(source({}), observations(rows)).calcs, UPTIME_ID, {
         env: "production",
+        days: 1,
       })
     ).resolves.toMatchObject({ complete: false, reason: "zero_denominator" });
   });
@@ -681,6 +798,58 @@ describe("the shared per-tick probe snapshot", () => {
     at += 2_000;
     await run(calcs, LANES_DOWN_ID, lanesDown());
     expect(src.laneReads).toBe(2);
+  });
+  it("a probe error on one lane is that lane's result; drift and lanes-down still read", async () => {
+    const lanes = [lane("a"), lane("b")];
+    const src = source({ lanes });
+    const base = src.probe;
+    src.probe = async (input) => {
+      if (input.host === "b.cognidao.org") throw new Error("boom");
+      return base(input);
+    };
+    const { calcs, drift } = fleet(src);
+    const down = await run(calcs, LANES_DOWN_ID, lanesDown());
+    expect(down).toMatchObject({ complete: true, value: 1 });
+    expect(down.evidenceRefs).toContain(
+      `lane:${NODE}/production/b:unreachable/network`
+    );
+    const driftCalc = drift().find(
+      (c) => c.id === SERVING_DRIFT_ID
+    ) as MetricCalculator;
+    const d = await run([driftCalc], SERVING_DRIFT_ID, { env: "production" });
+    expect(d).toMatchObject({ complete: true, value: 1 });
+    expect(d.evidenceRefs).toContain(
+      `lane:${NODE}/production/b:unreachable/network`
+    );
+  });
+  it("a caller abort still fails the whole snapshot", async () => {
+    const src = source({ lanes: [lane("a")] });
+    const base = src.probe;
+    const controller = new AbortController();
+    src.probe = async (input) => {
+      if (input.host === "a.cognidao.org") {
+        controller.abort();
+        throw new Error("aborted");
+      }
+      return base(input);
+    };
+    const { snapshots } = fleet(src);
+    const calc = createFleetCalculators({
+      snapshots,
+      observations: observations([]),
+    }).find((c) => c.id === LANES_DOWN_ID) as MetricCalculator;
+    const ctx: CalculatorContext = {
+      window: {
+        start: new Date(NOW).toISOString(),
+        end: new Date(NOW).toISOString(),
+      },
+      signal: controller.signal,
+      budget: calc.budget,
+      read: (fn) => fn(controller.signal, calc.budget),
+    };
+    await expect(
+      calc.compute(calc.paramsSchema.parse(lanesDown()), ctx)
+    ).rejects.toThrow("aborted");
   });
   it("a failed build and an unverified egress are not cached", async () => {
     const src = source({ lanes: [lane("a")] });

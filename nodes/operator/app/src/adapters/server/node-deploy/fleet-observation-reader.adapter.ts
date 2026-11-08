@@ -12,6 +12,8 @@
  *   - OWN_SCOPE_ONLY: rows are filtered by the scope prefix `<node>/<environment>/`, so one environment never
  *     reads another's readings.
  *   - OK_ONLY: only `status = 'ok'` rows reach the caller; error/unavailable/pending are gaps.
+ *   - SCHEDULED_ONLY: only rows with a `scheduled_for` slot (computed by the refresh grid) reach the caller;
+ *     an on-demand compute has none and is ignored.
  *   - BOUNDED: `LIMIT maxRows + 1` (the extra row reports `truncated`); cancelled when the signal aborts.
  *   - IDENTITY_FROM_STORED_DEFINITION: a reading is a lanes-down reading for `env` when its stored calculator
  *     version is `fleet.lanes-down@1` and its stored definition params are `{env, output: "down"}`.
@@ -47,7 +49,8 @@ export class FleetObservationReader implements FleetObservationReaderPort {
     const s = this.sql;
     const rows = await cancellable(
       s`
-        SELECT o.id, o.evaluation_at, ev.ref AS evidence
+        SELECT o.id, o.evaluation_at, o.scheduled_for,
+          o.snapshot -> 'spec' ->> 'cadenceSeconds' AS cadence_seconds, ev.ref AS evidence
         FROM metric_observations o
         CROSS JOIN LATERAL (
           SELECT e.ref
@@ -60,6 +63,7 @@ export class FleetObservationReader implements FleetObservationReaderPort {
         ) ev
         WHERE starts_with(o.scope, ${this.scopePrefix})
           AND o.status = 'ok'
+          AND o.scheduled_for IS NOT NULL
           AND o.observation ->> 'calculatorVersion' = ${LANES_DOWN_CALCULATOR}
           AND o.snapshot -> 'spec' -> 'params' ->> 'env' = ${input.env}
           AND o.snapshot -> 'spec' -> 'params' ->> 'output' = 'down'
@@ -74,6 +78,9 @@ export class FleetObservationReader implements FleetObservationReaderPort {
       rows: rows.slice(0, input.maxRows).map((r) => ({
         observationId: String(r.id),
         at: new Date(r.evaluation_at as string | Date),
+        scheduledFor: new Date(r.scheduled_for as string | Date),
+        cadenceSeconds:
+          r.cadence_seconds == null ? undefined : Number(r.cadence_seconds),
         evidence: String(r.evidence),
       })),
       truncated: rows.length > input.maxRows,
