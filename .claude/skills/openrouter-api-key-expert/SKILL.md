@@ -5,7 +5,7 @@ description: "End-to-end OpenRouter key + spend + outage playbook for Cogni. Use
 
 # OpenRouter API Key Expert
 
-Route design work through [operator-architect](https://cognidao.org/knowledge/operator-architect) first; this skill adds the OpenRouter key and spend rules on top of it.
+Route the work through [operator-architect](https://cognidao.org/knowledge/operator-architect) first; this skill adds the OpenRouter key and spend rules on top of it.
 
 The playbook for OpenRouter spend investigation, leak/compromise response, outage diagnosis, and fleet key rotation. Battle-tested in the 2026-08-27→31 incident (leaked prod key `cogni-template-prod-2` drained the account **twice** via direct off-infra opus-4.8 abuse → two prod AI outages). Read this BEFORE touching a key.
 

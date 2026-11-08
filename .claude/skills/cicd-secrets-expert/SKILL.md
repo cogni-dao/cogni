@@ -5,7 +5,7 @@ description: "Secrets architecture reference for node-template — when to use O
 
 # CI/CD Secrets Expert
 
-Route design work through [operator-architect](https://cognidao.org/knowledge/operator-architect) first; this skill adds the secrets architecture rules on top of it.
+Route the work through [operator-architect](https://cognidao.org/knowledge/operator-architect) first; this skill adds the secrets architecture rules on top of it.
 
 One-page reference for anyone touching secrets in node-template. Read this BEFORE the spec; this points at what to actually read.
 
