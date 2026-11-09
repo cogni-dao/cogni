@@ -16,10 +16,14 @@
  * @public
  */
 
-import { DomainNotRegisteredError as SharedDomainNotRegisteredError } from "@cogni/shared-knowledge-store";
+import {
+  type KnowledgeHistoryEntry,
+  DomainNotRegisteredError as SharedDomainNotRegisteredError,
+} from "@cogni/shared-knowledge-store";
 import {
   deleteDoltgresDomain,
   getDoltgresDomain,
+  queryKnowledgeHistory,
   updateDoltgresDomain,
 } from "@cogni/shared-knowledge-store/adapters/doltgres";
 
@@ -881,6 +885,14 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
 
   async commit(_message: string): Promise<string> {
     throw new KnowledgeWriteScopeRequiredError();
+  }
+
+  /**
+   * Versions of one entry, newest first, with their change reasons (story.0023).
+   * The query lives in the pinned shared package; the operator copies none of it.
+   */
+  async history(id: string): Promise<KnowledgeHistoryEntry[]> {
+    return queryKnowledgeHistory(this.sql, id);
   }
 
   async log(limit?: number): Promise<DoltCommit[]> {

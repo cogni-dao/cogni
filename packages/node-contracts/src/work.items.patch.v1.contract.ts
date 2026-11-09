@@ -19,11 +19,14 @@
  *   - OPTIONAL_CAS: top-level `expectedRevision` (the item's `revision` as read) is compare-and-set —
  *     the write lands only if the row is still at that revision, else 409 `revision_conflict` and
  *     nothing is written. Omitted ⇒ unconditioned patch (unchanged). No transition state-machine.
+ *   - OPTIONAL_REASON: top-level `reason` is one line (CR/LF become spaces), 1-512 chars, stored in Dolt
+ *     history and read back at GET /api/v1/work/items/{id}/history, never in the item (task.0052, story.0023).
  * Side-effects: none
  * Links: /api/v1/work/items/[id] route, docs/spec/work-items-port.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
  */
 
+import { ChangeReasonSchema } from "@cogni/work-items";
 import { z } from "zod";
 
 import {
@@ -53,10 +56,12 @@ export const workItemsPatchOperation = {
     "fields only; id (path), created_at, updated_at are server-managed. Optional top-level " +
     "`expectedRevision` (integer, the item's `revision` as read) makes the write " +
     "compare-and-set: a moved row answers 409 errorCode `revision_conflict` with " +
-    "`currentRevision` and nothing is written.",
+    "`currentRevision` and nothing is written. Optional `reason` (one line, 1-512 chars) says why; " +
+    "it is stored in history (GET /api/v1/work/items/{id}/history), not in the item.",
   input: z.strictObject({
     id: z.string(),
     expectedRevision: z.number().int().min(0).optional(),
+    reason: ChangeReasonSchema.optional(),
     set: z
       .strictObject({
         title: z.string().min(1).max(500).optional(),

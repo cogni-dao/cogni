@@ -494,6 +494,7 @@ export async function patchWorkItem(
           expectedRevision: input.expectedRevision,
         }),
         set: dropUndefined(input.set),
+        ...(input.reason !== undefined && { reason: input.reason }),
       },
       authorTagFromSession(sessionUser)
     );
