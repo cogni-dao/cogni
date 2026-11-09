@@ -37,6 +37,7 @@ evidence + repo-spec/owning-node context, and GitHub App installation tokens.
 - **Exports:**
   - `createInstallationOctokit(installationId, appId, privateKeyBase64)` — JWT sign → installation token → authenticated Octokit (`github-auth.ts`)
   - `createGithubReviewAdapter({ appId, privateKeyBase64, logger, buildSha? })` → `{ createCheckRun, updateCheckRun, postPrComment, fetchPrContext, resolvePullRequest }` (`github-review.adapter.ts`). story.5102: `resolvePullRequest` pins head/base SHAs for `POST /api/v1/vcs/review`; `createCheckRun` writes `external_id`; `fetchPrContext` reads config at the pinned base and reports `headMoved`; default model `deepseek-v4-flash`.
+  - `readQueueVerdictInputs` / `writeQueueVerdict` (task.5438): read the PR head's `Cogni Git PR Review` runs (all Apps; the pure decision in `features/review/queue-verdict.ts` filters by `GH_REVIEW_APP_ID`) and write the completed same-named check on a merge-queue commit. Driven by `app/_facades/review/queue-verdict.server.ts` from the webhook `push`.
 - **Env/Config keys:** `GH_REVIEW_APP_ID`, `GH_REVIEW_APP_PRIVATE_KEY_BASE64` (via serverEnv)
 
 ## Ports

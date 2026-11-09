@@ -36,6 +36,11 @@ vi.mock("@/adapters/server/review/github-auth", () => ({
   }),
 }));
 
+// App-JWT mint for the installation lookup (task.5438); the lookup itself is a stubbed `fetch`.
+vi.mock("@octokit/auth-app", () => ({
+  createAppAuth: () => async () => ({ token: "app-jwt" }),
+}));
+
 import { createGithubReviewAdapter } from "@/adapters/server/review/github-review.adapter";
 
 const mockLogger = {
@@ -379,5 +384,107 @@ describe("repo-spec absence is 404 only (story.5102 review fix)", () => {
     await expect(makeAdapter().fetchPrContext(target)).rejects.toThrow(
       "repo-spec read failed"
     );
+  });
+});
+
+describe("task.5438 — merge-queue verdict I/O", () => {
+  const headSha = "a".repeat(40);
+  const queueSha = "b".repeat(40);
+  const runOf = (
+    id: number,
+    appId: number,
+    conclusion: string | null,
+    status = "completed"
+  ) => ({
+    id,
+    name: "Cogni Git PR Review",
+    app: { id: appId },
+    status,
+    conclusion,
+    html_url: `https://example.test/runs/${id}`,
+  });
+  const stubInstallation = () =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => ({ id: 99 }) }))
+    );
+  const readTarget = {
+    owner: "org",
+    repo: "repo",
+    prNumber: 12,
+    queueSha,
+  };
+
+  it("reads the PR head, its review runs, and whether the App already wrote the queue verdict", async () => {
+    stubInstallation();
+    try {
+      routeHandlers = {
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+          head: { sha: headSha },
+        }),
+        "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": (params) =>
+          (params as { ref: string }).ref === headSha
+            ? { check_runs: [runOf(5, 1, "success"), runOf(6, 777, "failure")] }
+            : { check_runs: [runOf(9, 1, "success")] },
+      };
+      const inputs = await makeAdapter().readQueueVerdictInputs(readTarget);
+      expect(inputs.installationId).toBe(99);
+      expect(inputs.headSha).toBe(headSha);
+      expect(inputs.headRuns.map((r) => [r.id, r.appId, r.conclusion])).toEqual(
+        [
+          [5, 1, "success"],
+          [6, 777, "failure"],
+        ]
+      );
+      // appId "1" wrote a completed run on the queue commit, so a redelivery is a no-op.
+      expect(inputs.queueHasVerdict).toBe(true);
+      const listed = requests.filter((r) => r.route.includes("check-runs"));
+      expect(listed[0]?.params).toMatchObject({
+        check_name: "Cogni Git PR Review",
+        filter: "all",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not treat a foreign App's run on the queue commit as already written", async () => {
+    stubInstallation();
+    try {
+      routeHandlers = {
+        "GET /repos/{owner}/{repo}/pulls/{pull_number}": () => ({
+          head: { sha: headSha },
+        }),
+        "GET /repos/{owner}/{repo}/commits/{ref}/check-runs": (params) =>
+          (params as { ref: string }).ref === headSha
+            ? { check_runs: [] }
+            : { check_runs: [runOf(9, 777, "success")] },
+      };
+      const inputs = await makeAdapter().readQueueVerdictInputs(readTarget);
+      expect(inputs.queueHasVerdict).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("writes a completed, same-named check run on the queue commit", async () => {
+    routeHandlers = {
+      "POST /repos/{owner}/{repo}/check-runs": () => ({ id: 41 }),
+    };
+    const id = await makeAdapter().writeQueueVerdict({
+      installationId: 99,
+      owner: "org",
+      repo: "repo",
+      queueSha,
+      verdict: { conclusion: "failure", title: "t", summary: "s" },
+    });
+    expect(id).toBe(41);
+    expect(requests[0]?.params).toMatchObject({
+      name: "Cogni Git PR Review",
+      head_sha: queueSha,
+      status: "completed",
+      conclusion: "failure",
+      output: { title: "t", summary: "s" },
+    });
   });
 });

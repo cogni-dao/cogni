@@ -18,6 +18,7 @@
 
 import { NextResponse } from "next/server";
 import { dispatchNodePreviewPromote } from "@/app/_facades/deploy/node-preview-promote.server";
+import { dispatchQueueReviewVerdict } from "@/app/_facades/review/queue-verdict.server";
 import {
   getContainer,
   resolveAttributionProfileResolver,
@@ -308,6 +309,9 @@ export async function POST(
       // pull_request closed/merged delivery for a queued merge (Poly #65); the canonical main
       // advance still identifies the exact on-main SHA.
       await dispatchNodePreviewPromote(verified.payload, env, log);
+      // A merge-queue branch push carries the PR head's review verdict onto the queue commit, so
+      // the review can be a GitHub-required check (task.5438). Ignores every other push.
+      await dispatchQueueReviewVerdict(verified.payload, env, log);
     }
 
     if (source === "alchemy") {

@@ -22,6 +22,9 @@ export const EVENT_NAMES = {
   NODE_ACCESS_REQUEST_COMPLETE: "feature.node_access_request.complete",
   NODE_SECRET_WRITE_COMPLETE: "feature.node_secret_write.complete",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
+  // Merge-queue push → head review verdict copied onto the queue commit (task.5438). One event per
+  // handled queue push; `outcome` is copied_success | copied_failure | not_reviewed | skipped_exists | error.
+  REVIEW_QUEUE_VERDICT_COMPLETE: "feature.review_queue_verdict.complete",
   // Env-membership merge → lane reconcile (task.5132). One terminal event per merged
   // `cogni-operator/node-env-<slug>-<env>` PR, including the no-dispatch outcomes. Adding a
   // PRE-PROD lane can dispatch a PRODUCTION promote (the custodian owns the lane's substrate),

@@ -12,8 +12,15 @@
     "never drain.",
     "",
     "Apply: see infra/github/setup-main-branch.sh.",
-    "Spec: docs/spec/node-ci-cd-contract.md#repo-setup-fixture."
+    "Spec: docs/spec/node-ci-cd-contract.md#repo-setup-fixture.",
+    "",
+    "`_operator_only_required_checks` is NOT part of the node-shape fixture: the apply script adds it",
+    "only for the operator repo (COGNI_REQUIRE_PR_REVIEW=1 + COGNI_REVIEW_APP_ID) and pins each entry to",
+    "the review App's integration id. It satisfies (a)+(b) above through the operator webhook, which",
+    "copies the PR head's review verdict onto the merge-queue commit (task.5438). Node repos cannot",
+    "request reviews yet (task.5448), so they MUST NOT require it."
   ],
+  "_operator_only_required_checks": [{ "context": "Cogni Git PR Review" }],
   "required_status_checks": {
     "strict": false,
     "contexts": ["unit", "component", "static", "manifest"]
