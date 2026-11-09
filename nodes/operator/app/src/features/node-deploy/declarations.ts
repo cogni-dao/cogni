@@ -377,8 +377,15 @@ export function generatedSecretRecipes(input: {
     ...(input.spec.companions ?? []).flatMap((c) => c.secretKeys ?? []),
   ]);
   const out: Record<string, { kind: "hex" | "base64"; bytes: number }> = {};
+  // Only an entry that PROJECTS the key (non-empty `workloads`) may generate it: that is the entry
+  // `checkSecretsCatalog` proved node-owned. A profile key the catalog merely names never qualifies.
   for (const e of catalog)
-    if (e.source === "agent" && e.generate && wanted.has(e.name))
+    if (
+      e.source === "agent" &&
+      e.generate &&
+      e.workloads.length > 0 &&
+      wanted.has(e.name)
+    )
       out[e.name] = { kind: e.generate.kind, bytes: e.generate.bytes };
   return out;
 }
@@ -404,8 +411,9 @@ function checkSecretsCatalog(
       throw new DeclarationError("secrets_catalog_refused", error.message);
     throw error;
   }
+  // A projected entry, or any generated (`source: agent`) entry, must name a node-owned key.
   const refused = catalog
-    .filter((e) => e.workloads.length > 0)
+    .filter((e) => e.workloads.length > 0 || e.source === "agent")
     .map((e) => e.name)
     .filter(
       (k) =>
@@ -416,7 +424,7 @@ function checkSecretsCatalog(
   if (refused.length > 0)
     throw new DeclarationError(
       "secrets_catalog_refused",
-      `catalog workloads may name only node-owned keys; refused: ${refused.join(", ")}`
+      `a projected or generated catalog entry may name only node-owned keys; refused: ${refused.join(", ")}`
     );
   return catalog;
 }

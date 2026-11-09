@@ -33,6 +33,7 @@ import type {
   DatabaseDsnSecretsWriteResult,
   EnsureGeneratedKeysInput,
   EnsureGeneratedKeysResult,
+  GeneratedSecretRecipe,
   OperatorSecretsPlanePort,
   SecretWriteOp,
   WriteNodeSecretInput,
@@ -197,8 +198,7 @@ export class OpenBaoSecretsAdapter
         return { generated: [], version: current?.version ?? 0 };
       const values: Record<string, string> = {};
       for (const key of missing) {
-        const recipe = input.recipes[key];
-        if (!recipe) continue;
+        const recipe = input.recipes[key] as GeneratedSecretRecipe;
         values[key] = randomBytes(recipe.bytes).toString(recipe.kind);
       }
       try {
@@ -217,7 +217,12 @@ export class OpenBaoSecretsAdapter
     throw httpError("openbao_cas_conflict_exhausted", 409);
   }
 
-  /** Key names + version of a bucket; `null` when it does not exist. Values are dropped here. */
+  /**
+   * Key names + version of a bucket; `null` when it does not exist. Values are dropped here. Any present
+   * key counts, even an empty one, so a value is never overwritten. Known limit: a soft-deleted latest
+   * version also reads 404, and `cas: 0` then conflicts, so the call fails closed (503) until an
+   * operator undeletes or destroys that version.
+   */
   private async readKeyNames(
     token: string,
     dataPath: string
@@ -232,11 +237,7 @@ export class OpenBaoSecretsAdapter
     const version = body.data?.metadata?.version;
     if (!Number.isSafeInteger(version) || (version ?? 0) < 1)
       throw httpError("openbao_read_invalid_version", res.status);
-    const keys = new Set(
-      Object.entries(body.data?.data ?? {})
-        .filter(([, v]) => typeof v === "string" && v.length > 0)
-        .map(([k]) => k)
-    );
+    const keys = new Set(Object.keys(body.data?.data ?? {}));
     return { version: version as number, keys };
   }
 

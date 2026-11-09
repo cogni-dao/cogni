@@ -254,43 +254,69 @@ export async function recordNodeRelease(
     nodeSlug: node.slug,
     spec,
   });
-  if (
-    Object.keys(recipes).length > 0 &&
-    node.slug !== "operator" &&
-    canWriteSecretsLane(
-      envConfig.DEPLOY_ENVIRONMENT ?? "",
-      env,
-      envConfig.FLEET_CONTROL_ENV
-    ) &&
-    (await input.mayGenerateSecrets?.()) === true
-  ) {
+  const skipReason =
+    Object.keys(recipes).length === 0
+      ? undefined
+      : node.slug === "operator"
+        ? "operator_bucket"
+        : !canWriteSecretsLane(
+              envConfig.DEPLOY_ENVIRONMENT ?? "",
+              env,
+              envConfig.FLEET_CONTROL_ENV
+            )
+          ? "lane_not_custodied"
+          : (await input.mayGenerateSecrets?.()) !== true
+            ? "caller_lacks_manage_secrets"
+            : undefined;
+  if (skipReason)
+    // The release still records; the sequencer waits on `missing_keys` until a value exists.
+    log.info(
+      {
+        event: EVENT_NAMES.NODE_DEPLOY_SECRET_GENERATION,
+        reqId: input.reqId,
+        nodeId: node.id,
+        env,
+        workload,
+        keys: Object.keys(recipes),
+        outcome: "skipped",
+        reason: skipReason,
+      },
+      EVENT_NAMES.NODE_DEPLOY_SECRET_GENERATION
+    );
+  else if (Object.keys(recipes).length > 0) {
     try {
       const result = await createOperatorSecretsPlane(
         envConfig
       ).ensureGeneratedKeys({ env, nodeSlug: node.slug, recipes });
-      if (result.generated.length > 0)
-        log.info(
-          {
-            event: EVENT_NAMES.NODE_DEPLOY_SECRET_GENERATED,
-            reqId: input.reqId,
-            nodeId: node.id,
-            env,
-            workload,
-            keys: result.generated,
-            version: result.version,
-          },
-          EVENT_NAMES.NODE_DEPLOY_SECRET_GENERATED
-        );
-    } catch (error) {
-      log.warn(
+      log.info(
         {
+          event: EVENT_NAMES.NODE_DEPLOY_SECRET_GENERATION,
           reqId: input.reqId,
           nodeId: node.id,
           env,
+          workload,
+          keys:
+            result.generated.length > 0
+              ? result.generated
+              : Object.keys(recipes),
+          version: result.version,
+          outcome: result.generated.length > 0 ? "generated" : "present",
+        },
+        EVENT_NAMES.NODE_DEPLOY_SECRET_GENERATION
+      );
+    } catch (error) {
+      log.warn(
+        {
+          event: EVENT_NAMES.NODE_DEPLOY_SECRET_GENERATION,
+          reqId: input.reqId,
+          nodeId: node.id,
+          env,
+          workload,
           keys: Object.keys(recipes),
+          outcome: "failed",
           code: (error as { code?: unknown })?.code ?? "unknown",
         },
-        "node-deploy secret generation failed"
+        EVENT_NAMES.NODE_DEPLOY_SECRET_GENERATION
       );
       return refused(503, { error: "secret_generation_failed" });
     }
