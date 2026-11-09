@@ -8,8 +8,10 @@
  *   (`deploy.serving-drift@1`, `deploy.release-success@1`, `deploy.first-try@1`, `deploy.lead-time@1`, task.5442, bug.5617) over the
  *   node-deploy release store, fleet uptime (`fleet.lanes-down@1`, `fleet.substrate-reach@1`,
  *   `fleet.uptime@1`, task.5457) over the same lane probes and the stored lanes-down readings, and PR review (`review.merge-coverage@1`, `review.fail-fix-rate@1`,
- *   task.5450) over the review App's check runs on the parent repo, and shared-substrate host pressure
- *   (`substrate.host-pressure@1`, bug.5613) over per-host node_exporter and k3s-kine series in Grafana Cloud Mimir. Package calculators, budgets
+ *   task.5450) over the review App's check runs on the parent repo, shared-substrate host pressure
+ *   (`substrate.host-pressure@1`, bug.5613) over per-host node_exporter and k3s-kine series in Grafana Cloud Mimir,
+ *   and fleet AI health (`ai.run-errors@1`, task.5468) over the fleet's run and chat-turn outcome logs in
+ *   Grafana Cloud Loki. Package calculators, budgets
  *   enforcement and the engine live in `@cogni-dao/metrics/knowledge`; nothing here re-implements them.
  * Invariants:
  *   - RELEASE_OWNS_BEHAVIOR: metric computation, assessment and goal progress come from the package.
@@ -25,8 +27,9 @@
  *   - REVIEW_IDENTITY_FROM_ENV: the review calculators take the repo from `NODE_SUBMODULE_PARENT_*` and the
  *     App id from `GH_REVIEW_APP_ID`; neither is a literal. Missing env makes a reading unavailable.
  * Side-effects: none (factory only)
- * Links: hub adopt-node-package-release, story.0021, task.5442, task.5450, bug.5613, features/node-deploy/delivery-kpis.ts,
- *   features/review/review-kpis.ts, features/substrate-health/substrate-kpis.ts
+ * Links: hub adopt-node-package-release, story.0021, task.5442, task.5450, task.5468, bug.5613,
+ *   features/node-deploy/delivery-kpis.ts, features/review/review-kpis.ts,
+ *   features/substrate-health/substrate-kpis.ts
  * @internal
  */
 
@@ -42,12 +45,13 @@ import {
   GitHubReviewKpiSource,
   REVIEW_CHECK_RUN_NAME,
 } from "@/adapters/server";
+import { createAiCalculators } from "@/features/ai-health/ai-kpis";
 import { createDeliveryCalculators } from "@/features/node-deploy/delivery-kpis";
 import { createFleetCalculators } from "@/features/node-deploy/fleet-kpis";
 import { createFleetProbeSnapshots } from "@/features/node-deploy/fleet-probe-snapshot";
 import { createReviewCalculators } from "@/features/review/review-kpis";
 import { createSubstrateCalculators } from "@/features/substrate-health/substrate-kpis";
-import type { MetricsQueryPort } from "@/ports";
+import type { LokiReaderPort, MetricsQueryPort } from "@/ports";
 import { getNodeId } from "@/shared/config";
 
 export { createGoalProgressReader, createGoalSource };
@@ -70,10 +74,13 @@ export function createGoalMetrics(deps: {
   };
   /** The Mimir instant reader for `substrate.host-pressure@1`; absent makes substrate readings unavailable. */
   prometheus?: Pick<MetricsQueryPort, "queryInstant"> | null;
+  /** The Grafana Cloud Loki reader for `ai.run-errors@1`; absent makes AI readings unavailable. */
+  loki?: LokiReaderPort | null;
   environment: string;
   log(event: object): void;
 }) {
-  const { releaseStoreSql, controlHost, review, prometheus, ...rest } = deps;
+  const { releaseStoreSql, controlHost, review, prometheus, loki, ...rest } =
+    deps;
   const reviewRepo =
     review.appId && review.privateKeyBase64 ? review.repo : undefined;
   const deliverySource = new DeliveryKpiSource(releaseStoreSql);
@@ -101,6 +108,7 @@ export function createGoalMetrics(deps: {
         { repo: reviewRepo }
       ),
       ...createSubstrateCalculators({ prometheus }),
+      ...createAiCalculators({ loki }),
     ],
   });
 }
