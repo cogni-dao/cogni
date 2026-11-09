@@ -49,13 +49,14 @@ This forces a clear policy: **PR-only workflows (CodeQL default-setup, Validate 
 
 ## Operator repo only: require the PR review (task.5438)
 
-`Cogni Git PR Review` is required on the **operator repo only**, restricted to the review App's integration id:
+`Cogni Git PR Review` is required on the **operator repo only**, restricted to the review App's integration id. The operator's complete required set is the declarative fixture [`branch-protection.operator.json`](./branch-protection.operator.json); `setup-main-branch.sh` and `branch-protection.json` stay the unchanged node-shape set. One admin command applies it:
 
 ```bash
-COGNI_REQUIRE_PR_REVIEW=1 COGNI_REVIEW_APP_ID=<review App id> bash infra/github/setup-main-branch.sh cogni-dao/cogni
+jq 'with_entries(select(.key | startswith("_") | not))' infra/github/branch-protection.operator.json \
+  | gh api -X PATCH repos/cogni-dao/cogni/branches/main/protection/required_status_checks --input -
 ```
 
-The check satisfies the "reports on the queue ref" rule above through the operator webhook: on a push to `gh-readonly-queue/main/pr-<N>-…` it copies the PR head's review verdict (same check name, written by the same App) onto the queue commit; no head verdict, or one that is not `success`, is written as `failure` ("PR Review: NOT REVIEWED AT HEAD"). Apply this **after** that webhook code is deployed. Without the opt-in flag the script is unchanged, so node repos never require the review (they cannot request one yet — task.5448).
+The check satisfies the "reports on the queue ref" rule above through the operator webhook: on a push to `gh-readonly-queue/main/pr-<N>-…` it copies the PR head's review verdict (same check name, written by the same App) onto the queue commit; no head verdict, or one that is not `success`, is written as `failure` ("PR Review: NOT REVIEWED AT HEAD"). Apply this **after** that webhook code is deployed. Re-apply it after any run of `setup-main-branch.sh` on the operator repo, because that script PUTs the four generic contexts only.
 
 ## Drift detection
 

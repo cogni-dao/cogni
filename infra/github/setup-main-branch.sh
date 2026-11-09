@@ -36,22 +36,7 @@ gh api -X PATCH "repos/$REPO" \
 
 # 2. Classic branch protection — required status checks set.
 echo "    [2/3] branch protection (required: $(jq -r '.required_status_checks.contexts | join(", ")' "$SCRIPT_DIR/branch-protection.json"))"
-PROTECTION_PAYLOAD="$(jq 'with_entries(select(.key | startswith("_") | not))' "$SCRIPT_DIR/branch-protection.json")"
-# Operator repo only (task.5438): also require the review App's `Cogni Git PR Review`, pinned to that
-# App's integration id. Opt-in, because node repos cannot request reviews yet (task.5448) and the
-# check reaches the merge-queue commit only through the operator webhook. Deploy that webhook BEFORE
-# enabling this, or every queued PR stalls for the queue response timeout and is ejected.
-if [ "${COGNI_REQUIRE_PR_REVIEW:-}" = "1" ]; then
-  [[ "${COGNI_REVIEW_APP_ID:-}" =~ ^[1-9][0-9]*$ ]] || {
-    echo "ERROR: COGNI_REQUIRE_PR_REVIEW=1 needs COGNI_REVIEW_APP_ID (positive integer)" >&2
-    exit 1
-  }
-  PROTECTION_PAYLOAD="$(jq --argjson app_id "$COGNI_REVIEW_APP_ID" \
-    --slurpfile fixture "$SCRIPT_DIR/branch-protection.json" \
-    '.required_status_checks |= (.checks = ((.contexts | map({context: .})) + ($fixture[0]._operator_only_required_checks | map(. + {app_id: $app_id}))) | del(.contexts))' \
-    <<<"$PROTECTION_PAYLOAD")"
-fi
-printf '%s' "$PROTECTION_PAYLOAD" \
+jq 'with_entries(select(.key | startswith("_") | not))' "$SCRIPT_DIR/branch-protection.json" \
   | gh api -X PUT "repos/$REPO/branches/main/protection" --input - >/dev/null
 
 # 3. Merge queue — applied as a `merge_queue` repository RULESET (config-as-code).

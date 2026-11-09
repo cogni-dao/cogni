@@ -1,0 +1,33 @@
+{
+  "_comment": [
+    "Operator repo (cogni-dao/cogni) ONLY: the COMPLETE required-status-checks set for `main`, including the",
+    "PR review (task.5438). Body of `PATCH /repos/{owner}/{repo}/branches/main/protection/required_status_checks`.",
+    "Node repos MUST NOT use this file: they cannot request a review yet (task.5448), and node protection is",
+    "owned by the node template policy (.cogni/repo-policy.json).",
+    "",
+    "Existing contexts keep today's semantics: `app_id: -1` is GitHub's explicit 'any source' (what the",
+    "`contexts` form of branch-protection.json stores as app_id null). `Cogni Git PR Review` is pinned to the",
+    "review App, id 2994706 (app `cogni-operator`, the writer of that check on PR #3066). It reports on the merge",
+    "queue commit through the operator webhook, which copies the PR head's verdict there (task.5438).",
+    "",
+    "Why a separate file: setup-main-branch.sh and branch-protection.json stay the node-shape canonical set",
+    "(they PUT the four generic contexts). This file is the operator's superset and is applied by a human admin.",
+    "",
+    "ORDER: deploy the webhook queue copy and see `feature.review_queue_verdict.complete` in Loki BEFORE applying,",
+    "or every queued PR waits the 60 min queue response timeout and is ejected. Re-apply after any run of",
+    "setup-main-branch.sh on this repo, because that script PUTs the four generic contexts only.",
+    "",
+    "Apply (ONE command, repo admin):",
+    "  jq 'with_entries(select(.key | startswith(\"_\") | not))' infra/github/branch-protection.operator.json | gh api -X PATCH repos/cogni-dao/cogni/branches/main/protection/required_status_checks --input -",
+    "Rollback: PUT the node-shape set again with `bash infra/github/setup-main-branch.sh cogni-dao/cogni`.",
+    "Verify: gh api repos/cogni-dao/cogni/branches/main/protection/required_status_checks --jq '.checks'"
+  ],
+  "strict": false,
+  "checks": [
+    { "context": "unit", "app_id": -1 },
+    { "context": "component", "app_id": -1 },
+    { "context": "static", "app_id": -1 },
+    { "context": "manifest", "app_id": -1 },
+    { "context": "Cogni Git PR Review", "app_id": 2994706 }
+  ]
+}
