@@ -285,9 +285,12 @@ export {
   normalizeErrorToExecutionCode,
 } from "./llm.port";
 export type {
+  LokiInstantQuery,
+  LokiInstantReaderPort,
   LokiLogLine,
   LokiQueryRange,
   LokiReaderPort,
+  LokiVectorSample,
 } from "./loki-reader.port";
 export type {
   InstantQueryParams,

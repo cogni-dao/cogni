@@ -5,31 +5,40 @@
  * Module: `@features/node-deploy/edge-caught-kpis`
  * Purpose: The operator's node-local goal-metric calculator `edge.caught@1` (story.5148, edge-availability-design
  *   rev 7.1, "Measure"): how many requests the env's edge Caddy answered with its own catch-all (a 503 that
- *   carries `X-Cogni-Edge: caught`) for ONE application host in the last 300 s. A user-facing failure becomes
- *   downtime evidence even when the origin is too dead to log it. Registered through `@cogni-dao/metrics`
- *   `createGoalMetrics({ nodeCalculators })`, like the fleet calculators.
+ *   carries `X-Cogni-Edge: caught`) over a 300 s, 1 h or 24 h window, for ONE application host or for every
+ *   application host the env's edge serves. A user-facing failure becomes downtime evidence even when the origin
+ *   is too dead to log it. Registered through `@cogni-dao/metrics` `createGoalMetrics({ nodeCalculators })`, like
+ *   the fleet calculators.
  * Scope: Pure classification and the calculator object. IO comes in through injected sources: the catalog roster
  *   (`EdgeHostCatalogPort`), one bounded public HTTP probe (`DeliveryKpiSourcePort.probe`) and the Loki reader
- *   (`LokiReaderPort`). This module does no IO itself.
+ *   (`LokiReaderPort` for the probe's own line, `LokiInstantReaderPort` for the count). This module does no IO itself.
  * Invariants:
  *   - CALCULATOR_IS_THE_PROBER: every compute GETs `https://<host>/-/edge-probe?probe=<nonce>` and requires 503 with
  *     `X-Cogni-Edge: caught`. The canary always raises a Caddy-made error, so this proves the catch-all is live.
  *   - PROBE_LINE_IS_THE_WRITER_PROOF: the number is reported only after THIS probe's own access-log line (found by
- *     its nonce, for this host) is read back from Loki. That proves Caddy, Alloy and Loki together
+ *     its nonce, for the probed host) is read back from Loki. That proves Caddy, Alloy and Loki together
  *     (guard-needs-proven-writer). Lines older than the proven one are therefore ingested.
- *   - UNKNOWN_NOT_ZERO: a failed canary, a missing probe line, an unwired or failing Loki read, a truncated or
- *     unparseable read, an unprobed host or an env this operator does not serve is an incomplete sample with a
- *     reason, never 0. Only a proven pipeline with no caught line reads 0.
- *   - CANARY_IS_EXCLUDED: lines whose path is `/-/edge-probe` (any query) never count; they are reported as
- *     `edge:canary_excluded=`.
- *   - HOSTS_FROM_THE_RENDERER_SOURCE: the probed hosts are the catalog roster (`type: node` rows with a
- *     `node_port`; the primary row owns the bare env domain) joined to the operator's own env domain, exactly as
- *     `scripts/ci/render-caddyfile.sh --domain` emits application sites. Nothing names a host. A host outside
- *     that list (the mesh control, relay and publish hosts, which have no canary) is `unprobed`: unknown.
+ *   - WHO_IS_PROBED: with a `host` param, that host is probed (it must be a roster host). With no `host` the count
+ *     covers every roster application host, and the operator's OWN env host is probed: one Caddy serves the whole
+ *     env and every site imports the same catch-all snippet, so that one proof covers the env's catch-all and log
+ *     path. If it fails, the env-wide count is unknown.
+ *   - COUNT_HAS_NO_LINE_CAP: the number is a Loki INSTANT metric query (`sum(count_over_time(... [<window>s]))`),
+ *     so no window can truncate it. A line read (capped) is used only for the probe's own line.
+ *   - UNKNOWN_NOT_ZERO: a failed canary, a missing probe line, an unwired Loki reader, a failing Loki query, an
+ *     invalid vector, an unprobed host or an env this operator does not serve is an incomplete sample with a
+ *     reason, never 0. Only a proven pipeline with an empty vector reads 0.
+ *   - CANARY_IS_EXCLUDED: the count drops every line that mentions `/-/edge-probe` (`!= "/-/edge-probe"`). The only
+ *     over-exclusion is a caught line that quotes that path elsewhere (for example in a referer).
+ *   - HOSTS_FROM_THE_RENDERER_SOURCE: the roster is the catalog (`type: node` rows with a `node_port`; the primary
+ *     row owns the bare env domain) joined to the operator's own env domain, exactly as
+ *     `scripts/ci/render-caddyfile.sh --domain` emits application sites. Nothing names a host. The mesh control,
+ *     relay and publish hosts are not in the roster: they have no canary, never count, and as a `host` param read
+ *     `unprobed_host`.
  *   - OWN_ENV_ONLY: the env domain is the operator's own (`APP_BASE_URL` host), so a param `env` other than the
  *     operator's own env is unknown.
  *   - ONE_EVENT_PER_WINDOW: every compute emits exactly one `edge_caught_window` event with stable enum fields
- *     (host, env, outcome, caught, reason), so a Grafana alert can read Loki. No error text, header or URL is logged.
+ *     (scope, host, env, window, outcome, caught, reason), so a Grafana alert can read Loki. No error text, header
+ *     or URL is logged.
  *   - IDS_USE_DASHES: the calculator id matches `MetricSpecSchema.calculatorId` (no underscores).
  * Side-effects: none (calculators call the injected sources)
  * Links: ports/edge-host-catalog.port.ts, ports/loki-reader.port.ts, ports/delivery-kpi.port.ts,
@@ -48,18 +57,19 @@ import type {
   DeliveryProbeResult,
   EdgeCatalogNode,
   EdgeHostCatalogPort,
+  LokiInstantReaderPort,
   LokiLogLine,
   LokiReaderPort,
+  LokiVectorSample,
 } from "@/ports";
 import { EVENT_NAMES } from "@/shared/observability";
 
 export const EDGE_CAUGHT_ID = "edge.caught@1";
 /** The path each application site always answers with a Caddy-made 502 (rewritten to the catch-all 503). */
 export const EDGE_CANARY_PATH = "/-/edge-probe";
-/** The measured interval is the 300 s refresh cadence. */
-export const EDGE_WINDOW_SECONDS = 300;
-/** Most caught lines one window read returns; a read that fills it is unknown, not a capped number. */
-export const MAX_CAUGHT_LINES = 5_000;
+/** The windows a metric definition may ask for: 5 minutes, 1 hour, 1 day. */
+export const EDGE_WINDOWS_SECONDS = [300, 3600, 86400] as const;
+export const DEFAULT_EDGE_WINDOW_SECONDS = 300;
 /** Most lines the probe-line read returns (one probe makes one line). */
 export const MAX_PROBE_LINES = 20;
 export const CANARY_PROBE_TIMEOUT_MS = 5_000;
@@ -77,6 +87,9 @@ const envSchema = z.string().regex(/^[a-z0-9-]{1,40}$/);
 export const HOST_RE =
   /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.[a-z]([a-z0-9-]*[a-z0-9])?$/;
 const hostSchema = z.string().max(253).regex(HOST_RE);
+const windowSecondsSchema = z
+  .union([z.literal(300), z.literal(3600), z.literal(86400)])
+  .default(DEFAULT_EDGE_WINDOW_SECONDS);
 
 // ---------------------------------------------------------------------------------------------
 // Pure parts
@@ -175,36 +188,6 @@ export function isCanaryUri(uri: string): boolean {
   return path === EDGE_CANARY_PATH;
 }
 
-export interface CaughtCount {
-  /** Caught lines for the host, canary excluded. */
-  readonly caught: number;
-  /** Caught canary lines for the host (excluded from `caught`). */
-  readonly canaryExcluded: number;
-  /** Lines that were not parseable Caddy access lines: the count cannot be trusted. */
-  readonly unparseable: number;
-}
-
-/** Count caught lines for `host` over Loki lines, excluding the canary path. Other hosts' lines are ignored. */
-export function countCaught(
-  lines: readonly LokiLogLine[],
-  host: string
-): CaughtCount {
-  let caught = 0;
-  let canaryExcluded = 0;
-  let unparseable = 0;
-  for (const { line } of lines) {
-    const parsed = parseCaddyLine(line);
-    if (!parsed) {
-      unparseable++;
-      continue;
-    }
-    if (parsed.host !== host || !parsed.caught) continue;
-    if (isCanaryUri(parsed.uri)) canaryExcluded++;
-    else caught++;
-  }
-  return { caught, canaryExcluded, unparseable };
-}
-
 /** Whether one of `lines` is the line of the probe with this nonce, on this host: a caught 503 for the canary. */
 export function hasProbeLine(
   lines: readonly LokiLogLine[],
@@ -224,6 +207,21 @@ export function hasProbeLine(
   });
 }
 
+/**
+ * The total of an instant-query vector. An empty vector is 0 (nothing matched). A sample that is not a finite,
+ * non-negative number makes the vector invalid: undefined, never a guess.
+ */
+export function vectorTotal(
+  vector: readonly LokiVectorSample[]
+): number | undefined {
+  let total = 0;
+  for (const s of vector) {
+    if (!Number.isFinite(s.value) || s.value < 0) return undefined;
+    total += s.value;
+  }
+  return Math.round(total);
+}
+
 /** Why a window reads unknown. A stable enum: it is logged and never carries error text. */
 export type EdgeUnknownReason =
   | "env_not_served"
@@ -233,17 +231,12 @@ export type EdgeUnknownReason =
   | "canary_status"
   | "canary_no_edge_header"
   | "canary_log_missing"
-  | "log_read_truncated"
-  | "log_lines_unparseable"
+  | "count_invalid"
   | "source_error"
   | "aborted";
 
 export type EdgeWindowOutcome =
-  | {
-      readonly kind: "number";
-      readonly caught: number;
-      readonly canaryExcluded: number;
-    }
+  | { readonly kind: "number"; readonly caught: number }
   | {
       readonly kind: "unknown";
       readonly reason: EdgeUnknownReason;
@@ -251,16 +244,15 @@ export type EdgeWindowOutcome =
     };
 
 /**
- * The reading of one host and window. A number needs a proven canary AND its proven log line AND a complete,
- * parseable window read; anything less is unknown. Pure: the calculator gathers the facts, this decides.
+ * The reading of one scope and window. A number needs a proven canary AND its proven log line AND a valid count
+ * vector (empty = 0); anything less is unknown. Pure: the calculator gathers the facts, this decides.
  */
 export function decideWindow(input: {
   readonly canary: CanaryVerdict;
   readonly probeLineSeen: boolean;
-  readonly window: CaughtCount & { readonly lineCount: number };
-  readonly maxLines: number;
+  readonly vector: readonly LokiVectorSample[];
 }): EdgeWindowOutcome {
-  const { canary, probeLineSeen, window, maxLines } = input;
+  const { canary, probeLineSeen, vector } = input;
   if (!canary.ok)
     return {
       kind: "unknown",
@@ -268,15 +260,9 @@ export function decideWindow(input: {
       ...(canary.status === undefined ? {} : { canaryStatus: canary.status }),
     };
   if (!probeLineSeen) return { kind: "unknown", reason: "canary_log_missing" };
-  if (window.lineCount >= maxLines)
-    return { kind: "unknown", reason: "log_read_truncated" };
-  if (window.unparseable > 0)
-    return { kind: "unknown", reason: "log_lines_unparseable" };
-  return {
-    kind: "number",
-    caught: window.caught,
-    canaryExcluded: window.canaryExcluded,
-  };
+  const total = vectorTotal(vector);
+  if (total === undefined) return { kind: "unknown", reason: "count_invalid" };
+  return { kind: "number", caught: total };
 }
 
 const KPI_REASON: Record<
@@ -285,8 +271,7 @@ const KPI_REASON: Record<
 > = {
   env_not_served: "incomplete_or_invalid_source",
   unprobed_host: "incomplete_or_invalid_source",
-  log_read_truncated: "incomplete_or_invalid_source",
-  log_lines_unparseable: "incomplete_or_invalid_source",
+  count_invalid: "incomplete_or_invalid_source",
   loki_unwired: "source_failed",
   canary_unreachable: "source_failed",
   canary_status: "source_failed",
@@ -301,12 +286,17 @@ const KPI_REASON: Record<
 // ---------------------------------------------------------------------------------------------
 
 const CAUGHT_MARKER = '|= "\\"X-Cogni-Edge\\":[\\"caught\\"]"';
+const NOT_CANARY = `!= "${EDGE_CANARY_PATH}"`;
+const escapeRegex = (s: string) => s.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 
-/** Caught lines of one host in one env (the canary included; it is excluded when counting). */
-export function caughtQuery(env: string, host: string): string {
-  // Case-insensitive with an optional port: a logged host may be `Host.example.org:443`. `parseCaddyLine` is exact.
-  const escaped = host.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
-  return `{service="caddy", env="${env}"} ${CAUGHT_MARKER} |~ \`(?i)"host":"${escaped}(:[0-9]+)?"\``;
+/**
+ * Case-insensitive match of a logged `"host":"<host>"`, with an optional port (a logged host may be
+ * `Host.example.org:443`). Several hosts become one alternation. `parseCaddyLine` is exact; this is the pre-filter.
+ */
+export function hostLineFilter(hosts: readonly string[]): string {
+  const names = hosts.map(escapeRegex);
+  const alt = names.length === 1 ? names[0] : `(${names.join("|")})`;
+  return `|~ \`(?i)"host":"${alt}(:[0-9]+)?"\``;
 }
 
 /** The line of one probe: caught lines of the host whose uri carries the probe nonce. */
@@ -315,7 +305,19 @@ export function probeLineQuery(
   host: string,
   nonce: string
 ): string {
-  return `${caughtQuery(env, host)} |= "probe=${nonce}"`;
+  return `{service="caddy", env="${env}"} ${CAUGHT_MARKER} ${hostLineFilter([host])} |= "probe=${nonce}"`;
+}
+
+/**
+ * The count: caught lines of `hosts` in one env over `windowSeconds`, canary excluded, as one instant metric
+ * query (no line cap at any window).
+ */
+export function caughtCountQuery(
+  env: string,
+  hosts: readonly string[],
+  windowSeconds: number
+): string {
+  return `sum(count_over_time({service="caddy", env="${env}"} ${CAUGHT_MARKER} ${NOT_CANARY} ${hostLineFilter(hosts)} [${windowSeconds}s]))`;
 }
 
 const nanos = (ms: number) => `${Math.trunc(ms)}000000`;
@@ -324,12 +326,16 @@ const nanos = (ms: number) => `${Math.trunc(ms)}000000`;
 // Calculator
 // ---------------------------------------------------------------------------------------------
 
-/** The one structured event per window. Enums, counts and the public host only. */
+/** The one structured event per compute. Enums, counts and the public host only. */
 export interface EdgeCaughtWindowEvent {
   /** The registry name as a field (hub contract): Grafana filters on `event`, not only the message. */
   readonly event: typeof EVENT_NAMES.EDGE_CAUGHT_WINDOW;
   readonly env: string;
-  readonly host: string;
+  /** `host`: one application host. `env`: every application host of the env. */
+  readonly scope: "host" | "env";
+  /** The host counted (scope `host`) or probed (scope `env`: the operator's own env host); null when never resolved. */
+  readonly host: string | null;
+  readonly windowSeconds: number;
   readonly windowStart: string;
   readonly windowEnd: string;
   readonly outcome: "number" | "unknown";
@@ -338,7 +344,6 @@ export interface EdgeCaughtWindowEvent {
   /** `none` for a number; the stable unknown reason otherwise. */
   readonly reason: EdgeUnknownReason | "none";
   readonly canaryStatus: number | null;
-  readonly canaryExcluded: number | null;
   readonly durationMs: number;
 }
 
@@ -349,7 +354,7 @@ export interface EdgeCaughtOptions {
   readonly catalog: EdgeHostCatalogPort;
   readonly probe: DeliveryKpiSourcePort["probe"];
   /** Null when the Grafana read credential is unwired: every reading is unknown. */
-  readonly loki: LokiReaderPort | null;
+  readonly loki: (LokiReaderPort & LokiInstantReaderPort) | null;
   /** One call per compute. Bootstrap writes it to the `edge_caught_window` event. */
   readonly log: (event: EdgeCaughtWindowEvent) => void;
   readonly now?: () => number;
@@ -380,34 +385,43 @@ export function createEdgeCaughtCalculators(
   const sleep = options.sleep ?? defaultSleep;
   const nonce = options.nonce ?? defaultNonce;
 
-  const params = z.strictObject({ env: envSchema, host: hostSchema });
+  const params = z.strictObject({
+    env: envSchema,
+    // Omitted = every application host of the env (probed through the operator's own env host).
+    host: hostSchema.optional(),
+    windowSeconds: windowSecondsSchema,
+  });
 
   const caught: MetricCalculator = {
     id: EDGE_CAUGHT_ID,
     unit: UNIT,
     display: "volume",
-    windowSeconds: () => EDGE_WINDOW_SECONDS,
+    windowSeconds: (raw) => params.parse(raw).windowSeconds,
     paramsSchema: params,
     budget: {
-      // probe (5 s) + three polls (18 s of waits) + the window read, with room for slow reads.
-      timeoutMs: 45_000,
-      // roster + probe + up to three probe-line reads + the window read.
+      // probe (5 s) + three polls (18 s of waits) + the count query, with room for slow reads.
+      timeoutMs: 60_000,
+      // roster + probe + up to three probe-line reads + the count query.
       maxSourceCalls: 7,
-      maxRows: MAX_CAUGHT_LINES,
+      maxRows: MAX_PROBE_LINES,
       maxResponseBytes: CANARY_MAX_BYTES,
     },
     async compute(rawParams, ctx) {
       const p = params.parse(rawParams);
+      const scope = p.host === undefined ? "env" : "host";
       const startedMs = now();
       let probeAtMs = startedMs;
-      let canaryExcluded: number | undefined;
+      // The host probed: the asked host, or the operator's own env host for an env-wide count.
+      const probeHost = p.host ?? options.domain ?? null;
 
       const finish = (outcome: EdgeWindowOutcome): MetricSample => {
         const endedMs = now();
         options.log({
           event: EVENT_NAMES.EDGE_CAUGHT_WINDOW,
           env: p.env,
-          host: p.host,
+          scope,
+          host: probeHost,
+          windowSeconds: p.windowSeconds,
           windowStart: ctx.window.start,
           windowEnd: ctx.window.end,
           outcome: outcome.kind,
@@ -415,10 +429,6 @@ export function createEdgeCaughtCalculators(
           reason: outcome.kind === "number" ? "none" : outcome.reason,
           canaryStatus:
             outcome.kind === "unknown" ? (outcome.canaryStatus ?? null) : null,
-          canaryExcluded:
-            outcome.kind === "number"
-              ? outcome.canaryExcluded
-              : (canaryExcluded ?? null),
           durationMs: endedMs - startedMs,
         });
         const sourceWatermarks = [
@@ -431,7 +441,12 @@ export function createEdgeCaughtCalculators(
             asOf: new Date(endedMs).toISOString(),
           },
         ];
-        const head = [`edge:env=${p.env}`, `edge:host=${p.host}`];
+        const head = [
+          `edge:env=${p.env}`,
+          `edge:scope=${scope}`,
+          ...(probeHost ? [`edge:host=${probeHost}`] : []),
+          `edge:window_s=${p.windowSeconds}`,
+        ];
         if (outcome.kind === "number")
           return {
             value: outcome.caught,
@@ -440,7 +455,7 @@ export function createEdgeCaughtCalculators(
             sourceWatermarks,
             evidenceRefs: [
               ...head,
-              `edge:caught=${outcome.caught},canary_excluded=${outcome.canaryExcluded}`,
+              `edge:caught=${outcome.caught}`,
               "edge:canary=ok,probe_line=seen",
             ],
           };
@@ -464,7 +479,9 @@ export function createEdgeCaughtCalculators(
         if (!options.domain || !options.env || p.env !== options.env)
           return finish({ kind: "unknown", reason: "env_not_served" });
         const nodes = await ctx.read(() => options.catalog.edgeNodes());
-        if (!edgeApplicationHosts(options.domain, nodes).includes(p.host))
+        const hosts = edgeApplicationHosts(options.domain, nodes);
+        // A host outside the roster (a mesh host) has no canary; an env with no roster host has nothing to probe.
+        if (probeHost === null || !hosts.includes(probeHost))
           return finish({ kind: "unknown", reason: "unprobed_host" });
         const loki = options.loki;
         if (!loki) return finish({ kind: "unknown", reason: "loki_unwired" });
@@ -476,7 +493,7 @@ export function createEdgeCaughtCalculators(
         const result = await ctx.read(async (signal, budget) => {
           try {
             return await options.probe({
-              host: p.host,
+              host: probeHost,
               path: `${EDGE_CANARY_PATH}?probe=${id}`,
               timeoutMs: CANARY_PROBE_TIMEOUT_MS,
               maxBytes: budget.maxResponseBytes,
@@ -491,79 +508,50 @@ export function createEdgeCaughtCalculators(
         const canary = classifyCanaryProbe(result);
         if (!canary.ok)
           return finish(
-            decideWindow({
-              canary,
-              probeLineSeen: false,
-              window: {
-                caught: 0,
-                canaryExcluded: 0,
-                unparseable: 0,
-                lineCount: 0,
-              },
-              maxLines: MAX_CAUGHT_LINES,
-            })
+            decideWindow({ canary, probeLineSeen: false, vector: [] })
           );
 
-        // 2. The probe's own line must be readable in Loki for this host, or the log path is not proven.
+        // 2. The probe's own line must be readable in Loki for the probed host, or the log path is not proven.
         let probeLineSeen = false;
         for (const delay of PROBE_LINE_POLL_DELAYS_MS) {
           await sleep(delay, ctx.signal);
           const lines = await ctx.read((signal) =>
             loki.queryRange({
-              query: probeLineQuery(p.env, p.host, id),
+              query: probeLineQuery(p.env, probeHost, id),
               startNs: nanos(sentMs - PROBE_LOOKBACK_MS),
               endNs: nanos(now() + PROBE_LOOKBACK_MS),
               limit: MAX_PROBE_LINES,
               signal,
             })
           );
-          if (hasProbeLine(lines, p.host, id)) {
+          if (hasProbeLine(lines, probeHost, id)) {
             probeLineSeen = true;
             break;
           }
         }
         if (!probeLineSeen)
-          return finish(
-            decideWindow({
-              canary,
-              probeLineSeen,
-              window: {
-                caught: 0,
-                canaryExcluded: 0,
-                unparseable: 0,
-                lineCount: 0,
-              },
-              maxLines: MAX_CAUGHT_LINES,
-            })
-          );
+          return finish(decideWindow({ canary, probeLineSeen, vector: [] }));
 
-        // 3. The window's caught lines for this host, canary excluded.
-        const lines = await ctx.read((signal, budget) =>
-          loki.queryRange({
-            query: caughtQuery(p.env, p.host),
-            startNs: nanos(Date.parse(ctx.window.start)),
-            endNs: nanos(Date.parse(ctx.window.end)),
-            limit: budget.maxRows,
+        // 3. The count: one instant metric query over the window, canary excluded, no line cap.
+        const vector = await ctx.read((signal) =>
+          loki.queryInstant({
+            query: caughtCountQuery(
+              p.env,
+              p.host === undefined ? hosts : [p.host],
+              p.windowSeconds
+            ),
+            atNs: nanos(Date.parse(ctx.window.end)),
             signal,
           })
         );
-        const count = countCaught(lines, p.host);
-        canaryExcluded = count.canaryExcluded;
-        return finish(
-          decideWindow({
-            canary,
-            probeLineSeen,
-            window: { ...count, lineCount: lines.length },
-            maxLines: MAX_CAUGHT_LINES,
-          })
-        );
+        return finish(decideWindow({ canary, probeLineSeen, vector }));
       } catch (error) {
         // A caller abort (budget timeout) is not a reading: the engine records it. Log it once, then rethrow.
         if (ctx.signal.aborted) {
           finish({ kind: "unknown", reason: "aborted" });
           throw error;
         }
-        // The source-call budget error and any source failure: an unknown reading with a stable reason.
+        // The source-call budget error and any source failure (a Loki query error): unknown, stable reason.
         return finish({ kind: "unknown", reason: "source_error" });
       }
     },
