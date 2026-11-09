@@ -73,7 +73,7 @@ export const BASE_KNOWLEDGE_SEEDS: NewKnowledge[] = [
       "- node-template owns the shared code you inherit; know what it owns via `node-template-architect` (https://node-template.cognidao.org/knowledge/node-template-architect). You consume it from here, you do not edit it.\n" +
       "- If a change truly belongs in the shared baseline, first weigh whether it improves every node, then raise it upstream rather than forking it locally. Keep mission code separate so updates keep merging.\n\n" +
       "## Ship through the operator: do not reinvent delivery\n" +
-      "- CI/CD, flight, validation, merge, promotion, secrets, runtime and logs are operator-owned, not in your code. Use `operator-service-index` (it points to the canonical operator atoms) and `knowledge-contribution-flow` to ship.\n\n" +
+      "- CI/CD, flight, validation, merge, promotion, secrets, runtime and logs are operator-owned, not in your code. Read `operator-service-index` on the operator hub (https://cognidao.org/knowledge/operator-service-index) with an operator reader key: reuse `COGNI_OPERATOR_NODE_API_KEY`, or register once at `POST https://cognidao.org/api/v1/agent/register`. Do not copy it into this hub. Use `knowledge-contribution-flow` to ship knowledge.\n\n" +
       "## Experts\n" +
       "- Expert skills link to this architect and add the rules for one concern. Do not list them here; their links are the source. The operator's `networking-expert` is the model.\n\n" +
       "## Compare and prove\n" +
