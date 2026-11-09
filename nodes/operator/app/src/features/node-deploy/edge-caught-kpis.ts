@@ -12,7 +12,7 @@
  *   (`EdgeHostCatalogPort`), one bounded public HTTP probe (`DeliveryKpiSourcePort.probe`) and the Loki reader
  *   (`LokiReaderPort`). This module does no IO itself.
  * Invariants:
- *   - CALCULATOR_IS_THE_PROBER: every compute GETs `https://<host>/__edge/caught?probe=<nonce>` and requires 503 with
+ *   - CALCULATOR_IS_THE_PROBER: every compute GETs `https://<host>/-/edge-probe?probe=<nonce>` and requires 503 with
  *     `X-Cogni-Edge: caught`. The canary always raises a Caddy-made error, so this proves the catch-all is live.
  *   - PROBE_LINE_IS_THE_WRITER_PROOF: the number is reported only after THIS probe's own access-log line (found by
  *     its nonce, for this host) is read back from Loki. That proves Caddy, Alloy and Loki together
@@ -20,7 +20,7 @@
  *   - UNKNOWN_NOT_ZERO: a failed canary, a missing probe line, an unwired or failing Loki read, a truncated or
  *     unparseable read, an unprobed host or an env this operator does not serve is an incomplete sample with a
  *     reason, never 0. Only a proven pipeline with no caught line reads 0.
- *   - CANARY_IS_EXCLUDED: lines whose path is `/__edge/caught` (any query) never count; they are reported as
+ *   - CANARY_IS_EXCLUDED: lines whose path is `/-/edge-probe` (any query) never count; they are reported as
  *     `edge:canary_excluded=`.
  *   - HOSTS_FROM_THE_RENDERER_SOURCE: the probed hosts are the catalog roster (`type: node` rows with a
  *     `node_port`; the primary row owns the bare env domain) joined to the operator's own env domain, exactly as
@@ -55,7 +55,7 @@ import { EVENT_NAMES } from "@/shared/observability";
 
 export const EDGE_CAUGHT_ID = "edge.caught@1";
 /** The path each application site always answers with a Caddy-made 502 (rewritten to the catch-all 503). */
-export const EDGE_CANARY_PATH = "/__edge/caught";
+export const EDGE_CANARY_PATH = "/-/edge-probe";
 /** The measured interval is the 300 s refresh cadence. */
 export const EDGE_WINDOW_SECONDS = 300;
 /** Most caught lines one window read returns; a read that fills it is unknown, not a capped number. */

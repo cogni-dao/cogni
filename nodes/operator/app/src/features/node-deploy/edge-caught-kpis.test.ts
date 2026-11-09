@@ -160,8 +160,8 @@ describe("parseCaddyLine and canary exclusion", () => {
   it("knows the canary path, with any query", () => {
     expect(isCanaryUri(EDGE_CANARY_PATH)).toBe(true);
     expect(isCanaryUri(`${EDGE_CANARY_PATH}?probe=x`)).toBe(true);
-    expect(isCanaryUri("/__edge/caught/extra")).toBe(false);
-    expect(isCanaryUri("/api/v1/x?next=/__edge/caught")).toBe(false);
+    expect(isCanaryUri("/-/edge-probe/extra")).toBe(false);
+    expect(isCanaryUri("/api/v1/x?next=/-/edge-probe")).toBe(false);
   });
 
   it("counts caught lines for the host and excludes the canary", () => {
