@@ -52,6 +52,7 @@ const TOKS5_ROW = {
 
 const zoneConfig = vi.hoisted(() => ({
   value: "cognidao.org" as string | undefined,
+  deployEnv: "production",
 }));
 const gate = vi.fn();
 const envNotServed = vi.fn();
@@ -60,6 +61,7 @@ const fetchFileText = vi.fn();
 const listDirectoryEntries = vi.fn();
 const recordRelease = vi.fn();
 const getDesired = vi.fn();
+const ensureGeneratedKeys = vi.fn();
 
 vi.mock("@/app/_lib/auth/session", () => ({
   getSessionUser: vi.fn(async () => ({ id: "user-1" })),
@@ -91,7 +93,7 @@ vi.mock("@/shared/env", () => ({
     NODE_SUBMODULE_PARENT_OWNER: "cogni-dao",
     NODE_SUBMODULE_PARENT_REPO: "cogni",
     NODE_DEPLOY_WORKLOAD_ZONE: zoneConfig.value,
-    DEPLOY_ENVIRONMENT: "production",
+    DEPLOY_ENVIRONMENT: zoneConfig.deployEnv,
   }),
 }));
 vi.mock("@/shared/config", () => ({ getNodeId: () => NODE_ID }));
@@ -106,6 +108,9 @@ vi.mock(
 );
 vi.mock("@/bootstrap/capabilities/node-deploy-store", () => ({
   createNodeDeployStore: () => ({ recordRelease, getDesired }),
+}));
+vi.mock("@/bootstrap/capabilities/operator-secrets-plane", () => ({
+  createOperatorSecretsPlane: () => ({ ensureGeneratedKeys }),
 }));
 
 const post = async (env = "candidate-a"): Promise<Response> => {
@@ -143,6 +148,7 @@ describe("POST /api/v1/deploy/workloads: one front door, a node deploys from its
   beforeEach(() => {
     vi.clearAllMocks();
     zoneConfig.value = "cognidao.org";
+    zoneConfig.deployEnv = "production";
     gate.mockResolvedValue({
       ok: true,
       node: { id: TOKS5_ID, slug: "toks5" },
@@ -195,6 +201,207 @@ describe("POST /api/v1/deploy/workloads: one front door, a node deploys from its
       createdBy: "user:user-1",
       // never waits on node CI: the tag node CI will publish, flagged pending; the sequencer pins the digest
       spec: { name: "canary", image: PENDING, imagePending: true },
+    });
+  });
+
+  it("reads the node's secrets catalog at the sha and records the keys its workloads names (bug.5254)", async () => {
+    const catalog = `secrets:
+  - name: TOKS5_VENDOR_TOKEN
+    tier: A2
+    source: human
+    workloads: [app]
+    required: true
+    category: Vendor
+    description: Vendor token.
+    steps: []
+`;
+    fetchFileText.mockImplementation(async ({ path: p }: { path: string }) =>
+      p === ".cogni/repo-spec.yaml"
+        ? REPO_SPEC
+        : p === ".cogni/workloads/canary.yaml"
+          ? CANARY_BUILT
+          : p === ".cogni/secrets-catalog.yaml"
+            ? catalog
+            : null
+    );
+    expect((await post()).status).toBe(200);
+    expect(fetchFileText).toHaveBeenCalledWith({
+      owner: "cogni-dao",
+      repo: "toks5",
+      path: ".cogni/secrets-catalog.yaml",
+      ref: SHA,
+    });
+    expect(recorded().spec.secretKeys).toContain("TOKS5_VENDOR_TOKEN");
+  });
+
+  it("refuses 422 secrets_catalog_refused on an invalid catalog, before any store write", async () => {
+    fetchFileText.mockImplementation(async ({ path: p }: { path: string }) =>
+      p === ".cogni/repo-spec.yaml"
+        ? REPO_SPEC
+        : p === ".cogni/workloads/canary.yaml"
+          ? CANARY_BUILT
+          : p === ".cogni/secrets-catalog.yaml"
+            ? "secrets:\n  - name: K\n    tier: A2\n    source: agent\n    required: false\n    category: c\n    description: d\n    steps: []\n"
+            : null
+    );
+    const response = await post();
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "secrets_catalog_refused",
+    });
+    expect(recordRelease).not.toHaveBeenCalled();
+  });
+
+  describe("generating a catalog-declared source: agent key (bug.5254)", () => {
+    const AGENT_CATALOG = `secrets:
+  - name: TOKS5_EXECD_TOKEN
+    tier: A2
+    source: agent
+    generate: { kind: hex, bytes: 32 }
+    workloads: [app]
+    required: true
+    category: Sandbox
+    description: Shared token.
+    steps: []
+  - name: TOKS5_OTHER_TOKEN
+    tier: A2
+    source: agent
+    generate: { kind: hex, bytes: 16 }
+    required: true
+    category: Sandbox
+    description: Not projected, so never generated.
+    steps: []
+`;
+    const servesCatalog = () =>
+      fetchFileText.mockImplementation(async ({ path: p }: { path: string }) =>
+        p === ".cogni/repo-spec.yaml"
+          ? REPO_SPEC
+          : p === ".cogni/workloads/canary.yaml"
+            ? CANARY_BUILT
+            : p === ".cogni/secrets-catalog.yaml"
+              ? AGENT_CATALOG
+              : null
+      );
+    const gateWith = (mayGenerate: boolean) =>
+      gate.mockResolvedValue({
+        ok: true,
+        node: { id: TOKS5_ID, slug: "toks5" },
+        catalogRow: TOKS5_ROW,
+        mayGenerateSecrets: async () => mayGenerate,
+      });
+
+    it("creates only the release's missing agent keys, in the lane bucket, before the release row", async () => {
+      servesCatalog();
+      gateWith(true);
+      const order: string[] = [];
+      ensureGeneratedKeys.mockImplementation(async () => {
+        order.push("generate");
+        return { generated: ["TOKS5_EXECD_TOKEN"], version: 4 };
+      });
+      recordRelease.mockImplementationOnce(async (input: { spec: unknown }) => {
+        order.push("record");
+        return {
+          release: {
+            id: "11111111-1111-4111-8111-111111111111",
+            spec: input.spec,
+          },
+          desired: { state: "running" },
+        };
+      });
+      expect((await post()).status).toBe(200);
+      expect(ensureGeneratedKeys).toHaveBeenCalledWith({
+        env: "candidate-a",
+        nodeSlug: "toks5",
+        recipes: { TOKS5_EXECD_TOKEN: { kind: "hex", bytes: 32 } },
+      });
+      expect(order).toEqual(["generate", "record"]);
+      expect(recorded().spec.secretKeys).toContain("TOKS5_EXECD_TOKEN");
+    });
+
+    it("writes nothing when the caller may not manage the node's secrets; the release still records", async () => {
+      servesCatalog();
+      gateWith(false);
+      expect((await post()).status).toBe(200);
+      expect(ensureGeneratedKeys).not.toHaveBeenCalled();
+      expect(recordRelease).toHaveBeenCalledTimes(1);
+    });
+
+    it("writes nothing when the declaration is refused", async () => {
+      servesCatalog();
+      gateWith(true);
+      fetchFileText.mockImplementation(async ({ path: p }: { path: string }) =>
+        p === ".cogni/repo-spec.yaml"
+          ? REPO_SPEC
+          : p === ".cogni/workloads/canary.yaml"
+            ? CANARY_BUILT.replace('"false"', '"true"')
+            : p === ".cogni/secrets-catalog.yaml"
+              ? AGENT_CATALOG
+              : null
+      );
+      expect((await post()).status).toBe(422);
+      expect(ensureGeneratedKeys).not.toHaveBeenCalled();
+      expect(recordRelease).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when this operator does not custody the lane; the release still records", async () => {
+      servesCatalog();
+      gateWith(true);
+      zoneConfig.deployEnv = "candidate-a"; // a candidate operator never custodies production
+      expect((await post("production")).status).toBe(200);
+      expect(ensureGeneratedKeys).not.toHaveBeenCalled();
+      expect(recordRelease).toHaveBeenCalledTimes(1);
+    });
+
+    it("the merge webhook (no mayGenerateSecrets) never generates", async () => {
+      servesCatalog();
+      const { recordNodeRelease } = await import(
+        "@/app/_facades/deploy/record-node-release.server"
+      );
+      const result = await recordNodeRelease({
+        node: { id: TOKS5_ID, slug: "toks5" },
+        env: "candidate-a",
+        workload: "canary",
+        sourceSha: SHA,
+        createdBy: "webhook:merge",
+        log: { warn: vi.fn(), info: vi.fn() },
+        reqId: "req-1",
+      });
+      expect(result.ok).toBe(true);
+      expect(ensureGeneratedKeys).not.toHaveBeenCalled();
+    });
+
+    it("refuses a generated catalog entry that names a substrate key, even with no workloads", async () => {
+      gateWith(true);
+      fetchFileText.mockImplementation(async ({ path: p }: { path: string }) =>
+        p === ".cogni/repo-spec.yaml"
+          ? REPO_SPEC
+          : p === ".cogni/workloads/canary.yaml"
+            ? CANARY_BUILT
+            : p === ".cogni/secrets-catalog.yaml"
+              ? "secrets:\n  - name: AUTH_SECRET\n    tier: A2\n    source: agent\n    generate: { kind: hex, bytes: 32 }\n    required: true\n    category: c\n    description: d\n    steps: []\n"
+              : null
+      );
+      const response = await post();
+      expect(response.status).toBe(422);
+      await expect(response.json()).resolves.toMatchObject({
+        error: "secrets_catalog_refused",
+      });
+      expect(ensureGeneratedKeys).not.toHaveBeenCalled();
+      expect(recordRelease).not.toHaveBeenCalled();
+    });
+
+    it("refuses 503 secret_generation_failed with no release row when the writer fails", async () => {
+      servesCatalog();
+      gateWith(true);
+      ensureGeneratedKeys.mockRejectedValue(
+        Object.assign(new Error("x"), { code: "openbao_login_failed" })
+      );
+      const response = await post();
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        error: "secret_generation_failed",
+      });
+      expect(recordRelease).not.toHaveBeenCalled();
     });
   });
 

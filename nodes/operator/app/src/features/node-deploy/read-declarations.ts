@@ -3,8 +3,8 @@
 
 /**
  * Module: `@features/node-deploy/read-declarations`
- * Purpose: Read a node's `.cogni/repo-spec.yaml` and every workload manifest (`.cogni/workloads/*.yaml`)
- *   at ONE source sha through the deploy plane, so the deploy route only maps outcomes to HTTP (story.5137).
+ * Purpose: Read a node's `.cogni/repo-spec.yaml`, every workload manifest (`.cogni/workloads/*.yaml`)
+ *   and its secrets catalog (`.cogni/secrets-catalog.yaml`, bug.5254) at ONE source sha through the deploy plane, so the deploy route only maps outcomes to HTTP (story.5137).
  * Scope: Read orchestration only. The caller names the repo (the node's own repo from its catalog row,
  *   story.5127); this module never decides which repo to read. It does not check or lower manifests (that is `declarations.ts` plus
  *   `@cogni/repo-spec`), and it does not write anything.
@@ -22,6 +22,7 @@
 
 import {
   checkWorkloadDirectoryEntries,
+  NODE_SECRETS_CATALOG_PATH,
   WORKLOAD_MANIFEST_DIR,
   WorkloadManifestError,
   type WorkloadManifestFile,
@@ -37,6 +38,8 @@ export type WorkloadDeclarationsRead =
       readonly kind: "ok";
       readonly repoSpecText: string;
       readonly manifests: readonly WorkloadManifestFile[];
+      /** `null` when the node has no secrets catalog at this sha. */
+      readonly secretsCatalogText: string | null;
     }
   | { readonly kind: "repo_spec_not_found" }
   | {
@@ -93,5 +96,11 @@ export async function readWorkloadDeclarations(
     if (text === null) throw new Error(`${path} listed but unreadable`);
     manifests.push({ path, text });
   }
-  return { kind: "ok", repoSpecText, manifests };
+  const secretsCatalogText = await plane.fetchFileText({
+    owner,
+    repo,
+    path: NODE_SECRETS_CATALOG_PATH,
+    ref: sourceSha,
+  });
+  return { kind: "ok", repoSpecText, manifests, secretsCatalogText };
 }

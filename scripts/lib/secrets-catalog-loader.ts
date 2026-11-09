@@ -13,7 +13,16 @@ import { execSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { z } from "zod";
+import {
+  type SecretCapability,
+  SecretEnvironmentSchema,
+  type SecretGenerate,
+  type SecretSyncTarget,
+  type SecretsCatalogEntry,
+  SecretsCatalogFileSchema,
+  type SecretTier,
+  type SecretTransform,
+} from "../../packages/repo-spec/src/secrets-catalog";
 
 // ── Generators ─────────────────────────────────────────────────────────────
 // Kept here (not in setup-secrets.ts) so the YAML `generate.kind` discriminator
@@ -66,72 +75,12 @@ function deriveCogniNodeEndpoints(): string {
 }
 
 // ── Schema ──────────────────────────────────────────────────────────────────
+// The entry schema lives in @cogni/repo-spec so the node-deploy verb parses a
+// node's catalog with the SAME schema (CATALOG_IS_THE_ONE_READER, bug.5254).
+// Imported by source path so `tsx` callers need no package build.
 
-const TierSchema = z.enum(["A1", "A2", "B", "D", "E", "F", "G"]);
-const SecretEnvironmentSchema = z.enum([
-  "candidate-a",
-  "preview",
-  "production",
-]);
-const InheritEnvironmentByLaneSchema = z
-  .object({
-    "candidate-a": z.enum(["lane", "control"]).optional(),
-    preview: z.enum(["lane", "control"]).optional(),
-    production: z.enum(["lane", "control"]).optional(),
-  })
-  .strict();
-
-// Capability classes a secret can be gated to (design.secrets-catalog-per-node
-// §Amendment v2). An operator-domain entry uses `appliesTo:` instead of a
-// single `service:` — the loader fans it to every type:node whose node-spec
-// declares that capability. `all-nodes` = the genuine boot-floor.
-const CapabilitySchema = z.enum([
-  "all-nodes",
-  "web",
-  "database",
-  "llm",
-  "payments",
-]);
-export type Capability = z.infer<typeof CapabilitySchema>;
-
-const GenerateSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("base64"), bytes: z.number().int().positive() }),
-  z.object({ kind: z.literal("hex"), bytes: z.number().int().positive() }),
-  z.object({
-    kind: z.literal("sk-cogni"),
-    randHexBytes: z.number().int().positive(),
-  }),
-  z.object({ kind: z.literal("static"), value: z.string() }),
-  // env-bound generators handled by setup-secrets.ts main loop, not the loader.
-  // Catalog entry MUST set name to a value the main loop special-cases
-  // (today: SSH_DEPLOY_KEY). Anyone copying as a template gets a clear
-  // error when their non-special-cased name reaches the throw stub below.
-  z.object({
-    kind: z.literal("special-cased-by-main"),
-    specialName: z.string(),
-  }),
-  z.object({
-    kind: z.literal("derived"),
-    source: z.enum(["node-dbs", "node-endpoints"]),
-  }),
-  // Derived at call-time from a process.env interpolation template — e.g.,
-  // `https://${DOMAIN}` resolves to `https://test.opencompany.cc` once the
-  // operator's DOMAIN reaches the provision shell. Used for values that are
-  // a pure function of another (already-set) env var; not for secrets that
-  // need randomness. Phase 5c's seed loop reads the generator at the same
-  // shell scope that just sourced `.env.${DEPLOY_ENV}`, so DOMAIN is set.
-  z.object({
-    kind: z.literal("derive-env"),
-    template: z.string().min(1),
-  }),
-]);
-
-const TransformSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("append-path"), path: z.string() }),
-]);
-
-const SyncTargetSchema = z.enum(["github-app-webhook", "litellm-virtual-key"]);
-export type SyncTarget = z.infer<typeof SyncTargetSchema>;
+export type Capability = SecretCapability;
+export type SyncTarget = SecretSyncTarget;
 
 /**
  * Non-node PLATFORM SERVICES that own their own OpenBao bucket + ExternalSecret.
@@ -184,71 +133,8 @@ export function isSetupSecretsManaged(
   return service === undefined || !PLATFORM_SERVICES.has(service);
 }
 
-const CatalogEntrySchema = z
-  .object({
-    name: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
-    tier: TierSchema,
-    service: z.string().optional(),
-    // Capability-gated fan-out (operator-domain, v2). Mutually exclusive with
-    // `service:` — `appliesTo` declares the secret ONCE and the write side fans
-    // it to every in-scope type:node. `shared: true` → one value at the
-    // `_shared` path; default (false) → distinct value per node at the node path.
-    appliesTo: CapabilitySchema.optional(),
-    shared: z.boolean().optional(),
-    // Canonical-custody lane: per-node materialization inherits this key's value
-    // verbatim from `cogni/<env>/<inheritFrom>/<KEY>` instead of the blind
-    // node-template→operator→_shared ancestor scan. Use when the value MUST
-    // byte-match one owner (SCHEDULER_API_TOKEN ← scheduler-worker). See
-    // scripts/ci/secret-materialize.sh inherit_shared_value + bug.5021.
-    inheritFrom: z.string().optional(),
-    // Staged producer binding: omitted lanes retain their current control owner.
-    inheritEnvironmentByLane: InheritEnvironmentByLaneSchema.optional(),
-    // Explicit fan-out destinations (supersedes the old `coConsumed` boolean).
-    // The pod emitter (print-pod-keys.ts) includes a key iff `pod` ∈ consumedBy.
-    // `tier` stays the source/authority; `consumedBy` is where it's consumed.
-    // Set it on B-tier keys the pod also reads (OPENROUTER_API_KEY) and on
-    // compose+pod duals (DB creds, LiteLLM). Absent → defaults from tier+path.
-    consumedBy: z.array(z.enum(["pod", "compose", "worker"])).optional(),
-    required: z.boolean(),
-    category: z.string(),
-    // ORIGIN of the value: agent = we generate it (`generate:` required);
-    // human = vendor-minted; derived = canonical materializer composes owned inputs.
-    // Derived structured custody is never a random credential or human prompt.
-    source: z.enum(["agent", "human", "derived"]),
-    // Orthogonal axis — does the value ALSO live in an external system that we
-    // must keep in lockstep? A generated value can still need mirroring outward
-    // (e.g. the GitHub App webhook secret: source: agent + syncTo: the App).
-    // deploy-infra runs the matching push (scripts/secrets/sync-app-webhook-secret.sh).
-    syncTo: SyncTargetSchema.optional(),
-    description: z.string(),
-    steps: z.array(z.string()),
-    url: z.string().url().optional(),
-    perEnv: z.boolean().optional(),
-    repoLevel: z.boolean().optional(),
-    generate: GenerateSchema.optional(),
-    transform: TransformSchema.optional(),
-  })
-  .refine((e) => e.source === "human" || e.generate !== undefined, {
-    message: "source: agent or derived requires generate field",
-  })
-  .refine((e) => !(e.service !== undefined && e.appliesTo !== undefined), {
-    message:
-      "entry declares both service: and appliesTo: — they are mutually exclusive (service = one node; appliesTo = capability fan-out)",
-  })
-  .refine(
-    (e) => e.inheritEnvironmentByLane === undefined || Boolean(e.inheritFrom),
-    {
-      message: "inheritEnvironmentByLane requires inheritFrom",
-    }
-  );
-
-type CatalogEntry = z.infer<typeof CatalogEntrySchema>;
-
-const CatalogFileSchema = z.object({
-  // Optional file-level default; loader auto-fills per-node files from parent dir.
-  service: z.string().optional(),
-  secrets: z.array(CatalogEntrySchema),
-});
+type CatalogEntry = SecretsCatalogEntry;
+const CatalogFileSchema = SecretsCatalogFileSchema;
 
 // ── Public types (mirror setup-secrets.ts shapes) ──────────────────────────
 
@@ -267,7 +153,7 @@ export interface Secret {
   transform?: (value: string) => string;
 }
 
-export type Tier = z.infer<typeof TierSchema>;
+export type Tier = SecretTier;
 export interface SecretRouting {
   tier: Tier;
   service?: string;
@@ -369,6 +255,10 @@ export function loadSecretsCatalog(opts: LoadOptions): LoadResult {
   if (existsSync(operatorAbs)) {
     const parsed = parseFile(operatorAbs);
     for (const entry of parsed.secrets) {
+      if (entry.workloads !== undefined)
+        throw new Error(
+          `${operatorAbs}: entry ${entry.name} declares workloads:, which only a node catalog may set (bug.5254).`
+        );
       if (
         entry.service !== undefined &&
         !operatorServiceAllowlist.has(entry.service)
@@ -490,7 +380,7 @@ function catalogEntryToSecret(entry: CatalogEntry): Secret {
   return secret;
 }
 
-function generatorFor(g: z.infer<typeof GenerateSchema>): () => string {
+function generatorFor(g: SecretGenerate): () => string {
   switch (g.kind) {
     case "base64":
       return () => rand64(g.bytes);
@@ -537,9 +427,7 @@ function generatorFor(g: z.infer<typeof GenerateSchema>): () => string {
   }
 }
 
-function transformerFor(
-  t: z.infer<typeof TransformSchema>
-): (value: string) => string {
+function transformerFor(t: SecretTransform): (value: string) => string {
   switch (t.kind) {
     case "append-path":
       return (v: string) => {

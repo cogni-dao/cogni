@@ -177,6 +177,97 @@ describe("declaring a worker workload", () => {
   });
 });
 
+describe("declaring a secret once in the catalog (bug.5254)", () => {
+  const catalog = (key: string, workloads: string, extra = "") => `secrets:
+  - name: ${key}
+    tier: A2
+    source: agent
+    generate: { kind: hex, bytes: 32 }
+${workloads ? `    workloads: ${workloads}\n` : ""}    required: true
+    category: Sandbox
+    description: Shared execd token.
+    steps: []
+${extra}`;
+  const noRefs = redSpec({ secret_refs: undefined });
+
+  it("delivers a catalog key to every named workload with no secret_refs", () => {
+    const over = {
+      repoSpecText: noRefs,
+      secretsCatalogText: catalog("SANDBOX_EXECD_TOKEN", "[app, sandbox]"),
+    };
+    expect(resolve(over).secretKeys).toEqual(["SANDBOX_EXECD_TOKEN"]);
+    const app = resolve({ ...over, workload: "app" });
+    expect(app.secretKeys).toEqual([
+      ...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+      "SANDBOX_EXECD_TOKEN",
+    ]);
+  });
+
+  it("keeps secret_refs as a transition input and dedupes it with the catalog", () => {
+    const w = resolve({
+      secretsCatalogText: catalog("SANDBOX_EXECD_TOKEN", "[sandbox]"),
+    });
+    expect(w.secretKeys).toEqual(["SANDBOX_EXECD_TOKEN"]);
+  });
+
+  it("is opt-in: an entry with no workloads reaches no workload, so today's releases do not change", () => {
+    const over = {
+      repoSpecText: noRefs,
+      secretsCatalogText: catalog("SANDBOX_EXECD_TOKEN", ""),
+    };
+    expect(resolve(over).secretKeys).toEqual([]);
+    expect(resolve({ ...over, workload: "app" }).secretKeys).toEqual([
+      ...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+    ]);
+  });
+
+  it("refuses the release on an invalid catalog, before any paid create", () => {
+    for (const text of [
+      // red PR #49's entry: source agent with no generate and no steps
+      "secrets:\n  - name: SANDBOX_EXECD_TOKEN\n    tier: A2\n    source: agent\n    required: false\n    category: c\n    description: d\n",
+      catalog("SANDBOX_EXECD_TOKEN", "[app, worker]"),
+      catalog(
+        "SANDBOX_EXECD_TOKEN",
+        "[sandbox]",
+        "    inheritFrom: operator\n"
+      ),
+    ])
+      expect(() =>
+        resolve({ repoSpecText: noRefs, secretsCatalogText: text })
+      ).toThrow(expect.objectContaining({ code: "secrets_catalog_refused" }));
+  });
+
+  it("projects a node-owned reserved key the node supplies (source human), like poly's wallet key", () => {
+    const text = `secrets:
+  - name: POLY_WALLET_AEAD_KEY_HEX
+    tier: A2
+    source: human
+    workloads: [sandbox]
+    required: true
+    category: Wallet
+    description: Node-owned wallet key.
+    steps: []
+`;
+    expect(
+      resolve({ repoSpecText: noRefs, secretsCatalogText: text }).secretKeys
+    ).toEqual(["POLY_WALLET_AEAD_KEY_HEX"]);
+  });
+
+  it("refuses a catalog that projects a substrate, fleet-inherited or operator key", () => {
+    for (const key of [
+      "AUTH_SECRET",
+      "SCHEDULER_API_TOKEN",
+      "AKASH_CONSOLE_API_KEY",
+    ])
+      expect(() =>
+        resolve({
+          repoSpecText: noRefs,
+          secretsCatalogText: catalog(key, "[sandbox]"),
+        })
+      ).toThrow(expect.objectContaining({ code: "secrets_catalog_refused" }));
+  });
+});
+
 describe("workerEnv", () => {
   it("is exactly host, port, env, sha and the declared secrets; never a profile or substrate key", () => {
     const env = workerEnv({

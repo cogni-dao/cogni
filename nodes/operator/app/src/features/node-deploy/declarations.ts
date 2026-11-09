@@ -28,6 +28,12 @@
  *     Any operator/fleet/substrate credential on that list is refused here (`secret_ref_refused`), so
  *     it can never reach rented compute; fleet-inherited keys that are merely in the bucket are not
  *     on the list and are never delivered.
+ *   - CATALOG_DECLARES_CONSUMERS (bug.5254): a node's `.cogni/secrets-catalog.yaml` at the same sha adds
+ *     every entry whose `workloads` names the workload's repo-spec service. The catalog is checked whole
+ *     (`parseNodeSecretsCatalog`, pass 1 + sovereign pass 2) before any workload resolves; a refused
+ *     catalog refuses the release (`secrets_catalog_refused`). A catalog-projected key must be node-owned:
+ *     a substrate-reserved, fleet-inherited or off-cluster-denied key is refused. `secret_refs` remains a
+ *     transition input with its existing check.
  *   - PLACEMENT_FOLLOWS_ENV (story.5141): the app carries the manifest's placement set for `env`
  *     (`placement.requiredCountryCodes`), frozen into the release with the rest of the spec (CD3).
  *   - HOST_FOLLOWS_ENV: a manifest names its PRODUCTION host; other environments get the
@@ -40,12 +46,16 @@
 
 import {
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+  catalogSecretKeysFor,
   extractNodeAppSecretRefs,
   extractNodeId,
   extractNodeServices,
   lowerWorkloadManifests,
+  type NodeSecretsCatalogEntry,
+  parseNodeSecretsCatalog,
   parseRepoSpec,
   resolveRuntimeProfileSecretRefs,
+  SecretsCatalogError,
   WorkloadManifestError,
   type WorkloadManifestFile,
   type WorkloadManifestIssue,
@@ -55,7 +65,11 @@ import { parse as parseYaml } from "yaml";
 
 import type { NodeWorkloadSpec } from "@/ports";
 import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
-import { isOffClusterWorkloadSecretKey } from "@/shared/secrets/node-secrets-reserved.data";
+import {
+  inheritedKeyOwner,
+  isNodeOwnedSecretKey,
+  isOffClusterWorkloadSecretKey,
+} from "@/shared/secrets/node-secrets-reserved.data";
 import { hostForEnv, hostOwnedBy } from "./edge";
 import { runtimeOwnedEnvKeys } from "./node-app-env";
 
@@ -70,7 +84,8 @@ export type DeclarationErrorCode =
   | "node_mismatch"
   | "workload_not_declared"
   | "workload_manifest_refused"
-  | "secret_ref_refused";
+  | "secret_ref_refused"
+  | "secrets_catalog_refused";
 
 export class DeclarationError extends Error {
   constructor(
@@ -88,6 +103,8 @@ export function resolveWorkloadDeclaration(input: {
   readonly nodeSlug: string;
   readonly repoSpecText: string;
   readonly manifests: readonly WorkloadManifestFile[];
+  /** The node's `.cogni/secrets-catalog.yaml` at the same sha; `null` or absent = no catalog. */
+  readonly secretsCatalogText?: string | null | undefined;
   readonly nodeId: string;
   readonly env: string;
   readonly workload: string;
@@ -125,6 +142,11 @@ export function resolveWorkloadDeclaration(input: {
       "node_mismatch",
       "the repo-spec at this sha belongs to a different node"
     );
+  const catalog = checkSecretsCatalog(
+    spec,
+    input.nodeSlug,
+    input.secretsCatalogText ?? null
+  );
   let workloads: NodeWorkloadSpec[];
   try {
     workloads = lowerWorkloadManifests(input.manifests, {
@@ -202,7 +224,7 @@ export function resolveWorkloadDeclaration(input: {
           "workload_manifest_refused",
           "companion must match a private unprofiled service and port"
         );
-      const keys = workerSecretKeys(spec, c.name);
+      const keys = workerSecretKeys(spec, c.name, catalog);
       if (
         keys.some(
           (k) =>
@@ -229,8 +251,8 @@ export function resolveWorkloadDeclaration(input: {
     for (const service of services) {
       const secretKeys =
         service.name === main.name
-          ? appSecretKeys(spec)
-          : workerSecretKeys(spec, service.name);
+          ? appSecretKeys(spec, catalog)
+          : workerSecretKeys(spec, service.name, catalog);
       const runtimeKeys = runtimeOwnedEnvKeys(
         service.name === main.name ? "app" : "worker",
         secretKeys
@@ -264,10 +286,10 @@ export function resolveWorkloadDeclaration(input: {
       ? isWorkerService(spec, declared.name)
         ? {
             ...declared,
-            secretKeys: workerSecretKeys(spec, declared.name),
+            secretKeys: workerSecretKeys(spec, declared.name, catalog),
             runtimeProfile: "worker",
           }
-        : { ...declared, secretKeys: appSecretKeys(spec) }
+        : { ...declared, secretKeys: appSecretKeys(spec, catalog) }
       : declared;
   if (declared.companions || declared.health?.qualification) {
     const services = extractNodeServices(spec);
@@ -305,13 +327,13 @@ export function resolveWorkloadDeclaration(input: {
       .map((c) => ({
         ...c,
         env: { ...c.env, ...bindingEnv(c.name) },
-        secretKeys: workerSecretKeys(spec, c.name),
+        secretKeys: workerSecretKeys(spec, c.name, catalog),
       }));
     const { companions: _all, runtimeProfile: _profile, ...rest } = withKeys;
     withKeys = {
       ...rest,
       serviceName: main.name,
-      secretKeys: appSecretKeys(spec),
+      secretKeys: appSecretKeys(spec, catalog),
       ...(companions.length ? { companions } : {}),
       env: { ...rest.env, ...bindingEnv(main.name) },
       artifactPlan: {
@@ -328,6 +350,97 @@ export function resolveWorkloadDeclaration(input: {
       http: { host: hostForEnv(withKeys.expose.http.host, input.env) },
     },
   };
+}
+
+/**
+ * The generate recipes for a resolved release (bug.5254): every key the spec already carries (app, worker
+ * or companion `secretKeys`) that the node catalog declares `source: agent` with a generator. The key SET
+ * is the spec's (one derivation, CD2); the catalog only supplies each key's recipe. The inputs passed
+ * `resolveWorkloadDeclaration`, so they parse.
+ */
+export function generatedSecretRecipes(input: {
+  readonly repoSpecText: string;
+  readonly secretsCatalogText: string | null;
+  readonly nodeSlug: string;
+  readonly spec: NodeWorkloadSpec;
+}): Record<string, { kind: "hex" | "base64"; bytes: number }> {
+  if (input.secretsCatalogText === null || input.spec.kind !== "app") return {};
+  const repoSpec = parseRepoSpec(
+    parseYaml(input.repoSpecText, { prettyErrors: false, logLevel: "error" })
+  );
+  const catalog = parseNodeSecretsCatalog(input.secretsCatalogText, {
+    nodeSlug: input.nodeSlug,
+    serviceNames: extractNodeServices(repoSpec).map((s) => s.name),
+  });
+  const wanted = new Set([
+    ...(input.spec.secretKeys ?? []),
+    ...(input.spec.companions ?? []).flatMap((c) => c.secretKeys ?? []),
+  ]);
+  const out: Record<string, { kind: "hex" | "base64"; bytes: number }> = {};
+  // Only an entry that PROJECTS the key (non-empty `workloads`) may generate it: that is the entry
+  // `checkSecretsCatalog` proved node-owned. A profile key the catalog merely names never qualifies.
+  for (const e of catalog)
+    if (
+      e.source === "agent" &&
+      e.generate &&
+      e.workloads.length > 0 &&
+      wanted.has(e.name)
+    )
+      out[e.name] = { kind: e.generate.kind, bytes: e.generate.bytes };
+  return out;
+}
+
+/**
+ * Check the node's secrets catalog whole (bug.5254). Every key a catalog entry projects into a workload
+ * must be node-owned: never substrate-reserved (the substrate mints it), fleet-inherited (another owner
+ * holds the value) or off-cluster-denied (an operator/fleet credential).
+ */
+function checkSecretsCatalog(
+  spec: ReturnType<typeof parseRepoSpec>,
+  nodeSlug: string,
+  text: string | null
+): readonly NodeSecretsCatalogEntry[] {
+  let catalog: readonly NodeSecretsCatalogEntry[];
+  try {
+    catalog = parseNodeSecretsCatalog(text, {
+      nodeSlug,
+      serviceNames: extractNodeServices(spec).map((s) => s.name),
+    });
+  } catch (error) {
+    if (error instanceof SecretsCatalogError)
+      throw new DeclarationError("secrets_catalog_refused", error.message);
+    throw error;
+  }
+  // A projected key must never be a fleet credential: not fleet-inherited (another owner holds the
+  // value) and not off-cluster-denied. That is the `secret_refs` rule plus the inherited check. A
+  // generated (`source: agent`) key must ALSO not be substrate-reserved: the substrate mints those,
+  // and a second minter is the overwrite-by-another-door Gate 2 blocks. A node-owned reserved key
+  // (e.g. POLY_WALLET_AEAD_KEY_HEX, `source: human`) may still be projected.
+  const fleet = (k: string) =>
+    inheritedKeyOwner(k) !== undefined || !isOffClusterWorkloadSecretKey(k);
+  const refused = catalog
+    .filter(
+      (e) =>
+        (e.workloads.length > 0 && fleet(e.name)) ||
+        (e.source === "agent" &&
+          (fleet(e.name) || !isNodeOwnedSecretKey(e.name)))
+    )
+    .map((e) => e.name);
+  if (refused.length > 0)
+    throw new DeclarationError(
+      "secrets_catalog_refused",
+      `catalog may not project a fleet credential or generate a substrate key; refused: ${refused.join(", ")}`
+    );
+  return catalog;
+}
+
+/** The repo-spec service that carries the node-app profile; a catalog names it to reach the app. */
+function appServiceName(spec: ReturnType<typeof parseRepoSpec>): string {
+  return (
+    extractNodeServices(spec).find(
+      (s) => s.runtimeProfile === "cogni-node-app-v1"
+    )?.name ?? "app"
+  );
 }
 
 /**
@@ -356,14 +469,16 @@ function isWorkerService(
  */
 function workerSecretKeys(
   spec: ReturnType<typeof parseRepoSpec>,
-  name: string
+  name: string,
+  catalog: readonly NodeSecretsCatalogEntry[]
 ): string[] {
   const keys = [
-    ...new Set(
-      (
+    ...new Set([
+      ...(
         extractNodeServices(spec).find((s) => s.name === name)?.secretRefs ?? []
-      ).map((r) => r.key)
-    ),
+      ).map((r) => r.key),
+      ...catalogSecretKeysFor(catalog, name),
+    ]),
   ];
   const refused = keys.filter((k) => !isOffClusterWorkloadSecretKey(k));
   if (refused.length > 0)
@@ -380,11 +495,19 @@ function workerSecretKeys(
  * (task.5411); a not-yet-migrated node's `deployment.services[]` app-service refs are the fallback
  * (`extractNodeAppSecretRefs`). Throws `secret_ref_refused` on any denylisted key.
  */
-function appSecretKeys(spec: ReturnType<typeof parseRepoSpec>): string[] {
-  const keys = resolveRuntimeProfileSecretRefs({
-    runtimeProfile: "cogni-node-app-v1",
-    secretRefs: extractNodeAppSecretRefs(spec),
-  }).map((ref) => ref.key);
+function appSecretKeys(
+  spec: ReturnType<typeof parseRepoSpec>,
+  catalog: readonly NodeSecretsCatalogEntry[]
+): string[] {
+  const keys = [
+    ...new Set([
+      ...resolveRuntimeProfileSecretRefs({
+        runtimeProfile: "cogni-node-app-v1",
+        secretRefs: extractNodeAppSecretRefs(spec),
+      }).map((ref) => ref.key),
+      ...catalogSecretKeysFor(catalog, appServiceName(spec)),
+    ]),
+  ];
   const refused = keys.filter((k) => !isOffClusterWorkloadSecretKey(k));
   if (refused.length > 0)
     throw new DeclarationError(

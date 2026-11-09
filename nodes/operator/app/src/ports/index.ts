@@ -424,6 +424,9 @@ export type {
   VerificationStatus,
 } from "./onchain-verifier.port";
 export type {
+  EnsureGeneratedKeysInput,
+  EnsureGeneratedKeysResult,
+  GeneratedSecretRecipe,
   OperatorSecretsPlanePort,
   SecretWriteOp,
   WriteNodeSecretInput,
