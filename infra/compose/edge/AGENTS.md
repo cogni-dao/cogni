@@ -15,6 +15,7 @@ Always-on TLS termination layer (Caddy). Isolated from app deployments to preven
 
 - [docker-compose.yml](docker-compose.yml): Edge stack (Caddy only)
 - [configs/Caddyfile.tmpl](configs/Caddyfile.tmpl): **generated** by `scripts/ci/render-caddyfile.sh` from `infra/catalog/*.yaml` (task.5078) — edit the catalog + `pnpm gen:caddyfile`, never by hand; CI `render-caddyfile.test.sh` gates drift
+- [configs/catch-all.caddy](configs/catch-all.caddy): **static** snippets (`cogni_catch_all`, `cogni_edge_canary`) — our own 503 page/JSON + `X-Cogni-Edge: caught` for Caddy-generated 502/503/504 (story.5148). Hand-edited; `render-caddyfile.sh` `cat`s it into the generated Caddyfile (embedded, not mounted, so the stdin reload needs no new mount). Every site imports `cogni_catch_all`; only application sites import `cogni_edge_canary` (`/__edge/caught`)
 - [Runtime stack](../runtime/): App + postgres + litellm + alloy (mutable, updated each deploy)
 
 ## Boundaries
@@ -43,7 +44,7 @@ Always-on TLS termination layer (Caddy). Isolated from app deployments to preven
 
 ## Responsibilities
 
-- This directory **does**: TLS termination, HTTP→HTTPS redirect, reverse proxy to app:3000, emit JSON runtime/access logs to container stdout
+- This directory **does**: TLS termination, HTTP→HTTPS redirect, reverse proxy to app:3000, serve its own 503 when Caddy itself raises 502/503/504 (an upstream app's own 503 passes through), emit JSON runtime/access logs to container stdout
 - This directory **does not**: Handle app logic, databases, log shipping, or any mutable services; runtime Alloy owns stdout collection
 
 ## Usage

@@ -30,6 +30,14 @@
 # publish path or its coordinator site. The env is the one whose operator domain equals `--domain`
 # (cogni_operator_domain_for_env), or `--env` when given.
 #
+# story.5148 — every site block imports `cogni_catch_all` (our own 503 page/JSON and the
+# `X-Cogni-Edge: caught` marker for Caddy-generated 502/503/504), and application sites also import
+# `cogni_edge_canary` (`/__edge/caught`). Both snippets live in the static
+# infra/compose/edge/configs/catch-all.caddy, which this script only `cat`s once into the output; it is
+# embedded (not mounted) so the hash-gated stdin reload of the running Caddy needs no new container mount.
+# Application sites also proxy with response_header_timeout 90s (under Cloudflare's 100s, so a hung origin
+# is caught as our 503 instead of Cloudflare's 524); `/api/v1/public/*` keeps its 10s.
+#
 # Usage: render-caddyfile.sh            # write canonical template to stdout
 #        render-caddyfile.sh --check    # diff stdout against the committed file
 #        render-caddyfile.sh --domain <base-domain> [--env <env>]  # concrete runtime config
@@ -44,6 +52,7 @@ source "${SCRIPT_DIR}/lib/mesh-plane.sh"
 source "${SCRIPT_DIR}/../setup/lib/cogni-deployment-identity.sh"
 
 CADDYFILE_PATH="${SCRIPT_DIR}/../../infra/compose/edge/configs/Caddyfile.tmpl"
+CATCH_ALL_PATH="${SCRIPT_DIR}/../../infra/compose/edge/configs/catch-all.caddy"
 
 slug_for_node() { echo "$1" | tr '[:lower:]-' '[:upper:]_'; }
 
@@ -69,6 +78,8 @@ emit_site_block() {
   cat <<BLOCK
 ${host} {
   encode zstd gzip
+  import cogni_catch_all
+  import cogni_edge_canary
 
   @public path /api/v1/public/*
   handle @public {
@@ -80,7 +91,11 @@ ${host} {
     }
   }
 
-  reverse_proxy ${upstream}
+  reverse_proxy ${upstream} {
+    transport http {
+      response_header_timeout 90s
+    }
+  }
 
   log {
     format json
@@ -98,6 +113,7 @@ ${host} {
   tls {
     issuer acme
   }
+  import cogni_catch_all
 
   @mesh path /derp /derp/* /generate_204
   handle @mesh {
@@ -121,7 +137,7 @@ BLOCK
 emit_mesh_publish_site() {
   local host="$1" pair tailnet port
   shift
-  printf '%s {\n  tls {\n    issuer acme\n  }\n' "$host"
+  printf '%s {\n  tls {\n    issuer acme\n  }\n  import cogni_catch_all\n' "$host"
   for pair in "$@"; do
     tailnet="${pair%%=*}"
     port="${pair#*=}"
@@ -158,6 +174,7 @@ ${host} {
   tls {
     issuer acme
   }
+  import cogni_catch_all
 
   @mesh path /ts2021 /key /machine/* /verify
   handle @mesh {
@@ -261,6 +278,13 @@ render() {
 }
 
 HEADER
+
+  # story.5148 — the edge catch-all snippet is one static file (all logic lives there); each site
+  # block below carries `import cogni_catch_all`. It is embedded here, not mounted, so the
+  # hash-gated native reload of the running Caddy needs no new container mount.
+  echo "# ── edge catch-all snippet (verbatim from infra/compose/edge/configs/catch-all.caddy) ──"
+  cat "$CATCH_ALL_PATH"
+  echo
 
   echo "# Redirect www to non-www (canonical operator domain)"
   if [[ -n "$domain" ]]; then
