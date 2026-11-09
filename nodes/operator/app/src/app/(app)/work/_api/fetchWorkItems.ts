@@ -3,20 +3,22 @@
 
 /**
  * Module: `@app/(app)/work/_api/fetchWorkItems`
- * Purpose: Client-side fetch wrappers for work-item list and exact-item reads.
- * Scope: Calls /api/v1/work/items with type-safe contracts. Does not implement business logic.
- * Invariants: Exact-item failures stay typed so only HTTP 404 can render not-found.
+ * Purpose: Client-side fetch wrappers for bounded work summary pages, the work board, and exact-item reads.
+ * Scope: Calls /api/v1/work/{summaries,board,items/{id}} with type-safe contracts. Does not implement business logic.
+ * Invariants:
+ *   - Exact-item failures stay typed so only HTTP 404 can render not-found.
+ *   - Every failure is a `WorkItemFetchError` carrying the HTTP `status`; the package hooks retry only 5xx and network failures.
+ *   - BOUNDED_BOARD_READS: the only list reads are one `/work/summaries` page and one `/work/board` request; nothing here walks cursors (task.0056).
  * Side-effects: IO
  * Links: [work.items.list.v1.contract](../../../../contracts/work.items.list.v1.contract.ts)
  * @internal
  */
 
-import type { WorkItemDto, WorkItemsListOutput } from "@cogni/node-contracts";
-
-const PAGE_SIZE = 500;
-// Hard cap on cursor-walk to avoid runaway loops in degenerate cases (corpus
-// is ~1k today; raising the ceiling here is cheap relative to a stuck UI).
-const MAX_PAGES = 20;
+import type {
+  WorkItemDto,
+  WorkItemSummariesListOutput,
+} from "@cogni/node-contracts";
+import type { WorkBoardColumns } from "@cogni/work-items";
 
 export type WorkItemFetchErrorKind =
   | "not_found"
@@ -46,73 +48,69 @@ function classifyWorkItemFetchStatus(status: number): WorkItemFetchErrorKind {
   return "unexpected";
 }
 
-async function fetchOnePage(
-  cursor: string | null
-): Promise<WorkItemsListOutput> {
-  const params = new URLSearchParams();
-  params.set("limit", String(PAGE_SIZE));
-  if (cursor) params.set("cursor", cursor);
-  const response = await fetch(`/api/v1/work/items?${params.toString()}`, {
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    cache: "no-store",
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({
-      error: "Failed to fetch work items",
-    }));
-    throw new Error(error.error || `HTTP ${response.status}`);
-  }
-  return response.json() as Promise<WorkItemsListOutput>;
-}
-
-export async function fetchWorkItems(): Promise<WorkItemsListOutput> {
-  const all: WorkItemDto[] = [];
-  let cursor: string | null = null;
-  for (let i = 0; i < MAX_PAGES; i++) {
-    const page = await fetchOnePage(cursor);
-    all.push(...page.items);
-    const next = page.pageInfo?.endCursor ?? null;
-    const more = page.pageInfo?.hasMore ?? false;
-    if (!more || !next) {
-      return {
-        items: all,
-        pageInfo: { endCursor: null, hasMore: false },
-      };
-    }
-    cursor = next;
-  }
-  return {
-    items: all,
-    pageInfo: { endCursor: cursor, hasMore: true },
-  };
-}
-
-export async function fetchWorkItem(id: string): Promise<WorkItemDto> {
+async function fetchJson<T>(
+  url: string,
+  fallback: string,
+  signal?: AbortSignal
+): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`/api/v1/work/items/${encodeURIComponent(id)}`, {
+    response = await fetch(url, {
       method: "GET",
+      ...(signal && { signal }),
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
       cache: "no-store",
     });
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     throw new WorkItemFetchError(
       "network",
       "Unable to reach the work-item service"
     );
   }
   if (!response.ok) {
-    const error = await response.json().catch(() => ({
-      error: "Failed to fetch work item",
-    }));
+    const error = await response.json().catch(() => ({ error: fallback }));
     throw new WorkItemFetchError(
       classifyWorkItemFetchStatus(response.status),
       error.error || `HTTP ${response.status}`,
       response.status
     );
   }
-  return response.json() as Promise<WorkItemDto>;
+  return response.json() as Promise<T>;
+}
+
+/** One bounded, server-filtered summary page (table page or one board column page). */
+export function fetchWorkItems(
+  params: URLSearchParams,
+  signal?: AbortSignal
+): Promise<WorkItemSummariesListOutput> {
+  return fetchJson(
+    `/api/v1/work/summaries?${params.toString()}`,
+    "Failed to fetch work items",
+    signal
+  );
+}
+
+/** The first page of every visible board column in one request. */
+export function fetchWorkBoard(
+  params: URLSearchParams,
+  signal?: AbortSignal
+): Promise<WorkBoardColumns> {
+  return fetchJson(
+    `/api/v1/work/board?${params.toString()}`,
+    "Failed to fetch the work board",
+    signal
+  );
+}
+
+export function fetchWorkItem(
+  id: string,
+  signal?: AbortSignal
+): Promise<WorkItemDto> {
+  return fetchJson(
+    `/api/v1/work/items/${encodeURIComponent(id)}`,
+    "Failed to fetch work item",
+    signal
+  );
 }

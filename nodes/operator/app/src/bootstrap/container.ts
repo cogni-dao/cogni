@@ -1079,6 +1079,9 @@ function createContainer(): Container {
     doltgresWorkItems = {
       get: notConfigured,
       list: notConfigured,
+      // Bounded summary pages (task.0056); the facade's Markdown fallback keys on
+      // this error. `listBoardColumns` is optional and stays absent.
+      listSummaries: notConfigured,
       create: notConfigured,
       patch: notConfigured,
       delete: notConfigured,

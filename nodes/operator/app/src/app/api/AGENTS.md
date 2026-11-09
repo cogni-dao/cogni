@@ -5,7 +5,7 @@
 ## Metadata
 
 - **Owners:** @derek @core-dev
-- **Last reviewed:** 2026-10-31
+- **Last reviewed:** 2026-11-09
 - **Status:** draft
 
 ## Purpose
@@ -76,6 +76,8 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/users/me` [GET, PATCH] - current profile
   - `/api/v1/users/me/ownership` [GET] - current ownership summary derived from linked identities
   - `/api/v1/work/items` [GET, POST] - list/create node-local work items (Bearer or SIWE auth)
+  - `/api/v1/work/summaries` [GET] - one bounded summary page (default 25, max 100) via the published `handleWorkSummariesRequest` (session auth; task.0056)
+  - `/api/v1/work/board` [GET] - first page (≤20) of each visible status column via the published `handleWorkBoardRequest`; one composed Doltgres read without text (session auth; task.0056)
   - `/api/v1/work/items/[id]` [GET, PATCH, DELETE] - read/update/delete a node-local work item (Bearer or SIWE auth)
   - `/api/v1/work/items/[id]/claims` [POST] - claim an operator work-item execution session (Bearer or SIWE auth)
   - `/api/v1/work/items/[id]/heartbeat` [POST] - refresh the authenticated user's active work-item session
