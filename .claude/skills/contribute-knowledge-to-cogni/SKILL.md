@@ -21,6 +21,7 @@ and open inboxes, edit operations, citations, provenance, and human review.
 | Does this deserve durable knowledge?                        | `knowledge-syntropy-protocol`                                                        |
 | Which registered domain owns it?                            | `cogni-domain-taxonomy`                                                              |
 | How do repository docs, specs, or skills move into the hub? | `migrate-markdown-to-hub` and its required guides                                    |
+| Is it developer docs for an operator service nodes use?     | a `use-*` shelf, then a row + cite edge in `operator-service-index`                  |
 | Is this a prediction that resolves later?                   | [edo-loop](../edo-loop/SKILL.md)                                                     |
 | Does visual structure help human review?                    | `knowledge-human-visuals`, then [dolt-human-visuals](../dolt-human-visuals/SKILL.md) |
 
