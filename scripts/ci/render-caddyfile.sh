@@ -32,7 +32,7 @@
 #
 # story.5148 — every site block imports `cogni_catch_all` (our own 503 page/JSON and the
 # `X-Cogni-Edge: caught` marker for Caddy-generated 502/503/504), and application sites also import
-# `cogni_edge_canary` (`/__edge/caught`). Both snippets live in the static
+# `cogni_edge_canary` (`/-/edge-probe`). Both snippets live in the static
 # infra/compose/edge/configs/catch-all.caddy, which this script only `cat`s once into the output; it is
 # embedded (not mounted) so the hash-gated stdin reload of the running Caddy needs no new container mount.
 # Application sites also proxy with response_header_timeout 90s (under Cloudflare's 100s, so a hung origin

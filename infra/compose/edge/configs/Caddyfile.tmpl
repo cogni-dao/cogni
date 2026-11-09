@@ -32,8 +32,8 @@
 #   - Every caught response is 503: Cloudflare keeps an origin 503 body but
 #     replaces origin 502/504 pages with its own.
 #   - A browser navigation (Accept has text/html, path not under /api/) gets one
-#     small self-contained page. Every other client gets a JSON body. Both are 503.
-#   - `/__edge/caught` (snippet cogni_edge_canary) is a canary: it proxies to a closed
+#     small self-contained page (no auto-retry, no product name: the edge serves many hosts). Every other client gets a JSON body. Both are 503.
+#   - `/-/edge-probe` (snippet cogni_edge_canary) is a canary (the `/-/` prefix is the GitLab-style reserved system-route convention): it proxies to a closed
 #     local port, so it always raises a Caddy 502 and exercises the branch above
 #     without touching any app. Only application sites import it; the mesh sites
 #     expose just their listed paths and import cogni_catch_all alone.
@@ -49,7 +49,7 @@
 # https://caddyserver.com/docs/caddyfile/matchers · https://caddyserver.com/docs/caddyfile/concepts
 
 (cogni_edge_canary) {
-  handle /__edge/caught {
+  handle /-/edge-probe {
     reverse_proxy 127.0.0.1:9
   }
 }
@@ -74,14 +74,26 @@
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="robots" content="noindex">
-        <meta http-equiv="refresh" content="30">
-        <title>Briefly unavailable</title>
+        <title>Service unavailable</title>
         </head>
-        <body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0d12;color:#e8eaf0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
-        <main style="max-width:30rem;padding:2rem;text-align:center">
-        <h1 style="margin:0 0 .75rem;font-size:1.5rem;font-weight:600">Cogni is briefly unavailable</h1>
-        <p style="margin:0 0 1.25rem;line-height:1.5;color:#b4b9c6">This service is not answering right now. This page retries by itself every 30 seconds. You do not need to do anything.</p>
-        <p style="margin:0;font-size:.75rem;color:#7b8294">Request {http.request.uuid}</p>
+        <body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f6f8fa;color:#1f2328;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;text-align:center">
+        <main style="padding:24px;max-width:420px">
+        <svg width="96" height="96" viewBox="0 0 96 96" fill="none" stroke="#57606a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Sad robot">
+        <circle cx="48" cy="9" r="3"/>
+        <line x1="48" y1="12" x2="48" y2="22"/>
+        <rect x="20" y="22" width="56" height="44" rx="10"/>
+        <line x1="14" y1="40" x2="20" y2="40"/>
+        <line x1="76" y1="40" x2="82" y2="40"/>
+        <circle cx="37" cy="40" r="4"/>
+        <circle cx="59" cy="40" r="4"/>
+        <path d="M37 57 Q48 49 59 57"/>
+        <line x1="38" y1="66" x2="38" y2="76"/>
+        <line x1="58" y1="66" x2="58" y2="76"/>
+        </svg>
+        <h1 style="font-size:24px;font-weight:600;margin:16px 0 8px">Service unavailable</h1>
+        <p style="font-size:16px;line-height:1.5;color:#59636e;margin:0 0 24px">The server didn't respond. Please try again in a moment.</p>
+        <a href="" style="display:inline-block;padding:8px 16px;border:1px solid #d1d9e0;border-radius:6px;background:#fff;color:#1f2328;text-decoration:none;font-size:14px;font-weight:500">Try again</a>
+        <p style="font-size:12px;color:#818b98;margin:24px 0 0">Error 503 · Ref {http.request.uuid}</p>
         </main>
         </body>
         </html>
