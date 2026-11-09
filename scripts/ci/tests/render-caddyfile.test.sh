@@ -318,4 +318,83 @@ done
 grep -Eq 'MESH_|mesh-plane' "$DEPLOY_INFRA" && fail "deploy-infra.sh must carry no mesh-plane logic"
 pass "relay + publish routes for both candidate-a tailnets, coordinator sites per sequencer, one writer with an all-present check, hardened, deploy brain untouched"
 
+echo "[9/9] edge catch-all (story.5148): static snippet embedded verbatim, imported by every site, canary on app sites only"
+CATCH_ALL="infra/compose/edge/configs/catch-all.caddy"
+for rendered in "$RENDERED" "$CAND" "$PROD"; do
+  grep -Fq "$(cat "$CATCH_ALL")" <<<"$rendered" || fail "rendered Caddyfile does not embed $CATCH_ALL verbatim"
+done
+grep -Fq 'handle_errors 502 503 504 {' "$CATCH_ALL" || fail "catch-all must filter handle_errors to 502 503 504"
+grep -Fq 'header X-Cogni-Edge caught' "$CATCH_ALL" || fail "catch-all must set X-Cogni-Edge: caught"
+grep -Fq 'header X-Cogni-Edge-Cause {err.status_code}' "$CATCH_ALL" || fail "catch-all must set X-Cogni-Edge-Cause"
+grep -Fq 'header Retry-After 30' "$CATCH_ALL" || fail "catch-all must set Retry-After"
+grep -Fq 'header Cache-Control no-store' "$CATCH_ALL" || fail "catch-all must set Cache-Control: no-store"
+grep -Fq 'HTML 503' "$CATCH_ALL" || fail "the branded page must answer 503"
+grep -Fq 'origin_unavailable' "$CATCH_ALL" || fail "the JSON branch is missing"
+# Every caught response is 503 (Cloudflare replaces origin 502/504 pages, not 503).
+if grep -Eq '^[[:space:]]*(respond .*|HTML) (502|504)$' "$CATCH_ALL"; then
+  fail "every caught response must be status 503"
+fi
+if grep -Fq 'file_server' "$CATCH_ALL"; then fail "the branded page must be inline respond, not file_server"; fi
+grep -Fq 'reverse_proxy 127.0.0.1:9' "$CATCH_ALL" || fail "canary must proxy to a closed local port"
+if grep -Fq 'catch-all' infra/compose/edge/docker-compose.yml; then
+  fail "the snippet is embedded in the rendered Caddyfile; no compose mount"
+fi
+# Every site block except the www redirect imports the snippet; only application sites carry the canary.
+for rendered in "$CAND" "$PROD"; do
+  hosts="$(awk '/^[^ #}(][^ ]* \{$/ {sub(/ \{$/, ""); print}' <<<"$rendered" | grep -v '^www\.' || true)"
+  [ -n "$hosts" ] || fail "no site blocks found"
+  # All four emitters are covered: application sites, relay (derp-*), publish (VM alias), control (mesh-*).
+  grep -q '^derp-' <<<"$hosts" || fail "relay emitter rendered no site"
+  grep -q '\.vm\.cognidao\.org$' <<<"$hosts" || fail "publish emitter rendered no site"
+  grep -q '^mesh-' <<<"$hosts" || fail "control emitter rendered no site"
+  while read -r host; do
+    b="$(block_of "$host" "$rendered")"
+    grep -Fqx '  import cogni_catch_all' <<<"$b" || fail "$host does not import cogni_catch_all"
+    case "$host" in
+      derp-* | mesh-* | *.vm.cognidao.org)
+        if grep -Fq 'cogni_edge_canary' <<<"$b"; then fail "$host (mesh site) must not expose the canary"; fi ;;
+      *)
+        grep -Fqx '  import cogni_edge_canary' <<<"$b" || fail "application site $host lacks the canary"
+        grep -Fq 'response_header_timeout 90s' <<<"$b" || fail "$host default proxy needs response_header_timeout 90s (under Cloudflare's 100s)"
+        grep -Fq 'response_header_timeout 10s' <<<"$b" || fail "$host lost the 10s timeout on /api/v1/public/*" ;;
+    esac
+  done <<<"$hosts"
+done
+pass "catch-all embedded once, imported by all site blocks, canary only on application sites, 90s proxy timeout"
+
+echo "[10/10] the real Caddy parser accepts the template and both materialized renders (story.5148)"
+# Prefer a local `caddy` binary. Otherwise use the same image the edge runs (infra/compose/edge/docker-compose.yml:
+# `caddy:2`) when docker exists AND this is CI (GitHub runners set CI=true). Never docker on a laptop: skip loudly.
+EDGE_CADDY_IMAGE="$(sed -n 's/^[[:space:]]*image: \(caddy:[^[:space:]]*\)$/\1/p' infra/compose/edge/docker-compose.yml)"
+[ -n "$EDGE_CADDY_IMAGE" ] || fail "could not read the edge caddy image from infra/compose/edge/docker-compose.yml"
+VALIDATE_DIR="$(mktemp -d -t caddy-validate.XXXXXX)"
+trap 'rm -rf "$VALIDATE_DIR"' EXIT
+chmod 755 "$VALIDATE_DIR"
+printf '%s\n' "$RENDERED" > "$VALIDATE_DIR/template.caddyfile"
+printf '%s\n' "$CAND" > "$VALIDATE_DIR/candidate-a.caddyfile"
+printf '%s\n' "$PROD" > "$VALIDATE_DIR/production.caddyfile"
+chmod 644 "$VALIDATE_DIR"/*.caddyfile
+caddy_runner=""
+if command -v caddy >/dev/null 2>&1; then
+  caddy_runner="binary"
+elif [ "${CI:-}" = "true" ] && command -v docker >/dev/null 2>&1; then
+  caddy_runner="docker"
+fi
+case "$caddy_runner" in
+  "") echo "  skip — no caddy binary, and no docker with CI=true; the real-parser check runs on GitHub runners" ;;
+  *)
+    for f in template candidate-a production; do
+      if [ "$caddy_runner" = "binary" ]; then
+        out="$(DOMAIN=validate.example.com caddy validate --config "$VALIDATE_DIR/$f.caddyfile" --adapter caddyfile 2>&1)" \
+          || fail "caddy rejects the $f Caddyfile: $out"
+      else
+        out="$(docker run --rm -e DOMAIN=validate.example.com -v "$VALIDATE_DIR/$f.caddyfile:/etc/caddy/Caddyfile:ro" \
+          "$EDGE_CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1)" \
+          || fail "caddy ($EDGE_CADDY_IMAGE) rejects the $f Caddyfile: $out"
+      fi
+      pass "caddy ($caddy_runner) validates the $f Caddyfile"
+    done
+    ;;
+esac
+
 echo "PASS: render-caddyfile.test.sh"

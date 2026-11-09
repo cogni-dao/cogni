@@ -1,0 +1,78 @@
+# Cogni edge catch-all (story.5148). STATIC — hand-edited, never generated.
+#
+# render-caddyfile.sh emits this file verbatim once (after the global options
+# block) and every site block carries `import cogni_catch_all`. Nothing here is
+# env-specific, so the same text serves every env and every host.
+#
+# What it does
+#   - Caddy itself generates a 502/503/504 (upstream refused, timed out, or no
+#     healthy upstream). `handle_errors` runs ONLY for errors Caddy raised. An
+#     upstream app that answers its own 503 passes through byte-for-byte.
+#   - A caught error gets the `X-Cogni-Edge: caught` marker (grep-able in the
+#     access log and from the client), `X-Cogni-Edge-Cause` (the original Caddy
+#     status), `Retry-After`, and `Cache-Control: no-store`.
+#   - Every caught response is 503: Cloudflare keeps an origin 503 body but
+#     replaces origin 502/504 pages with its own.
+#   - A browser navigation (Accept has text/html, path not under /api/) gets one
+#     small self-contained page. Every other client gets a JSON body. Both are 503.
+#   - `/__edge/caught` (snippet cogni_edge_canary) is a canary: it proxies to a closed
+#     local port, so it always raises a Caddy 502 and exercises the branch above
+#     without touching any app. Only application sites import it; the mesh sites
+#     expose just their listed paths and import cogni_catch_all alone.
+#
+# Escaping: the JSON body and the page use `\{` before a literal brace so Caddy
+# does not read it as a placeholder. The page uses style attributes only (no
+# <style> block), so it has no CSS braces to escape.
+#
+# Docs (Caddy v2): https://caddyserver.com/docs/caddyfile/directives/handle_errors ·
+# https://caddyserver.com/docs/caddyfile/directives/respond ·
+# https://caddyserver.com/docs/caddyfile/directives/header ·
+# https://caddyserver.com/docs/caddyfile/directives/handle ·
+# https://caddyserver.com/docs/caddyfile/matchers · https://caddyserver.com/docs/caddyfile/concepts
+
+(cogni_edge_canary) {
+  handle /__edge/caught {
+    reverse_proxy 127.0.0.1:9
+  }
+}
+
+(cogni_catch_all) {
+  handle_errors 502 503 504 {
+    header X-Cogni-Edge caught
+    header X-Cogni-Edge-Cause {err.status_code}
+    header Retry-After 30
+    header Cache-Control no-store
+
+    @cogni_nav {
+      header Accept *text/html*
+      not path /api/*
+    }
+    handle @cogni_nav {
+      header Content-Type "text/html; charset=utf-8"
+      respond <<HTML
+        <!doctype html>
+        <html lang="en">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noindex">
+        <meta http-equiv="refresh" content="30">
+        <title>Briefly unavailable</title>
+        </head>
+        <body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0b0d12;color:#e8eaf0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
+        <main style="max-width:30rem;padding:2rem;text-align:center">
+        <h1 style="margin:0 0 .75rem;font-size:1.5rem;font-weight:600">Cogni is briefly unavailable</h1>
+        <p style="margin:0 0 1.25rem;line-height:1.5;color:#b4b9c6">This service is not answering right now. This page retries by itself every 30 seconds. You do not need to do anything.</p>
+        <p style="margin:0;font-size:.75rem;color:#7b8294">Request {http.request.uuid}</p>
+        </main>
+        </body>
+        </html>
+        HTML 503
+    }
+
+    handle {
+      header Content-Type application/json
+      respond `\{"error":"origin_unavailable","host":"{http.request.host}"}` 503
+    }
+  }
+}
