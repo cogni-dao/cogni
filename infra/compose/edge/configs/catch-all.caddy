@@ -63,7 +63,7 @@
         <main style="max-width:30rem;padding:2rem;text-align:center">
         <h1 style="margin:0 0 .75rem;font-size:1.5rem;font-weight:600">Cogni is briefly unavailable</h1>
         <p style="margin:0 0 1.25rem;line-height:1.5;color:#b4b9c6">This service is not answering right now. This page retries by itself every 30 seconds. You do not need to do anything.</p>
-        <p style="margin:0;font-size:.75rem;color:#7b8294">Request {http.request.uuid} / ray {http.request.header.Cf-Ray}</p>
+        <p style="margin:0;font-size:.75rem;color:#7b8294">Request {http.request.uuid}</p>
         </main>
         </body>
         </html>
