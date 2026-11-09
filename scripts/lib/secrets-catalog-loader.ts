@@ -255,6 +255,10 @@ export function loadSecretsCatalog(opts: LoadOptions): LoadResult {
   if (existsSync(operatorAbs)) {
     const parsed = parseFile(operatorAbs);
     for (const entry of parsed.secrets) {
+      if (entry.workloads !== undefined)
+        throw new Error(
+          `${operatorAbs}: entry ${entry.name} declares workloads:, which only a node catalog may set (bug.5254).`
+        );
       if (
         entry.service !== undefined &&
         !operatorServiceAllowlist.has(entry.service)

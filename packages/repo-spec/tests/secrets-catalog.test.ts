@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/repo-spec/tests/secrets-catalog`
  * Purpose: Prove the sovereign-node secrets catalog check (bug.5254): real fleet catalog shapes parse,
  *   `workloads` is opt-in and names repo-spec services, and a node cannot declare operator-only fields,
  *   unsafe generators or a schema-invalid entry.
+ * Scope: Unit tests of `parseNodeSecretsCatalog` and `catalogSecretKeysFor` only.
+ * Invariants: NO_SOURCE_ECHO — a refusal never contains catalog values.
  * Side-effects: none
+ * Links: packages/repo-spec/src/secrets-catalog.ts, bug.5254
  */
 
 import { describe, expect, it } from "vitest";
@@ -158,13 +161,17 @@ ${extra}`;
     expect(issuesOf(`# ${"x".repeat(70 * 1024)}\nsecrets: []\n`)).toEqual([
       "too_large",
     ]);
+    const marker = "sk-live-MARKER123";
+    let message = "";
     try {
       parseNodeSecretsCatalog(
-        `secrets:\n  - name: lower\n    value: s3cr3t-value\n`,
+        `secrets:\n  - name: K\n    tier: ${marker}\n    source: ${marker}\n    consumedBy: [${marker}]\n    inheritEnvironmentByLane: { ${marker}: lane }\n    required: false\n    category: c\n    description: d\n    steps: []\n`,
         CTX
       );
     } catch (error) {
-      expect((error as Error).message).not.toContain("s3cr3t-value");
+      message = (error as Error).message;
     }
+    expect(message).toContain("does not match the secrets catalog schema");
+    expect(message).not.toContain("MARKER123");
   });
 });

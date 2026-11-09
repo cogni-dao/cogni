@@ -198,6 +198,54 @@ describe("POST /api/v1/deploy/workloads: one front door, a node deploys from its
     });
   });
 
+  it("reads the node's secrets catalog at the sha and records the keys its workloads names (bug.5254)", async () => {
+    const catalog = `secrets:
+  - name: TOKS5_VENDOR_TOKEN
+    tier: A2
+    source: human
+    workloads: [app]
+    required: true
+    category: Vendor
+    description: Vendor token.
+    steps: []
+`;
+    fetchFileText.mockImplementation(async ({ path: p }: { path: string }) =>
+      p === ".cogni/repo-spec.yaml"
+        ? REPO_SPEC
+        : p === ".cogni/workloads/canary.yaml"
+          ? CANARY_BUILT
+          : p === ".cogni/secrets-catalog.yaml"
+            ? catalog
+            : null
+    );
+    expect((await post()).status).toBe(200);
+    expect(fetchFileText).toHaveBeenCalledWith({
+      owner: "cogni-dao",
+      repo: "toks5",
+      path: ".cogni/secrets-catalog.yaml",
+      ref: SHA,
+    });
+    expect(recorded().spec.secretKeys).toContain("TOKS5_VENDOR_TOKEN");
+  });
+
+  it("refuses 422 secrets_catalog_refused on an invalid catalog, before any store write", async () => {
+    fetchFileText.mockImplementation(async ({ path: p }: { path: string }) =>
+      p === ".cogni/repo-spec.yaml"
+        ? REPO_SPEC
+        : p === ".cogni/workloads/canary.yaml"
+          ? CANARY_BUILT
+          : p === ".cogni/secrets-catalog.yaml"
+            ? "secrets:\n  - name: K\n    tier: A2\n    source: agent\n    required: false\n    category: c\n    description: d\n    steps: []\n"
+            : null
+    );
+    const response = await post();
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "secrets_catalog_refused",
+    });
+    expect(recordRelease).not.toHaveBeenCalled();
+  });
+
   it("decides both lane refusals from the catalog row the gate returned, for the requested env and node", async () => {
     expect((await post("preview")).status).toBe(200);
     expect(envNotServed).toHaveBeenCalledWith("preview", TOKS5_ID, TOKS5_ROW);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/repo-spec/secrets-catalog`
@@ -259,8 +259,12 @@ export function parseNodeSecretsCatalog(
           .map((p) => (typeof p === "number" ? `[${p}]` : `.${p}`))
           .join("")
           .replace(/^\./, ""),
-        // A Zod message names the rule, never the input value.
-        message: i.message,
+        // NO_SOURCE_ECHO: a Zod message can quote the received value or an unknown key, so the
+        // refusal names only the path and a fixed rule.
+        message:
+          i.message === "source: agent or derived requires generate field"
+            ? i.message
+            : "does not match the secrets catalog schema",
       }))
     );
 
