@@ -108,7 +108,7 @@ checks agree.
 
 ## App flight substrate assertions are read-only (operator lane)
 
-A node app on the deploy verb gets its runtime env from OpenBao: the standard node keys plus every key under `deployment.services[].secret_refs` in the node repo-spec. The call carries no secret value ([deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload)). The rest of this section describes the operator flight lane (operator only).
+A node workload on the deploy verb gets its runtime env from OpenBao: for the app, the standard node keys plus its repo-spec `secret_refs`; for a worker, only its own `secret_refs`. Both also get every node `.cogni/secrets-catalog.yaml` entry whose `workloads` names that service (bug.5254). The verb reads the node catalog at `sourceSha` and refuses an invalid one (422 `secrets_catalog_refused`). It does NOT generate values: `secret-materialize.sh` below reads `nodes/<n>/.cogni/secrets-catalog.yaml` only inside the operator monorepo, so a sovereign node's `source: agent` key needs a value written through the operator API until generation ships. The call carries no secret value ([deploy-a-declared-workload](https://cognidao.org/knowledge/deploy-a-declared-workload)). The rest of this section describes the operator flight lane (operator only).
 
 `candidate-flight.yml` uses `scripts/ci/assert-target-substrate.sh` as a
 preflight for selected app rollouts. That gate may verify a Deployment-consumed

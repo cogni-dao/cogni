@@ -177,6 +177,7 @@ export async function recordNodeRelease(
       nodeSlug: node.slug,
       repoSpecText: read.repoSpecText,
       manifests: read.manifests,
+      secretsCatalogText: read.secretsCatalogText,
       nodeId: node.id,
       env,
       workload,
