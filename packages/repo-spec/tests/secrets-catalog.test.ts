@@ -6,7 +6,7 @@
  * Purpose: Prove the sovereign-node secrets catalog check (bug.5254): real fleet catalog shapes parse,
  *   `workloads` is opt-in and names repo-spec services, and a node cannot declare operator-only fields,
  *   unsafe generators or a schema-invalid entry.
- * Scope: Unit tests of `parseNodeSecretsCatalog` and `catalogSecretKeysFor` only.
+ * Scope: Unit tests of `parseNodeSecretsCatalog` and `catalogSecretKeysFor`. Does not test the operator loader or the deploy route.
  * Invariants: NO_SOURCE_ECHO — a refusal never contains catalog values.
  * Side-effects: none
  * Links: packages/repo-spec/src/secrets-catalog.ts, bug.5254
