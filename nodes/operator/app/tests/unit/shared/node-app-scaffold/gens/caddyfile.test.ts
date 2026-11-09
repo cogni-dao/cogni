@@ -12,6 +12,8 @@
  * @public
  */
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { insertCaddyBlock } from "@/shared/node-app-scaffold/gens/caddyfile";
 
@@ -39,6 +41,8 @@ function block(slug: string, upper: string, port: number): string {
   return `# ── ${slug} node → k3s NodePort ${port} ──────────────────────────────────
 {$${upper}_DOMAIN:${slug}.localhost} {
   encode zstd gzip
+  import cogni_catch_all
+  import cogni_edge_canary
 
   @public path /api/v1/public/*
   handle @public {
@@ -50,15 +54,15 @@ function block(slug: string, upper: string, port: number): string {
     }
   }
 
-  reverse_proxy {$${upper}_UPSTREAM:host.docker.internal:${port}}
+  reverse_proxy {$${upper}_UPSTREAM:host.docker.internal:${port}} {
+    transport http {
+      response_header_timeout 90s
+    }
+  }
 
   log {
     format json
-    output file /data/logs/caddy/access-${slug}.log {
-      roll_size 10MB
-      roll_keep 7
-      roll_keep_for 168h
-    }
+    output stdout
   }
 }
 `;
@@ -104,5 +108,35 @@ describe("insertCaddyBlock", () => {
     expect(() => insertCaddyBlock(WITH_RESY, "resy", 30300)).toThrow(
       /already contains a block for node 'resy'/
     );
+  });
+
+  // CD4 (story.5148): the TS port is a second writer of the template. Re-inserting each non-primary
+  // block of the REAL shell-rendered Caddyfile.tmpl must reproduce that file byte-for-byte, so a
+  // render-caddyfile.sh change that this port misses fails here instead of skewing a node-formation PR.
+  it("re-inserting any non-primary block reproduces the real rendered Caddyfile.tmpl", () => {
+    const real = readFileSync(
+      fileURLToPath(
+        new URL(
+          "../../../../../../../../infra/compose/edge/configs/Caddyfile.tmpl",
+          import.meta.url
+        )
+      ),
+      "utf8"
+    );
+    const lines = real.split("\n");
+    const comment = /^# ── (?<node>\S+) node → k3s NodePort (?<port>\d+) ─+$/;
+    const starts = lines.flatMap((line, i) => {
+      const m = comment.exec(line);
+      return m?.groups?.node && m.groups.port
+        ? [{ i, node: m.groups.node, port: Number(m.groups.port) }]
+        : [];
+    });
+    expect(starts.length).toBeGreaterThan(1);
+    for (const { i, node, port } of starts) {
+      // A block runs from its comment to the first column-0 `}`; one blank line precedes it.
+      const close = lines.indexOf("}", i);
+      const without = [...lines.slice(0, i - 1), ...lines.slice(close + 1)];
+      expect(insertCaddyBlock(without.join("\n"), node, port)).toBe(real);
+    }
   });
 });
