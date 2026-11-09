@@ -336,6 +336,16 @@ if grep -Eq '^[[:space:]]*(respond .*|HTML) (502|504)$' "$CATCH_ALL"; then
 fi
 if grep -Fq 'file_server' "$CATCH_ALL"; then fail "the branded page must be inline respond, not file_server"; fi
 grep -Fq 'reverse_proxy 127.0.0.1:9' "$CATCH_ALL" || fail "canary must proxy to a closed local port"
+grep -Fqx '  handle /-/edge-probe {' "$CATCH_ALL" || fail "canary path must be /-/edge-probe (reserved /-/ system-route convention)"
+if grep -Fq '__edge' "$CATCH_ALL" || grep -Fq '__edge' <<<"$RENDERED"; then fail "the retired /__edge/caught path must not return"; fi
+if grep -Fiq 'http-equiv="refresh"' "$CATCH_ALL"; then fail "the error page must not auto-retry (meta refresh)"; fi
+# The page's only placeholder is the request uuid; any other brace in the heredoc would be read as a placeholder.
+page_text="$(sed -n '/respond <<HTML/,/HTML 503/p' "$CATCH_ALL")"
+page_open="$(printf '%s' "$page_text" | tr -cd '{' | wc -c | tr -d ' ')"
+page_close="$(printf '%s' "$page_text" | tr -cd '}' | wc -c | tr -d ' ')"
+[ "$page_open" = "1" ] && [ "$page_close" = "1" ] \
+  || fail "the error page must hold exactly one placeholder brace pair (got $page_open open, $page_close close)"
+grep -Fq 'Ref {http.request.uuid}' "$CATCH_ALL" || fail "the error page must show the request uuid"
 if grep -Fq 'catch-all' infra/compose/edge/docker-compose.yml; then
   fail "the snippet is embedded in the rendered Caddyfile; no compose mount"
 fi
