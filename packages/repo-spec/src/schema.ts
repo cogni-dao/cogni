@@ -301,13 +301,19 @@ const serviceEnvKeySchema = z
     "service environment keys must be uppercase names"
   );
 
-export const nodeServiceSecretRefSchema = z
-  .object({ key: serviceEnvKeySchema })
-  .strict();
+/**
+ * `secret_refs` is retired (bug.5254). A node secret has ONE declaration: its entry in
+ * `.cogni/secrets-catalog.yaml`, whose `workloads` names the services that receive it. A repo-spec that
+ * still carries `secret_refs` (top level or on a service) is refused with this fixed message, never
+ * stripped (CD1: a declared field is never ignored). The text names fields only, so it echoes no value.
+ */
+export const RETIRED_SECRET_REFS_MESSAGE =
+  "secret_refs is retired: declare each node secret in .cogni/secrets-catalog.yaml with `workloads` (bug.5254)";
 
-export type NodeServiceSecretRefSpec = z.infer<
-  typeof nodeServiceSecretRefSchema
->;
+/** The refused `secret_refs` field: absent parses, any value (even `[]`) fails with the fixed message. */
+const retiredSecretRefsSchema = z
+  .never({ message: RETIRED_SECRET_REFS_MESSAGE })
+  .optional();
 
 const relativeBuildPathSchema = z
   .string()
@@ -406,15 +412,8 @@ export const nodeServiceSpecSchema = z
         message: "A service may declare at most 16 sibling bindings",
       })
       .default({}),
-    /** Value-free logical secret needs; scope is derived outside Git. */
-    secret_refs: z
-      .array(nodeServiceSecretRefSchema)
-      .max(32)
-      .refine(
-        (refs) => new Set(refs.map((ref) => ref.key)).size === refs.length,
-        "secret_refs keys must be unique"
-      )
-      .default([]),
+    /** Retired (bug.5254): refused with a fixed message. Node secrets live in the catalog. */
+    secret_refs: retiredSecretRefsSchema,
     bind_host: z.literal("0.0.0.0").default("0.0.0.0"),
     /** Explicit for every declared service; environment policy owns recommended sizes. */
     resources: nodeServiceResourcesSchema,
@@ -551,8 +550,8 @@ export const nodeWorkloadSpecSchema = z
       .default([]),
     /**
      * Secret KEY NAMES (value-free) the operator delivers to an `app` from the node's own OpenBao
-     * bucket: the `cogni-node-app-v1` profile keys plus the node's declared `secret_refs`
-     * (task.5405). Set by the operator when it lowers a declaration at a source sha, NEVER by a
+     * bucket: the `cogni-node-app-v1` profile keys plus the catalog entries whose `workloads` names the
+     * app service (task.5405, bug.5254). Set by the operator when it lowers a declaration at a source sha, NEVER by a
      * manifest. Absent = the profile keys only. Operator/fleet credentials are refused at lowering.
      */
     secretKeys: z.array(serviceEnvKeySchema).max(64).optional(),
@@ -748,17 +747,6 @@ export const nodeDeploymentSchema = z
         });
       } else {
         artifactsByName.set(service.artifact.name, service.artifact);
-      }
-      const bindingKeys = new Set(Object.keys(service.bindings));
-      const conflictingSecret = service.secret_refs.find((ref) =>
-        bindingKeys.has(ref.key)
-      );
-      if (conflictingSecret) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["services", index, "secret_refs"],
-          message: `${conflictingSecret.key} cannot be both a sibling binding and a secret ref`,
-        });
       }
     });
     if (
@@ -1343,20 +1331,11 @@ export const repoSpecSchema = z
     deployment: nodeDeploymentSchema.optional(),
 
     /**
-     * story.5137 / task.5411 — secret KEY names the node's `app` workload needs BEYOND the
-     * `cogni-node-app-v1` profile keys. The node-deploy verb reads this; the legacy
-     * `deployment.services[].secret_refs` is still read as a fallback for nodes not yet migrated.
-     * Values live only in OpenBao; this lists names, never values.
+     * Retired (bug.5254): refused with a fixed message. A node secret is declared once, in
+     * `.cogni/secrets-catalog.yaml` with `workloads`. Declared here (and not left to `.passthrough()`) so a
+     * stale repo-spec fails loudly instead of its keys being silently dropped.
      */
-    secret_refs: z
-      .array(nodeServiceSecretRefSchema)
-      .optional()
-      .refine(
-        (refs) =>
-          refs === undefined ||
-          new Set(refs.map((r) => r.key)).size === refs.length,
-        "secret_refs keys must be unique"
-      ),
+    secret_refs: retiredSecretRefsSchema,
 
     /** Provider-neutral state substrate requested by this sovereign node. */
     state: nodeStateSpecSchema.optional(),

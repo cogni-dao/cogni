@@ -12,13 +12,14 @@
  *   - PROFILE_IMPLIES_ITS_SECRET_CONTRACT: `cogni-node-app-v1` is a named runtime profile, so the
  *     logical secret keys it needs to boot are IMPLIED BY THE PROFILE, not re-listed per node. The
  *     operator supplies them from `COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS` at workload-build time
- *     (`resolveRuntimeProfileSecretRefs`); a node's repo-spec declares only refs BEYOND the profile.
+ *     (`resolveRuntimeProfileSecretRefs`); a node declares any key BEYOND the profile once, in its
+ *     `.cogni/secrets-catalog.yaml` with `workloads` (bug.5254). The repo-spec carries no secret list.
  *     This kills the stale-spec class (bug.5175): a node spec authored before a key was added to the
  *     profile still flights, because the profile — not the git file — is the source of truth.
  *     Scoped by capability (the profile), never by node name.
- *   - SCAFFOLD_AND_RESOLVER_SHARE_ONE_VALUE: the block the node scaffold emits carries NO profile
- *     refs, and the resolver that fills them at build time reads the same constant, so a stock node
- *     and its deployed workload cannot drift.
+ *   - SCAFFOLD_AND_RESOLVER_SHARE_ONE_VALUE: the resolver that fills the profile keys at build time
+ *     reads the same constant the scaffold and the value-presence gate read, so a stock node and its
+ *     deployed workload cannot drift.
  *   - RENDER_ROUND_TRIPS: `renderNodeDeploymentYaml` output re-parses to the same declaration.
  * Side-effects: none
  * Links: packages/repo-spec/src/schema.ts, task.5079, story.5016, bug.5175
@@ -38,7 +39,7 @@ import type {
  *
  * This is a CAPABILITY contract, not a node list: any service that opts into the profile owes
  * these refs, and no node is named. Because the profile OWNS this contract, a node does NOT
- * re-list these keys in its repo-spec — the operator unions them in at workload-build time
+ * re-list these keys anywhere — the operator unions them in at workload-build time
  * (`resolveRuntimeProfileSecretRefs`). The values themselves live only in the node's own
  * `cogni/<env>/<node>/*` scope and are resolved at the provider-I/O boundary; the value-presence
  * gate (`features/compute/compute-workload-manifest.ts`) already reads THIS constant, never the spec's ref list.
@@ -55,10 +56,10 @@ export const COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS = [
   // The knowledge store + Doltgres work-items are part of cogni-node-app-v1 (container.ts
   // builds knowledgeStorePort iff env.DOLTGRES_URL is set). It is composed into every node's
   // bank (secret-materialize COMPOSED_DSN_KEYS) and reaches k3s pods via ESO dataFrom:extract,
-  // but the Akash lane's per-key ExternalSecret only requests the profile+secret_refs set — so
+  // but the Akash lane's per-key ExternalSecret only requests the profile+catalog set — so
   // omitting it here left every Akash node's knowledge routes 503 ("knowledge store not
   // configured") fleet-wide (bug.5265; poly+beacon). Listing it also flips the reconciler's
-  // migrate-doltgres gate (secretRefs.some(DOLTGRES_URL)) ON for Akash, so knowledge_<node> is
+  // migrate-doltgres gate (a DOLTGRES_URL key in the env) ON for Akash, so knowledge_<node> is
   // migrated before serving. DSN, not a password → off-cluster-allowed (like DATABASE_URL).
   "DOLTGRES_URL",
   "EVM_RPC_URL",
@@ -91,10 +92,10 @@ function requiredSecretKeysForRuntimeProfile(
 
 /**
  * The single public Next.js app service every freshly-minted Cogni node ships with.
- * Identical in shape to the historical node-template workload. It declares NO `secret_refs`:
- * the `cogni-node-app-v1` runtime profile owns that contract and the operator unions the
- * required keys in at build time (`resolveRuntimeProfileSecretRefs`). A node lists refs here
- * only when it needs a secret BEYOND the profile.
+ * Identical in shape to the historical node-template workload. It declares no secrets: the
+ * `cogni-node-app-v1` runtime profile owns that contract and the operator unions the required keys
+ * in at build time (`resolveRuntimeProfileSecretRefs`). A node declares a secret BEYOND the profile
+ * in its `.cogni/secrets-catalog.yaml`, never here.
  */
 const COGNI_NODE_APP_V1_SERVICE: NodeServiceSpec = {
   name: "app",
@@ -108,7 +109,6 @@ const COGNI_NODE_APP_V1_SERVICE: NodeServiceSpec = {
   visibility: "public",
   runtime_profile: "cogni-node-app-v1",
   bindings: {},
-  secret_refs: [],
   bind_host: "0.0.0.0",
   resources: { cpu_units: 2, memory_mi: 2048, storage_mi: 4096 },
 };
@@ -120,77 +120,38 @@ export const COGNI_NODE_APP_V1_DEPLOYMENT: NodeDeploymentSpec = {
 
 /**
  * The fallback used when a node declares no `deployment:` block at all. k3s nodes resolve their
- * env through their per-node ExternalSecret overlay rather than through `secret_refs`, so they
- * ride this default. The distinction that matters for off-cluster placement is now PRESENCE of a
- * declared block (`hasDeclaredNodeDeployment`), not the ref list: profile refs are supplied at
- * build time, so the declared block and this fallback share the same empty `secret_refs`.
+ * env through their per-node ExternalSecret overlay, so they ride this default. The distinction that
+ * matters for off-cluster placement is PRESENCE of a declared block (`hasDeclaredNodeDeployment`):
+ * profile keys are supplied at build time, so the declared block and this fallback are the same.
  */
 export const LEGACY_DEFAULT_NODE_DEPLOYMENT: NodeDeploymentSpec = {
-  services: [{ ...COGNI_NODE_APP_V1_SERVICE, secret_refs: [] }],
+  services: [COGNI_NODE_APP_V1_SERVICE],
 };
 
-/** Required keys a runtime-profiled service has not explicitly declared, in contract order. */
-export function missingRuntimeProfileSecretKeys(input: {
-  readonly runtimeProfile?: NodeServiceRuntimeProfileSpec | undefined;
-  readonly secretRefs: readonly { readonly key: string }[];
-}): readonly string[] {
-  const required = requiredSecretKeysForRuntimeProfile(input.runtimeProfile);
-  const declared = new Set(input.secretRefs.map((ref) => ref.key));
-  return required.filter((key) => !declared.has(key));
-}
-
 /**
- * Resolve the secret refs a service's workload actually receives: the keys its runtime profile
- * implies, unioned with any EXTRA refs the node declared. This is where the profile's ownership
- * of its secret contract is realized — the operator supplies the standard keys so a node need
- * not (and should not) re-list them in git.
- *
- * Profile keys come first, in contract order, then any node-declared extras, deduped. A service
- * with no recognized runtime profile is returned unchanged (its refs are whatever it declared).
+ * The secret refs a service's workload receives from its runtime profile: the keys the profile
+ * implies, in contract order. This is where the profile's ownership of its secret contract is
+ * realized: the operator supplies the standard keys so a node does not re-list them in git. Keys
+ * BEYOND the profile come from the node's secrets catalog (`catalogSecretKeysFor`), never from here.
+ * A service with no recognized runtime profile gets none.
  */
 export function resolveRuntimeProfileSecretRefs(input: {
   readonly runtimeProfile?: NodeServiceRuntimeProfileSpec | undefined;
-  readonly secretRefs: readonly { readonly key: string }[];
 }): readonly { readonly key: string }[] {
-  const required = requiredSecretKeysForRuntimeProfile(input.runtimeProfile);
-  if (required.length === 0) return input.secretRefs;
-  const seen = new Set<string>();
-  const resolved: { readonly key: string }[] = [];
-  for (const key of required) {
-    if (!seen.has(key)) {
-      seen.add(key);
-      resolved.push({ key });
-    }
-  }
-  for (const ref of input.secretRefs) {
-    if (!seen.has(ref.key)) {
-      seen.add(ref.key);
-      resolved.push({ key: ref.key });
-    }
-  }
-  return resolved;
+  return requiredSecretKeysForRuntimeProfile(input.runtimeProfile).map(
+    (key) => ({ key })
+  );
 }
 
 /**
  * Render a `deployment:` block as top-level `.cogni/repo-spec.yaml` YAML.
  * Used both to mint a node and to show an author exactly what to paste when theirs is absent.
  *
- * An empty `secret_refs` list is omitted from the rendered YAML so the block a node carries is
- * clean: the profile supplies the standard keys, and a node adds refs here only for extras.
- * Round-trips because the schema re-applies the `secret_refs: []` default on parse.
+ * The block carries no secret list: the profile supplies the standard keys, and a node declares
+ * any extra key in its secrets catalog.
  */
 export function renderNodeDeploymentYaml(
   deployment: NodeDeploymentSpec = COGNI_NODE_APP_V1_DEPLOYMENT
 ): string {
-  const services = deployment.services.map((service) => {
-    if (service.secret_refs.length > 0) return service;
-    const { secret_refs: _omit, ...rest } = service;
-    return rest;
-  });
-  return stringify(
-    { deployment: { ...deployment, services } },
-    {
-      lineWidth: 0,
-    }
-  );
+  return stringify({ deployment }, { lineWidth: 0 });
 }

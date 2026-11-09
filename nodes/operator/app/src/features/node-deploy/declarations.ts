@@ -23,17 +23,18 @@
  *     before the first paid create. With neither it is refused `built_image_unresolved`, so a mutable tag
  *     never reaches a create.
  *   - SECRET_KEYS_ARE_DECLARED_NOT_DISCOVERED (task.5405): an `app` carries the explicit, value-free list
- *     of secret KEY names it may receive: the `cogni-node-app-v1` profile keys plus the app service's
- *     declared `secret_refs` (`resolveRuntimeProfileSecretRefs`, the helper the Crossplane lane used).
- *     Any operator/fleet/substrate credential on that list is refused here (`secret_ref_refused`), so
+ *     of secret KEY names it may receive: the `cogni-node-app-v1` profile keys plus the catalog entries
+ *     whose `workloads` names the app service (`resolveRuntimeProfileSecretRefs`, the helper the
+ *     Crossplane lane used). Any operator/fleet/substrate credential on that list is refused here (`secret_ref_refused`), so
  *     it can never reach rented compute; fleet-inherited keys that are merely in the bucket are not
  *     on the list and are never delivered.
- *   - CATALOG_DECLARES_CONSUMERS (bug.5254): a node's `.cogni/secrets-catalog.yaml` at the same sha adds
- *     every entry whose `workloads` names the workload's repo-spec service. The catalog is checked whole
+ *   - CATALOG_IS_THE_ONLY_SECRET_DECLARATION (bug.5254): a node's `.cogni/secrets-catalog.yaml` at the same
+ *     sha is the ONE place a node declares a secret. Its entries whose `workloads` names the workload's
+ *     repo-spec service are the keys beyond the profile. A repo-spec that still carries `secret_refs` is
+ *     refused (`secret_ref_refused`, fixed message), never stripped (CD1). The catalog is checked whole
  *     (`parseNodeSecretsCatalog`, pass 1 + sovereign pass 2) before any workload resolves; a refused
  *     catalog refuses the release (`secrets_catalog_refused`). A catalog-projected key must be node-owned:
- *     a substrate-reserved, fleet-inherited or off-cluster-denied key is refused. `secret_refs` remains a
- *     transition input with its existing check.
+ *     a substrate-reserved, fleet-inherited or off-cluster-denied key is refused.
  *   - PLACEMENT_FOLLOWS_ENV (story.5141): the app carries the manifest's placement set for `env`
  *     (`placement.requiredCountryCodes`), frozen into the release with the rest of the spec (CD3).
  *   - HOST_FOLLOWS_ENV: a manifest names its PRODUCTION host; other environments get the
@@ -47,13 +48,13 @@
 import {
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
   catalogSecretKeysFor,
-  extractNodeAppSecretRefs,
   extractNodeId,
   extractNodeServices,
   lowerWorkloadManifests,
   type NodeSecretsCatalogEntry,
   parseNodeSecretsCatalog,
   parseRepoSpec,
+  RETIRED_SECRET_REFS_MESSAGE,
   resolveRuntimeProfileSecretRefs,
   SecretsCatalogError,
   WorkloadManifestError,
@@ -131,7 +132,17 @@ export function resolveWorkloadDeclaration(input: {
   let spec: ReturnType<typeof parseRepoSpec>;
   try {
     spec = parseRepoSpec(raw);
-  } catch {
+  } catch (error) {
+    // A retired `secret_refs` fails with its own fixed text (bug.5254). Surface that constant only: the
+    // schema's message can quote repo-spec text (NO_SOURCE_ECHO). The release is refused, never stripped.
+    if (
+      error instanceof Error &&
+      error.message.includes(RETIRED_SECRET_REFS_MESSAGE)
+    )
+      throw new DeclarationError(
+        "secret_ref_refused",
+        RETIRED_SECRET_REFS_MESSAGE
+      );
     throw new DeclarationError(
       "repo_spec_unparseable",
       "repo-spec does not match the repo-spec schema"
@@ -224,7 +235,7 @@ export function resolveWorkloadDeclaration(input: {
           "workload_manifest_refused",
           "companion must match a private unprofiled service and port"
         );
-      const keys = workerSecretKeys(spec, c.name, catalog);
+      const keys = workerSecretKeys(c.name, catalog);
       if (
         keys.some(
           (k) =>
@@ -252,7 +263,7 @@ export function resolveWorkloadDeclaration(input: {
       const secretKeys =
         service.name === main.name
           ? appSecretKeys(spec, catalog)
-          : workerSecretKeys(spec, service.name, catalog);
+          : workerSecretKeys(service.name, catalog);
       const runtimeKeys = runtimeOwnedEnvKeys(
         service.name === main.name ? "app" : "worker",
         secretKeys
@@ -286,7 +297,7 @@ export function resolveWorkloadDeclaration(input: {
       ? isWorkerService(spec, declared.name)
         ? {
             ...declared,
-            secretKeys: workerSecretKeys(spec, declared.name, catalog),
+            secretKeys: workerSecretKeys(declared.name, catalog),
             runtimeProfile: "worker",
           }
         : { ...declared, secretKeys: appSecretKeys(spec, catalog) }
@@ -327,7 +338,7 @@ export function resolveWorkloadDeclaration(input: {
       .map((c) => ({
         ...c,
         env: { ...c.env, ...bindingEnv(c.name) },
-        secretKeys: workerSecretKeys(spec, c.name, catalog),
+        secretKeys: workerSecretKeys(c.name, catalog),
       }));
     const { companions: _all, runtimeProfile: _profile, ...rest } = withKeys;
     withKeys = {
@@ -412,7 +423,7 @@ function checkSecretsCatalog(
     throw error;
   }
   // A projected key must never be a fleet credential: not fleet-inherited (another owner holds the
-  // value) and not off-cluster-denied. That is the `secret_refs` rule plus the inherited check. A
+  // value) and not off-cluster-denied. That is the off-cluster denylist plus the inherited check. A
   // generated (`source: agent`) key must ALSO not be substrate-reserved: the substrate mints those,
   // and a second minter is the overwrite-by-another-door Gate 2 blocks. A node-owned reserved key
   // (e.g. POLY_WALLET_AEAD_KEY_HEX, `source: human`) may still be projected.
@@ -464,36 +475,26 @@ function isWorkerService(
 }
 
 /**
- * The secret KEY names a worker may receive: ONLY the `secret_refs` its own service declares (no profile
- * keys). Throws `secret_ref_refused` on any denylisted key, exactly like an app.
+ * The secret KEY names a worker may receive: ONLY the catalog entries whose `workloads` names its own
+ * service (no profile keys). Throws `secret_ref_refused` on any denylisted key, exactly like an app.
  */
 function workerSecretKeys(
-  spec: ReturnType<typeof parseRepoSpec>,
   name: string,
   catalog: readonly NodeSecretsCatalogEntry[]
 ): string[] {
-  const keys = [
-    ...new Set([
-      ...(
-        extractNodeServices(spec).find((s) => s.name === name)?.secretRefs ?? []
-      ).map((r) => r.key),
-      ...catalogSecretKeysFor(catalog, name),
-    ]),
-  ];
+  const keys = [...new Set(catalogSecretKeysFor(catalog, name))];
   const refused = keys.filter((k) => !isOffClusterWorkloadSecretKey(k));
   if (refused.length > 0)
     throw new DeclarationError(
       "secret_ref_refused",
-      `secret_refs name operator/fleet credentials that may not reach an off-cluster workload: ${refused.join(", ")}`
+      `secret keys name operator/fleet credentials that may not reach an off-cluster workload: ${refused.join(", ")}`
     );
   return keys;
 }
 
 /**
- * The secret KEY names an app may receive: profile keys first (contract order), then the app service's
- * extra declared `secret_refs`, deduped. Extra refs come from the repo-spec top-level `secret_refs`
- * (task.5411); a not-yet-migrated node's `deployment.services[]` app-service refs are the fallback
- * (`extractNodeAppSecretRefs`). Throws `secret_ref_refused` on any denylisted key.
+ * The secret KEY names an app may receive: profile keys first (contract order), then the catalog entries
+ * whose `workloads` names the app service, deduped. Throws `secret_ref_refused` on any denylisted key.
  */
 function appSecretKeys(
   spec: ReturnType<typeof parseRepoSpec>,
@@ -503,7 +504,6 @@ function appSecretKeys(
     ...new Set([
       ...resolveRuntimeProfileSecretRefs({
         runtimeProfile: "cogni-node-app-v1",
-        secretRefs: extractNodeAppSecretRefs(spec),
       }).map((ref) => ref.key),
       ...catalogSecretKeysFor(catalog, appServiceName(spec)),
     ]),
@@ -512,7 +512,7 @@ function appSecretKeys(
   if (refused.length > 0)
     throw new DeclarationError(
       "secret_ref_refused",
-      `secret_refs name operator/fleet credentials that may not reach an off-cluster workload: ${refused.join(", ")}`
+      `secret keys name operator/fleet credentials that may not reach an off-cluster workload: ${refused.join(", ")}`
     );
   return keys;
 }

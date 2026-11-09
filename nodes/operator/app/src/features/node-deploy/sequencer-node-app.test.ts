@@ -84,7 +84,7 @@ const PROFILE_BUCKET: Record<string, string> = Object.fromEntries(
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS.map((k) => [k, `value-of-${k}`])
 );
 
-/** Fleet-inherited keys that sit in a node's bucket but are not in its declared secret_refs. */
+/** Fleet-inherited keys that sit in a node's bucket but are not in its declared catalog keys. */
 const INHERITED = {
   GH_WEBHOOK_SECRET: "inherited-wh",
   POSTHOG_API_KEY: "inherited-ph",
@@ -1359,7 +1359,6 @@ const SERVICE_DECLARATIONS = [
     port: 8181,
     visibility: "private",
     envs: ["candidate-a", "preview"],
-    secret_refs: [{ key: "HELPER_ACCESS" }],
     resources: { cpu_units: 0.25, memory_mi: 256, storage_mi: 256 },
   }),
 ];
@@ -1936,7 +1935,30 @@ describe("private release companions", () => {
   });
 });
 
+/** A node secrets catalog of `source: human` entries; `workloads` names the repo-spec services that receive each key. */
+function catalogText(
+  entries: readonly { name: string; workloads: string[] }[]
+) {
+  return `secrets:\n${entries
+    .map(
+      (e) => `  - name: ${e.name}
+    tier: A2
+    source: human
+    workloads: [${e.workloads.join(", ")}]
+    required: true
+    category: Node
+    description: Node-owned key.
+    steps: []
+`
+    )
+    .join("")}`;
+}
+
 function declarationInput() {
+  /** The node catalog: the helper receives HELPER_ACCESS. A test may replace it (bug.5254). */
+  let catalog: { name: string; workloads: string[] }[] = [
+    { name: "HELPER_ACCESS", workloads: ["helper"] },
+  ];
   const spec = buildTestRepoSpec({
     node_id: POLY_ID,
     deployment: { services: SERVICE_DECLARATIONS },
@@ -1971,11 +1993,18 @@ function declarationInput() {
   return {
     spec,
     manifest,
+    get catalog() {
+      return catalog;
+    },
+    set catalog(entries) {
+      catalog = entries;
+    },
     resolve: (environment = "preview") =>
       resolveWorkloadDeclaration({
         workloadZone: WORKLOAD_ZONE,
         nodeSlug: "poly",
         repoSpecText: stringify(spec),
+        secretsCatalogText: catalogText(catalog),
         manifests: [
           { path: ".cogni/workloads/canary.yaml", text: stringify(manifest) },
         ],
@@ -2043,24 +2072,23 @@ describe("same-source Score/declaration bridge", () => {
     if (failure === "undeclared") helper.name = "other-helper";
     if (failure === "profile") helper.runtime_profile = "cogni-node-app-v1";
     if (failure === "auth-secret")
-      helper.secret_refs = [{ key: "AUTH_SECRET" }];
-    if (failure === "db-secret") helper.secret_refs = [{ key: "DOLTGRES_URL" }];
+      d.catalog = [{ name: "AUTH_SECRET", workloads: ["helper"] }];
+    if (failure === "db-secret")
+      d.catalog = [{ name: "DOLTGRES_URL", workloads: ["helper"] }];
     if (failure === "app-profile")
-      helper.secret_refs = [{ key: "BILLING_INGEST_TOKEN" }];
+      d.catalog = [{ name: "BILLING_INGEST_TOKEN", workloads: ["helper"] }];
     expect(() => d.resolve("production")).toThrow(DeclarationError);
   });
   it.each([
-    ["preview", "top-level"],
-    ["production", "top-level"],
-    ["preview", "service"],
-    ["production", "service"],
+    ["preview", "catalog"],
+    ["production", "catalog"],
     ["preview", "profile"],
     ["production", "profile"],
   ])("refuses public binding/secret conflicts in %s from %s", (env, authority) => {
     const d = declarationInput();
     const app = requiredFixture(requiredFixture(d.spec.deployment).services[0]);
-    if (authority === "top-level") d.spec.secret_refs = [{ key: "HELPER_URL" }];
-    else if (authority === "service") app.secret_refs = [{ key: "HELPER_URL" }];
+    if (authority === "catalog")
+      d.catalog = [{ name: "HELPER_URL", workloads: ["canary"] }];
     else app.bindings = { AUTH_SECRET: "helper" };
     expect(() => d.resolve(env)).toThrow(DeclarationError);
   });
@@ -2976,9 +3004,7 @@ describe("review repair digest and companion gates", () => {
     });
     expect(() => d.resolve(env)).toThrow(DeclarationError);
     Object.assign(d.manifest.containers.helper, { variables: {} });
-    requiredFixture(
-      requiredFixture(d.spec.deployment).services[1]
-    ).secret_refs = [{ key: "BACKEND_URL" }];
+    d.catalog = [{ name: "BACKEND_URL", workloads: ["helper"] }];
     expect(() => d.resolve(env)).toThrow(DeclarationError);
   });
 });
@@ -3065,6 +3091,7 @@ describe("green migrates itself before it serves (task.5408)", () => {
       workloadZone: WORKLOAD_ZONE,
       nodeSlug: "poly",
       repoSpecText: stringify(d.spec),
+      secretsCatalogText: catalogText(d.catalog),
       manifests: [
         { path: ".cogni/workloads/canary.yaml", text: stringify(manifest) },
       ],

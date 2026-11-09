@@ -17,9 +17,9 @@
 
 import {
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
-  extractNodeAppSecretRefs,
   hasDeclaredNodeDeployment,
   parseRepoSpec,
+  RETIRED_SECRET_REFS_MESSAGE,
   resolveRuntimeProfileSecretRefs,
 } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
@@ -172,21 +172,20 @@ describe("renderRepoSpec — NO_LEGACY_DEPLOYMENT_BLOCK (task.5411)", () => {
     expect(rendered).not.toMatch(/^deployment:/m);
   });
 
-  it("declares no extra secret_refs; the profile supplies the full contract", () => {
-    expect(extractNodeAppSecretRefs(parsed)).toEqual([]);
+  it("carries no secret list; the profile supplies the full contract", () => {
+    expect(rendered).not.toMatch(/^\s*secret_refs:/m);
     expect(rendered).not.toContain("EVM_RPC_URL");
     expect(
       resolveRuntimeProfileSecretRefs({
         runtimeProfile: "cogni-node-app-v1",
-        secretRefs: extractNodeAppSecretRefs(parsed),
       }).map((ref) => ref.key)
     ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
   });
 
-  it("reads a top-level secret_refs before the legacy deployment block", () => {
-    const withRefs = parseRepoSpec(
-      `${rendered}\nsecret_refs:\n  - key: EXTRA_KEY\n`
-    );
-    expect(extractNodeAppSecretRefs(withRefs)).toEqual([{ key: "EXTRA_KEY" }]);
+  it("tells a new node to use the catalog; the schema refuses secret_refs", () => {
+    expect(rendered).toContain(".cogni/secrets-catalog.yaml");
+    expect(() =>
+      parseRepoSpec(`${rendered}\nsecret_refs:\n  - key: EXTRA_KEY\n`)
+    ).toThrow(RETIRED_SECRET_REFS_MESSAGE);
   });
 });

@@ -14,12 +14,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  COGNI_NODE_APP_V1_DEPLOYMENT,
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
   extractNodeServices,
   hasDeclaredNodeDeployment,
   parseRepoSpec,
-  renderNodeDeploymentYaml,
+  RETIRED_SECRET_REFS_MESSAGE,
 } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
 import {
@@ -172,15 +171,22 @@ describe("the operator's checked-in canary workload manifest", () => {
   });
 });
 
-describe("declared secret keys on an app release (task.5405)", () => {
-  /** The operator's repo-spec plus an app-tier `deployment:` block declaring extra secret_refs. */
-  const withRefs = (keys: string[]) => {
-    const [service] = COGNI_NODE_APP_V1_DEPLOYMENT.services;
-    if (!service) throw new Error("fixture");
-    return `${ROOT_SPEC}\n${renderNodeDeploymentYaml({
-      services: [{ ...service, secret_refs: keys.map((key) => ({ key })) }],
-    })}`;
-  };
+describe("declared secret keys on an app release (task.5405, bug.5254)", () => {
+  /** A node catalog entry (`source: human`) that names the app service, so the key reaches the app. */
+  const catalogFor = (keys: string[]) =>
+    `secrets:\n${keys
+      .map(
+        (key) => `  - name: ${key}
+    tier: A2
+    source: human
+    workloads: [app]
+    required: true
+    category: Node
+    description: Node-owned key.
+    steps: []
+`
+      )
+      .join("")}`;
   const PROFILE = [...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS];
 
   it("an app carries the profile keys; a state workload carries none", () => {
@@ -188,22 +194,33 @@ describe("declared secret keys on an app release (task.5405)", () => {
     expect(resolve({ workload: "canary-db" }).secretKeys).toBeUndefined();
   });
 
-  it("a declared secret_ref is added after the profile keys, deduped (poly's PAPER_ENFORCE_MODE)", () => {
+  it("a catalog key naming the app is added after the profile keys (poly's PAPER_ENFORCE_MODE)", () => {
     const w = resolve({
-      repoSpecText: withRefs(["PAPER_ENFORCE_MODE", "AUTH_SECRET"]),
+      secretsCatalogText: catalogFor(["PAPER_ENFORCE_MODE"]),
     });
     expect(w.secretKeys).toEqual([...PROFILE, "PAPER_ENFORCE_MODE"]);
     // a key merely present in some bucket is never listed: only declarations are
     expect(w.secretKeys).not.toContain("GH_WEBHOOK_SECRET");
   });
 
-  it("refuses a declared operator/fleet credential at lowering (secret_ref_refused), naming the key", () => {
+  it("refuses a catalog key that is an operator/fleet credential, naming the key", () => {
     for (const key of ["LITELLM_MASTER_KEY", "CLOUDFLARE_API_TOKEN"])
-      expect(() => resolve({ repoSpecText: withRefs([key]) })).toThrow(
+      expect(() => resolve({ secretsCatalogText: catalogFor([key]) })).toThrow(
         expect.objectContaining({
-          code: "secret_ref_refused",
+          code: "secrets_catalog_refused",
           message: expect.stringContaining(key),
         })
       );
+  });
+
+  it("refuses a repo-spec carrying secret_refs with the fixed catalog message (bug.5254)", () => {
+    expect(() =>
+      resolve({ repoSpecText: `${ROOT_SPEC}\nsecret_refs:\n  - key: X_KEY\n` })
+    ).toThrow(
+      expect.objectContaining({
+        code: "secret_ref_refused",
+        message: RETIRED_SECRET_REFS_MESSAGE,
+      })
+    );
   });
 });

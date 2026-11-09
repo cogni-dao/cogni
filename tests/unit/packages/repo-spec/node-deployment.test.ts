@@ -18,8 +18,8 @@ import {
   extractNodeServices,
   hasDeclaredNodeDeployment,
   LEGACY_DEFAULT_NODE_DEPLOYMENT,
-  missingRuntimeProfileSecretKeys,
   parseRepoSpec,
+  RETIRED_SECRET_REFS_MESSAGE,
   renderNodeDeploymentYaml,
   resolveRuntimeProfileSecretRefs,
 } from "@cogni/repo-spec";
@@ -52,7 +52,6 @@ describe("node deployment repo-spec", () => {
         visibility: "public",
         runtimeProfile: "cogni-node-app-v1",
         bindings: {},
-        secretRefs: [],
         bindHost: "0.0.0.0",
         internalUrl: "http://app:3200",
         resources: {
@@ -102,7 +101,6 @@ describe("node deployment repo-spec", () => {
       port: 9100,
       visibility: "private",
       bindings: {},
-      secretRefs: [],
       bindHost: "0.0.0.0",
       internalUrl: "http://echo-sidecar:9100",
       resources: { cpuUnits: 2, memoryMi: 16384, storageMi: 65536 },
@@ -187,28 +185,37 @@ describe("node deployment repo-spec", () => {
     );
   });
 
-  it("carries bounded value-free secret requirements", () => {
-    const spec = buildTestRepoSpec({
-      deployment: {
-        services: [
-          { ...APP, secret_refs: [{ key: "APP_TOKEN" }] },
-          {
-            name: "worker",
-            artifact: { name: "worker" },
-            port: 9100,
-            visibility: "private",
-            resources: {
-              cpu_units: 0.5,
-              memory_mi: 1024,
-              storage_mi: 2048,
-            },
+  it("refuses secret_refs on a service with the fixed catalog message (bug.5254)", () => {
+    for (const refs of [[{ key: "APP_TOKEN" }], []])
+      expect(() =>
+        buildTestRepoSpec({
+          deployment: {
+            services: [{ ...APP, secret_refs: refs }],
           },
-        ],
-      },
-    });
-    expect(extractNodeServices(spec)[0]?.secretRefs).toEqual([
-      { key: "APP_TOKEN" },
-    ]);
+        })
+      ).toThrow(RETIRED_SECRET_REFS_MESSAGE);
+  });
+
+  it("refuses a top-level secret_refs with the fixed message, never stripping it (bug.5254)", () => {
+    for (const refs of [[{ key: "APP_TOKEN" }], []])
+      expect(() =>
+        parseRepoSpec({
+          node_id: "00000000-0000-4000-8000-000000000001",
+          governance: {},
+          secret_refs: refs,
+        })
+      ).toThrow(RETIRED_SECRET_REFS_MESSAGE);
+    expect(RETIRED_SECRET_REFS_MESSAGE).toContain(
+      ".cogni/secrets-catalog.yaml"
+    );
+    expect(RETIRED_SECRET_REFS_MESSAGE).toContain("workloads");
+    // Absent parses, so a migrated node is unaffected.
+    expect(
+      parseRepoSpec({
+        node_id: "00000000-0000-4000-8000-000000000001",
+        governance: {},
+      }).node_id
+    ).toBe("00000000-0000-4000-8000-000000000001");
   });
 
   it("keeps explicit services generic unless they opt into app compatibility", () => {
@@ -407,23 +414,11 @@ describe("node deployment repo-spec", () => {
       message: /binding target is not declared/,
     },
     {
-      name: "secret value in Git",
+      name: "a retired secret_refs list, even one carrying a value",
       services: [
         { ...APP, secret_refs: [{ key: "APP_TOKEN", value: "forbidden" }] },
       ],
-      message: /Invalid repo-spec structure/,
-    },
-    {
-      name: "binding and secret collision",
-      services: [
-        {
-          ...APP,
-          bindings: { APP_TOKEN: "worker" },
-          secret_refs: [{ key: "APP_TOKEN" }],
-        },
-        { ...APP, name: "worker", visibility: "private" },
-      ],
-      message: /cannot be both a sibling binding and a secret ref/,
+      message: RETIRED_SECRET_REFS_MESSAGE,
     },
   ])("rejects $name", ({ services, message }) => {
     expect(() =>
@@ -498,65 +493,45 @@ describe("cogni-node-app-v1 deployment contract", () => {
     ).toBe(true);
   });
 
-  it("keeps the legacy fallback secret-free so k3s nodes are untouched", () => {
-    expect(LEGACY_DEFAULT_NODE_DEPLOYMENT.services[0]?.secret_refs).toEqual([]);
-    expect(extractNodeServices(buildTestRepoSpec())[0]?.secretRefs).toEqual([]);
+  it("keeps the legacy fallback free of any secret list so k3s nodes are untouched", () => {
+    expect(LEGACY_DEFAULT_NODE_DEPLOYMENT.services[0]).not.toHaveProperty(
+      "secret_refs"
+    );
+    expect(extractNodeServices(buildTestRepoSpec())[0]).not.toHaveProperty(
+      "secretRefs"
+    );
   });
 
   it("keeps the profile's required keys as a capability contract, not a per-node list", () => {
     expect(COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS).toContain("EVM_RPC_URL");
-    // The stock deployment no longer re-lists the profile's keys — the profile owns them (bug.5175).
-    expect(COGNI_NODE_APP_V1_DEPLOYMENT.services[0]?.secret_refs).toEqual([]);
-    // A service without the profile owes nothing — the contract is capability-scoped.
-    expect(missingRuntimeProfileSecretKeys({ secretRefs: [] })).toEqual([]);
-    // The query still reports every profile key as "not explicitly declared" on an empty list.
-    expect(
-      missingRuntimeProfileSecretKeys({
-        runtimeProfile: "cogni-node-app-v1",
-        secretRefs: [],
-      })
-    ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
+    // The stock deployment no longer re-lists the profile's keys; the profile owns them (bug.5175).
+    expect(COGNI_NODE_APP_V1_DEPLOYMENT.services[0]).not.toHaveProperty(
+      "secret_refs"
+    );
   });
 
-  it("resolves a profiled service to the full contract, deduped, extras last", () => {
-    // Empty declaration → exactly the profile keys, in contract order.
+  it("resolves a profiled service to exactly its profile keys, in contract order", () => {
     expect(
       resolveRuntimeProfileSecretRefs({
         runtimeProfile: "cogni-node-app-v1",
-        secretRefs: [],
       }).map((ref) => ref.key)
     ).toEqual([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS]);
-
-    // A re-listed profile key is deduped; a genuine extra is appended after the profile keys.
-    expect(
-      resolveRuntimeProfileSecretRefs({
-        runtimeProfile: "cogni-node-app-v1",
-        secretRefs: [{ key: "EVM_RPC_URL" }, { key: "NODE_CUSTOM_SECRET" }],
-      }).map((ref) => ref.key)
-    ).toEqual([
-      ...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
-      "NODE_CUSTOM_SECRET",
-    ]);
-
-    // A service with no recognized profile is returned unchanged (owns whatever it declared).
-    const custom = [{ key: "ONLY_THIS" }];
-    expect(resolveRuntimeProfileSecretRefs({ secretRefs: custom })).toEqual(
-      custom
-    );
 
     expect(
       resolveRuntimeProfileSecretRefs({
         runtimeProfile: "cogni-workflow-worker-v1",
-        secretRefs: [],
       }).map((ref) => ref.key)
     ).toEqual([...COGNI_WORKFLOW_WORKER_V1_REQUIRED_SECRET_KEYS]);
+
+    // A service with no recognized profile owes nothing: its keys come from the node catalog.
+    expect(resolveRuntimeProfileSecretRefs({})).toEqual([]);
   });
 
-  it("renders a clean YAML block (no empty secret_refs) that round-trips through the schema", () => {
+  it("renders a clean YAML block (no secret_refs) that round-trips through the schema", () => {
     const rendered = renderNodeDeploymentYaml();
-    // The block a node carries omits the empty secret_refs list — the profile supplies those keys.
+    // The block a node carries has no secret list: the profile supplies those keys.
     expect(rendered).not.toContain("secret_refs");
-    // Through the real schema parser the default restores it, so it round-trips exactly.
+    // Through the real schema parser it round-trips exactly.
     const spec = parseRepoSpec(buildTestRepoSpecYaml({ extra: rendered }));
     expect(spec.deployment).toEqual(COGNI_NODE_APP_V1_DEPLOYMENT);
   });
