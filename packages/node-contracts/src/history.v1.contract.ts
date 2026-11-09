@@ -6,7 +6,7 @@
  * Purpose: Read the versions of one work item or knowledge entry, each with its change reason (task.0052).
  * Scope: Re-exports the history schemas that `@cogni-dao/work-items` and `@cogni/shared-knowledge-store/contracts` own (story.0023). Does not define a schema or hold logic of its own.
  * Invariants:
- *   - ONE_HISTORY_SHAPE: work items and knowledge return the same item schema (a test compares the two packages' JSON schemas).
+ *   - ONE_HISTORY_SHAPE: work items and knowledge return the same item schema (the packages own both schemas).
  *   - NOTE_NOT_BODY: the reason comes from Dolt history, never from the row.
  *   - BOUNDED_READ: newest first, at most 50 versions; values over 4 KB are truncated and flagged.
  * Side-effects: none
