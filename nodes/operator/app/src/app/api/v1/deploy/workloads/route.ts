@@ -90,6 +90,7 @@ export const POST = wrapRouteHandlerWithLogging(
         workload,
         sourceSha,
         createdBy: `user:${sessionUser.id}`,
+        mayGenerateSecrets: g.mayGenerateSecrets,
         log: ctx.log,
         reqId: ctx.reqId,
       });

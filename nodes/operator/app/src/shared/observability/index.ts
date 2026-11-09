@@ -21,6 +21,9 @@ export const EVENT_NAMES = {
     "feature.node_publish.secret_shape_generated",
   NODE_ACCESS_REQUEST_COMPLETE: "feature.node_access_request.complete",
   NODE_SECRET_WRITE_COMPLETE: "feature.node_secret_write.complete",
+  // bug.5254: the release facade created missing catalog-declared generated node keys
+  // (key names + KV version only, never values).
+  NODE_DEPLOY_SECRET_GENERATED: "feature.node_deploy.secret_generated",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
   // Merge-queue push → head review verdict copied onto the queue commit (task.5438). One event per
   // handled queue push; `outcome` is copied_success | copied_failure | not_reviewed | skipped_exists | error.

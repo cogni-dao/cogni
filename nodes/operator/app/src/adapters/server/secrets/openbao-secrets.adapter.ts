@@ -15,17 +15,24 @@
  *   - NO_SECRETS_IN_CONTEXT: the writer token + value are never logged; value goes
  *     in the JSON body only, never a query string or argv.
  *   - PATCH_PRESERVES_SIBLINGS: existing node path → merge-patch, never clobber.
+ *   - CREATE_IF_ABSENT (bug.5254): `ensureGeneratedKeys` writes only missing keys, with KV-v2
+ *     check-and-set (`cas: 0` creates a new bucket; `cas: <version>` patches an existing one). Only a
+ *     check-and-set refusal is a conflict; it re-reads and retries (max 3). It reads key NAMES and the
+ *     version, never keeps a value, and never writes the `operator` bucket.
  * Side-effects: IO (reads the projected SA token file; OpenBao HTTP API).
  * Links: docs/design/node-self-serve-secrets.md, scripts/secrets/set-secret.sh
  *   (the put-vs-patch gate this mirrors), src/ports/operator-secrets-plane.port.ts
  * @public
  */
 
+import { randomBytes } from "node:crypto";
 import type {
   DatabaseDsnSecretsPlanePort,
   DatabaseDsnSecretsReadInput,
   DatabaseDsnSecretsReadResult,
   DatabaseDsnSecretsWriteResult,
+  EnsureGeneratedKeysInput,
+  EnsureGeneratedKeysResult,
   OperatorSecretsPlanePort,
   SecretWriteOp,
   WriteNodeSecretInput,
@@ -170,6 +177,98 @@ export class OpenBaoSecretsAdapter
       path,
       keys: Object.keys(input.values).sort(),
     };
+  }
+
+  async ensureGeneratedKeys(
+    input: EnsureGeneratedKeysInput
+  ): Promise<EnsureGeneratedKeysResult> {
+    if (
+      !/^[a-z][a-z0-9-]{0,62}$/.test(input.nodeSlug) ||
+      input.nodeSlug === "operator"
+    )
+      throw new Error("openbao_generate_bucket_refused");
+    const names = Object.keys(input.recipes).sort();
+    const dataPath = `cogni/data/${input.env}/${input.nodeSlug}`;
+    const token = await this.login();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const current = await this.readKeyNames(token, dataPath);
+      const missing = names.filter((k) => !current?.keys.has(k));
+      if (missing.length === 0)
+        return { generated: [], version: current?.version ?? 0 };
+      const values: Record<string, string> = {};
+      for (const key of missing) {
+        const recipe = input.recipes[key];
+        if (!recipe) continue;
+        values[key] = randomBytes(recipe.bytes).toString(recipe.kind);
+      }
+      try {
+        const version = await this.writeCas(
+          token,
+          dataPath,
+          values,
+          current ? current.version : 0
+        );
+        return { generated: missing, version };
+      } catch (error) {
+        if ((error as { code?: string }).code !== "openbao_cas_conflict")
+          throw error;
+      }
+    }
+    throw httpError("openbao_cas_conflict_exhausted", 409);
+  }
+
+  /** Key names + version of a bucket; `null` when it does not exist. Values are dropped here. */
+  private async readKeyNames(
+    token: string,
+    dataPath: string
+  ): Promise<{ version: number; keys: ReadonlySet<string> } | null> {
+    const res = await this.fetchImpl(`${this.addr}/v1/${dataPath}`, {
+      method: "GET",
+      headers: { "x-vault-token": token },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw httpError("openbao_read_failed", res.status);
+    const body = (await res.json()) as KvReadResponse;
+    const version = body.data?.metadata?.version;
+    if (!Number.isSafeInteger(version) || (version ?? 0) < 1)
+      throw httpError("openbao_read_invalid_version", res.status);
+    const keys = new Set(
+      Object.entries(body.data?.data ?? {})
+        .filter(([, v]) => typeof v === "string" && v.length > 0)
+        .map(([k]) => k)
+    );
+    return { version: version as number, keys };
+  }
+
+  /** Check-and-set write: `cas: 0` = create a new bucket (POST); `cas: n` = merge-patch version n. */
+  private async writeCas(
+    token: string,
+    dataPath: string,
+    values: Readonly<Record<string, string>>,
+    cas: number
+  ): Promise<number> {
+    const res = await this.fetchImpl(`${this.addr}/v1/${dataPath}`, {
+      method: cas === 0 ? "POST" : "PATCH",
+      headers: {
+        "content-type":
+          cas === 0 ? "application/json" : "application/merge-patch+json",
+        "x-vault-token": token,
+      },
+      body: JSON.stringify({ options: { cas }, data: values }),
+    });
+    if (res.status === 400) {
+      const text = await res.text().catch(() => "");
+      throw httpError(
+        /check-and-set/i.test(text)
+          ? "openbao_cas_conflict"
+          : "openbao_cas_write_failed",
+        res.status
+      );
+    }
+    const version = await readVersion(res, "openbao_cas_write_failed");
+    if (!Number.isSafeInteger(version) || version < 1)
+      throw httpError("openbao_cas_invalid_result_version", res.status);
+    return version;
   }
 
   /** Kubernetes-auth self-login → short-lived client token. */

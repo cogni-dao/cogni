@@ -52,6 +52,35 @@ export interface WriteNodeSecretResult {
   readonly path: string;
 }
 
+/** A random-value recipe from a node catalog entry (`source: agent`, bug.5254). */
+export interface GeneratedSecretRecipe {
+  readonly kind: "hex" | "base64";
+  readonly bytes: number;
+}
+
+export interface EnsureGeneratedKeysInput {
+  /** Node slug from the authorized node row, never request text. Never `operator`. */
+  readonly nodeSlug: string;
+  /** The lane whose bucket receives the keys; the caller has checked lane custody. */
+  readonly env: string;
+  /** Key name → recipe. Only ABSENT keys are generated; a present key is never touched. */
+  readonly recipes: Readonly<Record<string, GeneratedSecretRecipe>>;
+}
+
+export interface EnsureGeneratedKeysResult {
+  /** Keys this call created (sorted, names only). Empty when every key already existed. */
+  readonly generated: readonly string[];
+  /** KV-v2 version after the call (the version read when nothing was written). */
+  readonly version: number;
+}
+
 export interface OperatorSecretsPlanePort {
   writeSecret(input: WriteNodeSecretInput): Promise<WriteNodeSecretResult>;
+  /**
+   * CREATE_IF_ABSENT (bug.5254): generate and write only the missing keys, with KV-v2 check-and-set so
+   * concurrent callers converge on one value. Never overwrites, never returns or logs a value.
+   */
+  ensureGeneratedKeys(
+    input: EnsureGeneratedKeysInput
+  ): Promise<EnsureGeneratedKeysResult>;
 }

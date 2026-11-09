@@ -9,10 +9,18 @@
  *   release plus the desired row in one transaction. `POST /api/v1/deploy/workloads` calls it; the
  *   merge-to-preview webhook will call it too (no second brain).
  * Scope: Everything AFTER authorization and the lane refusals. It authorizes nothing, never calls the
- *   actuator and never touches DNS: the sequencer executes the intent. Returns a typed result (status +
+ *   actuator and never touches DNS: the sequencer executes the intent. Its one write besides the release
+ *   is creating missing catalog-declared generated keys in the node's own bucket (bug.5254). Returns a typed result (status +
  *   body) instead of an HTTP response so a non-route caller can use it.
  * Invariants:
  *   - INTENT_ONLY: `ok: true` means a release row exists, not that anything is deployed.
+ *   - GENERATE_ONLY_WHAT_THE_RELEASE_NEEDS (bug.5254): just before the release row is written (after every
+ *     refusal below), keys the resolved spec carries that the node catalog declares `source: agent` are
+ *     created if absent in `cogni/<env>/<slug>`. Only when this operator custodies the lane
+ *     (`canWriteSecretsLane`) AND the caller may manage the node's secrets (`mayGenerateSecrets`);
+ *     otherwise nothing is written and the sequencer waits on `missing_keys` as before. Never overwrites,
+ *     never logs a value. A writer failure is 503 `secret_generation_failed` with no release row; the
+ *     POST is safe to repeat. A key wiped later is recreated by POSTing again.
  *   - DECLARED_AT_THE_SHA: the manifests and the repo-spec are read at `sourceSha` from the node's repo,
  *     and the repo-spec `node_id` must equal the requested node.
  *   - NODE_DEPLOYS_FROM_ITS_OWN_REPO: the repo comes from the node's row in the IMAGE catalog
@@ -51,9 +59,11 @@ import {
   createDeclarationReader,
   createNodeSourceResolver,
 } from "@/bootstrap/capabilities/node-source-resolver";
+import { createOperatorSecretsPlane } from "@/bootstrap/capabilities/operator-secrets-plane";
 import type { DeployWorkloadInput } from "@/contracts/deploy.workloads.v1.contract";
 import {
   DeclarationError,
+  generatedSecretRecipes,
   resolveWorkloadDeclaration,
 } from "@/features/node-deploy/declarations";
 import { releasePlacementRefusal } from "@/features/node-deploy/node-catalog-policy";
@@ -68,6 +78,8 @@ import {
   resolveWorkloadZoneBinding,
   WorkloadZoneConfigError,
 } from "@/shared/node-registry/fleet-ownership";
+import { EVENT_NAMES } from "@/shared/observability";
+import { canWriteSecretsLane } from "@/shared/secrets/secrets-lane-trust.data";
 
 /**
  * G4 canary-only exception: the one production state workload admitted before backups exist. It
@@ -82,7 +94,12 @@ export interface RecordNodeReleaseInput {
   readonly sourceSha: string;
   /** `user:<id>` for a verb call; the webhook passes its own principal. */
   readonly createdBy: string;
-  readonly log: { warn(fields: object, msg: string): void };
+  /** May this caller write the node's secrets? Absent = no (the webhook path). See GENERATE_ONLY_... */
+  readonly mayGenerateSecrets?: (() => Promise<boolean>) | undefined;
+  readonly log: {
+    warn(fields: object, msg: string): void;
+    info(fields: object, msg: string): void;
+  };
   readonly reqId?: string;
 }
 
@@ -230,6 +247,55 @@ export async function recordNodeRelease(
     });
     if (existing) return refused(409, { error: "state_workload_exists" });
   }
+
+  const recipes = generatedSecretRecipes({
+    repoSpecText: read.repoSpecText,
+    secretsCatalogText: read.secretsCatalogText,
+    nodeSlug: node.slug,
+    spec,
+  });
+  if (
+    Object.keys(recipes).length > 0 &&
+    node.slug !== "operator" &&
+    canWriteSecretsLane(
+      envConfig.DEPLOY_ENVIRONMENT ?? "",
+      env,
+      envConfig.FLEET_CONTROL_ENV
+    ) &&
+    (await input.mayGenerateSecrets?.()) === true
+  ) {
+    try {
+      const result = await createOperatorSecretsPlane(
+        envConfig
+      ).ensureGeneratedKeys({ env, nodeSlug: node.slug, recipes });
+      if (result.generated.length > 0)
+        log.info(
+          {
+            event: EVENT_NAMES.NODE_DEPLOY_SECRET_GENERATED,
+            reqId: input.reqId,
+            nodeId: node.id,
+            env,
+            workload,
+            keys: result.generated,
+            version: result.version,
+          },
+          EVENT_NAMES.NODE_DEPLOY_SECRET_GENERATED
+        );
+    } catch (error) {
+      log.warn(
+        {
+          reqId: input.reqId,
+          nodeId: node.id,
+          env,
+          keys: Object.keys(recipes),
+          code: (error as { code?: unknown })?.code ?? "unknown",
+        },
+        "node-deploy secret generation failed"
+      );
+      return refused(503, { error: "secret_generation_failed" });
+    }
+  }
+
   const { release, desired } = await store.recordRelease({
     nodeId: node.id,
     env,

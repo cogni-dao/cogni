@@ -353,6 +353,37 @@ export function resolveWorkloadDeclaration(input: {
 }
 
 /**
+ * The generate recipes for a resolved release (bug.5254): every key the spec already carries (app, worker
+ * or companion `secretKeys`) that the node catalog declares `source: agent` with a generator. The key SET
+ * is the spec's (one derivation, CD2); the catalog only supplies each key's recipe. The inputs passed
+ * `resolveWorkloadDeclaration`, so they parse.
+ */
+export function generatedSecretRecipes(input: {
+  readonly repoSpecText: string;
+  readonly secretsCatalogText: string | null;
+  readonly nodeSlug: string;
+  readonly spec: NodeWorkloadSpec;
+}): Record<string, { kind: "hex" | "base64"; bytes: number }> {
+  if (input.secretsCatalogText === null || input.spec.kind !== "app") return {};
+  const repoSpec = parseRepoSpec(
+    parseYaml(input.repoSpecText, { prettyErrors: false, logLevel: "error" })
+  );
+  const catalog = parseNodeSecretsCatalog(input.secretsCatalogText, {
+    nodeSlug: input.nodeSlug,
+    serviceNames: extractNodeServices(repoSpec).map((s) => s.name),
+  });
+  const wanted = new Set([
+    ...(input.spec.secretKeys ?? []),
+    ...(input.spec.companions ?? []).flatMap((c) => c.secretKeys ?? []),
+  ]);
+  const out: Record<string, { kind: "hex" | "base64"; bytes: number }> = {};
+  for (const e of catalog)
+    if (e.source === "agent" && e.generate && wanted.has(e.name))
+      out[e.name] = { kind: e.generate.kind, bytes: e.generate.bytes };
+  return out;
+}
+
+/**
  * Check the node's secrets catalog whole (bug.5254). Every key a catalog entry projects into a workload
  * must be node-owned: never substrate-reserved (the substrate mints it), fleet-inherited (another owner
  * holds the value) or off-cluster-denied (an operator/fleet credential).

@@ -32,6 +32,12 @@ export type Gate =
       node: { id: string; slug: string };
       /** The node's image-baked catalog row; undefined when the image does not know the node. */
       catalogRow: unknown;
+      /**
+       * True when the caller may also write this node's secrets (`node.manage_secrets`, the POST /secrets
+       * check). The release facade generates missing catalog keys only then (bug.5254): deploying never
+       * widens into secret authority.
+       */
+      mayGenerateSecrets: () => Promise<boolean>;
     }
   | { ok: false; response: NextResponse };
 
@@ -98,5 +104,14 @@ export async function gate(
     };
   }
   const entry = await createNodeCatalog().entryFor(node.id);
-  return { ok: true, node, catalogRow: entry?.row };
+  const mayGenerateSecrets = async (): Promise<boolean> =>
+    (
+      await authorization.check({
+        actorId: `user:${userId}`,
+        action: "node.manage_secrets",
+        resource: `node:${node.id}`,
+        context: { tenantId: billing.id, nodeId: node.id },
+      })
+    ).decision === "allow";
+  return { ok: true, node, catalogRow: entry?.row, mayGenerateSecrets };
 }
