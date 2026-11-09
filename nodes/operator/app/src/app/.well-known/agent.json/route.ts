@@ -124,7 +124,9 @@ export async function GET(request: Request) {
       // CI/CD plane. flight + promote are OPERATOR-ONLY (task.5411, CD4
       // ONE_WRITER_PER_NODE_LANE): they deploy the operator control plane itself and
       // refuse every other node with 409 `node_on_deploy_verb`. Every other node
-      // deploys through `deployWorkloads` below. infraReconcile is the separate,
+      // deploys through `deployWorkloads` below. Promote also takes an optional `service`: an in-repo
+      // operator catalog service (e.g. scheduler-worker) promotes on its own lane, never bundled into
+      // an operator promote (CD5, bug.5599). infraReconcile is the separate,
       // operator-node-only production substrate lever. Grant the role via the
       // access-request → owner-approve loop below.
       flight: `${origin}/api/v1/vcs/flight`,

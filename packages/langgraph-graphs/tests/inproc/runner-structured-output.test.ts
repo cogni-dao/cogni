@@ -114,6 +114,89 @@ describe("runner + pr-review graph with responseFormat", () => {
     });
   });
 
+  it("injects the host architect into the preamble and counts a citation of it as read (task.5455)", async () => {
+    const verdictJson = JSON.stringify({
+      metrics: [
+        {
+          metric: "complies-with-governing-hub-rules",
+          value: 0.2,
+          observations: ["breaks the architect boundary"],
+          citations: ["operator-architect"],
+        },
+      ],
+      summary: "breaks operator-architect",
+    });
+    const seenSystem: string[] = [];
+    const completionFn: CompletionFn = (params) => {
+      seenSystem.push(
+        params.messages
+          .filter((m) => m.role === "system")
+          .map((m) => String(m.content))
+          .join("\n")
+      );
+      return {
+        stream: (async function* (): AsyncIterable<AiEvent> {})(),
+        final: Promise.resolve({
+          ok: true as const,
+          content: seenSystem.length === 1 ? "done reading" : verdictJson,
+          finishReason: "stop",
+        }),
+      };
+    };
+    const { stream, final } = createInProcGraphRunner({
+      createGraph: (opts) => createPrReviewGraph(opts),
+      sourceContext: {
+        ...SOURCE_CONTEXT,
+        architect: {
+          id: "operator-architect",
+          content: "ARCHITECT BODY",
+          sourceRef: "hub:operator-architect",
+        },
+      },
+      completionFn,
+      createToolExecFn: (): ToolExecFn => async () => ({ ok: true, value: {} }),
+      toolContracts: [],
+      request: {
+        runId: "test-architect",
+        messages: [{ role: "user", content: "Evaluate this PR" }],
+        configurable: { model: "test-model" },
+      },
+      responseFormat: {
+        prompt: "Return JSON.",
+        schema: z.object({
+          metrics: z.array(
+            z.object({
+              metric: z.string(),
+              value: z.number(),
+              observations: z.array(z.string()),
+              citations: z.array(z.string()).optional(),
+            })
+          ),
+          summary: z.string(),
+        }),
+      },
+    });
+    for await (const _event of stream) {
+      // drain
+    }
+    const result = await final;
+    expect(result.ok).toBe(true);
+    expect(seenSystem.length).toBeGreaterThan(0);
+    // Both the gather turn and the verdict turn carry the host preamble.
+    for (const sys of seenSystem.slice(0, 2)) {
+      expect(sys).toContain(
+        "Host-owned node architect (operator-architect):\nARCHITECT BODY"
+      );
+    }
+    expect(result.structuredOutput).toMatchObject({
+      evidence: { files: [], entries: ["operator-architect"] },
+      // The injected body counts as read, so citing it is accepted.
+      uncited: false,
+      // The reviewer still has to read the rules itself.
+      noHubRead: true,
+    });
+  });
+
   it("fails the run when the governing index is empty (requireIndex)", async () => {
     const completionFn: CompletionFn = () => ({
       stream: (async function* (): AsyncIterable<AiEvent> {})(),

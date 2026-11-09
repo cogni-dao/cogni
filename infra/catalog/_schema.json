@@ -16,61 +16,6 @@
   ],
   "allOf": [
     {
-      "$comment": "Entry egress env scope must be a subset of the owning row\u2019s envs.",
-      "if": {
-        "required": ["compute_egress_cidrs"],
-        "properties": {
-          "compute_egress_cidrs": {
-            "contains": {
-              "required": ["envs"],
-              "properties": {
-                "envs": { "contains": { "const": "candidate-a" } }
-              }
-            }
-          }
-        }
-      },
-      "then": {
-        "properties": { "envs": { "contains": { "const": "candidate-a" } } }
-      }
-    },
-    {
-      "$comment": "Entry egress env scope must be a subset of the owning row\u2019s envs.",
-      "if": {
-        "required": ["compute_egress_cidrs"],
-        "properties": {
-          "compute_egress_cidrs": {
-            "contains": {
-              "required": ["envs"],
-              "properties": { "envs": { "contains": { "const": "preview" } } }
-            }
-          }
-        }
-      },
-      "then": {
-        "properties": { "envs": { "contains": { "const": "preview" } } }
-      }
-    },
-    {
-      "$comment": "Entry egress env scope must be a subset of the owning row\u2019s envs.",
-      "if": {
-        "required": ["compute_egress_cidrs"],
-        "properties": {
-          "compute_egress_cidrs": {
-            "contains": {
-              "required": ["envs"],
-              "properties": {
-                "envs": { "contains": { "const": "production" } }
-              }
-            }
-          }
-        }
-      },
-      "then": {
-        "properties": { "envs": { "contains": { "const": "production" } } }
-      }
-    },
-    {
       "if": {
         "properties": { "type": { "const": "node" } },
         "required": ["type"]
@@ -148,9 +93,8 @@
       }
     },
     {
-      "$comment": "task.5052 — compute_egress_cidrs is env-scoped through the row's own envs[]: the renderer unions declarations across rows deployed to an env, so a row declaring egress CIDRs must declare envs.",
-      "if": { "required": ["compute_egress_cidrs"] },
-      "then": { "required": ["envs"] }
+      "$comment": "task.5428 — compute_egress_cidrs is retired. Every lane reaches the shared substrate over its env mesh, so the VM firewall admits no provider egress CIDR. A row that still declares it is a config error.",
+      "not": { "required": ["compute_egress_cidrs"] }
     },
     {
       "$comment": "story.5016 — off-cluster placement is operator-owned, node-only policy; source_repo supplies the immutable node artifact lineage.",
@@ -161,39 +105,14 @@
       }
     },
     {
-      "$comment": "bug.5382 — every Akash-placed workload must declare the provider egress CIDRs admitted to shared substrate ports. Missing is a deterministic boot failure, not an optional hardening choice. Explicit k3s-only placement opens no off-cluster firewall hole and owes no declaration.",
-      "if": {
-        "required": ["deployment_provider"],
-        "properties": {
-          "deployment_provider": {
-            "anyOf": [
-              {
-                "required": ["candidate-a"],
-                "properties": { "candidate-a": { "const": "akash" } }
-              },
-              {
-                "required": ["preview"],
-                "properties": { "preview": { "const": "akash" } }
-              },
-              {
-                "required": ["production"],
-                "properties": { "production": { "const": "akash" } }
-              }
-            ]
-          }
-        }
-      },
-      "then": { "required": ["compute_egress_cidrs"] }
-    },
-    {
       "$comment": "task.5097 — the compute API is a property of an off-cluster workload, so it is only meaningful where deployment_provider already routes the row off-cluster. Declaring it without placement would be an authority with nothing to reconcile.",
       "if": { "required": ["compute_api"] },
       "then": { "required": ["deployment_provider"] }
     },
     {
-      "$comment": "story.5050 — a required placement country only constrains a marketplace bid, so it is only meaningful where deployment_provider already routes the row off-cluster. It also names the providers whose egress must already be allowlisted, so the row owes compute_egress_cidrs too: admitting a provider whose NAT is absent there boots a workload that then cannot reach the env VM's substrate ports (the bug.5191 class), which reads as a mystery outage rather than a config error.",
+      "$comment": "story.5050 — a required placement country only constrains a marketplace bid, so it is only meaningful where deployment_provider already routes the row off-cluster. task.5428: a lease reaches the shared substrate over its env mesh, so the country set owes no provider egress declaration.",
       "if": { "required": ["required_placement_countries"] },
-      "then": { "required": ["deployment_provider", "compute_egress_cidrs"] }
+      "then": { "required": ["deployment_provider"] }
     },
     {
       "$comment": "bug.5177 — candidate-a no longer ships base/compute-workload-controller (story.5016 step 9 deleted it to hold ONE_WALLET_ONE_ACTIVE_WRITER). LEGACY_IS_DEFAULT means an omitted compute_api.candidate-a resolves to that deleted controller, so an akash-placed candidate-a row without an explicit cell fails 100% of its flights with a confusing 'controller is not available'. node-template and toks4 were both silently broken this way. Make the cell REQUIRED where it is load-bearing rather than defaulting to an authority the environment does not ship.",
@@ -331,7 +250,7 @@
     },
     "required_placement_countries": {
       "type": "object",
-      "description": "story.5050 — per-environment HARD placement requirement: the ISO 3166-1 alpha-2 country codes this row's workload MAY be placed in. Distinct from the fleet-wide latency PREFERENCE (AkashComputeAdapter's substrate co-location list, which only RANKS): this cell FILTERS bids, so a provider outside the set never wins. It exists because a workload can have an outbound dependency that geo-fences by IP while the latency preference pulls toward the substrate's own neighbourhood — for the Baltics substrate those two axes point in opposite directions (BE/DE/PL/SK/FR are all co-located AND all Polymarket-restricted). REQUIRED_FAILS_CLOSED: a bid whose provider country is unknown, or whose provider metadata is unavailable, is REFUSED — the opposite of the preference path's FAIL_OPEN_ON_MISSING_METADATA rule, because a requirement that cannot be evaluated is not satisfied. NOT_A_GUARANTEE: provider country describes ADVERTISED/INGRESS identity, which is measurably not the egress identity the workload presents to a third party (two Akash providers in different advertised countries have shared one egress NAT), so this narrows the candidate pool and only the workload's own outbound probe proves reachability. An omitted environment is unconstrained; an empty array is rejected rather than read as 'anywhere', because fail-closed semantics would make it refuse every bid. Binds only on a fresh CREATE — Akash refuses in-place placement change, so a change here needs a fresh blue/green release. Coupled to compute_egress_cidrs: every provider this admits must already be allowlisted there, or the workload boots and then cannot reach the env VM's substrate ports.",
+      "description": "story.5050 — per-environment HARD placement requirement: the ISO 3166-1 alpha-2 country codes this row's workload MAY be placed in. Distinct from the fleet-wide latency PREFERENCE (AkashComputeAdapter's substrate co-location list, which only RANKS): this cell FILTERS bids, so a provider outside the set never wins. It exists because a workload can have an outbound dependency that geo-fences by IP while the latency preference pulls toward the substrate's own neighbourhood — for the Baltics substrate those two axes point in opposite directions (BE/DE/PL/SK/FR are all co-located AND all Polymarket-restricted). REQUIRED_FAILS_CLOSED: a bid whose provider country is unknown, or whose provider metadata is unavailable, is REFUSED — the opposite of the preference path's FAIL_OPEN_ON_MISSING_METADATA rule, because a requirement that cannot be evaluated is not satisfied. NOT_A_GUARANTEE: provider country describes ADVERTISED/INGRESS identity, which is measurably not the egress identity the workload presents to a third party (two Akash providers in different advertised countries have shared one egress NAT), so this narrows the candidate pool and only the workload's own outbound probe proves reachability. An omitted environment is unconstrained; an empty array is rejected rather than read as 'anywhere', because fail-closed semantics would make it refuse every bid. Binds only on a fresh CREATE — Akash refuses in-place placement change, so a change here needs a fresh blue/green release.",
       "additionalProperties": false,
       "properties": {
         "candidate-a": {
@@ -367,49 +286,6 @@
       "type": "string",
       "pattern": "^0x[0-9a-fA-F]{40}$",
       "description": "Stable cross-environment owner binding. Each environment resolves or creates its own users.id by this wallet, then projects the OpenFGA node#admin ownership tuple; env-local user IDs are never copied through git."
-    },
-    "compute_egress_cidrs": {
-      "type": "array",
-      "description": "task.5052 (story.5016) — egress CIDRs of the decentralized-compute infrastructure (e.g. Akash provider NAT) that hosts THIS row's workload, allowed to reach the env VM's substrate ports (5432,5435,6379,4000,7233). Lives on the workload's own row — NOT per-env and NOT a shared infra row — because an egress IP is a property of where the workload runs: the per-env allowlist is the union of compute_egress_cidrs across rows that BOTH list that env in envs[] AND declare deployment_provider.<env>: akash (bug.5191 \u2014 membership alone is not placement, and a k3s-placed row must open no provider hole), so decommissioning the workload, trimming an env from envs[], or moving that env back to k3s closes its holes with it. Rendered by scripts/ci/render-compute-egress-allowlist.sh into the allowlist consumed by infra/provision/cherry/harden-docker-public-ports.sh. Absent/empty = fail-closed: no off-cluster compute reaches the substrate ports. Optional per-entry ports and envs narrow access further; omitted fields preserve legacy scope. Provider egress NATs are multi-tenant — declare the narrowest CIDR (usually /32).",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["cidr", "comment"],
-        "properties": {
-          "cidr": {
-            "type": "string",
-            "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$",
-            "description": "IPv4 CIDR (prefix length required; use /32 for a single egress IP)."
-          },
-          "comment": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": "^[^\\n]+$",
-            "description": "Single-line provenance: which provider(s) egress via this CIDR and the work item that added it."
-          },
-          "ports": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "enum": [5432, 5435, 6379, 4000, 7233]
-            },
-            "minItems": 1,
-            "uniqueItems": true,
-            "description": "Optional narrow subset of substrate TCP ports; omitted preserves all legacy ports."
-          },
-          "envs": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": ["candidate-a", "preview", "production"]
-            },
-            "minItems": 1,
-            "uniqueItems": true,
-            "description": "Optional subset of this row's deployed environments: BOTH workload lane and actual destination must be listed. Omitted preserves legacy scope."
-          }
-        }
-      },
-      "uniqueItems": true
     },
     "is_primary_host": {
       "type": "boolean",

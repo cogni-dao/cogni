@@ -642,11 +642,13 @@ log_info "OpenFGA image (catalog content-hash): ${OPENFGA_IMAGE}"
 COGNI_DEFAULT_NODE_ID="$(default_node_id)"
 log_info "LiteLLM default node (repo-spec primary-host): ${COGNI_DEFAULT_NODE_ID}"
 
-# task.5052 — compute-egress allowlist is catalog-rendered (CATALOG_IS_SSOT):
-# harden-docker-public-ports.sh installs the staged render (even when empty, so
-# catalog removal converges) before rebuilding the DOCKER-USER rules.
+# task.5052, task.5428 — the substrate admission file is rendered from the catalog:
+# no provider egress CIDRs (lanes reach the substrate over the mesh), only the
+# migration custodian grant on nonproduction lanes. harden-docker-public-ports.sh
+# installs the staged render (even when empty, so removal converges) before
+# rebuilding the DOCKER-USER rules.
 "$REPO_ROOT/scripts/ci/render-compute-egress-allowlist.sh" "$DEPLOY_ENVIRONMENT" > "$ARTIFACT_DIR/compute-egress-allowlist"
-log_info "Compute-egress allowlist (catalog-driven): $(grep -cv '^#' "$ARTIFACT_DIR/compute-egress-allowlist" || true) CIDR rule(s) for ${DEPLOY_ENVIRONMENT}"
+log_info "Substrate admission file (catalog-driven): $(grep -cv '^#' "$ARTIFACT_DIR/compute-egress-allowlist" || true) CIDR rule(s) for ${DEPLOY_ENVIRONMENT}"
 REMOTE_STAGE_ID="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-$$"
 REMOTE_COMPUTE_EGRESS_ALLOWLIST="/tmp/cogni-compute-egress-${REMOTE_STAGE_ID}.allowlist"
 REMOTE_HARDEN_SCRIPT="/tmp/cogni-compute-egress-${REMOTE_STAGE_ID}.hardener.sh"

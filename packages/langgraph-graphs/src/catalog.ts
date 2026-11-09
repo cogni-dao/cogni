@@ -100,6 +100,12 @@ export interface CatalogEntry {
    * subject (repo + commits) on its run scope. Graphs without this flag never receive one.
    */
   readonly codeSubject?: true;
+  /**
+   * HOST_OWNED_ARCHITECT (task.5455): the host reads the node's `*-architect` governing-index entry
+   * and injects its body into `sourceContext.architect`, so grounding does not rely on the model
+   * choosing to read it. Graphs without this flag never receive one.
+   */
+  readonly hostArchitect?: true;
 }
 
 /** Delimiters of a catalog-declared run report on the run stream (CatalogEntry.report). */
@@ -252,6 +258,7 @@ export const OPERATOR_LANGGRAPH_CATALOG = {
     toolIds: PR_REVIEW_TOOL_IDS as readonly string[],
     graphFactory: createPrReviewGraph,
     codeSubject: true,
+    hostArchitect: true,
   },
 
   [GIT_REVIEWER_GRAPH_NAME]: {

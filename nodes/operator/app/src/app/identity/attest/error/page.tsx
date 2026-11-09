@@ -34,6 +34,8 @@ const REASONS: Record<string, string> = {
   invalid_request: "The node's verification request was malformed.",
   invalid_return_to:
     "The node asked us to return to an address that is not registered for it.",
+  invalid_target_origin:
+    "This node's web address is not registered with this operator for this environment.",
   unknown_node: "That node is not registered with this operator.",
 };
 

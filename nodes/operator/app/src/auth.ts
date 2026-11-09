@@ -39,6 +39,7 @@ import {
   userProfiles,
   users,
 } from "@/shared/db/schema";
+import { signedInSessionStore } from "@/shared/identity/signed-in-session-store";
 import { makeLogger } from "@/shared/observability";
 
 export const authSecret =
@@ -114,6 +115,10 @@ async function consumeLinkTransaction(
     .returning();
   return consumed?.userId ?? null;
 }
+
+/** Server-decided success URL for a completed link. */
+const LINKED_REDIRECT = (provider: string): string =>
+  `/profile?linked=${provider}`;
 
 /**
  * NextAuth configuration.
@@ -364,6 +369,19 @@ export const authOptions: NextAuthOptions = {
         }
       }
 
+      // SESSION_NEVER_SWITCHED_BY_OAUTH_CALLBACK (bug.5603): a callback that arrives
+      // while a session exists but carries no verified link intent (cookie consumed by a
+      // duplicate request, or never set) must not sign in as the binding owner. Keep the
+      // current session and surface a fixed error. Signed-out sign-in is unchanged.
+      const signedIn = signedInSessionStore.getStore();
+      if (signedIn && !verifiedUserId) {
+        getLog().warn(
+          { provider, sessionUserId: signedIn.userId },
+          "[OAuth] Callback with existing session and no verified link intent — refusing to switch account"
+        );
+        return "/profile?error=link_failed";
+      }
+
       // Extract provider login from OAuth profile
       const profileData = profile as Record<string, unknown> | undefined;
       const oauthLogin =
@@ -386,9 +404,10 @@ export const authOptions: NextAuthOptions = {
 
         if (verifiedUserId) {
           if (existing.userId === verifiedUserId) {
-            // Idempotent — already linked to this user
-            user.id = verifiedUserId;
-            return true;
+            // Idempotent — already linked to this user. The server decides the
+            // outcome URL; a client callbackUrl can never claim success. Returning
+            // a URL ends the flow without minting a session: the current one stays.
+            return LINKED_REDIRECT(provider);
           }
           // Different user owns this binding — NO_AUTO_MERGE
           getLog().warn(
@@ -414,13 +433,6 @@ export const authOptions: NextAuthOptions = {
           name: profileData?.name ?? null,
         });
 
-        user.id = verifiedUserId;
-        // Preserve walletAddress in the session
-        const existingUser = await db.query.users.findFirst({
-          where: eq(users.id, verifiedUserId),
-        });
-        (user as { walletAddress?: string | null }).walletAddress =
-          existingUser?.walletAddress ?? null;
         getLog().info(
           { provider, userId: verifiedUserId },
           "[OAuth] Account linked"
@@ -430,7 +442,8 @@ export const authOptions: NextAuthOptions = {
           identity: { userId: verifiedUserId, sessionId: randomUUID() },
           properties: { provider },
         });
-        return true;
+        // Server-truth outcome; the existing session is kept as-is (see above).
+        return LINKED_REDIRECT(provider);
       }
 
       // New user — single transaction (user + binding + profile + event atomically).

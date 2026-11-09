@@ -288,9 +288,9 @@ export const serverSchema = z.object({
   // by its own ExternalSecret. serverEnv() is the PUBLIC operator app's env contract — declaring
   // the key here would invite a future wiring that reads a wallet the app must never hold.
   // The actuator reads it as a file in @bootstrap/akash-tx-actuator, not through serverEnv.
-  // Comma-separated Akash provider addresses whose egress IPs the substrate firewall
-  // allowlists (harden-docker-public-ports.sh compute-egress-allowlist). The adapter holds
-  // the bid window for these before falling back to the cheapest stranger.
+  // Comma-separated Akash provider addresses the adapter prefers: it holds the bid window for
+  // these before falling back to the cheapest stranger. Preference only; since task.5428 no
+  // substrate firewall row depends on the provider.
   AKASH_PREFERRED_PROVIDERS: optionalString,
   COMPUTE_BALANCE_QUERY_TIMEOUT_MS: z.coerce
     .number()

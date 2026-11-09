@@ -95,7 +95,7 @@ export const AKASH_OVERCLOCK_AUDITOR =
 /**
  * Country codes treated as co-located with the shared env substrate (EU; the substrate VM
  * lives in Lithuania — app↔substrate latency is real, ~25ms/call from BE). Preference only,
- * never a filter. Coupled to the substrate egress allowlist work (task.5052).
+ * never a filter.
  */
 const DEFAULT_SUBSTRATE_COUNTRY_CODES: readonly string[] = [
   "LT",

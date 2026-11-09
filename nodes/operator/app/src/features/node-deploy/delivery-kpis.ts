@@ -24,6 +24,8 @@
  *     run yields an incomplete sample with a reason, never a pass and never zero.
  *   - EGRESS_CONTROL: drift probes the operator's own public `/livez` first. If that fails, or every
  *     probed lane gets no HTTP answer, the reading is unknown (`source_failed`), never N bad lanes.
+ *   - SHARED_SNAPSHOT: drift reads the per-tick probe snapshot it shares with the fleet calculators
+ *     (`fleet-probe-snapshot.ts`), so a lane's readyz is probed once per tick (task.5457).
  *   - IDS_USE_DASHES: calculator ids match `MetricSpecSchema.calculatorId` (no underscores).
  * Side-effects: none (calculators call the injected source)
  * Links: ports/delivery-kpi.port.ts, adapters/server/node-deploy/delivery-kpi-source.adapter.ts,
@@ -43,18 +45,21 @@ import type {
   DeliveryReleaseFacts,
   DeliveryScope,
 } from "@/ports";
+import {
+  createFleetProbeSnapshots,
+  type FleetProbeSnapshots,
+  MAX_DRIFT_LANES,
+  SNAPSHOT_BUDGET,
+} from "./fleet-probe-snapshot";
+
+export { MAX_DRIFT_LANES, PROBE_TIMEOUT_MS } from "./fleet-probe-snapshot";
 
 export const SERVING_DRIFT_ID = "deploy.serving-drift@1";
 export const RELEASE_SUCCESS_ID = "deploy.release-success@1";
 export const LEAD_TIME_ID = "deploy.lead-time@1";
 
-/** Most lanes one drift reading probes; more is a truncated (unknown) reading. */
-export const MAX_DRIFT_LANES = 64;
 /** Most releases one window read returns; more is a truncated (unknown) reading. */
 export const MAX_WINDOW_RELEASES = 5000;
-/** Per-request probe bound. `/version` and `/readyz?deep=1` run in parallel per lane. */
-export const PROBE_TIMEOUT_MS = 5000;
-const PROBE_MAX_BYTES = 16384;
 /** Evidence refs list at most this many bad lanes. */
 const MAX_LANE_EVIDENCE = 20;
 
@@ -254,11 +259,6 @@ export function isTransportFailure(v: LaneVerdict): boolean {
   );
 }
 
-/** Append a query parameter. The `cb` buster defeats an edge cache that could hide drift. */
-function withQuery(path: string, query: string): string {
-  return `${path}${path.includes("?") ? "&" : "?"}${query}`;
-}
-
 // ---------------------------------------------------------------------------------------------
 // Calculators
 // ---------------------------------------------------------------------------------------------
@@ -296,6 +296,11 @@ export interface DeliveryCalculatorOptions {
    */
   readonly controlHost: string | undefined;
   readonly now?: () => number;
+  /**
+   * The per-tick probe snapshots drift reads (task.5457). Pass the instance the fleet calculators share so
+   * a lane is probed once per tick; absent, drift owns a private one.
+   */
+  readonly snapshots?: FleetProbeSnapshots;
 }
 
 export function createDeliveryCalculators(
@@ -303,6 +308,12 @@ export function createDeliveryCalculators(
   options: DeliveryCalculatorOptions
 ): MetricCalculator[] {
   const now = options.now ?? Date.now;
+  const snapshots =
+    options.snapshots ??
+    createFleetProbeSnapshots(source, {
+      controlHost: options.controlHost,
+      now,
+    });
   // ---- KPI 1: serving drift ----------------------------------------------------------------
   const driftParams = z.strictObject({
     ...scopeShape,
@@ -313,30 +324,24 @@ export function createDeliveryCalculators(
     unit: "lanes",
     display: "progress",
     paramsSchema: driftParams,
-    // One lane read, one control probe, then one read per probed lane (its two probes run inside it).
-    budget: {
-      timeoutMs: 2 * PROBE_TIMEOUT_MS + 7000,
-      maxSourceCalls: 2 + MAX_DRIFT_LANES,
-      maxRows: MAX_DRIFT_LANES,
-      maxResponseBytes: PROBE_MAX_BYTES,
-    },
+    // One lane read, one control probe, then one read per probed lane (its two probes run inside it): the
+    // shared snapshot budget. Only the first snapshot consumer of a tick pays it.
+    budget: SNAPSHOT_BUDGET,
     async compute(params, ctx) {
       const p = driftParams.parse(params);
       const scope = scopeOf(p);
-      const read = await ctx.read((signal, budget) =>
-        source.servingLanes({ scope, maxRows: budget.maxRows, signal })
-      );
+      const snap = await snapshots.get(scope, ctx);
       const watermarks = [
-        { source: "node_workload_desired", asOf: read.asOf.toISOString() },
+        { source: "node_workload_desired", asOf: snap.lanesAsOf.toISOString() },
       ];
-      if (read.truncated)
+      if (snap.truncated)
         return unknownSample(
           "lanes",
           "incomplete_or_invalid_source",
           watermarks,
-          [scopeRef(scope), `deploy:lanes>${read.lanes.length}`]
+          [scopeRef(scope), `deploy:lanes>${MAX_DRIFT_LANES}`]
         );
-      if (read.lanes.length === 0)
+      if (snap.laneCount === 0)
         return unknownSample("lanes", "zero_denominator", watermarks, [
           scopeRef(scope),
           "deploy:lanes=0",
@@ -348,58 +353,22 @@ export function createDeliveryCalculators(
           scopeRef(scope),
           `deploy:egress_unverified:${detail}`,
         ]);
-      const controlHost = options.controlHost;
-      if (!controlHost) return egressUnverified("no_control_host");
-      const control = await ctx.read((signal, budget) =>
-        source.probe({
-          host: controlHost,
-          path: withQuery("/livez", `cb=${now()}`),
-          timeoutMs: PROBE_TIMEOUT_MS,
-          maxBytes: budget.maxResponseBytes,
-          signal,
-        })
-      );
-      if (control.kind === "unreachable")
-        return egressUnverified(`control_${control.code}`);
-      if (control.status !== 200)
-        return egressUnverified(`control_status_${control.status}`);
+      if (snap.egressUnverified) return egressUnverified(snap.egressUnverified);
       const nowMs = now();
       const stuckMs = p.stuckMinutes * 60_000;
-      const verdicts = await Promise.all(
-        read.lanes.map(async (lane) => {
-          const early = laneVerdictBeforeProbe(lane, nowMs, stuckMs);
-          if (early) return { lane, verdict: early, probed: false };
-          // A probe that cannot run (budget, abort) throws: the whole reading is unknown.
-          const [version, ready] = await ctx.read((signal, budget) =>
-            Promise.all([
-              source.probe({
-                host: lane.host,
-                // Cache-buster: an edge-cached /version body could hide drift.
-                path: withQuery(lane.versionPath, `cb=${nowMs}`),
-                timeoutMs: PROBE_TIMEOUT_MS,
-                maxBytes: budget.maxResponseBytes,
-                signal,
-              }),
-              source.probe({
-                host: lane.host,
-                path: withQuery(lane.readyPath, "deep=1"),
-                timeoutMs: PROBE_TIMEOUT_MS,
-                maxBytes: budget.maxResponseBytes,
-                signal,
-              }),
-            ])
-          );
-          return {
-            lane,
-            probed: true,
-            verdict: laneVerdictFromProbes(
-              lane.expectedSha as string,
-              version,
-              ready
-            ),
-          };
-        })
-      );
+      const verdicts = snap.lanes.map(({ lane, version, ready }) => {
+        const early = laneVerdictBeforeProbe(lane, nowMs, stuckMs);
+        if (early) return { lane, verdict: early, probed: false };
+        return {
+          lane,
+          probed: true,
+          verdict: laneVerdictFromProbes(
+            lane.expectedSha as string,
+            version,
+            ready
+          ),
+        };
+      });
       const probed = verdicts.filter((v) => v.probed);
       // Every probed lane got no HTTP answer at all: an egress outage looks exactly like this, and the
       // control probe may have passed just before it. Unknown, never a fleet-wide red.
@@ -415,11 +384,14 @@ export function createDeliveryCalculators(
         complete: true,
         sourceWatermarks: [
           ...watermarks,
-          { source: "http_probe", asOf: new Date(now()).toISOString() },
+          {
+            source: "http_probe",
+            asOf: new Date(snap.takenAtMs).toISOString(),
+          },
         ],
         evidenceRefs: [
           scopeRef(scope),
-          `deploy:lanes=${read.lanes.length},bad=${bad.length}`,
+          `deploy:lanes=${snap.laneCount},bad=${bad.length}`,
           ...bad
             .slice(0, MAX_LANE_EVIDENCE)
             .map(

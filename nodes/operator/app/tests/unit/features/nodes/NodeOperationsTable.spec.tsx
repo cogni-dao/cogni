@@ -147,6 +147,22 @@ describe("NodeOperationsTable", () => {
     expect(screen.getAllByAltText("Beta logo").length).toBeGreaterThan(0);
   });
 
+  it("never renders the homepage thumbnail banner as a node mark", () => {
+    const withThumb = {
+      ...node,
+      thumbnailUrl: "https://alpha.example/opengraph-image",
+    };
+    const { container } = render(<NodeOperationsTable nodes={[withThumb]} />);
+    expect(
+      container.querySelector(
+        'img[src="https://alpha.example/opengraph-image"]'
+      )
+    ).toBeNull();
+    expect(container.querySelectorAll(".lucide-brain").length).toBeGreaterThan(
+      0
+    );
+  });
+
   it("filters the shared desktop and mobile row model by title or slug", async () => {
     const user = userEvent.setup();
     const beta = {

@@ -46,26 +46,3 @@ activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
 path_prefix: nodes/toks5/
 node_id: f66b260b-4633-41e2-8711-b7c1b8449cc1
-# task.5052 (story.5016) — this node's workload runs on Akash; these provider
-# egress CIDRs may dial the env VM's substrate ports (5432,5435,6379,4000,7233).
-# NOTE: the node-birth generator does not yet mint this block (filed at birth of
-# toks5); added by hand-PR pending the generator fix.
-compute_egress_cidrs:
-  - cidr: 184.105.162.170/32
-    comment: "bug.5582 TEMPORARY fleet-shared row (rows union per env). US provider on Akash v0.16.7, one of the only providers bidding on our ACT-priced orders; egress measured inside a probe lease 2026-11-06 (hurricane (akash15tl6…xfmdhk), 2 pods). Exit: the mesh deletion slice (story.5137 / task.5428) deletes every compute_egress_cidrs row."
-  - cidr: 107.161.145.222/32
-    comment: "bug.5582 TEMPORARY fleet-shared row (rows union per env). US provider on Akash v0.16.7, one of the only providers bidding on our ACT-priced orders; egress measured inside a probe lease 2026-11-06 (akash1ggfv…nenj3g, 1 pod). Exit: the mesh deletion slice (story.5137 / task.5428) deletes every compute_egress_cidrs row."
-  - cidr: 64.31.61.234/32
-    comment: "bug.5582 TEMPORARY fleet-shared row (rows union per env). US provider on Akash v0.16.7, one of the only providers bidding on our ACT-priced orders; egress measured inside a probe lease 2026-11-06 (lsn lax (akash1cg7n…5auvvv), 1 pod). Exit: the mesh deletion slice (story.5137 / task.5428) deletes every compute_egress_cidrs row."
-  - cidr: 209.135.147.15/32
-    comment: "bug.5582 TEMPORARY fleet-shared row (rows union per env). US provider on Akash v0.16.7, one of the only providers bidding on our ACT-priced orders; egress measured inside a probe lease 2026-11-06 (akash19zzh…ldshd8, 1 pod). Exit: the mesh deletion slice (story.5137 / task.5428) deletes every compute_egress_cidrs row."
-  - cidr: 95.217.30.59/32
-    envs: [production]
-    ports: [5432, 5435, 6379, 4000, 7233]
-    comment: Temporary recovery grant for production RHITE lease 1792832230729; egress measured inside the lease at 2026-10-30T20:40:07Z while all five substrate TCP ports timed out (bug.5557). Automatic egress admission remains unbuilt.
-  - cidr: 80.200.246.35/32
-    comment: shared egress NAT of Akash providers zencloud + digitalfrontier (story.5016)
-  - cidr: 65.108.194.156/32
-    envs: [candidate-a]
-    ports: [5432]
-    comment: Toks5 candidate lease 1792623140532 egress measured in the running app at 2026-10-21T23:08Z (spike.5010); service_toks5 targets candidate-a Postgres, whose TCP connection times out without this grant. Candidate Postgres only; production trust is unchanged.

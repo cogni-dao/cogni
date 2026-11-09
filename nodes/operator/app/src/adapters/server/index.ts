@@ -175,6 +175,7 @@ export {
   resolveCloudflareZoneId,
 } from "./node-deploy/cloudflare-dns.adapter";
 export { DeliveryKpiSource } from "./node-deploy/delivery-kpi-source.adapter";
+export { FleetObservationReader } from "./node-deploy/fleet-observation-reader.adapter";
 export { HttpProbe } from "./node-deploy/http-probe.adapter";
 export { ImageCatalogNodes } from "./node-deploy/image-catalog.adapter";
 export { ImageCatalogNodeSource } from "./node-deploy/image-catalog-source.adapter";
@@ -260,6 +261,7 @@ export {
   type ForkFromTemplateInput,
   GitHubRepoWriter,
   type GitHubRepoWriterConfig,
+  listCatalogNodesVia,
   type OpenNodeAppPrInput,
   type OpenNodeAppPrResult,
   type PackageImageTagExistsInput,

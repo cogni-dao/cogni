@@ -16,7 +16,7 @@
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { Check, Server as ServerIcon } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { signIn, useSession } from "next-auth/react";
+import { useSession } from "next-auth/react";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -31,6 +31,7 @@ import {
   PageContainer,
 } from "@/components";
 import { OpenAIIcon } from "@/features/ai/icons/providers/OpenAIIcon";
+import { LinkProviderButton } from "./LinkProviderButton";
 
 /* ─── Types ────────────────────────────────────────────────────────── */
 
@@ -701,21 +702,7 @@ export function ProfileView(): ReactElement {
             ) : isLinked ? (
               <ConnectedBadge login="Connected" />
             ) : (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={async () => {
-                  const res = await fetch(`/api/auth/link/${id}`, {
-                    method: "POST",
-                  });
-                  if (!res.ok) return;
-                  signIn(id, {
-                    callbackUrl: `/profile?linked=${id}`,
-                  });
-                }}
-              >
-                Link
-              </Button>
+              <LinkProviderButton provider={id} />
             )}
           </SettingRow>
         );

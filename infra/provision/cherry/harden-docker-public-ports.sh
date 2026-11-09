@@ -75,27 +75,25 @@ iptables -A DOCKER-USER -s "$POD_CIDR" -m comment --comment "$TAG:pod-cidr" -j A
 iptables -A DOCKER-USER -s "$SVC_CIDR" -m comment --comment "$TAG:svc-cidr" -j ACCEPT
 iptables -A DOCKER-USER -s 127.0.0.0/8 -m comment --comment "$TAG:loopback" -j ACCEPT
 
-# Decentralized-compute egress allowlist (task.5044): node-app workloads running on
-# external compute (e.g. Akash providers) dial the shared substrate on these same
-# internal ports. One entry per line in $ALLOWLIST_FILE: `CIDR` or `CIDR:port,port`
-# (comments/# allowed); each gets an ACCEPT ahead of the public DROP, scoped to the
-# named ports (default: all internal ports). Empty/absent file = no external compute.
-# Provider egress IPs are multi-tenant — grant only the ports the workload dials.
+# Substrate admission file (task.5044, task.5052, task.5428): one entry per line in
+# $ALLOWLIST_FILE: `CIDR` or `CIDR:port,port` (comments/# allowed); each gets an
+# ACCEPT ahead of the public DROP, scoped to the named ports (default: all internal
+# ports). Empty/absent file = no ACCEPTs.
 #
-# task.5052 — the allowlist is CATALOG-RENDERED (CATALOG_IS_SSOT), not hand-managed:
-# deploy-infra.sh renders infra/catalog/*.yaml `compute_egress_cidrs` via
-# scripts/ci/render-compute-egress-allowlist.sh and stages the result at
-# $STAGED_ALLOWLIST on every deploy. Installing it here — even when it contains no
-# allow lines — is what makes catalog REMOVAL converge on the next run. No staged
-# file (cloud-init boot runs before any deploy; a fresh VM has no installed file
-# either) = fail-closed until the first deploy stages one. Paths are overridable
-# for tests only.
+# task.5428 — provider egress CIDRs are retired: every Akash lane reaches the
+# substrate over its env mesh, never through this firewall. deploy-infra.sh renders
+# the file via scripts/ci/render-compute-egress-allowlist.sh, whose only remaining
+# grant is the native migration custodian /32:5432 on nonproduction lanes
+# (task.5256). Installing the staged file — even when it contains no allow lines —
+# is what makes removal converge on the next run. No staged file (cloud-init boot
+# runs before any deploy; a fresh VM has no installed file either) = fail-closed
+# until the first deploy stages one. Paths are overridable for tests only.
 ALLOWLIST_FILE="${ALLOWLIST_FILE:-/etc/cogni/compute-egress-allowlist}"
 STAGED_ALLOWLIST="${STAGED_ALLOWLIST:-/tmp/compute-egress-allowlist}"
 if [ -f "$STAGED_ALLOWLIST" ]; then
   mkdir -p "$(dirname "$ALLOWLIST_FILE")"
   install -m 0644 "$STAGED_ALLOWLIST" "$ALLOWLIST_FILE"
-  echo "[harden] installed catalog-rendered compute-egress allowlist -> $ALLOWLIST_FILE"
+  echo "[harden] installed rendered substrate admission file -> $ALLOWLIST_FILE"
 fi
 if [ -f "$ALLOWLIST_FILE" ]; then
   while IFS= read -r line; do

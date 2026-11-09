@@ -384,8 +384,11 @@ function KpiCard({
   const title = kpi.metric?.title ?? kpi.binding.metricId;
   const number = a.value === null ? null : formatValue(a.value, display, unit);
   const reason = reasonText(a.reason);
+  // A breached target is a fresh reading, so it stays at full strength.
   const muted =
-    a.value !== null && (a.status === "delayed" || a.status === "failing");
+    a.value !== null &&
+    (a.status === "delayed" ||
+      (a.status === "failing" && a.reason !== "target_breached"));
   const markLabel = `${title}: ${number ?? "no reading"}; ${hint}`;
   return (
     <div

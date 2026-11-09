@@ -246,6 +246,7 @@ export function createPrReviewGraph(opts: CreateReactAgentGraphOptions) {
       prompt: PR_REVIEW_SYSTEM_PROMPT,
       coverage: PR_REVIEW_COVERAGE,
       requireIndex: true,
+      includeArchitect: true,
     });
 
   const gather = createReactAgent({
@@ -309,6 +310,12 @@ export function createPrReviewGraph(opts: CreateReactAgentGraphOptions) {
     .addNode("finalize", (s: S) => {
       if (!s.modelVerdict) return {};
       const evidence = collectReviewEvidence(s.messages);
+      // HOST_OWNED_ARCHITECT (task.5455): the host put this entry's full body in the preamble, so
+      // the reviewer has read it. Count it as read evidence so a citation of it is accepted.
+      // noHubRead below stays tool-only: the reviewer must still read the rules itself.
+      const injected = opts.sourceContext?.architect;
+      if (injected?.content.trim() && !evidence.entries.includes(injected.id))
+        evidence.entries.push(injected.id);
       return {
         structuredResponse: {
           ...s.modelVerdict,
