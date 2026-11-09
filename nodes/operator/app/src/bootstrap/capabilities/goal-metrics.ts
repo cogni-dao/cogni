@@ -12,6 +12,9 @@
  *   (`substrate.host-pressure@1`, bug.5613) over per-host node_exporter and k3s-kine series in Grafana Cloud Mimir. Package calculators, budgets
  *   enforcement and the engine live in `@cogni-dao/metrics/knowledge`; nothing here re-implements them.
  * Invariants:
+ *   - EDGE_CAUGHT_IS_NODE_LOCAL: `edge.caught@1` (story.5148) probes each application edge host's canary and reads
+ *     the Caddy access log from Loki through the operator's existing Loki reader; hosts come from the catalog
+ *     roster and this operator's own env domain, never a literal.
  *   - RELEASE_OWNS_BEHAVIOR: metric computation, assessment and goal progress come from the package.
  *   - SERVES_FROM_PACKAGE (0.9.0, story.0033): a metric row's `serves` and `band` are parsed, joined under their KPI
  *     (`served`) and reported (`orphans`, `servedTruncated`, `servedUnavailable`) by the package; no operator code
@@ -45,7 +48,13 @@ import {
   GitHubReviewKpiSource,
   REVIEW_CHECK_RUN_NAME,
 } from "@/adapters/server";
+import { createEdgeHostCatalog } from "@/bootstrap/capabilities/node-catalog";
+import { createLokiReader } from "@/bootstrap/observability.factory";
 import { createDeliveryCalculators } from "@/features/node-deploy/delivery-kpis";
+import {
+  createEdgeCaughtCalculators,
+  type EdgeCaughtWindowEvent,
+} from "@/features/node-deploy/edge-caught-kpis";
 import { createFleetCalculators } from "@/features/node-deploy/fleet-kpis";
 import { createFleetProbeSnapshots } from "@/features/node-deploy/fleet-probe-snapshot";
 import { createReviewCalculators } from "@/features/review/review-kpis";
@@ -75,8 +84,17 @@ export function createGoalMetrics(deps: {
   prometheus?: Pick<MetricsQueryPort, "queryInstant"> | null;
   environment: string;
   log(event: object): void;
+  /** One `edge_caught_window` event per `edge.caught@1` compute (story.5148). */
+  logEdgeWindow(event: EdgeCaughtWindowEvent): void;
 }) {
-  const { releaseStoreSql, controlHost, review, prometheus, ...rest } = deps;
+  const {
+    releaseStoreSql,
+    controlHost,
+    review,
+    prometheus,
+    logEdgeWindow,
+    ...rest
+  } = deps;
   const reviewRepo =
     review.appId && review.privateKeyBase64 ? review.repo : undefined;
   const deliverySource = new DeliveryKpiSource(releaseStoreSql);
@@ -94,6 +112,16 @@ export function createGoalMetrics(deps: {
           rest.observationsSql,
           `${getNodeId()}/${rest.environment}/`
         ),
+      }),
+      // story.5148: the edge catch-all counter. Hosts come from the catalog roster + this operator's env domain
+      // (its own public host); the Loki reader is the operator's existing Grafana read credential (null = unknown).
+      ...createEdgeCaughtCalculators({
+        env: rest.environment,
+        domain: controlHost,
+        catalog: createEdgeHostCatalog(),
+        probe: (input) => deliverySource.probe(input),
+        loki: createLokiReader(),
+        log: logEdgeWindow,
       }),
       ...createReviewCalculators(
         new GitHubReviewKpiSource({

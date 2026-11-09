@@ -42,7 +42,9 @@ export class HttpLokiReader implements LokiReaderPort {
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${this.token}` },
       // Loki reads are fast; bound the call so a hung upstream can't pin the route.
-      signal: AbortSignal.timeout(15_000),
+      signal: range.signal
+        ? AbortSignal.any([AbortSignal.timeout(15_000), range.signal])
+        : AbortSignal.timeout(15_000),
     });
 
     if (!res.ok) {

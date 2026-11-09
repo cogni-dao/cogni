@@ -25,6 +25,8 @@ export interface LokiQueryRange {
   readonly startNs: string;
   readonly endNs: string;
   readonly limit: number;
+  /** Optional caller abort (a metric calculator's budget). The adapter's own timeout still applies. */
+  readonly signal?: AbortSignal;
 }
 
 export interface LokiReaderPort {

@@ -225,6 +225,10 @@ export type {
   ResolveNodeRepoInput,
   SharedLaneInfraEnv,
 } from "./deploy-plane.port";
+export type {
+  EdgeCatalogNode,
+  EdgeHostCatalogPort,
+} from "./edge-host-catalog.port";
 export type { EpochsRead } from "./epochs-read.port";
 export { EpochsReadError } from "./epochs-read.port";
 export type {
