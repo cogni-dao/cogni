@@ -29,6 +29,29 @@ export interface LokiQueryRange {
   readonly signal?: AbortSignal;
 }
 
+/** One sample of an instant metric query (a LogQL `sum(count_over_time(...))` vector element). */
+export interface LokiVectorSample {
+  readonly labels: Readonly<Record<string, string>>;
+  readonly value: number;
+}
+
+export interface LokiInstantQuery {
+  /** A LogQL metric query, for example `sum(count_over_time({...} |= "x" [3600s]))`. */
+  readonly query: string;
+  /** Evaluation instant, nanosecond epoch as a string. */
+  readonly atNs: string;
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * Instant metric queries: a count over a window with no line cap (a `query_range` read returns at most `limit`
+ * lines). Same Grafana datasource proxy and read token as `LokiReaderPort`; the same adapter implements both.
+ */
+export interface LokiInstantReaderPort {
+  /** Run a Loki instant query and return the vector. An empty vector is a result (nothing matched). Throws on error. */
+  queryInstant(input: LokiInstantQuery): Promise<readonly LokiVectorSample[]>;
+}
+
 export interface LokiReaderPort {
   /** Run a Loki `query_range` and return newest-first lines. Throws on transport/HTTP error. */
   queryRange(range: LokiQueryRange): Promise<LokiLogLine[]>;

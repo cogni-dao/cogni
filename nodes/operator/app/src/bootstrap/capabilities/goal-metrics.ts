@@ -42,7 +42,7 @@ import {
   REVIEW_CHECK_RUN_NAME,
 } from "@/adapters/server";
 import { createEdgeHostCatalog } from "@/bootstrap/capabilities/node-catalog";
-import { createLokiReader } from "@/bootstrap/observability.factory";
+import { createLokiMetricReader } from "@/bootstrap/observability.factory";
 import { createDeliveryCalculators } from "@/features/node-deploy/delivery-kpis";
 import {
   createEdgeCaughtCalculators,
@@ -102,7 +102,7 @@ export function createGoalMetrics(deps: {
         domain: controlHost,
         catalog: createEdgeHostCatalog(),
         probe: (input) => deliverySource.probe(input),
-        loki: createLokiReader(),
+        loki: createLokiMetricReader(),
         log: logEdgeWindow,
       }),
       ...createReviewCalculators(
