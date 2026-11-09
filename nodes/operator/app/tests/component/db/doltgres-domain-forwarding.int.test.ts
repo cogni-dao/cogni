@@ -103,7 +103,9 @@ describe("installed domain artifacts", () => {
       path.dirname(canonical),
       "../package.json"
     );
-    expect(JSON.parse(readFileSync(packagePath, "utf8")).version).toBe("0.9.0");
+    expect(JSON.parse(readFileSync(packagePath, "utf8")).version).toBe(
+      "0.11.0"
+    );
     const shared = await import("@cogni/shared-knowledge-store/contracts");
     const contracts = await import("@cogni/node-contracts");
     expect(contracts.KnowledgeRowSchema).toBe(shared.KnowledgeRowSchema);
@@ -125,7 +127,7 @@ describe("installed domain artifacts", () => {
         receipt: "operator-domain-artifact-binding",
         canonical,
         toolEntry,
-        knowledgeVersion: "0.9.0",
+        knowledgeVersion: "0.11.0",
       })
     );
   });
