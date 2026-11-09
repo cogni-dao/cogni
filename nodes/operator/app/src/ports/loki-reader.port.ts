@@ -34,6 +34,8 @@ export interface LokiInstantQuery {
   readonly query: string;
   /** Evaluation time as nanosecond epoch; Loki uses "now" when absent. */
   readonly timeNs?: string;
+  /** Caller cancellation (the calculator's budget signal); the adapter still applies its own timeout. */
+  readonly signal?: AbortSignal;
 }
 
 /** One series of an instant metric query: its labels and its numeric value. */

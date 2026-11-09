@@ -175,10 +175,12 @@ export function createAiCalculators({
     unitFor: (params) => unitOf(paramsSchema.parse(params).output),
     displayFor: (params) =>
       isRate(paramsSchema.parse(params).output) ? "slo" : "volume",
+    // The query measures [end - hours, end), so the stored reading must carry the same window.
+    windowSeconds: (params) => paramsSchema.parse(params).hours * 3600,
     paramsSchema,
     budget: {
       timeoutMs: 20_000,
-      maxSourceCalls: 2,
+      maxSourceCalls: 1,
       maxRows: MAX_SERIES,
       maxResponseBytes: 2_097_152,
     },
@@ -199,9 +201,8 @@ export function createAiCalculators({
       let samples: LokiInstantSample[];
       try {
         samples = await ctx.read((signal) => {
-          // The port takes no signal; honor an already-aborted call before the request goes out.
           signal.throwIfAborted();
-          return loki.queryInstant({ query, timeNs: `${endMs}000000` });
+          return loki.queryInstant({ query, timeNs: `${endMs}000000`, signal });
         });
       } catch {
         return unknownSample(unit, "source_failed", asOf, [head]);

@@ -65,8 +65,11 @@ async function compute(
   const controller = new AbortController();
   let calls = 0;
   const ctx: CalculatorContext = {
+    // Derived from the calculator, as the engine does: a missing windowSeconds would show up here.
     window: {
-      start: new Date(NOW - 3_600_000).toISOString(),
+      start: new Date(
+        NOW - (calc.windowSeconds?.(params) ?? 0) * 1000
+      ).toISOString(),
       end: new Date(NOW).toISOString(),
     },
     signal: controller.signal,
@@ -144,15 +147,15 @@ describe("ai.run-errors@1 runs", () => {
     expect(s.evidenceRefs?.[2]).toBe("node:n29:failed=30/30:codes=e=30");
   });
 
-  it("queries Loki once, instant, at the window end", async () => {
+  it("queries Loki once, instant, at the window end, forwarding abort", async () => {
     const { port, queries } = reader(RUNS);
     await compute(port, p("runs", "candidate-a", 12));
-    expect(queries).toEqual([
-      {
-        query: runQuery("candidate-a", 12),
-        timeNs: `${NOW}000000`,
-      },
-    ]);
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toMatchObject({
+      query: runQuery("candidate-a", 12),
+      timeNs: `${NOW}000000`,
+    });
+    expect(queries[0]?.signal).toBeInstanceOf(AbortSignal);
     expect(queries[0]?.query).toContain(
       '{env="candidate-a",service=~"app.*|poly.*"}'
     );
@@ -251,8 +254,15 @@ describe("ai.run-errors@1 contract", () => {
     expect(calc.displayFor?.(p("chat_error_rate"))).toBe("slo");
     expect(calc.displayFor?.(p("run_failed"))).toBe("volume");
   });
+  it("declares the window its query measures", () => {
+    expect(calc.windowSeconds?.(p("runs", "production", 24))).toBe(86_400);
+    expect(calc.windowSeconds?.(p("chat_turns", "preview", 1))).toBe(3_600);
+    expect(calc.windowSeconds?.(p("run_error_rate", "candidate-a", 168))).toBe(
+      604_800
+    );
+  });
   it("declares a small budget", () => {
-    expect(calc.budget.maxSourceCalls).toBe(2);
+    expect(calc.budget.maxSourceCalls).toBe(1);
     expect(calc.budget.timeoutMs).toBeLessThanOrEqual(30_000);
   });
 });

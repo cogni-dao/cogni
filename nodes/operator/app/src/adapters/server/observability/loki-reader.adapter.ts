@@ -77,9 +77,10 @@ export class HttpLokiReader implements LokiReaderPort {
     url.searchParams.set("query", input.query);
     if (input.timeNs) url.searchParams.set("time", input.timeNs);
 
+    const timeout = AbortSignal.timeout(15_000);
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${this.token}` },
-      signal: AbortSignal.timeout(15_000),
+      signal: input.signal ? AbortSignal.any([input.signal, timeout]) : timeout,
     });
 
     if (!res.ok) {
