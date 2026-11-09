@@ -8,9 +8,7 @@
 #          that made the `unit` CI job an 8-minute monolith (task.5140). Every
 #          listed test uses isolated fixtures or read-only drift comparisons
 #          against committed files, with no external network, docker, or shared
-#          writable state (one exception: render-caddyfile.test.sh validates the
-#          rendered Caddyfiles with a local caddy binary, or `caddy:2` via docker only
-#          when CI=true, and skips otherwise), so they are safe to run concurrently with each other.
+#          writable state, so they are safe to run concurrently with each other.
 # Usage:   bash scripts/ci/run-shell-tests.sh
 # Exit:    0 iff EVERY test passed; 1 if any failed (a non-zero from any leg is
 #          preserved — a green here means all legs were actually green).
