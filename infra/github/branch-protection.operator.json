@@ -5,8 +5,8 @@
     "Node repos MUST NOT use this file: they cannot request a review yet (task.5448), and node protection is",
     "owned by the node template policy (.cogni/repo-policy.json).",
     "",
-    "Existing contexts keep today's semantics: `app_id: -1` is GitHub's explicit 'any source' (what the",
-    "`contexts` form of branch-protection.json stores as app_id null). `Cogni Git PR Review` is pinned to the",
+    "Existing contexts keep their current GitHub Actions pin (`app_id: 15368`, as live on main).",
+    "`Cogni Git PR Review` is pinned to the",
     "review App, id 2994706 (app `cogni-operator`, the writer of that check on PR #3066). It reports on the merge",
     "queue commit through the operator webhook, which copies the PR head's verdict there (task.5438).",
     "",
@@ -24,10 +24,10 @@
   ],
   "strict": false,
   "checks": [
-    { "context": "unit", "app_id": -1 },
-    { "context": "component", "app_id": -1 },
-    { "context": "static", "app_id": -1 },
-    { "context": "manifest", "app_id": -1 },
+    { "context": "unit", "app_id": 15368 },
+    { "context": "component", "app_id": 15368 },
+    { "context": "static", "app_id": 15368 },
+    { "context": "manifest", "app_id": 15368 },
     { "context": "Cogni Git PR Review", "app_id": 2994706 }
   ]
 }
