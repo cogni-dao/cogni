@@ -58,15 +58,17 @@ export const EDGE_CANARY_PATH = "/__edge/caught";
 /** The measured interval is the 300 s refresh cadence. */
 export const EDGE_WINDOW_SECONDS = 300;
 /** Most caught lines one window read returns; a read that fills it is unknown, not a capped number. */
-export const MAX_CAUGHT_LINES = 5000;
+export const MAX_CAUGHT_LINES = 5_000;
 /** Most lines the probe-line read returns (one probe makes one line). */
 export const MAX_PROBE_LINES = 20;
-export const CANARY_PROBE_TIMEOUT_MS = 5000;
+export const CANARY_PROBE_TIMEOUT_MS = 5_000;
 const CANARY_MAX_BYTES = 4096;
 /** Waits before each read of the probe's own line: Alloy and Loki ingest within seconds. */
-export const PROBE_LINE_POLL_DELAYS_MS: readonly number[] = [4000, 6000, 8000];
+export const PROBE_LINE_POLL_DELAYS_MS: readonly number[] = [
+  4_000, 6_000, 8_000,
+];
 /** The probe line is looked up from this long before the probe was sent. */
-const PROBE_LOOKBACK_MS = 5000;
+const PROBE_LOOKBACK_MS = 5_000;
 const UNIT = "responses";
 
 const envSchema = z.string().regex(/^[a-z0-9-]{1,40}$/);
