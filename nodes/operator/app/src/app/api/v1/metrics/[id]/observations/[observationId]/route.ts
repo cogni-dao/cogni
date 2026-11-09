@@ -3,19 +3,20 @@
 
 /**
  * Module: `@app/api/v1/metrics/[id]/observations/[observationId]`
- * Purpose: Read one saved observation snapshot (definition + observation).
- * Scope: Auth + delegation to the goal-metrics facade; contracts come from @cogni-dao/metrics.
+ * Purpose: Read one immutable observation of a metric.
+ * Scope: Auth and logging here; parsing, contract validation and error mapping are the published `@cogni-dao/metrics/http` handler, bound in the metrics facade.
  * Invariants: AUTH_VIA_GETSESSIONUSER (bearer agent key or session cookie); responses are no-store.
  * Side-effects: IO (metric service reads/writes)
- * Links: app/_facades/metrics/goal-metrics.server.ts, story.0021
+ * Links: app/_facades/metrics.server.ts, story.0021
  * @public
  */
 
 import { NextResponse } from "next/server";
 import {
+  metricHandlers,
   metricHttpError,
-  metricObservation,
-} from "@/app/_facades/metrics/goal-metrics.server";
+  metricResponse,
+} from "@/app/_facades/metrics.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
@@ -35,18 +36,9 @@ export const GET = wrapRouteHandlerWithLogging<{
     try {
       if (!context) throw new Error("route_context_missing");
       const { id, observationId } = await context.params;
-      if (
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-          observationId
-        )
-      )
-        return NextResponse.json(
-          { error: "invalid_observation_id" },
-          { status: 400 }
-        );
-      const response = await metricObservation(id, observationId);
-      response.headers.set("Cache-Control", "no-store");
-      return response;
+      return metricResponse(
+        await metricHandlers().observation(id, observationId)
+      );
     } catch (error) {
       return metricHttpError(error);
     }

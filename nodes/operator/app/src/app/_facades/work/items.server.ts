@@ -4,7 +4,7 @@
 /**
  * Module: `@app/_facades/work/items.server`
  * Purpose: Server-side facade for work item read/write operations across the markdown + Doltgres surfaces.
- * Scope: Maps content to DTOs; lists use configured Doltgres or unconfigured markdown alone. Does not own adapters or PostgreSQL coordination.
+ * Scope: Maps content to DTOs; lists and bounded summary pages use configured Doltgres or unconfigured markdown alone. Does not own adapters or PostgreSQL coordination.
  * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED.
  *   Priority (including 0/1) carries no extra node-admin gate (task.5306); the store's own
  *   author-scoped write authority applies unchanged.
@@ -17,11 +17,23 @@ import type {
   WorkItemsCreateInput as ContractCreateInput,
   WorkItemsPatchInput as ContractPatchInput,
   WorkItemDto,
+  WorkItemSummariesListInput,
+  WorkItemSummariesListOutput,
   WorkItemsListInput,
   WorkItemsListOutput,
 } from "@cogni/node-contracts";
-import type { WorkItem, WorkItemId } from "@cogni/work-items";
-import { toWorkItemDto, toWorkItemId } from "@cogni/work-items";
+import type {
+  WorkBoardColumnPages,
+  WorkItem,
+  WorkItemId,
+  WorkQuery,
+  WorkSummaryReadOptions,
+} from "@cogni/work-items";
+import {
+  toWorkItemDto,
+  toWorkItemId,
+  WorkItemSummarySchema,
+} from "@cogni/work-items";
 
 import { getContainer } from "@/bootstrap/container";
 
@@ -312,6 +324,109 @@ export async function listWorkItems(
     }
     throw e;
   }
+}
+
+/** Map a store read failure; returns only when Doltgres is not configured. */
+function rethrowReadUnlessNotConfigured(error: unknown): void {
+  const name = (error as Error)?.name;
+  if (name === "InvalidCursorError") {
+    throw new InvalidCursorError((error as Error).message);
+  }
+  if (name !== "DoltgresNotConfiguredError") throw error;
+}
+
+/** The store query for one decoded summary request (the published codec already bounded it). */
+function summaryQuery(input: WorkItemSummariesListInput): WorkQuery {
+  return {
+    ...(input.sortBy !== undefined && { sortBy: input.sortBy }),
+    ...(input.sortDirection !== undefined && {
+      sortDirection: input.sortDirection,
+    }),
+    ...(input.types && { types: input.types as WorkItem["type"][] }),
+    ...(input.statuses && { statuses: input.statuses as WorkItem["status"][] }),
+    ...(input.text && { text: input.text }),
+    ...(input.actor && { actor: input.actor as WorkItem["actor"] }),
+    ...(input.projectId && { projectId: toWorkItemId(input.projectId) }),
+    ...(input.projectIds && { projectIds: input.projectIds.map(toWorkItemId) }),
+    ...(input.rankMin !== undefined && { rankMin: input.rankMin }),
+    ...(input.rankMax !== undefined && { rankMax: input.rankMax }),
+    ...(input.node && { node: input.node }),
+    ...(input.labels && { labels: input.labels }),
+    ...(input.labelPrefix !== undefined && { labelPrefix: input.labelPrefix }),
+    ...(input.scored !== undefined && { scored: input.scored }),
+    limit: input.limit ?? 25,
+    ...(input.cursor && { cursor: input.cursor }),
+  };
+}
+
+/**
+ * One bounded summary page (task.0056). `options` (signal, shared deadline,
+ * scan budget) only tightens the read. Doltgres owns the page; markdown serves
+ * it only when Doltgres is not configured (same rule as `listWorkItems`).
+ */
+export async function listWorkSummaries(
+  input: WorkItemSummariesListInput,
+  options?: WorkSummaryReadOptions
+): Promise<WorkItemSummariesListOutput> {
+  const container = getContainer();
+  const query = summaryQuery(input);
+  try {
+    return await container.doltgresWorkItems.listSummaries(query, options);
+  } catch (error) {
+    rethrowReadUnlessNotConfigured(error);
+  }
+  try {
+    const result = await container.workItemQuery.list(query);
+    return {
+      items: result.items.map((item) =>
+        WorkItemSummarySchema.parse(toDto(item))
+      ),
+      pageInfo: {
+        endCursor: result.nextCursor ?? null,
+        hasMore: result.nextCursor !== undefined,
+      },
+      ...(result.nextCursor !== undefined && { nextCursor: result.nextCursor }),
+    };
+  } catch (error) {
+    if ((error as Error)?.name === "InvalidCursorError")
+      throw new InvalidCursorError((error as Error).message);
+    throw error;
+  }
+}
+
+/**
+ * First page of every listed board column in ONE store read when the port
+ * composes it (task.0056); otherwise one bounded summary read per column.
+ * Text queries never reach here (the package keeps them per-column).
+ */
+export async function listWorkBoardColumns(
+  input: WorkItemSummariesListInput,
+  statuses: readonly string[],
+  perColumn: number,
+  options?: { readonly signal?: AbortSignal }
+): Promise<WorkBoardColumnPages> {
+  const port = getContainer().doltgresWorkItems;
+  if (port.listBoardColumns) {
+    try {
+      return await port.listBoardColumns(
+        summaryQuery(input),
+        statuses,
+        perColumn,
+        options
+      );
+    } catch (error) {
+      rethrowReadUnlessNotConfigured(error);
+    }
+  }
+  const columns = [];
+  for (const status of statuses) {
+    const page = await listWorkSummaries(
+      { ...input, statuses: [status], limit: perColumn },
+      options
+    );
+    columns.push({ status, items: page.items, pageInfo: page.pageInfo });
+  }
+  return { columns, queryCount: columns.length };
 }
 
 export async function getWorkItem(id: string): Promise<WorkItemDto | null> {

@@ -38,6 +38,11 @@ Protected (authenticated) pages wrapped in `SidebarProvider` + `AppSidebar` + `A
 - This directory **does**: Render the sidebar layout shell (sidebar + top bar + content area) for routes protected by `src/proxy.ts`.
 - This directory **does not**: Handle sign-in/sign-out flows, contain business logic, manage session persistence.
 
+## Package mounts
+
+- `/work` reads bounded pages only (task.0056): the board is `useWorkBoard` over `/api/v1/work/board`, the table is `useWorkTablePage` over `/api/v1/work/summaries`; nothing here walks cursors.
+- The Knowledge Goals tab renders only the published `@cogni/knowledge-base-ui/goals` board through `knowledge/_components/GoalsMount.tsx` (story.0021); the app owns no Goals markup, chart or formatter.
+
 ## Usage
 
 ```bash
