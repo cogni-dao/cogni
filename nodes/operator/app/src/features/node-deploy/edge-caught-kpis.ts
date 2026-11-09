@@ -305,7 +305,7 @@ const CAUGHT_MARKER = '|= "\\"X-Cogni-Edge\\":[\\"caught\\"]"';
 /** Caught lines of one host in one env (the canary included; it is excluded when counting). */
 export function caughtQuery(env: string, host: string): string {
   // Case-insensitive with an optional port: a logged host may be `Host.example.org:443`. `parseCaddyLine` is exact.
-  const escaped = host.replace(/\./g, "\\.");
+  const escaped = host.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
   return `{service="caddy", env="${env}"} ${CAUGHT_MARKER} |~ \`(?i)"host":"${escaped}(:[0-9]+)?"\``;
 }
 
