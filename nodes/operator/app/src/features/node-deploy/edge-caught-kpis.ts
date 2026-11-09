@@ -27,8 +27,10 @@
  *   - UNKNOWN_NOT_ZERO: a failed canary, a missing probe line, an unwired Loki reader, a failing Loki query, an
  *     invalid vector, an unprobed host or an env this operator does not serve is an incomplete sample with a
  *     reason, never 0. Only a proven pipeline with an empty vector reads 0.
- *   - CANARY_IS_EXCLUDED: the count drops every line that mentions `/-/edge-probe` (`!= "/-/edge-probe"`). The only
- *     over-exclusion is a caught line that quotes that path elsewhere (for example in a referer).
+ *   - CANARY_IS_EXCLUDED: the count drops every line that mentions `/-/edge-probe` or the retired canary path
+ *     `/__edge/caught` (`!~ "/-/edge-probe|/__edge/caught"`). Production already holds caught lines for the old
+ *     path, so the 1 d count would start failing without it; keeping both is harmless once the old path is gone.
+ *     The only over-exclusion is a caught line that quotes one of those paths elsewhere (for example in a referer).
  *   - HOSTS_FROM_THE_RENDERER_SOURCE: the roster is the catalog (`type: node` rows with a `node_port`; the primary
  *     row owns the bare env domain) joined to the operator's own env domain, exactly as
  *     `scripts/ci/render-caddyfile.sh --domain` emits application sites. Nothing names a host. The mesh control,
@@ -286,7 +288,9 @@ const KPI_REASON: Record<
 // ---------------------------------------------------------------------------------------------
 
 const CAUGHT_MARKER = '|= "\\"X-Cogni-Edge\\":[\\"caught\\"]"';
-const NOT_CANARY = `!= "${EDGE_CANARY_PATH}"`;
+/** The retired canary path: caught lines for it are still in the logs (production, 24 h), and never count. */
+export const RETIRED_EDGE_CANARY_PATH = "/__edge/caught";
+const NOT_CANARY = `!~ "${EDGE_CANARY_PATH}|${RETIRED_EDGE_CANARY_PATH}"`;
 const escapeRegex = (s: string) => s.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 
 /**
