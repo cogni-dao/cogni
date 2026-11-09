@@ -661,6 +661,46 @@ describe("lowering rules", () => {
     ).toBe(false);
   });
 
+  it("a stored release spec recorded with legacy secret_refs still parses, and the field is dropped (bug.5254)", () => {
+    const d = canaryDoc();
+    app(d).image = ".";
+    const m = parseWorkloadManifest(stringify(d));
+    const tag = `ghcr.io/cogni-dao/canary:sha-${"a".repeat(40)}`;
+    const app0 = lowerWorkloadManifest(m, { pendingImage: tag })[1];
+    const service = (name: string, extra: Record<string, unknown>) => ({
+      name,
+      artifact: { name },
+      port: 3200,
+      visibility: name === "app" ? "public" : "private",
+      bindings: {},
+      bind_host: "0.0.0.0",
+      resources: { cpu_units: 1, memory_mi: 512, storage_mi: 1024 },
+      ...extra,
+    });
+    const stored = {
+      ...app0,
+      artifactPlan: {
+        repository: "cogni-dao/canary",
+        imageRepository: "ghcr.io/cogni-dao/canary",
+        services: [
+          // `[]` is what the old `.default([])` froze into every row; real keys are poly's and red's rows
+          service("app", { secret_refs: [] }),
+          service("helper", { secret_refs: [{ key: "X" }] }),
+          service("plain", {}),
+        ],
+      },
+    };
+    const parsed = nodeWorkloadSpecSchema.safeParse(stored);
+    expect(parsed.success).toBe(true);
+    for (const frozen of parsed.success
+      ? (parsed.data.artifactPlan?.services ?? [])
+      : [])
+      expect(frozen).not.toHaveProperty("secret_refs");
+    expect(
+      parsed.success && parsed.data.artifactPlan?.services.map((s) => s.name)
+    ).toEqual(["app", "helper", "plain"]);
+  });
+
   it("parses Kubernetes quantities", () => {
     expect(quantityToCpu("250m")).toBe(0.25);
     expect(quantityToCpu("2")).toBe(2);

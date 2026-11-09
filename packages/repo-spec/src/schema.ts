@@ -422,6 +422,20 @@ export const nodeServiceSpecSchema = z
 
 export type NodeServiceSpec = z.infer<typeof nodeServiceSpecSchema>;
 
+/**
+ * A service as FROZEN in a recorded release (`artifactPlan.services`), read back on every sequencer
+ * tick, release GET and bundle lookup. Releases recorded before `secret_refs` was retired carry it
+ * (`[]` from the old default, or real keys). The stored path drops it and never acts on it: the secret
+ * keys a release delivers are the frozen `secretKeys`, not this field. The loud refusal belongs to the
+ * authoring surface only (the repo-spec parse). Never use this schema to parse a repo-spec.
+ */
+export const storedNodeServiceSpecSchema = z.preprocess((value) => {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return value;
+  const { secret_refs: _retired, ...rest } = value as Record<string, unknown>;
+  return rest;
+}, nodeServiceSpecSchema);
+
 // ---------------------------------------------------------------------------
 // Blue/green workloads (task.5400, story.5127): the deploy spec a release stores. A node declares
 // it through a workload manifest (`.cogni/workloads/<name>.yaml`, see workload-manifest.ts), which
@@ -504,7 +518,7 @@ export const nodeWorkloadSpecSchema = z
           .string()
           .regex(/^ghcr\.io\/[a-z0-9._-]+\/[a-z0-9._-]+$/),
         /** Frozen same-SHA build declarations, including services pruned in this environment. */
-        services: z.array(nodeServiceSpecSchema).min(1).max(8),
+        services: z.array(storedNodeServiceSpecSchema).min(1).max(8),
         bundleDigest: workloadImageSchema.optional(),
         selectedImages: z
           .record(serviceNameSchema, workloadImageSchema)

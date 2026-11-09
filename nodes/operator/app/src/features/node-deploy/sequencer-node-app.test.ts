@@ -2090,7 +2090,13 @@ describe("same-source Score/declaration bridge", () => {
     if (authority === "catalog")
       d.catalog = [{ name: "HELPER_URL", workloads: ["canary"] }];
     else app.bindings = { AUTH_SECRET: "helper" };
-    expect(() => d.resolve(env)).toThrow(DeclarationError);
+    expect(() => d.resolve(env)).toThrow(
+      expect.objectContaining({
+        code: "workload_manifest_refused",
+        message:
+          "sibling binding must target a different private service without conflicting env",
+      })
+    );
   });
   it.each([
     "preview",
