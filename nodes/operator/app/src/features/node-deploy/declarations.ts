@@ -411,20 +411,25 @@ function checkSecretsCatalog(
       throw new DeclarationError("secrets_catalog_refused", error.message);
     throw error;
   }
-  // A projected entry, or any generated (`source: agent`) entry, must name a node-owned key.
+  // A projected key must never be a fleet credential: not fleet-inherited (another owner holds the
+  // value) and not off-cluster-denied. That is the `secret_refs` rule plus the inherited check. A
+  // generated (`source: agent`) key must ALSO not be substrate-reserved: the substrate mints those,
+  // and a second minter is the overwrite-by-another-door Gate 2 blocks. A node-owned reserved key
+  // (e.g. POLY_WALLET_AEAD_KEY_HEX, `source: human`) may still be projected.
+  const fleet = (k: string) =>
+    inheritedKeyOwner(k) !== undefined || !isOffClusterWorkloadSecretKey(k);
   const refused = catalog
-    .filter((e) => e.workloads.length > 0 || e.source === "agent")
-    .map((e) => e.name)
     .filter(
-      (k) =>
-        !isNodeOwnedSecretKey(k) ||
-        inheritedKeyOwner(k) !== undefined ||
-        !isOffClusterWorkloadSecretKey(k)
-    );
+      (e) =>
+        (e.workloads.length > 0 && fleet(e.name)) ||
+        (e.source === "agent" &&
+          (fleet(e.name) || !isNodeOwnedSecretKey(e.name)))
+    )
+    .map((e) => e.name);
   if (refused.length > 0)
     throw new DeclarationError(
       "secrets_catalog_refused",
-      `a projected or generated catalog entry may name only node-owned keys; refused: ${refused.join(", ")}`
+      `catalog may not project a fleet credential or generate a substrate key; refused: ${refused.join(", ")}`
     );
   return catalog;
 }

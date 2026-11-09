@@ -237,6 +237,22 @@ ${extra}`;
       ).toThrow(expect.objectContaining({ code: "secrets_catalog_refused" }));
   });
 
+  it("projects a node-owned reserved key the node supplies (source human), like poly's wallet key", () => {
+    const text = `secrets:
+  - name: POLY_WALLET_AEAD_KEY_HEX
+    tier: A2
+    source: human
+    workloads: [sandbox]
+    required: true
+    category: Wallet
+    description: Node-owned wallet key.
+    steps: []
+`;
+    expect(
+      resolve({ repoSpecText: noRefs, secretsCatalogText: text }).secretKeys
+    ).toEqual(["POLY_WALLET_AEAD_KEY_HEX"]);
+  });
+
   it("refuses a catalog that projects a substrate, fleet-inherited or operator key", () => {
     for (const key of [
       "AUTH_SECRET",
