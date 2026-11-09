@@ -269,11 +269,40 @@ describe("decideWindow: unknown unless the canary proves the path", () => {
 describe("queries", () => {
   it("scopes the caught count to the env label and the host, with the verified marker", () => {
     expect(caughtQuery("candidate-a", HOST)).toBe(
-      '{service="caddy", env="candidate-a"} |= "\\"X-Cogni-Edge\\":[\\"caught\\"]" |= "\\"host\\":\\"test.cognidao.org\\""'
+      '{service="caddy", env="candidate-a"} |= "\\"X-Cogni-Edge\\":[\\"caught\\"]" |~ `(?i)"host":"test\\.cognidao\\.org(:[0-9]+)?"`'
     );
     expect(probeLineQuery("candidate-a", HOST, NONCE)).toContain(
       '|= "probe=abc123"'
     );
+  });
+
+  it("pre-filters with a case-insensitive host that allows a port, so :443 and uppercase lines reach the parser", () => {
+    const m = /\|~ `([^`]+)`/.exec(caughtQuery("candidate-a", HOST));
+    // LogQL regex is RE2: translate the (?i) flag for JS.
+    const re = new RegExp((m?.[1] ?? "").replace("(?i)", ""), "i");
+    for (const host of [
+      "test.cognidao.org",
+      "test.cognidao.org:443",
+      "TEST.Cognidao.org:80",
+    ])
+      expect(re.test(`{"request":{"host":"${host}","uri":"/"}}`)).toBe(true);
+    // A different host, or one that only ends like this one, does not pass.
+    expect(re.test('{"request":{"host":"poly-test.cognidao.org"}}')).toBe(
+      false
+    );
+    expect(re.test('{"request":{"host":"testXcognidao.org"}}')).toBe(false);
+  });
+
+  it("counts a caught line whose logged host has a port or uppercase letters", () => {
+    expect(
+      countCaught(
+        lines(
+          caddyLine({ host: "test.cognidao.org:443" }),
+          caddyLine({ host: "TEST.cognidao.org" })
+        ),
+        HOST
+      ).caught
+    ).toBe(2);
   });
 });
 
@@ -418,6 +447,7 @@ describe("createEdgeCaughtCalculators", () => {
     // Exactly one event, a number.
     expect(h.events).toEqual([
       expect.objectContaining({
+        event: "edge_caught_window",
         env: "candidate-a",
         host: HOST,
         outcome: "number",

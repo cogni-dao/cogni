@@ -51,6 +51,7 @@ import type {
   LokiLogLine,
   LokiReaderPort,
 } from "@/ports";
+import { EVENT_NAMES } from "@/shared/observability";
 
 export const EDGE_CAUGHT_ID = "edge.caught@1";
 /** The path each application site always answers with a Caddy-made 502 (rewritten to the catch-all 503). */
@@ -64,9 +65,9 @@ export const MAX_PROBE_LINES = 20;
 export const CANARY_PROBE_TIMEOUT_MS = 5_000;
 const CANARY_MAX_BYTES = 4096;
 /** Waits before each read of the probe's own line: Alloy and Loki ingest within seconds. */
-export const PROBE_LINE_POLL_DELAYS_MS: readonly number[] = [
-  4_000, 6_000, 8_000,
-];
+export const PROBE_LINE_POLL_DELAYS_MS: readonly number[] = [4, 6, 8].map(
+  (seconds) => seconds * 1000
+);
 /** The probe line is looked up from this long before the probe was sent. */
 const PROBE_LOOKBACK_MS = 5_000;
 const UNIT = "responses";
@@ -303,7 +304,9 @@ const CAUGHT_MARKER = '|= "\\"X-Cogni-Edge\\":[\\"caught\\"]"';
 
 /** Caught lines of one host in one env (the canary included; it is excluded when counting). */
 export function caughtQuery(env: string, host: string): string {
-  return `{service="caddy", env="${env}"} ${CAUGHT_MARKER} |= "\\"host\\":\\"${host}\\""`;
+  // Case-insensitive with an optional port: a logged host may be `Host.example.org:443`. `parseCaddyLine` is exact.
+  const escaped = host.replace(/\./g, "\\.");
+  return `{service="caddy", env="${env}"} ${CAUGHT_MARKER} |~ \`(?i)"host":"${escaped}(:[0-9]+)?"\``;
 }
 
 /** The line of one probe: caught lines of the host whose uri carries the probe nonce. */
@@ -323,6 +326,8 @@ const nanos = (ms: number) => `${Math.trunc(ms)}000000`;
 
 /** The one structured event per window. Enums, counts and the public host only. */
 export interface EdgeCaughtWindowEvent {
+  /** The registry name as a field (hub contract): Grafana filters on `event`, not only the message. */
+  readonly event: typeof EVENT_NAMES.EDGE_CAUGHT_WINDOW;
   readonly env: string;
   readonly host: string;
   readonly windowStart: string;
@@ -400,6 +405,7 @@ export function createEdgeCaughtCalculators(
       const finish = (outcome: EdgeWindowOutcome): MetricSample => {
         const endedMs = now();
         options.log({
+          event: EVENT_NAMES.EDGE_CAUGHT_WINDOW,
           env: p.env,
           host: p.host,
           windowStart: ctx.window.start,
