@@ -27,7 +27,12 @@ import { join } from "node:path";
 
 import { parse as parseYaml } from "yaml";
 
-import type { NodeCatalogEntry, NodeCatalogPort } from "@/ports";
+import type {
+  EdgeCatalogNode,
+  EdgeHostCatalogPort,
+  NodeCatalogEntry,
+  NodeCatalogPort,
+} from "@/ports";
 import { isFleetOwnedRow } from "@/shared/node-registry/fleet-ownership";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -42,7 +47,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-export class ImageCatalogNodes implements NodeCatalogPort {
+export class ImageCatalogNodes implements NodeCatalogPort, EdgeHostCatalogPort {
   private index: Map<string, NodeCatalogEntry> | undefined;
   private rows: NodeCatalogEntry[] = [];
 
@@ -70,6 +75,26 @@ export class ImageCatalogNodes implements NodeCatalogPort {
         );
       })
       .map((e) => e.slug);
+  }
+
+  /**
+   * The edge application roster, read as `render-caddyfile.sh` reads it: `NODE_TARGETS` is every `type: node`
+   * row, and a row without a numeric `node_port` makes the renderer fail, so it is not rostered here either.
+   */
+  async edgeNodes(): Promise<readonly EdgeCatalogNode[]> {
+    this.index ??= await this.build();
+    return this.rows
+      .filter(
+        (e) =>
+          isRecord(e.row) &&
+          e.row.type === "node" &&
+          typeof e.row.node_port === "number"
+      )
+      .map((e) => ({
+        slug: e.slug,
+        primary: isRecord(e.row) && e.row.is_primary_host === true,
+      }))
+      .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
   }
 
   async slugs(): Promise<readonly string[]> {

@@ -70,6 +70,8 @@ export type DeliveryProbeResult =
       readonly kind: "response";
       readonly status: number;
       readonly body: string;
+      /** Response headers, names lowercased. Absent when the source does not report them. */
+      readonly headers?: Readonly<Record<string, string>>;
     }
   | { readonly kind: "unreachable"; readonly code: string };
 
