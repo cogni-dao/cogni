@@ -8,7 +8,8 @@
  * Scope: Given the CURRENT committed `infra/compose/edge/configs/Caddyfile.tmpl` and a new
  *   NON-PRIMARY node's slug + node_port, return the new content byte-identical to what
  *   `bash scripts/ci/render-caddyfile.sh` emits once that node is in the catalog.
- * Invariants: CATALOG_IS_SSOT — the emitted block mirrors `emit_site_block`'s heredoc exactly;
+ * Invariants: CATALOG_IS_SSOT — the emitted block mirrors `emit_site_block`'s heredoc exactly
+ *   (story.5148: catch-all + canary imports, 90s default proxy timeout, stdout access log);
  *   non-primary nodes stay in `sort`-order; primary (operator) block is never moved.
  * Side-effects: none — pure string transform, no IO, no env.
  * Links: scripts/ci/render-caddyfile.sh, docs/guides/node-formation-guide.md, task.5092
@@ -25,11 +26,12 @@ function nonPrimaryBlock(slug: string, nodePort: number): string {
   const upper = slugVar(slug);
   const host = `{$${upper}_DOMAIN:${slug}.localhost}`;
   const upstream = `{$${upper}_UPSTREAM:host.docker.internal:${nodePort}}`;
-  const logfile = `access-${slug}.log`;
   return [
     `# ── ${slug} node → k3s NodePort ${nodePort} ──────────────────────────────────`,
     `${host} {`,
     `  encode zstd gzip`,
+    `  import cogni_catch_all`,
+    `  import cogni_edge_canary`,
     ``,
     `  @public path /api/v1/public/*`,
     `  handle @public {`,
@@ -41,15 +43,15 @@ function nonPrimaryBlock(slug: string, nodePort: number): string {
     `    }`,
     `  }`,
     ``,
-    `  reverse_proxy ${upstream}`,
+    `  reverse_proxy ${upstream} {`,
+    `    transport http {`,
+    `      response_header_timeout 90s`,
+    `    }`,
+    `  }`,
     ``,
     `  log {`,
     `    format json`,
-    `    output file /data/logs/caddy/${logfile} {`,
-    `      roll_size 10MB`,
-    `      roll_keep 7`,
-    `      roll_keep_for 168h`,
-    `    }`,
+    `    output stdout`,
     `  }`,
     `}`,
   ].join("\n");
