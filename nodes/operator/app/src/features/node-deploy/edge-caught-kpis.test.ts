@@ -260,7 +260,7 @@ describe("vectorTotal and decideWindow: unknown unless the canary proves the pat
 describe("queries", () => {
   it("counts caught lines of one host as an instant metric query, canary excluded, no line cap", () => {
     expect(caughtCountQuery("candidate-a", [HOST], 300)).toBe(
-      'sum(count_over_time({service="caddy", env="candidate-a"} |= "\\"X-Cogni-Edge\\":[\\"caught\\"]" != "/-/edge-probe" |~ `(?i)"host":"test\\.cognidao\\.org(:[0-9]+)?"` [300s]))'
+      'sum(count_over_time({service="caddy", env="candidate-a"} |= "\\"X-Cogni-Edge\\":[\\"caught\\"]" !~ "/-/edge-probe|/__edge/caught" |~ `(?i)"host":"test\\.cognidao\\.org(:[0-9]+)?"` [300s]))'
     );
     expect(caughtCountQuery("production", [HOST], 86400)).toContain("[86400s]");
     expect(caughtCountQuery("production", [HOST], 3600)).toContain("[3600s]");
@@ -272,7 +272,20 @@ describe("queries", () => {
       '`(?i)"host":"(poly-test\\.cognidao\\.org|test\\.cognidao\\.org)(:[0-9]+)?"`'
     );
     expect(q).not.toContain("mesh");
-    expect(q).toContain('!= "/-/edge-probe"');
+    expect(q).toContain('!~ "/-/edge-probe|/__edge/caught"');
+  });
+
+  it("excludes BOTH canary paths from the count (the retired /__edge/caught still has lines in the logs)", () => {
+    for (const hosts of [[HOST], [POLY, HOST]]) {
+      const q = caughtCountQuery("production", hosts, 86400);
+      const m = /!~ "([^"]+)"/.exec(q);
+      expect(m?.[1]).toBe("/-/edge-probe|/__edge/caught");
+      const re = new RegExp(m?.[1] ?? "");
+      // Lines that carry either canary uri are dropped by the filter; a real failure line is not.
+      expect(re.test('{"request":{"uri":"/-/edge-probe?probe=x"}}')).toBe(true);
+      expect(re.test('{"request":{"uri":"/__edge/caught"}}')).toBe(true);
+      expect(re.test('{"request":{"uri":"/api/v1/work/items"}}')).toBe(false);
+    }
   });
 
   it("builds the probe-line query with the nonce", () => {
