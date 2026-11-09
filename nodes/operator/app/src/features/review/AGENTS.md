@@ -40,6 +40,7 @@ PR review feature: deterministic gate orchestrator evaluates PRs against `.cogni
   - `EvidenceBundle` — pre-fetched PR diff + file patches
   - `ReviewContext` — owner/repo/prNumber/headSha/installationId
 - **Goal-metric calculators (`review-kpis.ts`, task.5450):** `review.merge-coverage@1` and `review.fail-fix-rate@1` (unit `ratio`, param `days`, default 7) over `ReviewKpiSourcePort`; registered in `bootstrap/capabilities/goal-metrics.ts`. Count only check runs the review App wrote; neutral is not a pass; unknown is unavailable, never 0.
+- **Merge-queue verdict copy (`queue-verdict.ts`, task.5438):** pure `extractQueuePush`, `parseQueueRef`, `selectHeadVerdictRun`, `decideQueueVerdict` — copies the PR head's `Cogni Git PR Review` verdict (review App only) onto the queue commit so the check can be GitHub-required on the operator repo. Never neutral, never silently skipped; no LLM.
 - **Env/Config keys:** none (all deps injected)
 - **Files considered API:** `public.server.ts`, `types.ts`
 

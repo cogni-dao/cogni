@@ -61,6 +61,9 @@ vi.mock("@/bootstrap/container", () => ({
 vi.mock("@/app/_facades/deploy/node-preview-promote.server", () => ({
   dispatchNodePreviewPromote: fakes.preview,
 }));
+vi.mock("@/app/_facades/review/queue-verdict.server", () => ({
+  dispatchQueueReviewVerdict: vi.fn(),
+}));
 vi.mock("@/features/governance/services/signal-dispatch", () => ({
   dispatchSignalExecution: fakes.signal,
 }));

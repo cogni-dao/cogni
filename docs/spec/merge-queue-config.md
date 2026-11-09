@@ -83,6 +83,8 @@ Set committed to [`infra/github/branch-protection.json`](../../infra/github/bran
 
 All four workflows fire on both `pull_request:` and `merge_group:`.
 
+**Operator repo only — `Cogni Git PR Review` (task.5438).** The operator repo's required set is this table plus `Cogni Git PR Review`, pinned to the review App's integration id, declared in [`infra/github/branch-protection.operator.json`](../../infra/github/branch-protection.operator.json) and applied by one admin `PATCH .../required_status_checks`. It satisfies `REPORT_OR_DON'T_REQUIRE` through the operator webhook: on a push to `gh-readonly-queue/main/pr-<N>-…` the review App copies the PR head's verdict (same check name) onto the queue commit. A missing, unfinished or non-passing head verdict is written as `failure` — never neutral, never skipped, because a missing check would stall the entry for the queue's response timeout and eject it. Node repos do not require it (they cannot request a review yet — task.5448).
+
 Excluded from required (advisory on PR-time only):
 
 | Context             | Workflow                  | Why excluded from required                                                                                                                                               |
