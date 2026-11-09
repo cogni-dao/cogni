@@ -60,18 +60,24 @@
         </head>
         <body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f6f8fa;color:#1f2328;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;text-align:center">
         <main style="padding:24px;max-width:420px">
-        <svg width="96" height="96" viewBox="0 0 96 96" fill="none" stroke="#57606a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Sad robot">
-        <circle cx="48" cy="9" r="3"/>
-        <line x1="48" y1="12" x2="48" y2="22"/>
-        <rect x="20" y="22" width="56" height="44" rx="10"/>
-        <line x1="14" y1="40" x2="20" y2="40"/>
-        <line x1="76" y1="40" x2="82" y2="40"/>
-        <circle cx="37" cy="40" r="4"/>
-        <circle cx="59" cy="40" r="4"/>
-        <path d="M37 57 Q48 49 59 57"/>
-        <line x1="38" y1="66" x2="38" y2="76"/>
-        <line x1="58" y1="66" x2="58" y2="76"/>
+        <svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 112 112" fill="none" stroke="#59636e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Sad Cogni robot">
+        <path d="M30 40 C26 28 36 18 46 22 C50 14 62 14 66 22 C76 18 86 28 82 40"/>
+        <path d="M56 19 V40"/>
+        <path d="M40 31 Q45 27 49 31"/>
+        <path d="M63 31 Q67 27 72 31"/>
+        <rect x="24" y="40" width="64" height="44" rx="12"/>
+        <line x1="17" y1="60" x2="24" y2="60"/>
+        <line x1="88" y1="60" x2="95" y2="60"/>
+        <path d="M35 55 L45 51"/>
+        <path d="M77 55 L67 51"/>
+        <circle cx="41" cy="62" r="3.5"/>
+        <circle cx="71" cy="62" r="3.5"/>
+        <path d="M44 77 Q56 69 68 77"/>
+        <line x1="44" y1="84" x2="44" y2="94"/>
+        <line x1="68" y1="84" x2="68" y2="94"/>
         </svg>
+
+
         <h1 style="font-size:24px;font-weight:600;margin:16px 0 8px">Service unavailable</h1>
         <p style="font-size:16px;line-height:1.5;color:#59636e;margin:0 0 24px">The server didn't respond. Please try again in a moment.</p>
         <a href="" style="display:inline-block;padding:8px 16px;border:1px solid #d1d9e0;border-radius:6px;background:#fff;color:#1f2328;text-decoration:none;font-size:14px;font-weight:500">Try again</a>
