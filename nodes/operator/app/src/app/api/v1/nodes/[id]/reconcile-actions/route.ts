@@ -56,7 +56,10 @@ interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
-export async function POST(request: Request, routeArgs: RouteParams) {
+export const GET = handleActions;
+export const POST = handleActions;
+
+async function handleActions(request: Request, routeArgs: RouteParams) {
   const ctx = createRequestContext({ baseLog, clock }, request, {
     routeId: "nodes.reconcileActions",
     traceId: getCurrentTraceId(),
@@ -138,7 +141,8 @@ export async function POST(request: Request, routeArgs: RouteParams) {
 
   const writer = createNodeRepoWriter(env);
   let result: Awaited<
-    ReturnType<typeof writer.reconcileNodeActionsPermissions>
+    | ReturnType<typeof writer.reconcileNodeActionsPermissions>
+    | ReturnType<typeof writer.inspectNodeActionsPermissions>
   >;
   try {
     const { owner, repo } = await writer.resolveNodeRepo({
@@ -147,7 +151,11 @@ export async function POST(request: Request, routeArgs: RouteParams) {
       slug: node.slug,
     });
     const isInRepoNode = owner === parentOwner && repo === parentRepo;
-    result = await writer.reconcileNodeActionsPermissions({
+    const operation =
+      request.method === "GET"
+        ? writer.inspectNodeActionsPermissions.bind(writer)
+        : writer.reconcileNodeActionsPermissions.bind(writer);
+    result = await operation({
       owner,
       repo,
       slug: node.slug,
