@@ -128,6 +128,27 @@ Any adapter implementing `WorkItemQueryPort + WorkItemCommandPort` must satisfy:
 4. **ID allocation** — `create()` produces a unique `WorkItemId` in `<type>.<NNNN>` format.
 5. **Body preservation** — adapter writes never modify content outside the adapter's storage domain (e.g., markdown body below frontmatter).
 
+### Concurrency Model
+
+COMMAND_QUERY_SEPARATION is a **runtime** requirement, not only a type-level one. An adapter whose storage has session state must keep the two ports in separate execution lanes.
+
+For a Dolt-family backend, `dolt_checkout` is session state, which makes the split concrete:
+
+| | write lane (`WorkItemCommandPort`) | read lane (`WorkItemQueryPort`) |
+| --- | --- | --- |
+| connection | session-pinned (`reserve()`), pool width 1 | ordinary pooled connection |
+| admission | FIFO, one operation at a time | none — concurrency is the pool's width |
+| cross-process lock | advisory lock, one key per plane | none |
+| branch | cuts and merges a proof-carrying operation branch | never calls `dolt_checkout`; reads committed `main` |
+| residual-evidence walk | required; a write must not build on unproven evidence | skipped |
+
+Two rules fall out of it:
+
+1. **A read must never enter the write lane.** Fusing them makes read concurrency equal to the write pool width — i.e. 1 — so N concurrent readers serialize. Measured on operator production before the split: queue-wait averaged 2660 ms and peaked at 7334 ms against a 677 ms query, so a dashboard issuing four `list` calls took ~30 s to paint. The queries were never the cost; waiting in line was.
+2. **Advisory-lock keys are per-plane and must be distinct on a shared database.** A node points `@cogni/work-items` and `@cogni/knowledge-store` at one Doltgres, so a shared key makes a work-item write and a knowledge write exclude each other for no reason. Allocated: `5_001_001` work-items, `5_001_002` knowledge.
+
+Reads stay available through residual branch evidence rather than failing closed on it; writes keep failing closed, because a write must not build on evidence it cannot prove. Bounded concurrency on the write lane is deliberate — it exists so a burst of writers queues instead of starving the pool — and is not a substitute for what the pool already provides on the read lane.
+
 ### Markdown Adapter (v0)
 
 The `MarkdownWorkItemAdapter` in `@cogni/work-items/markdown` implements both ports against `work/items/*.md` and `work/projects/*.md`:
@@ -206,6 +227,8 @@ Enable agents and scripts to manage work items through typed port interfaces ins
 | ID_ALLOC_UNIQUE          | `create()` allocates a unique `WorkItemId`. Collision is a bug.                                   |
 | NO_APP_IMPORTS           | `@cogni/work-items` imports nothing from `@/`, `src/`, or app/service code.                       |
 | CONTRACT_TESTS_PORTABLE  | The contract test suite runs against any adapter via factory parameterization.                    |
+| CONCURRENCY_MODEL        | Reads never enter the write admission lane. Writes are session-pinned, serialized, and advisory-locked; reads are pooled, lock-free, and read committed `main`. |
+| LOCK_KEY_PER_PLANE       | Each plane sharing a database owns a distinct advisory-lock key (`5_001_001` work-items, `5_001_002` knowledge).                        |
 
 ### File Pointers
 
