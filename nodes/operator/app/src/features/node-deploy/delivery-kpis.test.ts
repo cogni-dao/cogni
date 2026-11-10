@@ -303,22 +303,50 @@ describe(LEAD_TIME_ID, () => {
     expect(p90.value).toBe(18);
     expect(percentile([5], 90)).toBe(5);
   });
-  it("a served release with no activation instant makes the reading unknown, never a silent drop", async () => {
-    const s = await run(
-      source({
-        releases: [
-          release({ createdAt: at(DAY + 5 * MIN), activatedAt: at(DAY) }),
-          release({ served: true }),
-        ],
-      }),
-      LEAD_TIME_ID,
-      { quantile: 50 }
-    );
+  /** `timed` successes of 4 minutes each plus `untimed` served releases with no activation instant. */
+  const mixed = (timed: number, untimed: number) => [
+    ...Array.from({ length: timed }, (_, i) =>
+      release({ createdAt: at(DAY + 4 * MIN), activatedAt: at(DAY + i) })
+    ),
+    ...Array.from({ length: untimed }, () => release({ served: true })),
+  ];
+  it("untimed successes at or under 10% do not blank the reading: percentiles use the timed ones", async () => {
+    // 1 of 10 and 2 of 20 are exactly 10%: tolerated.
+    for (const [timed, untimed] of [
+      [9, 1],
+      [18, 2],
+    ] as const) {
+      const s = await run(
+        source({ releases: mixed(timed, untimed) }),
+        LEAD_TIME_ID,
+        { quantile: 90 }
+      );
+      expect(s).toMatchObject({ complete: true, unit: "min", value: 4 });
+      expect(s.evidenceRefs).toContain(
+        `deploy:lead_samples=${timed},untimed_success=${untimed}`
+      );
+    }
+  });
+  it("untimed successes over 10% make the reading unknown, never an estimate", async () => {
+    // 2 of 19 is 10.5%.
+    const s = await run(source({ releases: mixed(17, 2) }), LEAD_TIME_ID, {
+      quantile: 50,
+    });
     expect(s).toMatchObject({
       complete: false,
       reason: "incomplete_or_invalid_source",
     });
-    expect(s.evidenceRefs).toContain("deploy:lead_samples=1,untimed_success=1");
+    expect(s.evidenceRefs).toContain(
+      "deploy:lead_samples=17,untimed_success=2"
+    );
+    const allUntimed = await run(
+      source({ releases: mixed(0, 1) }),
+      LEAD_TIME_ID,
+      {
+        quantile: 50,
+      }
+    );
+    expect(allUntimed.complete).toBe(false);
   });
   it("no successes is unknown; an env param scopes the read", async () => {
     const s = await run(source({ releases: [] }), LEAD_TIME_ID, {
@@ -454,6 +482,69 @@ describe(FIRST_TRY_ID, () => {
       output: "percent",
     });
     expect(none).toMatchObject({ complete: false, reason: "zero_denominator" });
+  });
+
+  it("untimed successes are out of numerator and denominator; at or under 10% the rate stays available", async () => {
+    // 9 timed first-try successes + 1 untimed = 10%: tolerated, rate over the 9 timed.
+    const ok = await run(
+      source({
+        releases: [
+          ...activations("production", 9, 9, 0),
+          release({ served: true }),
+        ],
+      }),
+      FIRST_TRY_ID,
+      { output: "percent", minFinished: 1 }
+    );
+    expect(ok).toMatchObject({ complete: true, value: 100 });
+    expect(ok.evidenceRefs).toContain("deploy:first_try=9,eligible=9");
+    expect(ok.evidenceRefs).toContain(
+      "deploy:superseded=0,in_flight=0,untimed=1,untimed_success=1"
+    );
+    // 2 untimed of 11 successes = 18%: unknown.
+    const over = await run(
+      source({
+        releases: [
+          ...activations("production", 9, 9, 0),
+          release({ served: true }),
+          release({ served: true }),
+        ],
+      }),
+      FIRST_TRY_ID,
+      { output: "percent", minFinished: 1 }
+    );
+    expect(over).toMatchObject({
+      complete: false,
+      reason: "incomplete_or_invalid_source",
+    });
+  });
+
+  it("a release created before the window and superseded inside it lands in its creation window, not this one", async () => {
+    const from = NOW - 7 * DAY;
+    const rows = [
+      ...activations("production", 10, 10, 0),
+      // Created 8 days ago (before `from`), replaced inside the window after a failed attempt. A
+      // superseded release has no finish instant, so it belongs to the window it was created in.
+      release({
+        createdAt: new Date(from - DAY),
+        current: false,
+        failedBeforeActivation: true,
+      }),
+      // The same shape created inside the window is a first-try miss.
+      release({
+        createdAt: at(DAY),
+        current: false,
+        failedBeforeActivation: true,
+      }),
+    ];
+    const s = await run(source({ releases: rows }), FIRST_TRY_ID, {
+      output: "percent",
+      minFinished: 1,
+    });
+    expect(s.evidenceRefs).toContain("deploy:first_try=10,eligible=11");
+    expect(s.evidenceRefs).toContain(
+      "deploy:success=10,failure=0,superseded_failed=1"
+    );
   });
 
   it("a truncated read is unknown, never a rate", async () => {

@@ -24,9 +24,12 @@
  *   - DURABLE_FINISH_INSTANTS: a failure is timed only by the write-once `attempts.parked_at` or the
  *     write-once admission refusal, never by the repeating `release_parked` step.
  *   - EVERY_SUCCESS_IS_TIMED: lead = (`attempts.activated_at`, else the first persisted `activated/ok`
- *     step time) - `releases.created_at`, for EVERY success. A served release with neither instant cannot
- *     exist by construction; if one does it is counted (`untimed_success`) and makes lead time unknown
- *     (`incomplete_or_invalid_source`), never a silent drop (bug.5617).
+ *     step time) - `releases.created_at`, for every success that has either instant.
+ *   - UNTIMED_SUCCESS_TOLERANCE: a served release with neither instant (an old row, or the step fell off the
+ *     100-step timeline) cannot be timed or classified first-try. It is counted (`untimed_success`), left
+ *     out of lead-time samples and of the first-try numerator AND denominator, and reported in evidence.
+ *     Only when untimed successes exceed 10% of all successes in the window is the reading unknown
+ *     (`incomplete_or_invalid_source`): a few old rows must not blank a KPI, a broken writer must (bug.5617).
  *   - UNKNOWN_IS_A_RESULT: zero lanes, zero finished releases, a truncated read or a probe that could not
  *     run yields an incomplete sample with a reason, never a pass and never zero.
  *   - EGRESS_CONTROL: drift probes the operator's own public `/livez` first. If that fails, or every
@@ -70,6 +73,8 @@ export const LEAD_TIME_ID = "deploy.lead-time@1";
 export const MAX_WINDOW_RELEASES = 5000;
 /** Evidence refs list at most this many bad lanes. */
 const MAX_LANE_EVIDENCE = 20;
+/** Above this share of untimed successes among all successes a reading is unknown, not estimated. */
+export const MAX_UNTIMED_SUCCESS_SHARE = 0.1;
 /** Evidence refs list at most this many envs. */
 const MAX_ENV_EVIDENCE = 10;
 
@@ -159,6 +164,11 @@ export interface ReleaseWindowSummary {
   readonly leadMs: readonly number[];
 }
 
+/** Untimed successes exceed the tolerated share of all successes (timed + untimed). */
+export const tooManyUntimed = (s: ReleaseWindowSummary) =>
+  s.untimedSuccess > 0 &&
+  s.untimedSuccess / (s.success + s.untimedSuccess) > MAX_UNTIMED_SUCCESS_SHARE;
+
 /** The first-try denominator: finished releases plus superseded releases that had failed. */
 export const firstTryEligible = (s: ReleaseWindowSummary) =>
   s.success + s.failure + s.supersededFailed;
@@ -184,7 +194,10 @@ export function summarizeReleases(
       if (o.firstTry) firstTry++;
       leadMs.push(o.leadMs);
     } else if (o.kind === "failure") failure++;
-    // Neither-bucket counts speak about releases recorded inside the window only.
+    // Neither-bucket counts speak about releases recorded inside the window only. A superseded release
+    // has no finish instant, so it lands in the window of its CREATION time: one created before `from` and
+    // replaced inside the window is not counted here (it belonged to the earlier window), even when it
+    // had a failed attempt.
     else if (r.createdAt.getTime() >= from.getTime()) {
       if (o.kind === "superseded") {
         superseded++;
@@ -585,7 +598,7 @@ export function createDeliveryCalculators(
         scopeRef(scope),
         `deploy:first_try=${s.firstTry},eligible=${eligible}`,
         `deploy:success=${s.success},failure=${s.failure},superseded_failed=${s.supersededFailed}`,
-        `deploy:superseded=${s.superseded},in_flight=${s.inFlight},untimed=${s.untimed}`,
+        `deploy:superseded=${s.superseded},in_flight=${s.inFlight},untimed=${s.untimed},untimed_success=${s.untimedSuccess}`,
         ...envEvidence,
       ];
       if (read.truncated)
@@ -603,6 +616,14 @@ export function createDeliveryCalculators(
           sourceWatermarks: watermarks,
           evidenceRefs: evidence,
         };
+      // UNTIMED_SUCCESS_TOLERANCE: untimed successes are out of numerator and denominator; too many = unknown.
+      if (tooManyUntimed(s))
+        return unknownSample(
+          unit,
+          "incomplete_or_invalid_source",
+          watermarks,
+          evidence
+        );
       if (eligible === 0)
         return unknownSample(unit, "zero_denominator", watermarks, evidence);
       if (eligible < p.minFinished)
@@ -642,8 +663,8 @@ export function createDeliveryCalculators(
         scopeRef(scope),
         `deploy:lead_samples=${s.leadMs.length},untimed_success=${s.untimedSuccess}`,
       ];
-      // EVERY_SUCCESS_IS_TIMED: a served release with no activation instant is a defect, never a dropped sample.
-      if (read.truncated || s.untimedSuccess > 0)
+      // UNTIMED_SUCCESS_TOLERANCE: percentiles come from the timed successes; too many untimed = unknown.
+      if (read.truncated || tooManyUntimed(s))
         return unknownSample(
           "min",
           "incomplete_or_invalid_source",
