@@ -11,6 +11,7 @@
  * @public
  */
 
+export * from "./agent-authority";
 export * from "./ai";
 export * from "./ai-threads";
 export * from "./attribution";

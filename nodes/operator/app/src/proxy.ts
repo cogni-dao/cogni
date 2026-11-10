@@ -50,7 +50,10 @@ function isAppRoute(pathname: string): boolean {
   );
 }
 
-const AGENT_BEARER_PREFIX = "Bearer cogni_ag_sk_v1_";
+const AGENT_BEARER_PREFIXES = [
+  "Bearer cogni_ag_sk_v1_",
+  "Bearer cogni_ag_sk_v2_",
+];
 const SIGN_IN_PARAM = "signIn";
 const CALLBACK_PARAM = "callbackUrl";
 
@@ -70,8 +73,10 @@ function isAgentApiRoute(pathname: string): boolean {
 }
 
 function hasAgentBearer(req: NextRequest): boolean {
-  return (
-    req.headers.get("authorization")?.startsWith(AGENT_BEARER_PREFIX) ?? false
+  const authorization = req.headers.get("authorization");
+  if (!authorization) return false;
+  return AGENT_BEARER_PREFIXES.some((prefix) =>
+    authorization.startsWith(prefix)
   );
 }
 

@@ -389,3 +389,32 @@ describe("proxy — unmatched routes", () => {
     expect(mockGetToken).not.toHaveBeenCalled();
   });
 });
+
+// story.5156 / task.5474 D1: the perimeter admits BOTH key generations; handlers do the real verification.
+describe("proxy — v2 agent bearer (cogni_ag_sk_v2_)", () => {
+  function makeV2Request(path: string): NextRequest {
+    return new NextRequest(new URL(path, "http://localhost:3000"), {
+      headers: {
+        authorization: `Bearer cogni_ag_sk_v2_${"a".repeat(43)}`,
+      },
+    });
+  }
+
+  it("passes a v2 bearer through the agent lane without a session read", async () => {
+    const res = await proxy(makeV2Request("/api/v1/agent/runs"));
+
+    expect(res.status).toBe(200);
+    expect(mockGetToken).not.toHaveBeenCalled();
+  });
+
+  it("still rejects a non-cogni bearer with no session on /api/v1/*", async () => {
+    mockGetToken.mockResolvedValue(null);
+    const res = await proxy(
+      new NextRequest(new URL("/api/v1/agent/runs", "http://localhost:3000"), {
+        headers: { authorization: "Bearer not-a-cogni-key" },
+      })
+    );
+
+    expect(res.status).toBe(401);
+  });
+});

@@ -86,6 +86,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/work/items/[id]/pr` [POST] - link branch/PR metadata to the active work-item session and durable work item
   - `/api/v1/work/items/[id]/coordination` [GET] - read current operator coordination state for a work item
   - `/api/v1/agent/register` [POST] - unauthenticated machine actor registration (returns Bearer API key)
+  - `/api/v1/agent/credentials/{upgrade,rotate,confirm,revoke}` [POST] - revocable hashed v2 keys (`cogni_ag_sk_v2_`, story.5156, task.5474): a v1 key upgrades to a PENDING v2 key for the same user id; rotate mints a pending successor (a repeat supersedes); confirm (called with the pending key) activates it and revokes the predecessor in one transaction, idempotent; revoke ends one key and its pending successor. Logic lives in `@cogni-dao/agent-grants/credentials`; routes are thin. Once a user's v2 key is confirmed, that user's v1 keys answer 401 `v1_superseded` (revoking the v2 key does not revive them). Any store failure is 503 `authz_unavailable`, never 401
   - `/api/v1/agent/runs` [GET] - machine-authenticated run list
   - `/api/v1/agent/runs/[runId]/stream` [GET] - machine-authenticated run stream SSE
   - `/api/v1/knowledge/contributions/[id]/commits` [GET, POST] - list/append authenticated contribution branch commits

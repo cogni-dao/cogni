@@ -21,11 +21,17 @@
  */
 
 import type { SessionUser } from "@cogni/node-shared";
+import {
+  CredentialStoreUnavailableError,
+  V1SupersededError,
+} from "@cogni-dao/agent-grants/credentials";
 import { headers } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
+import type { Logger as PinoLogger } from "pino";
 import { withRootSpan } from "@/bootstrap/otel";
 import {
   createRequestContext,
+  EVENT_NAMES,
   httpRequestDurationMs,
   httpRequestsTotal,
   logRequestEnd,
@@ -212,11 +218,45 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
       ? await options.getRequestDependencies()
       : (await import("@/bootstrap/container")).getContainer();
 
-    // Fetch session based on auth mode
-    const sessionUser =
-      options.auth && options.auth.mode !== "none"
-        ? await options.auth.getSessionUser()
-        : null;
+    // Fetch session based on auth mode. A v2 key whose store cannot answer is 503, never a false 401
+    // (STORE_OUTAGE_IS_NOT_401, task.5474); a superseded v1 key is a distinct 401 `v1_superseded`.
+    let sessionUser: SessionUser | null = null;
+    if (options.auth && options.auth.mode !== "none") {
+      try {
+        sessionUser = await options.auth.getSessionUser();
+      } catch (error) {
+        if (error instanceof V1SupersededError) {
+          return NextResponse.json(
+            { error: error.code },
+            {
+              status: 401,
+              headers: {
+                "cache-control": "no-store",
+                "www-authenticate": 'Bearer error="invalid_token"',
+              },
+            }
+          );
+        }
+        if (!(error instanceof CredentialStoreUnavailableError)) throw error;
+        // `container` is a union of the DI container and injected request dependencies, whose pino
+        // identities differ; pin one so the LogFn overloads resolve.
+        const log = container.log as PinoLogger;
+        log.warn(
+          {
+            event: EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE,
+            routeId: options.routeId,
+          },
+          EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE
+        );
+        return NextResponse.json(
+          { error: "authz_unavailable" },
+          {
+            status: 503,
+            headers: { "cache-control": "no-store", "retry-after": "5" },
+          }
+        );
+      }
+    }
 
     // Get config once before try block to avoid env failures masking real errors
     const { unhandledErrorPolicy } = container.config;
