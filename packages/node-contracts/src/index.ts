@@ -13,6 +13,7 @@
  * @public
  */
 
+export * from "./agent.credentials.renew-v1.v1.contract";
 export * from "./agent.me.v1.contract";
 export * from "./agent.register.v1.contract";
 // ── AI contracts ────────────────────────────────────────────────────────────

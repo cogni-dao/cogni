@@ -24,6 +24,9 @@ export const WORK_ITEMS_LIST_ERROR_CODES = {
 } as const;
 
 export const EVENT_NAMES = {
+  // Agent credentials (task.5475)
+  AGENT_CREDENTIAL_V1_RENEWED: "agent.credential.v1_renewed",
+  AGENT_CREDENTIAL_V1_REFUSED: "agent.credential.v1_refused",
   WORK_ITEMS_LIST_COMPLETE: "work.items.list_complete",
   // AI Domain - Server
   AI_COMPLETION: "ai.completion",

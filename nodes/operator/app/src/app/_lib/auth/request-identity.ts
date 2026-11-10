@@ -91,12 +91,18 @@ function parseAgentToken(token: string): AgentTokenPayload | null {
 export function issueAgentApiKey(input: {
   userId: string;
   displayName: string | null;
+  /** Optional cap (unix seconds) on the default 30-day expiry; renew-v1 passes the hard stop. */
+  expiresAtCapSeconds?: number;
 }): string {
+  const now = Math.floor(Date.now() / 1000);
   const payload: AgentTokenPayload = {
     sub: input.userId,
     displayName: input.displayName,
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + AGENT_KEY_TTL_SECONDS,
+    iat: now,
+    exp: Math.min(
+      now + AGENT_KEY_TTL_SECONDS,
+      input.expiresAtCapSeconds ?? Number.POSITIVE_INFINITY
+    ),
   };
   const payloadB64 = base64UrlEncode(JSON.stringify(payload));
   return `${TOKEN_PREFIX}${payloadB64}.${signPayload(payloadB64)}`;
