@@ -14,6 +14,8 @@
  *   - UNREACHABLE_VS_CANNOT_RUN: a probe that got no HTTP answer returns `unreachable`; a caller abort is
  *     rethrown so the reading becomes unknown, never a pass.
  *   - NO_REDIRECTS: a 3xx is the lane's answer, not a hop to follow.
+ *   - FIRST_TRY_FACTS: per release, one lateral aggregate over its attempts returns the first activated
+ *     attempt number and whether an earlier attempt failed (bug.5617). Still one bounded query.
  *   - DURABLE_PARK: a release's park instant is the write-once `attempts.parked_at` (else the write-once
  *     admission refusal); the repeating `release_parked` step only sets `parkStepSeen`.
  *   - NOT_PUBLIC_READ: unlike `ProbePort.publicRead` (deploy proof: resolves a NEW host at the zone's
@@ -96,28 +98,55 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
       s`
         SELECT r.id, r.node_id, r.env, r.workload, r.created_at,
           (d.release_id = r.id) AS current,
-          min(a.activated_at) AS activated_at,
-          min(st.at) AS activated_step_at,
+          ag.activated_at,
+          ag.activated_step_at,
+          ag.first_activated_attempt,
+          coalesce(ag.failed_before_activation, false) AS failed_before_activation,
           coalesce(
-            min(a.parked_at),
+            ag.parked_at,
             (r.spec -> '_admissionRefusal' ->> 'at')::timestamptz
           ) AS parked_at,
-          coalesce(bool_or(a.steps @> '[{"step":"alert","outcome":"release_parked"}]'::jsonb), false)
-            AS park_step_seen,
-          coalesce(bool_or(a.phase IN ('active', 'retiring', 'retired')), false) AS served
+          coalesce(ag.park_step_seen, false) AS park_step_seen,
+          coalesce(ag.served, false) AS served
         FROM node_workload_releases r
         LEFT JOIN node_workload_desired d
           ON d.node_id = r.node_id AND d.env = r.env AND d.workload = r.workload
-        LEFT JOIN node_workload_attempts a ON a.release_id = r.id
         LEFT JOIN LATERAL (
-          SELECT (e ->> 'at')::timestamptz AS at
-          FROM jsonb_array_elements(coalesce(a.steps, '[]'::jsonb)) AS e
-          WHERE e ->> 'step' = 'activated' AND e ->> 'outcome' = 'ok'
-        ) st ON true
+          -- One row per release over its attempts. x.fa is the first activated attempt, so a failure is
+          -- "before activation" only for an earlier attempt (or any attempt when none ever activated).
+          SELECT
+            min(x.activated_at) AS activated_at,
+            min(x.step_at) AS activated_step_at,
+            min(x.fa) AS first_activated_attempt,
+            min(x.parked_at) AS parked_at,
+            bool_or(x.park_step) AS park_step_seen,
+            bool_or(x.phase IN ('active', 'retiring', 'retired')) AS served,
+            bool_or(x.failed) FILTER (WHERE x.fa IS NULL OR x.attempt < x.fa)
+              AS failed_before_activation
+          FROM (
+            SELECT a.attempt, a.phase, a.activated_at, a.parked_at, st.at AS step_at,
+              coalesce(a.steps @> '[{"step":"alert","outcome":"release_parked"}]'::jsonb, false)
+                AS park_step,
+              (
+                a.phase IN ('failed', 'closing', 'lost')
+                OR a.parked_at IS NOT NULL
+                OR coalesce(a.steps @> '[{"step":"attempt_failed","outcome":"failed"}]'::jsonb, false)
+                OR coalesce(a.steps @> '[{"step":"attempt_failed","outcome":"closing"}]'::jsonb, false)
+              ) AS failed,
+              min(a.attempt) FILTER (WHERE a.activated_at IS NOT NULL OR st.at IS NOT NULL) OVER ()
+                AS fa
+            FROM node_workload_attempts a
+            LEFT JOIN LATERAL (
+              SELECT min((e ->> 'at')::timestamptz) AS at
+              FROM jsonb_array_elements(coalesce(a.steps, '[]'::jsonb)) AS e
+              WHERE e ->> 'step' = 'activated' AND e ->> 'outcome' = 'ok'
+            ) st ON true
+            WHERE a.release_id = r.id
+          ) x
+        ) ag ON true
         WHERE r.created_at >= ${input.recordedFrom.toISOString()}::timestamptz
           AND r.created_at < ${input.to.toISOString()}::timestamptz
           ${this.scopeSql("r", input.scope)}
-        GROUP BY r.id, d.release_id
         ORDER BY r.created_at, r.id
         LIMIT ${input.maxRows + 1}
       `,
@@ -137,6 +166,11 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
         parkedAt: date(r.parked_at),
         parkStepSeen: r.park_step_seen === true,
         current: r.current === true,
+        firstActivatedAttempt:
+          r.first_activated_attempt == null
+            ? undefined
+            : Number(r.first_activated_attempt),
+        failedBeforeActivation: r.failed_before_activation === true,
       }));
     return {
       rows: facts,

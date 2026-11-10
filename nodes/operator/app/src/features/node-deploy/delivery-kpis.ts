@@ -4,10 +4,11 @@
 /**
  * Module: `@features/node-deploy/delivery-kpis`
  * Purpose: The operator's node-local goal-metric calculators for delivery health (task.5442, story.5137):
- *   `deploy.serving-drift@1` (lanes not serving what was shipped), `deploy.release-success@1` (share of
- *   finished releases that activated, plus the raw finished count as its guardrail) and
- *   `deploy.lead-time@1` (p50/p90 minutes from release POST to first activation). Registered through
- *   `@cogni-dao/metrics` 0.4 `createGoalMetrics({ nodeCalculators })`.
+ *   `deploy.serving-drift@1` (lanes not serving what was shipped), `deploy.first-try@1` (share of finished
+ *   releases that activated on attempt 1; bug.5617), `deploy.release-success@1` (share that EVENTUALLY
+ *   activated, plus the raw finished count: the guardrail beside first-try) and `deploy.lead-time@1`
+ *   (p50/p90 minutes from release POST to first activation). Registered through `@cogni-dao/metrics`
+ *   `createGoalMetrics({ nodeCalculators })`.
  * Scope: Pure classification and the calculator objects. Reads go through `DeliveryKpiSourcePort`;
  *   this module does no IO itself.
  * Invariants:
@@ -15,11 +16,17 @@
  *     Prometheus (hub goal-metrics-vs-telemetry).
  *   - FINISHED_IS_AN_EVENT: a release finishes when it first activates (success) or the sequencer parks it
  *     (failure). The window counts finish instants in `[end - days, end)`. A release replaced before it
- *     finished (superseded) or still in flight counts as neither.
+ *     finished (superseded) or still in flight counts as neither, EXCEPT for first-try: a superseded
+ *     release with a failed attempt is a first-try miss (a re-POST over a failing release must not hide
+ *     the failure; bug.5617).
+ *   - FIRST_TRY: a success is first-try when its first activated attempt is attempt 1 and no attempt failed
+ *     before it. First-try = first-try successes / (success + failure + superseded-with-failure).
  *   - DURABLE_FINISH_INSTANTS: a failure is timed only by the write-once `attempts.parked_at` or the
  *     write-once admission refusal, never by the repeating `release_parked` step.
- *   - LEAD_TIME_IS_DURABLE: lead = `attempts.activated_at - releases.created_at`. A success without the
- *     write-once column is excluded and counted in evidence, never estimated.
+ *   - EVERY_SUCCESS_IS_TIMED: lead = (`attempts.activated_at`, else the first persisted `activated/ok`
+ *     step time) - `releases.created_at`, for EVERY success. A served release with neither instant cannot
+ *     exist by construction; if one does it is counted (`untimed_success`) and makes lead time unknown
+ *     (`incomplete_or_invalid_source`), never a silent drop (bug.5617).
  *   - UNKNOWN_IS_A_RESULT: zero lanes, zero finished releases, a truncated read or a probe that could not
  *     run yields an incomplete sample with a reason, never a pass and never zero.
  *   - EGRESS_CONTROL: drift probes the operator's own public `/livez` first. If that fails, or every
@@ -56,12 +63,15 @@ export { MAX_DRIFT_LANES, PROBE_TIMEOUT_MS } from "./fleet-probe-snapshot";
 
 export const SERVING_DRIFT_ID = "deploy.serving-drift@1";
 export const RELEASE_SUCCESS_ID = "deploy.release-success@1";
+export const FIRST_TRY_ID = "deploy.first-try@1";
 export const LEAD_TIME_ID = "deploy.lead-time@1";
 
 /** Most releases one window read returns; more is a truncated (unknown) reading. */
 export const MAX_WINDOW_RELEASES = 5000;
 /** Evidence refs list at most this many bad lanes. */
 const MAX_LANE_EVIDENCE = 20;
+/** Evidence refs list at most this many envs. */
+const MAX_ENV_EVIDENCE = 10;
 
 const scopeShape = {
   nodeId: z.uuid().optional(),
@@ -77,15 +87,23 @@ const daysSchema = z.number().int().min(1).max(28).default(7);
 // ---------------------------------------------------------------------------------------------
 
 export type ReleaseOutcome =
-  | { readonly kind: "success"; readonly at: Date; readonly leadMs?: number }
+  | {
+      readonly kind: "success";
+      readonly at: Date;
+      /** Release POST to first activation. Every success has one. */
+      readonly leadMs: number;
+      /** First activated attempt is attempt 1 and no attempt failed before it. */
+      readonly firstTry: boolean;
+    }
   | { readonly kind: "failure"; readonly at: Date }
   /**
-   * Finished, but no durable instant: served with no activation column or step, or parked only by a
-   * step from before the write-once `parked_at`. Excluded, counted.
+   * Finished, but no durable instant. `success`: served with no activation column or step (impossible by
+   * construction; counted so lead time never drops it silently). Otherwise parked only by a step from
+   * before the write-once `parked_at`. Excluded from rates, counted.
    */
-  | { readonly kind: "untimed" }
-  /** Replaced by a newer release before it finished. */
-  | { readonly kind: "superseded" }
+  | { readonly kind: "untimed"; readonly success: boolean }
+  /** Replaced by a newer release before it finished; `hadFailure` = an attempt failed before that. */
+  | { readonly kind: "superseded"; readonly hadFailure: boolean }
   /** Still current and unfinished. */
   | { readonly kind: "in_flight" }
   /** Finished outside the window. */
@@ -100,40 +118,50 @@ export function classifyRelease(
   from: Date,
   to: Date
 ): ReleaseOutcome {
-  // First activation wins: it is the moment the deploy finished, whatever happened after.
+  // First activation wins: it is the moment the deploy finished, whatever happened after. The column is
+  // write-once; the persisted step is the fallback for attempts that activated before the column existed.
   const activated = r.activatedAt ?? r.activatedStepAt;
   if (activated) {
     if (!within(activated, from, to)) return { kind: "outside" };
-    return r.activatedAt
-      ? {
-          kind: "success",
-          at: activated,
-          leadMs: Math.max(0, r.activatedAt.getTime() - r.createdAt.getTime()),
-        }
-      : { kind: "success", at: activated };
+    return {
+      kind: "success",
+      at: activated,
+      leadMs: Math.max(0, activated.getTime() - r.createdAt.getTime()),
+      firstTry: r.firstActivatedAttempt === 1 && !r.failedBeforeActivation,
+    };
   }
-  if (r.served) return { kind: "untimed" };
+  if (r.served) return { kind: "untimed", success: true };
   // Only the write-once park instant (or the write-once admission refusal) times a failure; the
   // repeating `release_parked` step does not (it drifts once the first one leaves the timeline).
   if (r.parkedAt)
     return within(r.parkedAt, from, to)
       ? { kind: "failure", at: r.parkedAt }
       : { kind: "outside" };
-  if (r.parkStepSeen) return { kind: "untimed" };
-  return r.current ? { kind: "in_flight" } : { kind: "superseded" };
+  if (r.parkStepSeen) return { kind: "untimed", success: false };
+  return r.current
+    ? { kind: "in_flight" }
+    : { kind: "superseded", hadFailure: r.failedBeforeActivation };
 }
 
 export interface ReleaseWindowSummary {
   readonly success: number;
+  /** Successes that activated on attempt 1 with no earlier failed attempt. */
+  readonly firstTry: number;
   readonly failure: number;
   readonly superseded: number;
+  /** Superseded releases that had a failed attempt: first-try misses with no finish instant. */
+  readonly supersededFailed: number;
   readonly inFlight: number;
   readonly untimed: number;
-  /** Lead times (ms) of successes that carry the write-once column. */
+  /** Served releases with no activation instant at all (a subset of `untimed`; should be 0). */
+  readonly untimedSuccess: number;
+  /** Lead time (ms) of EVERY success. */
   readonly leadMs: readonly number[];
-  /** Successes without the column: excluded from lead time. */
-  readonly missingActivatedAt: number;
 }
+
+/** The first-try denominator: finished releases plus superseded releases that had failed. */
+export const firstTryEligible = (s: ReleaseWindowSummary) =>
+  s.success + s.failure + s.supersededFailed;
 
 export function summarizeReleases(
   rows: readonly DeliveryReleaseFacts[],
@@ -141,34 +169,43 @@ export function summarizeReleases(
   to: Date
 ): ReleaseWindowSummary {
   let success = 0;
+  let firstTry = 0;
   let failure = 0;
   let superseded = 0;
+  let supersededFailed = 0;
   let inFlight = 0;
   let untimed = 0;
-  let missingActivatedAt = 0;
+  let untimedSuccess = 0;
   const leadMs: number[] = [];
   for (const r of rows) {
     const o = classifyRelease(r, from, to);
     if (o.kind === "success") {
       success++;
-      if (o.leadMs === undefined) missingActivatedAt++;
-      else leadMs.push(o.leadMs);
+      if (o.firstTry) firstTry++;
+      leadMs.push(o.leadMs);
     } else if (o.kind === "failure") failure++;
     // Neither-bucket counts speak about releases recorded inside the window only.
     else if (r.createdAt.getTime() >= from.getTime()) {
-      if (o.kind === "superseded") superseded++;
-      else if (o.kind === "in_flight") inFlight++;
-      else if (o.kind === "untimed") untimed++;
+      if (o.kind === "superseded") {
+        superseded++;
+        if (o.hadFailure) supersededFailed++;
+      } else if (o.kind === "in_flight") inFlight++;
+      else if (o.kind === "untimed") {
+        untimed++;
+        if (o.success) untimedSuccess++;
+      }
     }
   }
   return {
     success,
+    firstTry,
     failure,
     superseded,
+    supersededFailed,
     inFlight,
     untimed,
+    untimedSuccess,
     leadMs,
-    missingActivatedAt,
   };
 }
 
@@ -438,7 +475,7 @@ export function createDeliveryCalculators(
     maxResponseBytes: 2_097_152,
   };
 
-  // ---- KPI 2: release success (+ raw finished count guardrail) ------------------------------
+  // ---- KPI 2: release success: EVENTUAL success (+ raw finished count guardrail) -----------
   const successParams = z.strictObject({
     ...scopeShape,
     output: z.enum(["percent", "finished"]),
@@ -466,6 +503,7 @@ export function createDeliveryCalculators(
       const evidence = [
         scopeRef(scope),
         `deploy:success=${s.success},failure=${s.failure},finished=${finished}`,
+        `deploy:first_try=${s.firstTry}`,
         `deploy:superseded=${s.superseded},in_flight=${s.inFlight},untimed=${s.untimed}`,
       ];
       if (read.truncated)
@@ -500,6 +538,88 @@ export function createDeliveryCalculators(
     },
   };
 
+  // ---- KPI 2b: first-try success (bug.5617) -------------------------------------------------
+  const firstTryParams = z.strictObject({
+    ...scopeShape,
+    output: z.enum(["percent", "count"]),
+    /** Fractional on purpose: `1` is a 24 h window, the fast signal that moves within a day. */
+    days: z
+      .number()
+      .min(1 / 24)
+      .max(28)
+      .default(7),
+    /** Below this many eligible releases the percent is unknown (`insufficient_history`). */
+    minFinished: z.number().int().min(1).max(1000).default(10),
+  });
+  const firstTry: MetricCalculator = {
+    id: FIRST_TRY_ID,
+    historicalWindows: true,
+    unit: "%",
+    unitFor: (params) =>
+      firstTryParams.parse(params).output === "percent" ? "%" : "releases",
+    displayFor: (params) =>
+      firstTryParams.parse(params).output === "percent" ? "slo" : "volume",
+    windowSeconds: (params) =>
+      Math.round(firstTryParams.parse(params).days * 86_400),
+    paramsSchema: firstTryParams,
+    budget: windowBudget,
+    async compute(params, ctx) {
+      const p = firstTryParams.parse(params);
+      const scope = scopeOf(p);
+      const unit = p.output === "percent" ? "%" : "releases";
+      const { read, summary: s, watermarks } = await readWindow(scope, ctx);
+      const eligible = firstTryEligible(s);
+      const from = new Date(ctx.window.start);
+      const to = new Date(ctx.window.end);
+      const byEnv = new Map<string, DeliveryReleaseFacts[]>();
+      for (const r of read.rows)
+        byEnv.set(r.env, [...(byEnv.get(r.env) ?? []), r]);
+      const envEvidence = [...byEnv.keys()]
+        .sort()
+        .slice(0, MAX_ENV_EVIDENCE)
+        .map((env) => {
+          const e = summarizeReleases(byEnv.get(env) ?? [], from, to);
+          return `env:${env}:first_try=${e.firstTry},eligible=${firstTryEligible(e)}`;
+        });
+      const evidence = [
+        scopeRef(scope),
+        `deploy:first_try=${s.firstTry},eligible=${eligible}`,
+        `deploy:success=${s.success},failure=${s.failure},superseded_failed=${s.supersededFailed}`,
+        `deploy:superseded=${s.superseded},in_flight=${s.inFlight},untimed=${s.untimed}`,
+        ...envEvidence,
+      ];
+      if (read.truncated)
+        return unknownSample(
+          unit,
+          "incomplete_or_invalid_source",
+          watermarks,
+          evidence
+        );
+      if (p.output === "count")
+        return {
+          value: eligible,
+          unit,
+          complete: true,
+          sourceWatermarks: watermarks,
+          evidenceRefs: evidence,
+        };
+      if (eligible === 0)
+        return unknownSample(unit, "zero_denominator", watermarks, evidence);
+      if (eligible < p.minFinished)
+        return unknownSample(unit, "insufficient_history", watermarks, [
+          ...evidence,
+          `deploy:min_finished=${p.minFinished}`,
+        ]);
+      return {
+        value: Math.round((10_000 * s.firstTry) / eligible) / 100,
+        unit,
+        complete: true,
+        sourceWatermarks: watermarks,
+        evidenceRefs: evidence,
+      };
+    },
+  };
+
   // ---- KPI 3: lead time ---------------------------------------------------------------------
   const leadParams = z.strictObject({
     ...scopeShape,
@@ -520,9 +640,10 @@ export function createDeliveryCalculators(
       const { read, summary: s, watermarks } = await readWindow(scope, ctx);
       const evidence = [
         scopeRef(scope),
-        `deploy:lead_samples=${s.leadMs.length},missing_activated_at=${s.missingActivatedAt}`,
+        `deploy:lead_samples=${s.leadMs.length},untimed_success=${s.untimedSuccess}`,
       ];
-      if (read.truncated)
+      // EVERY_SUCCESS_IS_TIMED: a served release with no activation instant is a defect, never a dropped sample.
+      if (read.truncated || s.untimedSuccess > 0)
         return unknownSample(
           "min",
           "incomplete_or_invalid_source",
@@ -542,5 +663,5 @@ export function createDeliveryCalculators(
     },
   };
 
-  return [servingDrift, releaseSuccess, leadTime];
+  return [servingDrift, releaseSuccess, leadTime, firstTry];
 }
