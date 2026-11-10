@@ -29,10 +29,14 @@
  *     failed `fetch failed` on 52/53 ticks and silenced lease logs fleet-wide).
  *   - SILENCE_IS_DETECTABLE: every newly seen stream gets one synthetic attach marker, so
  *     "no app output" and "pump never attached" are distinguishable in Loki.
+ *   - DROP_ONLY_READYZ_NOISE: readyz request-received lines and successful fast readyz
+ *     completions (./readyz-filter, the same predicates as Alloy's `drop_probe_start` readyz
+ *     arm and `drop_readyz_ok`) never ship; every other line does. Dropped lines still
+ *     advance the tail, so a readyz-only window commits its cursor without a push.
  * Side-effects: none directly (IO via injected seams)
- * Links: @ports/akash-tx.port (AkashTxLeaseLogSources), ./tail-merge,
+ * Links: @ports/akash-tx.port (AkashTxLeaseLogSources), ./tail-merge, ./readyz-filter,
  *   adapters/server/observability/loki-push.adapter, bootstrap/lease-log-pump, bug.5240,
- *   bug.5516, task.5144, docs/spec/grafana-observability-access.md
+ *   bug.5516, task.5144, task.5344, docs/spec/grafana-observability-access.md
  * @internal
  */
 
@@ -45,6 +49,7 @@ import type {
   ProviderLeaseLogReaderPort,
 } from "@/ports";
 
+import { isReadyzNoiseLine } from "./readyz-filter";
 import { mergeTail, serviceForLogName } from "./tail-merge";
 
 /** Structural pino subset (mirrors AkashTxLogger; features never import pino). */
@@ -103,6 +108,8 @@ export interface LeaseLogPumpTickReport {
   /** Lines of the committed streams only. */
   readonly pushedLines: number;
   readonly skippedSources: number;
+  /** New lines withheld as readyz probe noise (DROP_ONLY_READYZ_NOISE). */
+  readonly droppedLines: number;
   /** True when at least one stream shipped this cycle. */
   readonly pushed: boolean;
 }
@@ -213,12 +220,14 @@ export class LeaseLogPump {
         failedStreams: 0,
         pushedLines: 0,
         skippedSources: 0,
+        droppedLines: 0,
         pushed: false,
       };
     }
 
     const pending: PendingStream[] = [];
     let skippedSources = 0;
+    let droppedLines = 0;
 
     for (const source of snapshot.sources) {
       try {
@@ -231,7 +240,7 @@ export class LeaseLogPump {
           token: snapshot.token,
           tail: this.tailLines,
         });
-        this.collect(source, lines, pending);
+        droppedLines += this.collect(source, lines, pending);
       } catch (error) {
         skippedSources += 1;
         this.deps.log.warn(
@@ -258,17 +267,20 @@ export class LeaseLogPump {
       failedStreams: pending.length - shipped.pushedStreams,
       pushedLines: shipped.pushedLines,
       skippedSources,
+      droppedLines,
       pushed: shipped.pushedStreams > 0,
     };
     this.deps.log.info({ ...report }, "lease_log_pump_tick");
     return report;
   }
 
+  /** Queue each emitter's unshipped lines; returns the count dropped as readyz noise. */
   private collect(
     source: AkashTxLeaseLogSource,
     lines: readonly ProviderLeaseLogLine[],
     pending: PendingStream[]
-  ): void {
+  ): number {
+    let dropped = 0;
     const byEmitter = new Map<string, string[]>();
     for (const line of lines) {
       const existing = byEmitter.get(line.name);
@@ -288,7 +300,12 @@ export class LeaseLogPump {
       // Liveness touch even when nothing new ships — a quiet stream is not a stale one.
       cursor.lastSeenTick = this.tick_;
       this.cursors.set(key, cursor);
+      // Merge on the FULL window so tail overlap still anchors on dropped lines; filter after.
       const merged = mergeTail(cursor.tail, window, this.maxTail);
+      const shipLines = merged.newLines.filter(
+        (line) => !isReadyzNoiseLine(line)
+      );
+      dropped += merged.newLines.length - shipLines.length;
       const attachLine = cursor.attached
         ? undefined
         : JSON.stringify({
@@ -297,14 +314,16 @@ export class LeaseLogPump {
             emitter: name,
             service,
           });
-      if (merged.newLines.length === 0 && !attachLine) continue;
+      if (shipLines.length === 0 && !attachLine) {
+        // Nothing to ship and nothing to lose: advance past any dropped lines now.
+        cursor.tail = merged.nextTail;
+        continue;
+      }
 
       const values: (readonly [string, string])[] = [];
       let tsNs = cursor.lastTsNs;
       const baseNs = BigInt(this.now().getTime()) * 1_000_000n;
-      for (const line of attachLine
-        ? [attachLine, ...merged.newLines]
-        : merged.newLines) {
+      for (const line of attachLine ? [attachLine, ...shipLines] : shipLines) {
         tsNs = baseNs > tsNs ? baseNs : tsNs + 1n;
         values.push([tsNs.toString(), line] as const);
       }
@@ -340,6 +359,7 @@ export class LeaseLogPump {
         emitter: name,
       });
     }
+    return dropped;
   }
 
   /** Ship every pending stream through a small worker pool. Never throws. */

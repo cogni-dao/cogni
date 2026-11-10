@@ -308,6 +308,144 @@ describe("LeaseLogPump.tick", () => {
     expect(pushes).toHaveLength(0);
   });
 
+  it("drops successful fast readyz access lines and keeps every other line (task.5344)", async () => {
+    const access = (fields: Record<string, unknown>): string =>
+      JSON.stringify({ level: 30, msg: "request complete", ...fields });
+    const readyzOk = access({
+      route: "meta.readyz",
+      status: 200,
+      durationMs: 3,
+    });
+    const readyz503 = access({
+      route: "meta.readyz",
+      status: 503,
+      durationMs: 4,
+    });
+    const readyzSlow = access({
+      route: "meta.readyz",
+      status: 200,
+      durationMs: 1500,
+    });
+    const readyzNoDuration = access({ route: "meta.readyz", status: 200 });
+    const appLine = access({ route: "work.items.list", status: 200 });
+    const { pump, pushes } = harness({
+      sources: async () => snapshot([POLY_SOURCE]),
+      windows: async () =>
+        [
+          readyzOk,
+          readyz503,
+          readyzOk,
+          appLine,
+          readyzSlow,
+          readyzNoDuration,
+          "plain non-JSON line",
+          '{"route":"meta.readyz"',
+        ].map((message) => ({ name: "app-abc12-x", message })),
+    });
+
+    const report = await pump.tick();
+    expect(shippedLines(pushes).slice(1)).toEqual([
+      readyz503,
+      appLine,
+      readyzSlow,
+      readyzNoDuration,
+      "plain non-JSON line",
+      '{"route":"meta.readyz"',
+    ]);
+    expect(report).toMatchObject({ pushedLines: 7, droppedLines: 2 });
+  });
+
+  it("drops readyz request-received lines like Alloy drop_probe_start, nothing wider (task.5344)", async () => {
+    const line = (fields: Record<string, unknown>): string =>
+      JSON.stringify({ level: 30, ...fields });
+    const readyzReceived = line({
+      route: "meta.readyz",
+      msg: "request received",
+    });
+    const readyzOk = line({
+      route: "meta.readyz",
+      msg: "request complete",
+      status: 200,
+      durationMs: 2,
+    });
+    const metricsReceived = line({
+      route: "meta.metrics",
+      msg: "request received",
+    });
+    const appReceived = line({
+      route: "work.items.list",
+      msg: "request received",
+    });
+    const readyzOtherMsg = line({
+      route: "meta.readyz",
+      msg: "readiness check failed: internal error",
+    });
+    const readyzNoMsg = line({ route: "meta.readyz" });
+    const { pump, pushes } = harness({
+      sources: async () => snapshot([POLY_SOURCE]),
+      windows: async () =>
+        [
+          readyzReceived,
+          readyzOk,
+          metricsReceived,
+          appReceived,
+          readyzReceived,
+          readyzOtherMsg,
+          readyzNoMsg,
+        ].map((message) => ({ name: "app-abc12-x", message })),
+    });
+
+    const report = await pump.tick();
+    expect(shippedLines(pushes).slice(1)).toEqual([
+      metricsReceived,
+      appReceived,
+      readyzOtherMsg,
+      readyzNoMsg,
+    ]);
+    // droppedLines counts both kinds: 2 request-received + 1 request-complete.
+    expect(report).toMatchObject({ pushedLines: 5, droppedLines: 3 });
+  });
+
+  it("advances a readyz-only stream's cursor so dropped lines never re-ship (task.5344)", async () => {
+    const readyzOk = (n: number): ProviderLeaseLogLine => ({
+      name: "app-abc12-x",
+      message: JSON.stringify({
+        route: "meta.readyz",
+        status: 200,
+        durationMs: 2,
+        reqId: `r${n}`,
+      }),
+    });
+    let window: ProviderLeaseLogLine[] = [readyzOk(1), readyzOk(2)];
+    const { pump, pushes } = harness({
+      sources: async () => snapshot([POLY_SOURCE]),
+      windows: async () => window,
+    });
+
+    // First sight still ships the attach marker (SILENCE_IS_DETECTABLE).
+    await pump.tick();
+    expect(shippedLines(pushes)).toHaveLength(1);
+    expect(shippedLines(pushes)[0]).toContain("lease_log_pump_attached");
+
+    // Only dropped lines are new: nothing ships, yet the cursor moves past them.
+    pushes.length = 0;
+    window = [readyzOk(1), readyzOk(2), readyzOk(3)];
+    const quiet = await pump.tick();
+    expect(pushes).toHaveLength(0);
+    expect(quiet).toMatchObject({ streams: 0, droppedLines: 1 });
+
+    // A real line ships alone; earlier readyz lines are not re-evaluated as new.
+    pushes.length = 0;
+    window = [
+      readyzOk(2),
+      readyzOk(3),
+      { name: "app-abc12-x", message: "boot complete" },
+    ];
+    const next = await pump.tick();
+    expect(shippedLines(pushes)).toEqual(["boot complete"]);
+    expect(next).toMatchObject({ droppedLines: 0 });
+  });
+
   it("absorbs a sources outage and reports an idle tick", async () => {
     const { pump, pushes } = harness({
       sources: async () => {
