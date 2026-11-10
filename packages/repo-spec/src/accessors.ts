@@ -128,7 +128,6 @@ export interface NodeServiceConfig {
   readonly envs?: readonly ("candidate-a" | "preview" | "production")[];
   readonly runtimeProfile?: NodeServiceRuntimeProfileSpec;
   readonly bindings: Readonly<Record<string, string>>;
-  readonly secretRefs: readonly { readonly key: string }[];
   readonly bindHost: "0.0.0.0";
   readonly internalUrl: string;
   readonly resources: {
@@ -158,37 +157,20 @@ export function extractNodeName(spec: RepoSpec): string {
 /**
  * Did this node author its own `deployment:` block, or is it riding the legacy default?
  *
- * The two are NOT interchangeable: the default declares no `secret_refs`, which is correct for
- * the k3s lane (env arrives via the node's ExternalSecret overlay) and fatal for an off-cluster
- * workload (env arrives only through declared refs). Deploy gates that hand a node to an
- * off-cluster provider MUST require a real declaration instead of silently accepting the default.
+ * The two are NOT interchangeable: the default is correct for the k3s lane (env arrives via the
+ * node's ExternalSecret overlay) and fatal for an off-cluster workload (env arrives only through the
+ * runtime profile and the secrets catalog). Deploy gates that hand a node to an off-cluster provider
+ * MUST require a real declaration instead of silently accepting the default.
  */
 export function hasDeclaredNodeDeployment(spec: RepoSpec): boolean {
   return spec.deployment !== undefined;
 }
 
 /**
- * The node app's extra secret KEY names beyond the `cogni-node-app-v1` profile (story.5137 /
- * task.5411). Source order: the top-level repo-spec `secret_refs` (the node-deploy shape) when
- * present; otherwise the legacy `deployment.services[]` app service's `secret_refs`, kept so a
- * node whose repo-spec was not yet migrated keeps its declared keys. Absent both, none.
- */
-export function extractNodeAppSecretRefs(
-  spec: RepoSpec
-): readonly { readonly key: string }[] {
-  if (spec.secret_refs !== undefined) return spec.secret_refs;
-  const service = extractNodeServices(spec).find(
-    (s) => s.runtimeProfile === "cogni-node-app-v1"
-  );
-  return service?.secretRefs ?? [];
-}
-
-/**
  * Resolve the node's app-tier service declaration.
  *
  * Existing repo-specs intentionally need no migration: omission produces the
- * same single public Next.js app shape used by node-template today — including
- * its empty `secret_refs`. See `hasDeclaredNodeDeployment` before using this
+ * same single public Next.js app shape used by node-template today. See `hasDeclaredNodeDeployment` before using this
  * result to build off-cluster-compute desired state.
  */
 export function extractNodeServices(
@@ -212,7 +194,6 @@ export function extractNodeServices(
       ? { runtimeProfile: service.runtime_profile }
       : {}),
     bindings: service.bindings,
-    secretRefs: service.secret_refs,
     bindHost: service.bind_host,
     internalUrl: `http://${service.name}:${service.port}`,
     resources: {

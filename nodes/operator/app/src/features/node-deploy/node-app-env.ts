@@ -20,7 +20,7 @@
  *     its DATABASE_URL is bound to its own state lease; then the binding supplies it (bindings.ts
  *     OWN_STATE_MIGRATES_ITSELF). The start wrapper migrates with it and unsets it.
  *   - DECLARED_KEYS_ONLY: the secrets injected are EXACTLY the release's declared key list
- *     (`NodeWorkloadSpec.secretKeys` = the profile keys + the node's declared `secret_refs`, computed at
+ *     (`NodeWorkloadSpec.secretKeys` = the profile keys + the node's catalog entries naming the app, computed at
  *     lowering from its repo-spec at the source sha). A key that is merely present in the node's bucket
  *     (fleet-inherited `GH_WEBHOOK_SECRET`, `POSTHOG_API_KEY`, `TAVILY_API_KEY`, ...) is never delivered.
  *     Operator/fleet credentials on `OFF_CLUSTER_WORKLOAD_DENIED_KEYS` are refused even if declared.
@@ -154,7 +154,6 @@ export function nodeAppSecretKeys(
     ? declared
     : resolveRuntimeProfileSecretRefs({
         runtimeProfile: "cogni-node-app-v1",
-        secretRefs: [],
       }).map((r) => r.key);
   const migration = bound.has("DATABASE_URL") ? [] : [NODE_APP_MIGRATION_KEY];
   return [...new Set([...keys, ...migration])].filter((k) => !bound.has(k));

@@ -102,7 +102,6 @@ describe("node artifact bundle", () => {
       ["app", "app", APP_IMAGE],
       ["worker", "worker", WORKER_IMAGE],
     ]);
-    expect(resolved.services[0]?.service.secretRefs).toEqual([]);
   });
 
   it("builds one artifact once and maps it to multiple services", () => {
@@ -311,7 +310,6 @@ describe("resolveNodeArtifactBundleForEnvironment (bug.5262 cascade)", () => {
       port: overrides.port,
       visibility: "private",
       bindings: {},
-      secretRefs: [],
       bindHost: "0.0.0.0",
       internalUrl: `http://${overrides.name}:${overrides.port}`,
       resources: { cpuUnits: 0.5, memoryMi: 512, storageMi: 1024 },

@@ -12,7 +12,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS } from "@cogni/repo-spec";
+import {
+  COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+  RETIRED_SECRET_REFS_MESSAGE,
+} from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
 import { parse, stringify } from "yaml";
 import type { NodeCatalogPort, NodeRuntimeSecretsPort } from "@/ports";
@@ -74,13 +77,27 @@ function redSpec(
           name: "sandbox",
           port: 8080,
           visibility: "private",
-          secret_refs: [{ key: "SANDBOX_EXECD_TOKEN" }],
           ...sandbox,
         }),
       ],
     },
   });
 }
+
+/** A node catalog with one `source: agent` entry; `workloads` is the flow-style list of repo-spec services. */
+const catalog = (key: string, workloads: string, extra = "") => `secrets:
+  - name: ${key}
+    tier: A2
+    source: agent
+    generate: { kind: hex, bytes: 32 }
+${workloads ? `    workloads: ${workloads}\n` : ""}    required: true
+    category: Sandbox
+    description: Shared execd token.
+    steps: []
+${extra}`;
+
+/** Red's one declaration: the sandbox gets its execd token from the catalog, nothing else. */
+const RED_CATALOG = catalog("SANDBOX_EXECD_TOKEN", "[sandbox]");
 
 const manifest = (name: string, port: number, host: string, image: string) => ({
   path: `.cogni/workloads/${name}.yaml`,
@@ -121,6 +138,7 @@ const resolve = (
     workloadZone: WORKLOAD_ZONE,
     nodeSlug: "red",
     repoSpecText: redSpec(),
+    secretsCatalogText: RED_CATALOG,
     manifests: [APP, SANDBOX],
     nodeId: RED_ID,
     env: "production",
@@ -129,7 +147,7 @@ const resolve = (
   });
 
 describe("declaring a worker workload", () => {
-  it("lowers to a worker: its own secret_refs only, on its own host that follows the environment", () => {
+  it("lowers to a worker: its own catalog keys only, on its own host that follows the environment", () => {
     const w = resolve({ env: "candidate-a" });
     expect(w).toMatchObject({
       kind: "app",
@@ -166,33 +184,36 @@ describe("declaring a worker workload", () => {
     expect(w.expose).toEqual({ http: { host: "red.cognidao.org" } });
   });
 
-  it("refuses a worker that declares an operator or fleet credential", () => {
+  it("refuses a repo-spec that still carries secret_refs, with the fixed catalog message, never stripping it (bug.5254)", () => {
+    const retired = expect.objectContaining({
+      code: "secret_ref_refused",
+      message: RETIRED_SECRET_REFS_MESSAGE,
+    });
+    // on a service, even when the catalog already declares the same key
     expect(() =>
       resolve({
         repoSpecText: redSpec({
-          secret_refs: [{ key: "AKASH_CONSOLE_API_KEY" }],
+          secret_refs: [{ key: "SANDBOX_EXECD_TOKEN" }],
         }),
       })
-    ).toThrow(expect.objectContaining({ code: "secret_ref_refused" }));
+    ).toThrow(retired);
+    // top level, and an empty list
+    for (const refs of [[{ key: "SANDBOX_EXECD_TOKEN" }], []]) {
+      const top = parse(redSpec()) as Record<string, unknown>;
+      expect(() =>
+        resolve({ repoSpecText: stringify({ ...top, secret_refs: refs }) })
+      ).toThrow(retired);
+    }
+    // the message points the author at the catalog and echoes no repo-spec text
+    expect(RETIRED_SECRET_REFS_MESSAGE).toContain(
+      ".cogni/secrets-catalog.yaml"
+    );
   });
 });
 
 describe("declaring a secret once in the catalog (bug.5254)", () => {
-  const catalog = (key: string, workloads: string, extra = "") => `secrets:
-  - name: ${key}
-    tier: A2
-    source: agent
-    generate: { kind: hex, bytes: 32 }
-${workloads ? `    workloads: ${workloads}\n` : ""}    required: true
-    category: Sandbox
-    description: Shared execd token.
-    steps: []
-${extra}`;
-  const noRefs = redSpec({ secret_refs: undefined });
-
-  it("delivers a catalog key to every named workload with no secret_refs", () => {
+  it("delivers a catalog key to every named workload", () => {
     const over = {
-      repoSpecText: noRefs,
       secretsCatalogText: catalog("SANDBOX_EXECD_TOKEN", "[app, sandbox]"),
     };
     expect(resolve(over).secretKeys).toEqual(["SANDBOX_EXECD_TOKEN"]);
@@ -203,16 +224,8 @@ ${extra}`;
     ]);
   });
 
-  it("keeps secret_refs as a transition input and dedupes it with the catalog", () => {
-    const w = resolve({
-      secretsCatalogText: catalog("SANDBOX_EXECD_TOKEN", "[sandbox]"),
-    });
-    expect(w.secretKeys).toEqual(["SANDBOX_EXECD_TOKEN"]);
-  });
-
   it("is opt-in: an entry with no workloads reaches no workload, so today's releases do not change", () => {
     const over = {
-      repoSpecText: noRefs,
       secretsCatalogText: catalog("SANDBOX_EXECD_TOKEN", ""),
     };
     expect(resolve(over).secretKeys).toEqual([]);
@@ -232,9 +245,9 @@ ${extra}`;
         "    inheritFrom: operator\n"
       ),
     ])
-      expect(() =>
-        resolve({ repoSpecText: noRefs, secretsCatalogText: text })
-      ).toThrow(expect.objectContaining({ code: "secrets_catalog_refused" }));
+      expect(() => resolve({ secretsCatalogText: text })).toThrow(
+        expect.objectContaining({ code: "secrets_catalog_refused" })
+      );
   });
 
   it("projects a node-owned reserved key the node supplies (source human), like poly's wallet key", () => {
@@ -248,9 +261,9 @@ ${extra}`;
     description: Node-owned wallet key.
     steps: []
 `;
-    expect(
-      resolve({ repoSpecText: noRefs, secretsCatalogText: text }).secretKeys
-    ).toEqual(["POLY_WALLET_AEAD_KEY_HEX"]);
+    expect(resolve({ secretsCatalogText: text }).secretKeys).toEqual([
+      "POLY_WALLET_AEAD_KEY_HEX",
+    ]);
   });
 
   it("refuses a catalog that projects a substrate, fleet-inherited or operator key", () => {
@@ -260,10 +273,7 @@ ${extra}`;
       "AKASH_CONSOLE_API_KEY",
     ])
       expect(() =>
-        resolve({
-          repoSpecText: noRefs,
-          secretsCatalogText: catalog(key, "[sandbox]"),
-        })
+        resolve({ secretsCatalogText: catalog(key, "[sandbox]") })
       ).toThrow(expect.objectContaining({ code: "secrets_catalog_refused" }));
   });
 });

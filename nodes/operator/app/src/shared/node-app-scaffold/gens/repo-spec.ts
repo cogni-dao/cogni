@@ -16,8 +16,9 @@
  *   MUST remain. EPOCH_ACTIVE_BY_DEFAULT — the template's `activity_ledger:` block MUST remain so
  *   ledger ingest schedules are synthesized by @cogni/repo-spec. NO_LEGACY_DEPLOYMENT_BLOCK
  *   (task.5411) — the minted spec carries NO `deployment:` block; a node's workloads live in its own
- *   `.cogni/workloads/*.yaml` (rendered by gens/workload-manifest) and extra secret names in the
- *   top-level `secret_refs`.
+ *   `.cogni/workloads/*.yaml` (rendered by gens/workload-manifest) and its secrets in the node's
+ *   `.cogni/secrets-catalog.yaml`. The spec carries no `secret_refs` (retired, bug.5254; the
+ *   schema refuses it).
  * Side-effects: none — pure function, no IO, no env.
  * Links: Cogni-DAO/node-template:.cogni/repo-spec.yaml, src/features/nodes/repo-spec-builder.ts, docs/spec/node-ci-cd-contract.md, task.5092, task.5079
  * @public
@@ -114,10 +115,10 @@ ${input.knowledgeRemote ? renderKnowledgeBlock(input.knowledgeRemote) : ""}
 
 # App-tier workloads live in .cogni/workloads/*.yaml (story.5137): the operator's
 # node-deploy verb reads them at the deployed sha. The \`cogni-node-app-v1\` profile
-# secrets are supplied automatically; list a secret BEYOND the profile here as
-#   secret_refs:
-#     - key: MY_EXTRA_KEY
-# (names only; values live in OpenBao).
+# secrets are supplied automatically. Declare a secret BEYOND the profile once, in
+# .cogni/secrets-catalog.yaml, with \`workloads\` naming the services that receive it
+# (names only; values live in OpenBao). This file has no secret list: \`secret_refs\`
+# is retired and the schema refuses it.
 
 # State substrate is declared separately from app compute. New nodes start on
 # bounded shared Postgres and graduate to a dedicated provider-VM cell only
