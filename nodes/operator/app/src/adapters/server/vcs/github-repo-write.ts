@@ -453,7 +453,6 @@ const CandidateControlPlaneApplicationSchema = z.strictObject({
       repoURL: z.literal("https://github.com/cogni-dao/cogni.git"),
       targetRevision: z.literal(CANDIDATE_CONTROL_PLANE_REF),
       path: z.literal("infra/k8s/argocd/control-plane/candidate-a"),
-      directory: z.strictObject({ recurse: z.literal(false) }),
     }),
     destination: z.strictObject({
       server: z.literal("https://kubernetes.default.svc"),

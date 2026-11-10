@@ -27,8 +27,11 @@
 #   would make candidate-a un-flightable for control-plane changes — the whole point of a
 #   candidate env is to prove the change BEFORE it is on main.
 #
-# directory.recurse: false — own only the manifests directly in control-plane/candidate-a/,
-#   never descend. repoURL is the LITERAL upstream: the bootstrap apply path does NO envsubst,
+# No spec.source.directory block: Argo's default is already non-recursive, and the API server
+#   drops a default-valued `directory: {recurse: false}`. Declaring it made this self-managed
+#   object differ from its live copy forever, so selfHeal re-synced it every ~2.7 min and each
+#   sync rewrote the Application status into kine (bug.5613, bug.5243 write-churn class).
+# repoURL is the LITERAL upstream: the bootstrap apply path does NO envsubst,
 #   so this cannot use ${FORK_REPO}.
 #
 # Scope: this root owns ONLY the app-of-apps under control-plane/candidate-a/ (plus itself).
@@ -51,8 +54,6 @@ spec:
     repoURL: https://github.com/cogni-dao/cogni.git
     targetRevision: deploy/candidate-a-control-plane
     path: infra/k8s/argocd/control-plane/candidate-a
-    directory:
-      recurse: false
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

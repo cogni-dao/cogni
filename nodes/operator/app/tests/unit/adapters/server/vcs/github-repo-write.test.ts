@@ -2366,8 +2366,6 @@ spec:
     repoURL: https://github.com/cogni-dao/cogni.git
     targetRevision: deploy/candidate-a-control-plane
     path: infra/k8s/argocd/control-plane/candidate-a
-    directory:
-      recurse: false
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
