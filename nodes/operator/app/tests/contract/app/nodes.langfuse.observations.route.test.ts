@@ -10,7 +10,7 @@
  * Links: task.5319
  * @internal
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   session: vi.fn(),
@@ -42,6 +42,9 @@ vi.mock("@/shared/observability", () => ({
   logEvent: mocks.complete,
   EVENT_NAMES: { NODE_OBSERVABILITY_TRACES_COMPLETE: "complete" },
 }));
+
+import { HttpLangfuseOwnershipVerifier } from "@/adapters/server/observability/langfuse-ownership.adapter";
+import { HttpLangfuseReader } from "@/adapters/server/observability/langfuse-reader.adapter";
 
 import { GET } from "@/app/api/v1/nodes/[id]/observability/langfuse/api/public/v2/observations/route";
 
@@ -134,5 +137,138 @@ describe("node-native observation route", () => {
     expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain(
       "secret-auth-token"
     );
+  });
+});
+
+// Exercise the real reader/projection and independent verifier through the public handler.
+describe("native projection through the authorized public API", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  function wire(
+    input: unknown,
+    secret = "private-fixture",
+    receiptMatches = true
+  ) {
+    const hash = "a".repeat(64),
+      alias = `cogni:production:${NODE_ID}:app:v1`;
+    const provider = "gen-public-projection",
+      time = "2026-10-23T03:00:00Z";
+    const row = {
+      id: `time-03-00-00-000000_${provider}`,
+      traceId: "trace-fixture",
+      startTime: time,
+      endTime: time,
+      projectId: "project",
+      parentObservationId: null,
+      environment: "production",
+      type: "GENERATION",
+      input,
+      metadata: {
+        nodeId: NODE_ID,
+        user_api_key_hash: hash,
+        user_api_key: hash,
+        user_api_key_auth: { api_key: hash, key_alias: alias },
+        user_api_key_alias: alias,
+        billingAccountId: secret,
+      },
+    };
+    const fetcher = vi.fn(
+      async (url: URL) =>
+        new Response(
+          JSON.stringify(
+            String(url).includes("/spend/logs/v2")
+              ? {
+                  data: [
+                    {
+                      request_id: provider,
+                      api_key: hash,
+                      startTime: time,
+                      metadata: {
+                        user_api_key_alias: receiptMatches ? alias : "foreign",
+                      },
+                    },
+                  ],
+                  total: 1,
+                }
+              : { data: [row], meta: { cursor: null } }
+          )
+        )
+    );
+    vi.stubGlobal("fetch", fetcher);
+    mocks.reader.mockReturnValue(
+      new HttpLangfuseReader({
+        baseUrl: "https://native.invalid",
+        publicKey: "fixture",
+        secretKey: "fixture",
+        operatorEnvironment: "production",
+        ownership: new HttpLangfuseOwnershipVerifier({
+          baseUrl: "https://receipts.invalid",
+          apiKey: "fixture",
+        }),
+      })
+    );
+    return fetcher;
+  }
+  const query =
+    "?fromStartTime=2026-10-23T00:00:00.000Z&toStartTime=2026-10-24T00:00:00.000Z&environment=production&fields=core,io,metadata&limit=1";
+  it("returns complete normal schemas, flags structural withholding, and logs no content", async () => {
+    let schema: unknown = {
+      type: "string",
+      description: "todo status",
+      enum: ["pending", "done"],
+    };
+    for (let i = 0; i < 11; i++) schema = { properties: schema };
+    const normal = JSON.stringify({ tools: schema });
+    wire(normal);
+    const response = await request(query);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      data: [{ input: normal }],
+      meta: {
+        cogni: { truncated: false, partial: false, attributionUnavailable: 0 },
+      },
+    });
+    wire('{"value":"private-fixture"}');
+    const withheld = await request(query);
+    expect(await withheld.json()).toMatchObject({
+      data: [{ input: "[REDACTED]" }],
+      meta: { cogni: { truncated: true, partial: true } },
+    });
+    expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain(
+      "private-fixture"
+    );
+    expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain(
+      "todo status"
+    );
+  });
+  it("returns typed502 for unsafe fallbacks without raw bodies or private logging", async () => {
+    wire({ safe: "value" }, JSON.stringify("[REDACTED]"));
+    const response = await request(query);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: "observability_invalid_response",
+    });
+    expect(JSON.stringify(mocks.complete.mock.calls)).not.toContain(
+      "[REDACTED]"
+    );
+  });
+  it("retains auth-before-read, independent receipt denial, and read-concurrency release", async () => {
+    const fetcher = wire("sensitive content");
+    mocks.check.mockResolvedValueOnce({
+      decision: "deny",
+      code: "authz_denied",
+    });
+    expect((await request(query)).status).toBe(403);
+    expect(fetcher).not.toHaveBeenCalled();
+    wire("sensitive content", "private-fixture", false);
+    const response = await request(query);
+    expect(await response.json()).toMatchObject({
+      data: [],
+      meta: { cogni: { partial: true, attributionUnavailable: 1 } },
+    });
+    wire("safe after failure");
+    expect((await request(query)).status).toBe(200);
   });
 });

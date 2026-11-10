@@ -8,6 +8,7 @@
  * Invariants:
  *   - SCRUB_BEFORE_SEND: All content passes through scrubbing before external transmission (Langfuse, operator logs)
  *   - PAYLOAD_CAPS: Hard limits enforced; exceeded => summary + hash + bytes
+ *   - BOUNDED_CONTENT: an optional byte ceiling preflights each regex replacement before allocation
  *   - USER_OPT_OUT: maskContent=true => hashes only
  * Side-effects: none (pure functions)
  * Links: OBSERVABILITY.md#langfuse-integration
@@ -128,45 +129,64 @@ export function computeContentHash(content: unknown): string {
 
 /**
  * Scrub sensitive patterns from string content.
- * Preserves readability while removing secrets/PII.
+ * Preserves readability while removing secrets/PII. A byte ceiling returns null
+ * before any replacement pass would allocate an oversized result.
  */
-export function scrubStringContent(text: string): string {
-  return (
-    text
-      // API keys / tokens (various formats)
-      .replace(/sk-[a-zA-Z0-9]{20,}/g, "[REDACTED_SK_KEY]")
-      .replace(/pk-[a-zA-Z0-9]{20,}/g, "[REDACTED_PK_KEY]")
-      .replace(/sk-proj-[a-zA-Z0-9_-]{20,}/g, "[REDACTED_OPENAI_KEY]")
-      .replace(/xoxb-[a-zA-Z0-9-]+/g, "[REDACTED_SLACK_TOKEN]")
-      .replace(/ghp_[a-zA-Z0-9]{36,}/g, "[REDACTED_GITHUB_TOKEN]")
-      .replace(/gho_[a-zA-Z0-9]{36,}/g, "[REDACTED_GITHUB_TOKEN]")
-      // Bearer tokens
-      .replace(/Bearer\s+[a-zA-Z0-9._-]{20,}/gi, "Bearer [REDACTED]")
-      // Emails
-      .replace(
-        /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-        "[REDACTED_EMAIL]"
-      )
-      // Credit cards (basic patterns)
-      .replace(/\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b/g, "[REDACTED_CARD]")
-      // Passwords in common patterns
-      .replace(
-        /password["']?\s*[:=]\s*["']?[^"'\s,}]{4,}/gi,
-        "password: [REDACTED]"
-      )
-      // Environment variable assignments with sensitive names
-      .replace(
-        /\b([A-Z_]*(?:SECRET|KEY|TOKEN|PASSWORD|AUTH|CREDENTIAL)[A-Z_]*)\s*=\s*\S+/g,
-        "$1=[REDACTED]"
-      )
-      // AWS keys
-      .replace(/AKIA[A-Z0-9]{16}/g, "[REDACTED_AWS_KEY]")
-      // JWT tokens (header.payload.signature format)
-      .replace(
-        /eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g,
-        "[REDACTED_JWT]"
-      )
-  );
+export function scrubStringContent(text: string): string;
+export function scrubStringContent(
+  text: string,
+  maxBytes: number
+): string | null;
+export function scrubStringContent(
+  text: string,
+  maxBytes?: number
+): string | null {
+  if (maxBytes !== undefined && Buffer.byteLength(text) > maxBytes) return null;
+  // Keep one rule set for both ordinary callers and bounded read projections.
+  const rules: ReadonlyArray<readonly [RegExp, string]> = [
+    [/sk-[a-zA-Z0-9]{20,}/g, "[REDACTED_SK_KEY]"],
+    [/pk-[a-zA-Z0-9]{20,}/g, "[REDACTED_PK_KEY]"],
+    [/sk-proj-[a-zA-Z0-9_-]{20,}/g, "[REDACTED_OPENAI_KEY]"],
+    [/xoxb-[a-zA-Z0-9-]+/g, "[REDACTED_SLACK_TOKEN]"],
+    [/ghp_[a-zA-Z0-9]{36,}/g, "[REDACTED_GITHUB_TOKEN]"],
+    [/gho_[a-zA-Z0-9]{36,}/g, "[REDACTED_GITHUB_TOKEN]"],
+    [/Bearer\s+[a-zA-Z0-9._-]{20,}/gi, "Bearer [REDACTED]"],
+    [/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, "[REDACTED_EMAIL]"],
+    [/\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b/g, "[REDACTED_CARD]"],
+    [/password["']?\s*[:=]\s*["']?[^"'\s,}]{4,}/gi, "password: [REDACTED]"],
+    [
+      /\b([A-Z_]*(?:SECRET|KEY|TOKEN|PASSWORD|AUTH|CREDENTIAL)[A-Z_]*)\s*=\s*\S+/g,
+      "$1=[REDACTED]",
+    ],
+    [/AKIA[A-Z0-9]{16}/g, "[REDACTED_AWS_KEY]"],
+    [/eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g, "[REDACTED_JWT]"],
+  ];
+  let safe = text;
+  for (const [pattern, replacement] of rules) {
+    if (maxBytes !== undefined) {
+      let bytes = 0,
+        copiedThrough = 0;
+      // Detection/counting only. Retain one match at a time; do not construct expanded text.
+      for (let match = pattern.exec(safe); match; match = pattern.exec(safe)) {
+        const replacementBytes = replacement.includes("$1")
+          ? Buffer.byteLength(replacement) -
+            2 +
+            Buffer.byteLength(match[1] ?? "")
+          : Buffer.byteLength(replacement);
+        bytes +=
+          Buffer.byteLength(safe.slice(copiedThrough, match.index)) +
+          replacementBytes;
+        if (bytes > maxBytes) return null;
+        copiedThrough = match.index + match[0].length;
+      }
+      if (bytes + Buffer.byteLength(safe.slice(copiedThrough)) > maxBytes)
+        return null;
+      pattern.lastIndex = 0;
+    }
+    // Bounded calls measure each pass before native replace allocates its result.
+    safe = safe.replace(pattern, replacement);
+  }
+  return safe;
 }
 
 // ============================================================================

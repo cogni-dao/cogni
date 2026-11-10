@@ -6,7 +6,7 @@
  * Purpose: Bounded native v2 observation reads with independently verified node ownership,
  *   scoped signed cursors and privacy projection; retains the legacy trace-summary reader.
  * Scope: IO only. Credentials/URL are constructor inputs (no env loading here — bootstrap wires them).
- * Invariants: READ_ONLY; independently verified observation ownership; no credential-bearing errors.
+ * Invariants: READ_ONLY; independently verified ownership; finite depth16/17 and row-budgeted privacy projection; no credential-bearing errors.
  * Side-effects: network (fetch to Langfuse)
  * Links: src/ports/langfuse-reader.port.ts, src/bootstrap/observability.factory.ts
  * @public
@@ -293,17 +293,24 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
         unavailable++;
         continue;
       }
-      const projected = projectObservation(row, query.fields, rowBudget, () => {
-        truncated = true;
-      });
-      if (Buffer.byteLength(JSON.stringify(projected)) > rowBudget) {
+      let projected: Record<string, unknown>;
+      try {
+        projected = projectObservation(row, query.fields, rowBudget, () => {
+          truncated = true;
+        });
+      } catch (error) {
+        if (error instanceof LangfuseReadError) throw error;
+        // Allocation/serialization failures never become malformed-JSON success or raw errors.
+        throw new LangfuseReadError("observability_invalid_response", 502);
+      }
+      if (jsonBytes(projected, rowBudget) > rowBudget) {
         // Withhold over-budget content rather than corrupt a JSON/string payload or skip pagination rows.
         for (const field of ["input", "output", "modelParameters"]) {
           if (field in projected) projected[field] = null;
         }
         truncated = true;
       }
-      if (Buffer.byteLength(JSON.stringify(projected)) > rowBudget) {
+      if (jsonBytes(projected, rowBudget) > rowBudget) {
         throw new LangfuseReadError("observability_response_too_large", 502);
       }
       data.push(projected);
@@ -543,10 +550,21 @@ const PRIVATE_KEY =
 // A linear pre-pass bounds the inherited email/credential regexes' maximum candidate length.
 // It preserves ordinary long prose and JSON structure; only oversized unbroken leaf tokens go.
 const MAX_UNBROKEN_CONTENT_RUN = 2048;
-function boundContentRuns(value: string, onTruncated: () => void): string {
+function boundContentRuns(
+  value: string,
+  onTruncated: () => void,
+  budget: number
+): string {
   let runStart = 0;
   let copiedThrough = 0;
   const parts: string[] = [];
+  let bytes = 0;
+  const append = (part: string): boolean => {
+    bytes += Buffer.byteLength(part);
+    if (bytes > budget) return false;
+    parts.push(part);
+    return true;
+  };
   for (let i = 0; i <= value.length; i++) {
     const code = value.charCodeAt(i);
     const whitespace =
@@ -562,55 +580,327 @@ function boundContentRuns(value: string, onTruncated: () => void): string {
       code === 65279;
     if (i !== value.length && !whitespace) continue;
     if (i - runStart > MAX_UNBROKEN_CONTENT_RUN) {
-      parts.push(
-        value.slice(copiedThrough, runStart),
-        "[WITHHELD: oversized token]"
-      );
+      if (
+        !append(value.slice(copiedThrough, runStart)) ||
+        !append("[WITHHELD: oversized token]")
+      ) {
+        onTruncated();
+        return REDACTED;
+      }
       copiedThrough = i;
       onTruncated();
     }
     runStart = i + 1;
   }
   if (parts.length === 0) return value;
-  parts.push(value.slice(copiedThrough));
+  if (!append(value.slice(copiedThrough))) {
+    onTruncated();
+    return REDACTED;
+  }
   return parts.join("");
 }
-function scrubValue(
-  value: unknown,
-  onTruncated: () => void,
-  depth = 0
-): unknown {
-  if (depth > 10) {
-    onTruncated();
-    return "[REDACTED]";
-  }
-  if (typeof value === "string") {
-    // Native v2 io is a string. Scrub encoded JSON recursively, then retain its string shape.
-    if (/^[\s]*[[{]/.test(value)) {
-      try {
-        return JSON.stringify(
-          scrubValue(JSON.parse(value), onTruncated, depth + 1)
-        );
-      } catch {
-        return "[REDACTED]";
+const REDACTED = "[REDACTED]";
+const SERIALIZED_REDACTED = JSON.stringify(REDACTED);
+const highSurrogate = (code: number): boolean =>
+  code >= 0xd800 && code <= 0xdbff;
+const lowSurrogate = (code: number): boolean =>
+  code >= 0xdc00 && code <= 0xdfff;
+
+// Count native JSON bytes before allocating its string. Inputs are native JSON values.
+// Byte and fixed-depth ceilings bound admission work/state before optional content is admitted.
+// This counting ceiling exceeds privacy depth16/17 plus row/metadata wrappers.
+function jsonBytes(value: unknown, limit: number): number {
+  let bytes = 0;
+  const add = (count: number): void => {
+    bytes += count;
+  };
+  const string = (text: string): void => {
+    add(2);
+    for (let i = 0; i < text.length && bytes <= limit; i++) {
+      const code = text.charCodeAt(i);
+      if (
+        code === 34 ||
+        code === 92 ||
+        code === 8 ||
+        code === 9 ||
+        code === 10 ||
+        code === 12 ||
+        code === 13
+      )
+        add(2);
+      else if (code < 32) add(6);
+      else if (highSurrogate(code)) {
+        if (lowSurrogate(text.charCodeAt(i + 1))) {
+          add(4);
+          i++;
+        } else add(6);
+      } else if (lowSurrogate(code)) add(6);
+      else add(code < 128 ? 1 : code < 2048 ? 2 : 3);
+    }
+  };
+  const walk = (item: unknown, depth: number): void => {
+    if (bytes > limit) return;
+    if (depth >= 64) {
+      bytes = limit + 1;
+      return;
+    }
+    if (typeof item === "string") string(item);
+    else if (item === null || item === undefined) add(4);
+    else if (typeof item === "number" || typeof item === "boolean")
+      add(String(item).length);
+    else if (Array.isArray(item)) {
+      add(2 + Math.max(0, item.length - 1));
+      for (let i = 0; i < item.length && bytes <= limit; i++)
+        walk(item[i], depth + 1);
+    } else if (typeof item === "object") {
+      add(2);
+      let first = true;
+      // Do not allocate Object.keys/entries arrays or retain a generator for each ancestor.
+      for (const key in item) {
+        if (!Object.hasOwn(item, key)) continue;
+        if (!first) add(1);
+        first = false;
+        string(key);
+        add(1);
+        if (bytes > limit) break;
+        walk((item as Record<string, unknown>)[key], depth + 1);
+        if (bytes > limit) break;
       }
     }
-    return scrubStringContent(boundContentRuns(value, onTruncated));
-  }
-  if (Array.isArray(value))
-    return value.map((v) => scrubValue(v, onTruncated, depth + 1));
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, v]) => [
-        key,
-        PRIVATE_KEY.test(key.toLowerCase().replace(/[_-]/g, ""))
-          ? "[REDACTED]"
-          : scrubValue(v, onTruncated, depth + 1),
-      ])
-    );
-  }
-  return value;
+  };
+  walk(value, 0);
+  return bytes;
 }
+
+// Row-local KMP state: one lazy prefix backing per pattern, reused ONE WAY for escaped
+// matching, and one reusable difference buffer. Capacity follows the admitted row budget.
+function contentPolicy(
+  privateValues: readonly string[],
+  budget: number,
+  onTruncated: () => void
+) {
+  const invalid = (): never => {
+    throw new LangfuseReadError("observability_invalid_response", 502);
+  };
+  const allocate = (length: number): Int32Array => {
+    try {
+      return new Int32Array(length);
+    } catch {
+      return invalid();
+    }
+  };
+  const patterns = privateValues.map((raw) => {
+    // Escaped bytes upper-bound escaped UTF-16 units. Count before constructing the form.
+    const escapedBytes = jsonBytes(raw, budget + 2) - 2;
+    let escapedLength = 0;
+    if (escapedBytes <= budget) {
+      for (let i = 0; i < raw.length; i++) {
+        const code = raw.charCodeAt(i);
+        if (
+          code === 34 ||
+          code === 92 ||
+          code === 8 ||
+          code === 9 ||
+          code === 10 ||
+          code === 12 ||
+          code === 13
+        )
+          escapedLength += 2;
+        else if (code < 32) escapedLength += 6;
+        else if (highSurrogate(code) && lowSurrogate(raw.charCodeAt(i + 1))) {
+          escapedLength += 2;
+          i++;
+        } else
+          escapedLength += highSurrogate(code) || lowSurrogate(code) ? 6 : 1;
+      }
+    }
+    const rawFits = raw.length <= budget && Buffer.byteLength(raw) <= budget;
+    return {
+      raw,
+      rawFits,
+      escapedLength,
+      text: rawFits ? raw : "",
+      prefix: undefined as Int32Array | undefined,
+      ready: false,
+    };
+  });
+  let escapedPhase = false;
+  let difference: Int32Array | undefined;
+  const withhold = (): string => {
+    onTruncated();
+    return REDACTED;
+  };
+  const fits = (source: string): boolean => Buffer.byteLength(source) <= budget;
+  const table = (pattern: (typeof patterns)[number]): Int32Array => {
+    if (!pattern.prefix)
+      pattern.prefix = allocate(
+        Math.max(
+          pattern.rawFits ? pattern.raw.length : 0,
+          pattern.escapedLength
+        )
+      );
+    const prefix = pattern.prefix;
+    if (!pattern.ready) {
+      prefix.fill(0);
+      const text = pattern.text;
+      for (let i = 1, j = 0; i < text.length; i++) {
+        while (j && text[i] !== text[j]) j = prefix[j - 1] ?? 0;
+        if (text[i] === text[j]) j++;
+        prefix[i] = j;
+      }
+      pattern.ready = true;
+    }
+    return prefix;
+  };
+  const scan = (source: string, cover = false): boolean => {
+    if (!fits(source)) return invalid();
+    if (cover) {
+      if (escapedPhase) return invalid();
+      difference?.fill(0, 0, source.length + 1);
+    }
+    let found = false;
+    for (const pattern of patterns) {
+      const text = pattern.text;
+      if (!text.length || text.length > source.length) continue;
+      const prefix = table(pattern);
+      for (let i = 0, j = 0; i < source.length; i++) {
+        while (j && source[i] !== text[j]) j = prefix[j - 1] ?? 0;
+        if (source[i] === text[j]) j++;
+        if (j !== text.length) continue;
+        found = true;
+        if (!cover) return true;
+        let start = i - text.length + 1,
+          end = i + 1;
+        if (
+          start > 0 &&
+          highSurrogate(source.charCodeAt(start - 1)) &&
+          lowSurrogate(source.charCodeAt(start))
+        )
+          start--;
+        if (
+          end < source.length &&
+          highSurrogate(source.charCodeAt(end - 1)) &&
+          lowSurrogate(source.charCodeAt(end))
+        )
+          end++;
+        difference ??= allocate(budget + 1);
+        if (difference) {
+          difference[start] = (difference[start] ?? 0) + 1;
+          difference[end] = (difference[end] ?? 0) - 1;
+        }
+        j = prefix[j - 1] ?? 0;
+      }
+    }
+    return found;
+  };
+  // Every raw fallback must be safe in both its native and serialized representation.
+  if (scan(REDACTED) || scan(SERIALIZED_REDACTED)) invalid();
+  const union = (source: string): string => {
+    if (!fits(source)) return withhold();
+    if (!scan(source, true)) return source;
+    const parts: string[] = [];
+    let bytes = 0,
+      active = 0,
+      start = 0,
+      covered = false;
+    const append = (part: string): boolean => {
+      bytes += Buffer.byteLength(part);
+      if (bytes > budget) return false;
+      parts.push(part);
+      return true;
+    };
+    for (let i = 0; i <= source.length; i++) {
+      active += difference?.[i] ?? 0;
+      if (active > 0 && !covered) {
+        if (!append(source.slice(start, i)) || !append(REDACTED))
+          return withhold();
+        covered = true;
+      } else if (active === 0 && covered) {
+        start = i;
+        covered = false;
+      }
+    }
+    if (!append(source.slice(start))) return withhold();
+    return parts.join("");
+  };
+  const leaf = (source: string): string => {
+    const first = union(source);
+    const bounded = boundContentRuns(first, onTruncated, budget);
+    if (!fits(bounded)) return withhold();
+    const cleaned = scrubStringContent(bounded, budget);
+    if (cleaned === null) return withhold();
+    const result = union(cleaned);
+    return scan(result) ? REDACTED : result;
+  };
+  const serialize = (value: unknown): string => {
+    if (jsonBytes(value, budget) > budget) return withhold();
+    const text = JSON.stringify(value);
+    return scan(text) ? withhold() : text;
+  };
+  const scrub = (value: unknown, depth = 0): unknown => {
+    if (depth > 16) return withhold();
+    if (typeof value === "string") {
+      if (!fits(value)) return withhold();
+      const objectLike = /^[\s]*[[{]/.test(value);
+      const quoted = /^[ \t\n\r]*"/.test(value);
+      if (objectLike || quoted) {
+        if (scan(value)) return withhold();
+        let parsed: unknown;
+        // Only native parsing belongs in this catch. Privacy/allocation failures propagate.
+        try {
+          parsed = JSON.parse(value);
+        } catch {
+          if (objectLike) return REDACTED;
+          const cleaned = leaf(value);
+          return cleaned === value ? value : withhold();
+        }
+        return serialize(scrub(parsed, depth + 1));
+      }
+      return leaf(value);
+    }
+    if (Array.isArray(value))
+      return value.map((item) => scrub(item, depth + 1));
+    if (value && typeof value === "object") {
+      const entries: Array<[string, unknown]> = [],
+        seen = new Set<string>();
+      for (const [key, item] of Object.entries(value)) {
+        const privateKey = PRIVATE_KEY.test(
+          key.toLowerCase().replace(/[_-]/g, "")
+        );
+        const name = leaf(key);
+        if (seen.has(name)) return withhold();
+        seen.add(name);
+        entries.push([name, privateKey ? REDACTED : scrub(item, depth + 1)]);
+      }
+      return Object.fromEntries(entries);
+    }
+    return value;
+  };
+  const finish = (value: unknown, available: number): unknown => {
+    if (
+      jsonBytes(value, Math.min(budget, available)) >
+      Math.min(budget, available)
+    )
+      return withhold();
+    return scan(JSON.stringify(value)) ? withhold() : value;
+  };
+  const enterEscapedPhase = (): void => {
+    if (escapedPhase) invalid();
+    escapedPhase = true;
+    for (const pattern of patterns) {
+      pattern.text = pattern.escapedLength
+        ? JSON.stringify(pattern.raw).slice(1, -1)
+        : "";
+      pattern.ready = false;
+    }
+    // FIRST escaped check: no escaped fallback is permitted before this preflight.
+    if (scan(SERIALIZED_REDACTED)) invalid();
+  };
+  const bound = (value: unknown): unknown =>
+    jsonBytes(value, budget) > budget ? withhold() : value;
+  return { scrub, bound, finish, enterEscapedPhase };
+}
+
 // Selection and raw byte budgeting happen before any content scrubbing. Every authorized row
 // stays in the native page: oversized optional fields become null; core identity cannot be dropped.
 function projectObservation(
@@ -635,8 +925,9 @@ function projectObservation(
         typeof row.metadata === "object" &&
         !Array.isArray(row.metadata)
           ? Object.fromEntries(
-              Object.entries(metadata)
-                .filter(([k]) => METADATA_KEYS.has(k))
+              [...METADATA_KEYS]
+                .filter((key) => Object.hasOwn(metadata, key))
+                .map((key) => [key, metadata[key]] as const)
                 .map(([k, v]) => [
                   k,
                   typeof v === "string" ||
@@ -656,13 +947,18 @@ function projectObservation(
     } else if (key === "usageDetails" || key === "costDetails") {
       const value = row[key];
       result[key] =
-        value && typeof value === "object" && !Array.isArray(value)
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        jsonBytes(value, rawByteBudget) <= rawByteBudget
           ? Object.fromEntries(
               Object.entries(value).filter(
                 ([, v]) => typeof v === "number" && Number.isFinite(v)
               )
             )
           : null;
+      if (value && typeof value === "object" && result[key] === null)
+        onTruncated();
     } else result[key] = row[key];
   }
   if (!fields.split(",").includes("model")) {
@@ -672,23 +968,32 @@ function projectObservation(
 
   // rowBudget * requested limit is <=1MiB (less metadata/cursor headroom). Counting the selected
   // raw fields prevents redaction-shrunk output from multiplying regex work across fields/rows.
-  let selectedBytes = Buffer.byteLength(JSON.stringify(result));
+  const identity = new Set([
+    "id",
+    "traceId",
+    "startTime",
+    "endTime",
+    "projectId",
+    "parentObservationId",
+    "type",
+  ]);
+  // Measure each field ONCE with the admitted byte and traversal ceilings. An over-limit
+  // optional field is discarded before aggregate sorting; its unknown full size is unnecessary.
+  const measured = Object.entries(result).map(([key, value]) => {
+    let bytes = jsonBytes(value, rawByteBudget);
+    if (bytes > rawByteBudget && !identity.has(key)) {
+      result[key] = null;
+      bytes = 4;
+      onTruncated();
+    }
+    return { key, bytes };
+  });
+  let selectedBytes = 2 + Math.max(0, measured.length - 1);
+  for (const field of measured)
+    selectedBytes += jsonBytes(field.key, rawByteBudget) + 1 + field.bytes;
   if (selectedBytes > rawByteBudget) {
-    const identity = new Set([
-      "id",
-      "traceId",
-      "startTime",
-      "endTime",
-      "projectId",
-      "parentObservationId",
-      "type",
-    ]);
-    const optional = Object.entries(result)
-      .filter(([key]) => !identity.has(key))
-      .map(([key, value]) => ({
-        key,
-        bytes: Buffer.byteLength(JSON.stringify(value) ?? "null"),
-      }))
+    const optional = measured
+      .filter(({ key }) => !identity.has(key))
       .sort((a, b) => b.bytes - a.bytes);
     for (const field of optional) {
       if (selectedBytes <= rawByteBudget) break;
@@ -712,15 +1017,8 @@ function projectObservation(
     .filter(
       (value): value is string => typeof value === "string" && value.length >= 8
     );
-  const scrubContent = (value: unknown): unknown => {
-    const cleaned = scrubValue(value, onTruncated);
-    const serialized = JSON.stringify(cleaned);
-    if (serialized === undefined) return cleaned;
-    let safe = serialized;
-    for (const secret of privateValues)
-      safe = safe.split(JSON.stringify(secret).slice(1, -1)).join("[REDACTED]");
-    return JSON.parse(safe) as unknown;
-  };
+  const policy = contentPolicy(privateValues, rawByteBudget, onTruncated);
+  const targets: Array<{ object: Record<string, unknown>; key: string }> = [];
   for (const key of [
     "input",
     "output",
@@ -728,17 +1026,32 @@ function projectObservation(
     "statusMessage",
     "tags",
   ]) {
-    if (key in result) result[key] = scrubContent(result[key]);
+    if (key in result) targets.push({ object: result, key });
   }
   if (result.metadata && typeof result.metadata === "object") {
-    result.metadata = Object.fromEntries(
-      Object.entries(result.metadata).map(([key, value]) => [
-        key,
-        key === "nodeId" || /Id$/.test(key)
-          ? value
-          : scrubValue(value, onTruncated),
-      ])
-    );
+    const selectedMetadata = result.metadata as Record<string, unknown>;
+    for (const key of Object.keys(selectedMetadata)) {
+      if (key !== "nodeId" && !/Id$/.test(key))
+        targets.push({ object: selectedMetadata, key });
+    }
+  }
+  // All recursive decoding and RAW serialization checks finish before any prefix is overwritten.
+  for (const { object, key } of targets)
+    object[key] = policy.bound(policy.scrub(object[key]));
+  // Every target now fits one row budget; the remaining fields already passed raw admission.
+  const boundedOutputBytes = rawByteBudget * (targets.length + 1);
+  for (const { object, key } of targets) {
+    const otherBytes =
+      jsonBytes(result, boundedOutputBytes) -
+      jsonBytes(object[key], rawByteBudget);
+    object[key] = policy.finish(object[key], rawByteBudget - otherBytes);
+  }
+  policy.enterEscapedPhase();
+  for (const { object, key } of targets) {
+    const otherBytes =
+      jsonBytes(result, boundedOutputBytes) -
+      jsonBytes(object[key], rawByteBudget);
+    object[key] = policy.finish(object[key], rawByteBudget - otherBytes);
   }
   return result;
 }
