@@ -61,9 +61,9 @@ export const GET = wrapRouteHandlerWithLogging<{
 /**
  * PATCH /api/v1/work/items/:id — Patch a work item (Doltgres only).
  *
- * Trusts the bearer of a valid token under the store's author-scoped authority
- * (no transition state-machine — see PATCH_ALLOWLIST). Optional top-level
- * `expectedRevision` is compare-and-set: a moved row answers 409
+ * Trusts the bearer of a valid token; the author is recorded for attribution,
+ * not used as a gate (bug.5619). No transition state-machine — see
+ * PATCH_ALLOWLIST. Optional top-level `expectedRevision` is compare-and-set: a moved row answers 409
  * `revision_conflict` with `currentRevision`. Author embedded in dolt_log.
  */
 export const PATCH = wrapRouteHandlerWithLogging<{

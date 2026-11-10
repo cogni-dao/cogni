@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/tests/contribution-service`
  * Purpose: Unit coverage for contribution service ownership gates and edit-batch forwarding.
  * Scope: Pure service tests with a fake contribution port. Does not call Doltgres or HTTP.
- * Invariants: CONTRIBUTION_OWNER_CAN_APPEND, CONTRIBUTION_OWNER_CAN_CLOSE.
+ * Invariants: CONTRIBUTION_AUTHOR_IS_ATTRIBUTION_NOT_APPEND_GATE (bug.5619), CONTRIBUTION_OWNER_CAN_CLOSE.
  * Side-effects: none
  * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store/src/service/contribution-service.ts
  * @internal
@@ -572,31 +572,28 @@ describe("createContributionService", () => {
     expect(port.lastAppend?.edits).toEqual([edit]);
   });
 
-  it("rejects append for another principal's contribution", async () => {
+  it("allows append for another principal's contribution (author is attribution, not a gate, bug.5619)", async () => {
     const port = new FakeContributionPort();
     port.records = [contribution({ principalId: "agent-2" })];
     const service = createContributionService({
       port,
       canMergeKnowledge: () => false,
     });
+    const edit = {
+      op: "delete" as const,
+      targetRowId: "operator:knowledge:stale",
+      reason: "not mine, but allowed",
+    };
 
-    await expect(
-      service.appendCommit({
-        principal: agent,
-        contributionId: "contrib-agent-1-abc123",
-        body: {
-          message: "not mine",
-          edits: [
-            {
-              op: "delete",
-              targetRowId: "operator:knowledge:stale",
-              reason: "not mine",
-            },
-          ],
-        },
-      })
-    ).rejects.toBeInstanceOf(ContributionForbiddenError);
-    expect(port.lastAppend).toBeNull();
+    await service.appendCommit({
+      principal: agent,
+      contributionId: "contrib-agent-1-abc123",
+      body: { message: "not mine", edits: [edit] },
+    });
+
+    expect(port.lastAppend?.contributionId).toBe("contrib-agent-1-abc123");
+    expect(port.lastAppend?.principal).toEqual(agent);
+    expect(port.lastAppend?.edits).toEqual([edit]);
   });
 
   it("allows a bearer principal to close its own open contribution", async () => {

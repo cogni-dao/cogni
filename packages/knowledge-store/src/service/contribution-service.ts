@@ -5,7 +5,7 @@
  * Module: `@cogni/knowledge-store/service/contribution-service`
  * Purpose: Framework-agnostic typed handlers for the knowledge contribution flow.
  * Scope: Pure business logic — quotas, idempotency lookup, role gating, confidence cap. Does not contain HTTP, env, or lifecycle code; per-node `route.ts` files adapt these to Next.
- * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; CONTRIBUTION_OWNER_CAN_APPEND; CONTRIBUTION_OWNER_CAN_CLOSE.
+ * Invariants: KNOWLEDGE_MERGE_REQUIRES_ADMIN_SESSION; CONTRIBUTION_AUTHOR_IS_ATTRIBUTION_NOT_APPEND_GATE (bug.5619); CONTRIBUTION_OWNER_CAN_CLOSE.
  * Side-effects: none (delegates I/O to KnowledgeContributionPort)
  * Links: docs/design/knowledge-contribution-api.md
  * @public
@@ -291,14 +291,6 @@ export function createContributionService(
       if (record.state !== "open") {
         throw new ContributionStateError(
           `contribution ${contributionId} is ${record.state}`
-        );
-      }
-      const ownsContribution =
-        record.principalId === principal.id &&
-        record.principalKind === principal.kind;
-      if (!ownsContribution) {
-        throw new ContributionForbiddenError(
-          "append requires contribution owner"
         );
       }
       const gated = await gateEdits(body.edits);
