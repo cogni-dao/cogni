@@ -11,6 +11,9 @@
  *   task.5450) over the review App's check runs on the parent repo. Package calculators, budgets
  *   enforcement and the engine live in `@cogni-dao/metrics/knowledge`; nothing here re-implements them.
  * Invariants:
+ *   - EDGE_CAUGHT_IS_NODE_LOCAL: `edge.caught@1` (story.5148) probes each application edge host's canary and reads
+ *     the Caddy access log from Loki through the operator's existing Loki reader; hosts come from the catalog
+ *     roster and this operator's own env domain, never a literal.
  *   - RELEASE_OWNS_BEHAVIOR: metric computation, assessment and goal progress come from the package.
  *   - NODE_SCOPED_OBSERVATIONS: observations are scoped to `getNodeId()` + the deploy environment.
  *   - NODE_CALCULATORS_READ_OWN_TABLES: the delivery calculators read only the operator's own release
@@ -38,7 +41,13 @@ import {
   GitHubReviewKpiSource,
   REVIEW_CHECK_RUN_NAME,
 } from "@/adapters/server";
+import { createEdgeHostCatalog } from "@/bootstrap/capabilities/node-catalog";
+import { createLokiMetricReader } from "@/bootstrap/observability.factory";
 import { createDeliveryCalculators } from "@/features/node-deploy/delivery-kpis";
+import {
+  createEdgeCaughtCalculators,
+  type EdgeCaughtWindowEvent,
+} from "@/features/node-deploy/edge-caught-kpis";
 import { createFleetCalculators } from "@/features/node-deploy/fleet-kpis";
 import { createFleetProbeSnapshots } from "@/features/node-deploy/fleet-probe-snapshot";
 import { createReviewCalculators } from "@/features/review/review-kpis";
@@ -64,8 +73,10 @@ export function createGoalMetrics(deps: {
   };
   environment: string;
   log(event: object): void;
+  /** One `edge_caught_window` event per `edge.caught@1` compute (story.5148). */
+  logEdgeWindow(event: EdgeCaughtWindowEvent): void;
 }) {
-  const { releaseStoreSql, controlHost, review, ...rest } = deps;
+  const { releaseStoreSql, controlHost, review, logEdgeWindow, ...rest } = deps;
   const reviewRepo =
     review.appId && review.privateKeyBase64 ? review.repo : undefined;
   const deliverySource = new DeliveryKpiSource(releaseStoreSql);
@@ -83,6 +94,16 @@ export function createGoalMetrics(deps: {
           rest.observationsSql,
           `${getNodeId()}/${rest.environment}/`
         ),
+      }),
+      // story.5148: the edge catch-all counter. Hosts come from the catalog roster + this operator's env domain
+      // (its own public host); the Loki reader is the operator's existing Grafana read credential (null = unknown).
+      ...createEdgeCaughtCalculators({
+        env: rest.environment,
+        domain: controlHost,
+        catalog: createEdgeHostCatalog(),
+        probe: (input) => deliverySource.probe(input),
+        loki: createLokiMetricReader(),
+        log: logEdgeWindow,
       }),
       ...createReviewCalculators(
         new GitHubReviewKpiSource({

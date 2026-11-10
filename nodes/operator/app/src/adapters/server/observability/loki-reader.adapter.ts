@@ -12,9 +12,16 @@
  * @public
  */
 
-import type { LokiLogLine, LokiQueryRange, LokiReaderPort } from "@/ports";
+import type {
+  LokiInstantQuery,
+  LokiInstantReaderPort,
+  LokiLogLine,
+  LokiQueryRange,
+  LokiReaderPort,
+  LokiVectorSample,
+} from "@/ports";
 
-export class HttpLokiReader implements LokiReaderPort {
+export class HttpLokiReader implements LokiReaderPort, LokiInstantReaderPort {
   private readonly base: string;
   private readonly token: string;
   private readonly datasourceUid: string;
@@ -42,7 +49,9 @@ export class HttpLokiReader implements LokiReaderPort {
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${this.token}` },
       // Loki reads are fast; bound the call so a hung upstream can't pin the route.
-      signal: AbortSignal.timeout(15_000),
+      signal: range.signal
+        ? AbortSignal.any([AbortSignal.timeout(15_000), range.signal])
+        : AbortSignal.timeout(15_000),
     });
 
     if (!res.ok) {
@@ -63,6 +72,50 @@ export class HttpLokiReader implements LokiReaderPort {
     lines.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
     return lines.slice(0, range.limit);
   }
+
+  /** `GET /loki/api/v1/query`: one instant metric evaluation at `atNs`. Same proxy and token as `queryRange`. */
+  async queryInstant(
+    input: LokiInstantQuery
+  ): Promise<readonly LokiVectorSample[]> {
+    const url = new URL(
+      `${this.base}/api/datasources/proxy/uid/${this.datasourceUid}/loki/api/v1/query`
+    );
+    url.searchParams.set("query", input.query);
+    url.searchParams.set("time", input.atNs);
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${this.token}` },
+      // A 24 h count scans more than a line read; still bound the call.
+      signal: input.signal
+        ? AbortSignal.any([AbortSignal.timeout(30_000), input.signal])
+        : AbortSignal.timeout(30_000),
+    });
+
+    if (!res.ok) {
+      const body = (await res.text().catch(() => "")).slice(0, 200);
+      throw new Error(`loki query failed: HTTP ${res.status} ${body}`);
+    }
+
+    const json = (await res.json()) as LokiInstantResponse;
+    if (json.data?.resultType !== "vector")
+      throw new Error("loki query: result is not a vector");
+    return (json.data.result ?? []).map((r) => {
+      const value = Number(r.value?.[1]);
+      if (!Number.isFinite(value))
+        throw new Error("loki query: sample value is not a number");
+      return { labels: r.metric ?? {}, value };
+    });
+  }
+}
+
+interface LokiInstantResponse {
+  readonly data?: {
+    readonly resultType?: string;
+    readonly result?: ReadonlyArray<{
+      readonly metric?: Readonly<Record<string, string>>;
+      readonly value?: readonly [number | string, string];
+    }>;
+  };
 }
 
 interface LokiQueryRangeResponse {

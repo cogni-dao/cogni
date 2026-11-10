@@ -78,6 +78,9 @@ export const EVENT_NAMES = {
   // Goal metrics (@cogni-dao/metrics, story.0021): one refresh tick and one goals read.
   METRIC_REFRESH_COMPLETE: "metric.refresh_complete",
   GOALS_PROGRESS_READ: "goals.progress_read",
+  // Edge catch-all counter (story.5148, `edge.caught@1`): ONE terminal event per host and 300 s window, a number or
+  // unknown with a stable `reason`. A Grafana alert reads it from Loki. Fields: env, host, outcome, caught, reason.
+  EDGE_CAUGHT_WINDOW: "edge_caught_window",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

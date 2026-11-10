@@ -21,13 +21,34 @@ import {
   HttpLangfuseRootOwnershipVerifier,
   HttpLokiReader,
 } from "@/adapters/server";
-import type { LangfuseReaderPort, LokiReaderPort } from "@/ports";
+import type {
+  LangfuseReaderPort,
+  LokiInstantReaderPort,
+  LokiReaderPort,
+} from "@/ports";
 import { getNodeId } from "@/shared/config/repoSpec.server";
 import { serverEnv } from "@/shared/env";
 import { TokenBucketRateLimiter } from "./http/rateLimiter";
 
 /** The operator's Loki reader, or null when `GRAFANA_URL`/`GRAFANA_SERVICE_ACCOUNT_TOKEN` are unset. */
 export function createLokiReader(): LokiReaderPort | null {
+  const env = serverEnv();
+  if (!env.GRAFANA_URL || !env.GRAFANA_SERVICE_ACCOUNT_TOKEN) {
+    return null;
+  }
+  return new HttpLokiReader({
+    grafanaUrl: env.GRAFANA_URL,
+    token: env.GRAFANA_SERVICE_ACCOUNT_TOKEN,
+  });
+}
+
+/**
+ * The same Loki reader with instant metric queries (`edge.caught@1` counts, story.5148), or null when unwired.
+ * One adapter, one token: this only widens the type the caller sees.
+ */
+export function createLokiMetricReader():
+  | (LokiReaderPort & LokiInstantReaderPort)
+  | null {
   const env = serverEnv();
   if (!env.GRAFANA_URL || !env.GRAFANA_SERVICE_ACCOUNT_TOKEN) {
     return null;

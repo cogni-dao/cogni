@@ -227,6 +227,7 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
         kind: "response",
         status: res.status,
         body: await readCapped(res, input.maxBytes),
+        headers: Object.fromEntries(res.headers.entries()),
       };
     } catch (error) {
       // The caller gave up: this probe could not run, so the reading is unknown.
