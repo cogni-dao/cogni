@@ -18,6 +18,7 @@ node_modules
 
 # playwright artifacts
 /e2e/artifacts
+/e2e/.auth
 
 # next.js
 .next/

@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 const isCI = !!process.env.CI;
 const BASE = process.env.TEST_BASE_URL;
+const AUTH_STATE = process.env.PLAYWRIGHT_AUTH_STATE;
 if (isCI && !BASE) throw new Error("TEST_BASE_URL is required on CI.");
 
 export default defineConfig({
@@ -17,6 +18,7 @@ export default defineConfig({
   globalSetup: "./e2e/helpers/global-setup.cjs",
   use: {
     baseURL: BASE,
+    storageState: AUTH_STATE,
     headless: true,
     trace: "on-first-retry",
     video: "retain-on-failure",
