@@ -211,7 +211,8 @@ Open http://127.0.0.1:12345 in your browser:
    - `{app="cogni-template"}` — all logs from this env
    - `{service="app"}` — operator logs only (docker source)
    - `{source="k8s", namespace=~"cogni-.*"}` — k3s app pod logs
-   - `{source="k8s", namespace="argocd"}` — Argo CD sync/reconcile events
+   - `{source="k8s", namespace="argocd"}` — Argo CD warning/error logs (info lines are dropped at Alloy)
+   - `{source="k8s-events", namespace="argocd"}` — Argo CD sync/health events
    - `{source="k8s", namespace="kube-system"}` — kubelet / coredns / kube-proxy
    - `{service="caddy"}` — edge runtime + access logs
    - `{service="app"} | json | level="error"` — filter errors
@@ -223,7 +224,7 @@ Open http://127.0.0.1:12345 in your browser:
 - [ ] On a k3s host: `local.file_match.k8s_pods` shows >0 targets
 - [ ] Grafana Cloud shows `app="cogni-template"` logs from Docker and k8s sources
 - [ ] `{env="<env>",service="caddy"}` returns an access log after a public probe
-- [ ] `{source="k8s", namespace="argocd"}` returns Argo CD controller/server logs
+- [ ] `{source="k8s", namespace="argocd"} | logfmt | level="info"` returns nothing (info dropped at Alloy)
 - [ ] `{source="k8s", namespace="kube-system"}` returns kubelet/coredns/kube-proxy logs
 - [ ] Existing `{namespace=~"cogni-.*"}` logs still flow (no regression)
 - [ ] High-cardinality fields (reqId) queryable via `| json`

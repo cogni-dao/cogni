@@ -267,6 +267,31 @@ loki.process "k8s_pod_logs" {
     action   = "drop"
   }
 
+  // Drop Argo CD info-level lines (task.5343). argocd-application-controller
+  // alone shipped ~0.3 GB/day (all VMs) of `level=info` reconcile chatter ("Reconciliation
+  // completed", "Skipping auto-sync"), 0.38 GB/day for the namespace. Argo logs are logrus
+  // logfmt; the logfmt parser reads only the real `level` key, so a quoted
+  // "level=warn" inside msg cannot rescue or condemn a line. Fail-safe: non-logfmt
+  // lines and lines without `level` extract nothing and still ship, as do warning,
+  // error and fatal. Sync/health transitions stay visible as Kubernetes Events
+  // ({source="k8s-events",namespace="argocd"}, alloy-config.k8s-events.alloy).
+  stage.match {
+    selector      = "{namespace=\"argocd\"}"
+    pipeline_name = "argocd_info_drop"
+
+    stage.logfmt {
+      mapping = {
+        argocd_level = "level",
+      }
+    }
+
+    stage.drop {
+      source              = "argocd_level"
+      value               = "info"
+      drop_counter_reason = "argocd_info"
+    }
+  }
+
   stage.static_labels {
     values = {
       app    = "cogni-template",
@@ -293,13 +318,20 @@ loki.process "k8s_pod_logs" {
 // `app:3000` resolved only in the pre-k3s all-compose era and was silently orphaned
 // by the k3s migration (#785) — that is why this scrape read up=0. The alloy service
 // gets `extra_hosts: host.docker.internal:host-gateway` so this name resolves.
+//
+// CADENCE = 60s for app_metrics, worker_metrics and openfga_metrics (task.5343).
+// Grafana Cloud bills metrics per series × samples/minute (DPM), so a 15s scrape
+// made each of these ~2,000 series cost 4 billable series. Every consumer of
+// these families reads a ≥5m window (rate/increase need 2 samples, so windows
+// must stay ≥ 2× the interval; tests/ci-invariants/alloy-cost-trim.spec.ts pins
+// that floor). The 30s infra scrapes below are reliability evidence and keep 30s.
 
 prometheus.scrape "app_metrics" {
   targets = [
     {"__address__" = "host.docker.internal:30000"},
   ]
   forward_to      = [prometheus.relabel.app_metrics.receiver]
-  scrape_interval = "15s"
+  scrape_interval = "60s"
   scrape_timeout  = "10s"
   metrics_path    = "/api/metrics"
   bearer_token    = sys.env("METRICS_TOKEN")
@@ -337,7 +369,7 @@ prometheus.relabel "app_metrics" {
 prometheus.scrape "worker_metrics" {
   targets         = [{"__address__" = "host.docker.internal:30900"}]
   forward_to      = [prometheus.relabel.worker_metrics.receiver]
-  scrape_interval = "15s"
+  scrape_interval = "60s"
   scrape_timeout  = "10s"
   metrics_path    = "/metrics"
 }
@@ -365,7 +397,7 @@ prometheus.relabel "worker_metrics" {
 prometheus.scrape "openfga_metrics" {
   targets         = [{"__address__" = "openfga:2112"}]
   forward_to      = [prometheus.relabel.openfga_metrics.receiver]
-  scrape_interval = "15s"
+  scrape_interval = "60s"
   scrape_timeout  = "10s"
   metrics_path    = "/metrics"
 }
