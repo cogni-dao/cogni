@@ -28,23 +28,24 @@ The session cookie is the auth artifact. MetaMask only participates in the _firs
 
 Chrome 136+ **disables** `--remote-debugging-port` when launched against the default user data dir, as a security mitigation (default profile cookies are an attractive target for malware using CDP). A dedicated profile dir bypasses this cleanly. One-time MetaMask install into the new profile is the only setup cost.
 
-## Storage layout (in repo, gitignored)
+## Storage layout
 
 ```
-.local-auth/
-  chrome-profile/                           # dedicated Chrome user data dir (MetaMask lives here)
+~/.playwright-profiles/
+  cogni-wallet-auth/                        # canonical shared Chrome profile; MetaMask lives here
+
+<repo>/.local-auth/                         # gitignored; commonly symlinked to the canonical checkout
   credentials.md                            # MetaMask password + recovery phrase (test wallet only)
   candidate-a-poly.storageState.json        # poly-test.cognidao.org
   candidate-a-operator.storageState.json    # test.cognidao.org
   ...
 ```
 
-Root `.gitignore` excludes the entire `/.local-auth/` directory. Never commit — these files hold live session cookies, and the profile dir holds the MetaMask vault.
+Root `.gitignore` excludes the entire `/.local-auth/` directory. Never commit — these files hold live session cookies. The wallet profile is global so every Conductor worktree reuses the same installed MetaMask vault; never create a second profile under `.local-auth/chrome-profile`.
 
 > **Future state:** this whole stack is a crawl-step MVP wedge. Long-term it should be:
 >
 > - test wallet seed in a secrets manager (1Password CLI / Doppler), not a gitignored markdown file
-> - Chrome profile under `~/.cogni-auth/chrome-profile/` (or OS-equivalent), not in-repo (profile is hundreds of MB and shared across worktrees)
 > - first-class commands `pnpm auth:capture <node> <env>` + `pnpm auth:verify <node> <env>` driven by the node × env matrix
 >
 > Tracked under `proj.agent-dev-testing.md` Run (P2+) — "Playwright + Chromium in devtools image" milestone.
@@ -57,7 +58,7 @@ Root `.gitignore` excludes the entire `/.local-auth/` directory. Never commit �
    ```bash
    /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
      --remote-debugging-port=9222 \
-     --user-data-dir="$PWD/.local-auth/chrome-profile"
+     --user-data-dir="$HOME/.playwright-profiles/cogni-wallet-auth"
    ```
 
    Keep that terminal tab open — closing it kills Chrome.
@@ -79,7 +80,7 @@ Root `.gitignore` excludes the entire `/.local-auth/` directory. Never commit �
    # -> "Chrome/<version>"
    ```
 
-The profile now persists under `.local-auth/chrome-profile/`. Future launches reuse it — MetaMask stays installed, stays funded with whatever account you imported.
+The profile now persists under `~/.playwright-profiles/cogni-wallet-auth/`. Future launches from any worktree reuse it — MetaMask stays installed and funded with the account you imported.
 
 ## Per-environment: sign in and capture
 
@@ -105,8 +106,9 @@ Two valid consumers:
 **1. Ad-hoc / `/validate-candidate` skill — `playwright-cli`** (preferred for one-off validation runs):
 
 ```bash
+playwright-cli -s=validate open about:blank
 playwright-cli -s=validate state-load .local-auth/candidate-a-poly.storageState.json
-playwright-cli -s=validate open https://poly-test.cognidao.org
+playwright-cli -s=validate goto https://poly-test.cognidao.org
 playwright-cli -s=validate snapshot
 playwright-cli -s=validate close
 ```
@@ -135,13 +137,15 @@ The two paths read the **same JSON schema** — `playwright-cli state-save` and 
 
 - Sessions generally persist for days to weeks depending on the env's cookie TTL.
 - When an agent run hits "unauthenticated", re-run the sign-in + capture flow. MetaMask is only needed to re-mint the cookie.
-- Clearing `.local-auth/chrome-profile/` wipes MetaMask — you'd have to re-import the seed phrase.
+- Clearing `~/.playwright-profiles/cogni-wallet-auth/` wipes MetaMask — you'd have to re-import the seed phrase.
 
 ## Troubleshooting
 
-- **`curl localhost:9222` refused but Chrome is running:** you pointed `--user-data-dir` at the default profile. Chrome 136+ blocks CDP there. Use `.local-auth/chrome-profile/` as shown.
+- **`curl localhost:9222` refused but Chrome is running:** you pointed `--user-data-dir` at the default Chrome profile. Chrome 136+ blocks CDP there. Use `~/.playwright-profiles/cogni-wallet-auth/` as shown.
+- **Chrome opens but MetaMask is missing:** you launched the obsolete worktree-local `.local-auth/chrome-profile`. Quit only that debug-profile Chrome instance and relaunch with `~/.playwright-profiles/cogni-wallet-auth`; verify `chrome-extension://nkbihfbeogaeaoehlefnkodbefgpgknn` appears in `http://localhost:9222/json/list`.
 - **Still refused with dedicated profile:** another Chrome instance is holding the profile lock. Run `pgrep -lf "Google Chrome"`, kill stragglers, retry.
 - **MetaMask popup doesn't appear on signin:** unlock the extension (click the fox icon, enter password). Extensions stay locked across Chrome restarts.
+- **The recorded password is rejected:** do not recreate the Chrome profile. Use MetaMask's **Forgot password / Restore Vault** flow with the 12-word recovery phrase in `.local-auth/credentials.md`, set a new password, and immediately update the recorded password. Restoring the vault preserves the deterministic test wallet while reinstalling or creating a wallet can silently change the candidate identity.
 - **Captured state has no cookies for the expected domain:** you signed in before the capture script could see the tab. Make sure the tab is still open at the target URL when you run the script.
 - **Playwright runs but site redirects to signin:** cookie expired — recapture. _Or:_ the site stores auth in `localStorage` rather than cookies, and CDP-attach export reports `origins: 0`. In that case the captured `storageState.json` is insufficient; a dedicated Playwright authfile step (using `browser.newContext({ storageState })` against a Playwright-launched browser + manual signin inside Playwright) may be needed. Tracked as a known gap — update this guide when resolved.
 
@@ -155,7 +159,7 @@ When you're finished capturing state:
 Notes:
 
 - The macOS "default browser" setting is **app-level**, not profile-level. If macOS prompted "Make Chrome your default browser" when the debug profile launched, nothing meaningful changed — Chrome-the-app is still the default either way.
-- You **can run both at once**: the debug profile and your normal profile coexist as separate Chrome processes because they point at different `--user-data-dir`s. Launch one with the debug flag + `.local-auth/chrome-profile/`, open the other from the Dock. The only conflict is two processes sharing one profile dir (Chrome refuses that with a lock-file error). When both are running, macOS may open new-window link clicks in whichever Chrome launched most recently — keep that in mind while automating.
+- You **can run both at once**: the debug profile and your normal profile coexist as separate Chrome processes because they point at different `--user-data-dir`s. Launch one with the debug flag + `~/.playwright-profiles/cogni-wallet-auth/`, open the other from the Dock. The only conflict is two processes sharing one profile dir (Chrome refuses that with a lock-file error). When both are running, macOS may open new-window link clicks in whichever Chrome launched most recently — keep that in mind while automating.
 
 ## Scope / non-goals
 

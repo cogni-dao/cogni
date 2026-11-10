@@ -19,6 +19,7 @@ type StatusView = NonNullable<NodeTileView["status"]>;
 
 export interface NodeTileViewOptions {
   readonly href?: string | undefined;
+  readonly prefetch?: boolean | undefined;
   readonly external?: boolean | undefined;
   readonly status?: StatusView | null | undefined;
   readonly density?: NodeTileView["density"] | undefined;
@@ -40,6 +41,7 @@ export function nodeSummaryToTileView(
   return {
     title: node.title,
     href: options.href ?? node.href,
+    ...(options.prefetch !== undefined && { prefetch: options.prefetch }),
     ...(tagline !== undefined && { tagline }),
     ...(node.icon !== undefined && { icon: node.icon }),
     ...(node.thumbnailUrl !== undefined && { thumbnailUrl: node.thumbnailUrl }),
