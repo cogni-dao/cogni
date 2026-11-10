@@ -81,7 +81,7 @@ replacements:
 images:
   - name: ghcr.io/cogni-dao/cogni-template
     newName: ghcr.io/cogni-dao/cogni-template
-    digest: "sha256:9d3593161ac39d050311c6bd983f3898c594f2d0e1cd52dfad93550c5af5b40c"
+    digest: "sha256:c29064159e5a109f3767fc6347e5931db0044d4d60a165e9d2c7d2859a7b0b5f"
 patches:
   - target:
       kind: ExternalSecret
