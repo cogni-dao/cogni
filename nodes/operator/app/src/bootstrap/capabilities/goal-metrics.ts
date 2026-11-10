@@ -5,7 +5,7 @@
  * Module: `@bootstrap/capabilities/goal-metrics`
  * Purpose: Operator composition of the published @cogni-dao/metrics 0.6.0 goal-metric service.
  * Scope: Binds this node's id and registers the operator's node-local calculators: delivery
- *   (`deploy.serving-drift@1`, `deploy.release-success@1`, `deploy.lead-time@1`, task.5442) over the
+ *   (`deploy.serving-drift@1`, `deploy.release-success@1`, `deploy.first-try@1`, `deploy.lead-time@1`, task.5442, bug.5617) over the
  *   node-deploy release store, fleet uptime (`fleet.lanes-down@1`, `fleet.substrate-reach@1`,
  *   `fleet.uptime@1`, task.5457) over the same lane probes and the stored lanes-down readings, and PR review (`review.merge-coverage@1`, `review.fail-fix-rate@1`,
  *   task.5450) over the review App's check runs on the parent repo. Package calculators, budgets

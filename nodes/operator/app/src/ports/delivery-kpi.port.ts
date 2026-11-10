@@ -46,6 +46,17 @@ export interface DeliveryReleaseFacts {
   readonly parkStepSeen: boolean;
   /** The workload's desired row still points at this release. */
   readonly current: boolean;
+  /**
+   * Attempt number (per-release ordinal, from 1) of the earliest attempt that activated: its
+   * `activated_at` is set or its steps hold `activated/ok`. Undefined = no attempt ever activated.
+   */
+  readonly firstActivatedAttempt: number | undefined;
+  /**
+   * An attempt that came BEFORE the first activation (or any attempt, when none activated) failed: an
+   * `attempt_failed` step (`failed|closing`), phase `failed|closing|lost`, or a set `parked_at`. A failure
+   * after the release first served (a lost lease, a retired blue) does not count.
+   */
+  readonly failedBeforeActivation: boolean;
 }
 
 /** One public lane: a running desired row whose release exposes an http host. */
