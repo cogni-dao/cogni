@@ -110,6 +110,7 @@ services/*/dist
 
 # Claude Code worktrees
 .claude/worktrees/
+.claude/scheduled_tasks.lock
 
 .local/
 
