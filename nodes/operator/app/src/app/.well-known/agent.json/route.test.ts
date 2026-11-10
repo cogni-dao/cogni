@@ -127,5 +127,37 @@ describe("GET /.well-known/agent.json", () => {
 
     // Creating is a first-class step of the loop, not an undocumented aside.
     expect(body.process.requiredLoop).toContain("adopt_or_create_work_item");
+
+    // story.0023: a PATCH may say why, and the reason is readable back from history.
+    expect(body.actions.updateWorkItem.inputSchema.properties).toHaveProperty(
+      "reason"
+    );
+  });
+
+  it("publishes the change-history read actions from the package operations (story.0023)", async () => {
+    const { GET } = await import("./route");
+    const response = await GET(
+      new Request("http://0.0.0.0:3000/.well-known/agent.json", {
+        headers: {
+          "x-forwarded-host": "operator.example",
+          "x-forwarded-proto": "https",
+        },
+      })
+    );
+    const body = await response.json();
+
+    expect(body.actions.getWorkItemHistory).toMatchObject({
+      method: "GET",
+      endpoint: "https://operator.example/api/v1/work/items/{id}/history",
+      auth: { type: "bearer" },
+    });
+    expect(body.actions.getKnowledgeHistory).toMatchObject({
+      method: "GET",
+      endpoint: "https://operator.example/api/v1/knowledge/{id}/history",
+      auth: { type: "bearer" },
+    });
+    expect(body.actions.getWorkItemHistory.outputSchema).toHaveProperty(
+      "properties"
+    );
   });
 });

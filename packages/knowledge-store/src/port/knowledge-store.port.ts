@@ -17,7 +17,10 @@
  * @public
  */
 
-import type { DomainPatch } from "@cogni/shared-knowledge-store";
+import type {
+  DomainPatch,
+  KnowledgeHistoryEntry,
+} from "@cogni/shared-knowledge-store";
 
 export {
   DomainNotEmptyError,
@@ -380,4 +383,6 @@ export interface KnowledgeStorePort {
   log(limit?: number): Promise<DoltCommit[]>;
   diff(fromRef: string, toRef: string): Promise<DoltDiffEntry[]>;
   currentCommit(): Promise<string>;
+  /** Versions of one entry, newest first, with their change reasons (story.0023). */
+  history?(id: string): Promise<KnowledgeHistoryEntry[]>;
 }
