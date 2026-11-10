@@ -6,11 +6,24 @@
  * Purpose: Client-side work dashboard composing the published work board
  *          capability (`@cogni/knowledge-base-ui`) and the ReUI DataGrid over
  *          one TanStack filter, sort, search and detail-navigation model.
- * Scope: Route composition. Fetches data via React Query and maps table state
- *        to URL params; board controls, columns and cards come from the package.
+ * Scope: Route composition. Fetches bounded pages through the package hooks and
+ *        maps table state to URL params; board controls, columns and cards come
+ *        from the package.
  * Invariants:
  *   - BOARD_FROM_PACKAGE — board mode renders only `WorkBoardToolbar` and
- *     `WorkBoardView` from `@cogni/knowledge-base-ui` (task.0044).
+ *     `WorkBoardView` from `@cogni/knowledge-base-ui` (task.0044), fed by the
+ *     package's `useWorkBoard` (task.0056).
+ *   - BOUNDED_BOARD_READS — the page never downloads the backlog. Board mode
+ *     makes one `/api/v1/work/board` request (<=20 summaries per visible status
+ *     column) and one `/api/v1/work/summaries` request per column "Load more";
+ *     table mode requests one cursor page through `useWorkTablePage`. No client
+ *     code walks cursors (task.0056).
+ *   - PACKAGE_QUERY_MAPPING — requests are built by the package
+ *     (`workBoardTableStateToQuery` + the shared codec): unsupported sort fields
+ *     are dropped and page sizes clamp to 100. Only the table's page position
+ *     (cursor + previous-page stack) stays here, in component state.
+ *   - SERVER_ROW_MODEL — filters, sort and search are applied by the server
+ *     (manual sorting/filtering/pagination); the table renders one page.
  *   - HEADER_OWNS_SORT_AND_FILTER — sort + per-column facet filter live in the
  *     package column headers and board filter bar.
  *   - SINGLE_COLUMNS_TOGGLE — table visibility lives in one toolbar button
@@ -18,8 +31,8 @@
  *   - URL_DRIVEN_STATE — filters / sort / search / rank range / view / board
  *     columns persist in URL params (see `_lib/workItemNavigation.ts`).
  *   - TABLE_IS_DEFAULT — only `view=board` selects the board.
- *   - CONTRACTS_ARE_TRUTH — types derived from `WorkItemDto`.
- * Side-effects: IO (fetches from /api/v1/work/items)
+ *   - CONTRACTS_ARE_TRUTH — list types derived from `WorkItemSummary`.
+ * Side-effects: IO (fetches the board, summary pages and full item detail)
  * Links: [WorkPage](./page.tsx), [fetchWorkItems](./_api/fetchWorkItems.ts)
  * @public
  */
@@ -28,19 +41,25 @@
 
 import {
   createWorkItemColumns,
+  useWorkBoard,
+  useWorkTablePage,
+  WORK_TABLE_PAGE_DEFAULT,
+  WORK_TABLE_PAGE_SIZES,
   type WorkBoardGoalLink,
   WorkBoardToolbar,
   WorkBoardView,
   type WorkTableMeta,
+  workBoardTableStateToQuery,
   workItemGlobalFilterFn,
+  workPageStackNext,
+  workPageStackPrevious,
 } from "@cogni/knowledge-base-ui";
-import type { WorkItemDto } from "@cogni/node-contracts";
+import type { WorkItemSummary } from "@cogni/node-contracts";
 import {
   DataGrid,
   DataGridContainer,
 } from "@cogni/node-ui-kit/reui/data-grid/data-grid";
 import { DataGridColumnVisibility } from "@cogni/node-ui-kit/reui/data-grid/data-grid-column-visibility";
-import { DataGridPagination } from "@cogni/node-ui-kit/reui/data-grid/data-grid-pagination";
 import { DataGridTable } from "@cogni/node-ui-kit/reui/data-grid/data-grid-table";
 import { useIsMobile } from "@cogni/node-ui-kit/util/use-is-mobile";
 import { useQuery } from "@tanstack/react-query";
@@ -50,9 +69,6 @@ import {
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
-  getFilteredRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
   type SortingState,
   useReactTable,
   type VisibilityState,
@@ -61,9 +77,20 @@ import { Columns3, List, Settings2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button } from "@/components";
+import {
+  Button,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components";
 
-import { fetchWorkItem, fetchWorkItems } from "./_api/fetchWorkItems";
+import {
+  fetchWorkBoard,
+  fetchWorkItem,
+  fetchWorkItems,
+} from "./_api/fetchWorkItems";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
 import {
   closeWorkItemPermalink,
@@ -74,7 +101,7 @@ import {
   writeWorkListState,
 } from "./_lib/workItemNavigation";
 
-const columns = createWorkItemColumns<WorkItemDto>();
+const columns = createWorkItemColumns<WorkItemSummary>();
 
 // bug.0006: phones show Item (title + id) and Status; the Columns toggle can
 // still reveal the rest. Explicit user choices win over this default.
@@ -105,13 +132,6 @@ export function WorkDashboardView({
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
 
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["work-items"],
-    queryFn: fetchWorkItems,
-    staleTime: 30_000,
-  });
-
-  const items = data?.items ?? [];
   const boardView = searchParams.get("view") === "board";
   const visibleStatuses = useMemo(
     () => readBoardColumns(searchParams),
@@ -120,7 +140,7 @@ export function WorkDashboardView({
 
   const selectedItemQuery = useQuery({
     queryKey: ["work-item", selectedItemId],
-    queryFn: () => fetchWorkItem(selectedItemId as string),
+    queryFn: ({ signal }) => fetchWorkItem(selectedItemId as string, signal),
     enabled: selectedItemId !== undefined,
     retry: false,
     staleTime: 30_000,
@@ -134,6 +154,64 @@ export function WorkDashboardView({
   );
   const [globalFilter, setGlobalFilter] = useState(searchParams.get("q") ?? "");
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+
+  // PACKAGE_QUERY_MAPPING: board and table requests come from the package's
+  // table-state mapping and codec, built from the committed URL state.
+  const committedQuery = searchParams.get("q") ?? "";
+  const committedFilters = useMemo(
+    () => readWorkFilters(searchParams),
+    [searchParams]
+  );
+  const committedSorting = useMemo(
+    () => readWorkSorting(searchParams),
+    [searchParams]
+  );
+  const filterQuery = useMemo(
+    () =>
+      workBoardTableStateToQuery({
+        sorting: committedSorting,
+        columnFilters: committedFilters,
+        globalFilter: committedQuery,
+      }),
+    [committedFilters, committedSorting, committedQuery]
+  );
+
+  // Table page position: one cursor plus a bounded previous-page stack, reset
+  // whenever the listing (filters, sort, search or page size) changes.
+  const [pageSize, setPageSize] = useState<number>(WORK_TABLE_PAGE_DEFAULT);
+  const listingKey = JSON.stringify([filterQuery, pageSize]);
+  const [pagePosition, setPagePosition] = useState({
+    key: listingKey,
+    cursor: "",
+    stack: [] as string[],
+  });
+  const position =
+    pagePosition.key === listingKey
+      ? pagePosition
+      : { key: listingKey, cursor: "", stack: [] as string[] };
+  const tablePage = useWorkTablePage({
+    query: filterQuery,
+    pageSize,
+    cursor: position.cursor,
+    fetchPage: fetchWorkItems,
+    enabled: !boardView,
+  });
+  // Board reads share the table's filters and sort, never its page window.
+  const board = useWorkBoard({
+    query: filterQuery,
+    statuses: boardView ? visibleStatuses : [],
+    fetchBoard: fetchWorkBoard,
+    fetchPage: fetchWorkItems,
+  });
+  const isLoading = boardView ? board.isLoading : tablePage.isLoading;
+  const error = boardView ? board.error : tablePage.error;
+  const items = (
+    boardView ? board.items : tablePage.items
+  ) as WorkItemSummary[];
+  const tableEmptyMessage = tablePage.nextCursor
+    ? "No matches on this page yet. Next continues the search."
+    : "No work items found.";
+
   const tableColumnVisibility = useMemo(
     () =>
       isMobile
@@ -172,7 +250,7 @@ export function WorkDashboardView({
   );
 
   const openItem = useCallback(
-    (item: WorkItemDto) => {
+    (item: WorkItemSummary) => {
       openWorkItemPermalink(router, item.id, searchParams);
     },
     [router, searchParams]
@@ -193,6 +271,7 @@ export function WorkDashboardView({
   );
 
   const table = useReactTable({
+    getRowId: (item) => item.id,
     data: items,
     columns,
     meta: { isLoading } satisfies WorkTableMeta,
@@ -219,17 +298,34 @@ export function WorkDashboardView({
     },
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    // SERVER_ROW_MODEL: the server filters, sorts and pages; rows are one page.
+    manualSorting: true,
+    manualFiltering: true,
+    manualPagination: true,
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),
-    // The board shows every filtered, sorted item; only the table paginates.
-    manualPagination: boardView,
     globalFilterFn: workItemGlobalFilterFn,
   });
 
   const rows = table.getRowModel().rows;
+
+  const changePage = (action: "next" | "previous" | "restart") => {
+    if (action === "next") {
+      // An empty capped page still carries a cursor: Next continues the search.
+      if (!tablePage.nextCursor) return;
+      setPagePosition({
+        key: listingKey,
+        cursor: tablePage.nextCursor,
+        stack: workPageStackNext(position.stack, position.cursor),
+      });
+    } else if (action === "previous") {
+      const previous = workPageStackPrevious(position.stack);
+      if (!previous) return;
+      setPagePosition({ key: listingKey, ...previous });
+    } else {
+      setPagePosition({ key: listingKey, cursor: "", stack: [] });
+    }
+  };
 
   const [focusedRowIndex, setFocusedRowIndex] = useState(-1);
 
@@ -334,26 +430,31 @@ export function WorkDashboardView({
         )}
       </WorkBoardToolbar>
 
-      {error && (
+      {error != null && (
         <p className="py-8 text-center text-destructive">
           Failed to load work items.
         </p>
       )}
 
-      {!error && boardView && (
+      {boardView && board.pageError != null && (
+        <p className="text-destructive text-sm">Failed to load more items.</p>
+      )}
+
+      {error == null && boardView && (
         <WorkBoardView
           table={table}
-          visibleStatuses={visibleStatuses}
+          columns={board.columns}
           isLoading={isLoading}
           onOpenItem={openItem}
+          onLoadMore={board.loadMore}
           renderGoalLink={WorkGoalLink}
         />
       )}
 
-      {!error && !boardView && (
+      {error == null && !boardView && (
         <DataGrid
           table={table}
-          recordCount={table.getFilteredRowModel().rows.length}
+          recordCount={items.length}
           isLoading={isLoading}
           loadingMode="skeleton"
           onRowClick={openItem}
@@ -368,13 +469,70 @@ export function WorkDashboardView({
           tableClassNames={{
             bodyRow: "cursor-pointer",
           }}
-          emptyMessage="No work items found."
+          emptyMessage={tableEmptyMessage}
         >
           <DataGridContainer className="overflow-x-auto">
             <DataGridTable />
           </DataGridContainer>
-          <DataGridPagination sizes={[25, 50, 100]} />
         </DataGrid>
+      )}
+
+      {error == null && (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+          {boardView ? (
+            <span>
+              {items.length} cards loaded
+              {board.columns.some((column) => column.hasMore)
+                ? " · more in columns marked +"
+                : ""}
+            </span>
+          ) : (
+            <>
+              <span>{items.length} items on this page</span>
+              <div className="flex flex-wrap gap-2">
+                <Select
+                  value={String(tablePage.pageSize)}
+                  onValueChange={(value) => setPageSize(Number(value))}
+                >
+                  <SelectTrigger aria-label="Items per page" className="w-20">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {WORK_TABLE_PAGE_SIZES.map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => changePage("restart")}
+                  disabled={!position.cursor}
+                >
+                  Restart
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => changePage("previous")}
+                  disabled={position.stack.length === 0}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => changePage("next")}
+                  disabled={!tablePage.nextCursor}
+                >
+                  Next
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
       )}
 
       <WorkItemDetail

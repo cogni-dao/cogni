@@ -3,19 +3,20 @@
 
 /**
  * Module: `@app/api/v1/metrics/[id]/history`
- * Purpose: Ranged metric history in aligned half-open buckets.
- * Scope: Auth + delegation to the goal-metrics facade; contracts come from @cogni-dao/metrics.
+ * Purpose: Ranged metric history buckets, same authorization as metric read.
+ * Scope: Auth and logging here; parsing, contract validation and error mapping are the published `@cogni-dao/metrics/http` handler, bound in the metrics facade.
  * Invariants: AUTH_VIA_GETSESSIONUSER (bearer agent key or session cookie); responses are no-store.
  * Side-effects: IO (metric service reads/writes)
- * Links: app/_facades/metrics/goal-metrics.server.ts, story.0021
+ * Links: app/_facades/metrics.server.ts, story.0021
  * @public
  */
 
 import { NextResponse } from "next/server";
 import {
-  metricHistory,
+  metricHandlers,
   metricHttpError,
-} from "@/app/_facades/metrics/goal-metrics.server";
+  metricResponse,
+} from "@/app/_facades/metrics.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
@@ -35,9 +36,9 @@ export const GET = wrapRouteHandlerWithLogging<{
     try {
       if (!context) throw new Error("route_context_missing");
       const { id } = await context.params;
-      const response = await metricHistory(id, request);
-      response.headers.set("Cache-Control", "no-store");
-      return response;
+      return metricResponse(
+        await metricHandlers().history(id, new URL(request.url).searchParams)
+      );
     } catch (error) {
       return metricHttpError(error);
     }

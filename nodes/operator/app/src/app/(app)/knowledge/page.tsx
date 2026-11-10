@@ -23,7 +23,7 @@
 import { GoalsProgressSchema } from "@cogni-dao/metrics/contracts";
 import { redirect } from "next/navigation";
 
-import { loadGoalsProgress } from "@/app/_facades/metrics/goal-metrics.server";
+import { loadGoalsProgress } from "@/app/_facades/metrics.server";
 import { getContainer } from "@/bootstrap/container";
 import { getServerSessionUser } from "@/lib/auth/server";
 import {

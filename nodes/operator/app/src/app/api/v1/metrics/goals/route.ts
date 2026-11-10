@@ -4,18 +4,19 @@
 /**
  * Module: `@app/api/v1/metrics/goals`
  * Purpose: Read this node's goals with their KPI cards and hypotheses (the Goals view read model).
- * Scope: Auth + delegation to the goal-metrics facade; contracts come from @cogni-dao/metrics.
+ * Scope: Auth and logging here; the read, contract validation and error mapping are the published `@cogni-dao/metrics/http` handler, bound in the metrics facade.
  * Invariants: AUTH_VIA_GETSESSIONUSER (bearer agent key or session cookie); responses are no-store.
  * Side-effects: IO (metric service reads/writes)
- * Links: app/_facades/metrics/goal-metrics.server.ts, story.0021
+ * Links: app/_facades/metrics.server.ts, story.0021
  * @public
  */
 
 import { NextResponse } from "next/server";
 import {
-  loadGoalsProgress,
+  metricHandlers,
   metricHttpError,
-} from "@/app/_facades/metrics/goal-metrics.server";
+  metricResponse,
+} from "@/app/_facades/metrics.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { EVENT_NAMES } from "@/shared/observability";
@@ -29,26 +30,27 @@ export const GET = wrapRouteHandlerWithLogging(
     if (!user)
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     try {
-      const data = await loadGoalsProgress();
-      // App-local event: ctx.log directly (logEvent types only the shared EventName).
-      ctx.log.info(
-        {
-          event: EVENT_NAMES.GOALS_PROGRESS_READ,
-          reqId: ctx.reqId,
-          routeId: ctx.routeId,
-          goalCount: data.goals.length,
-          metricCount: data.goals.reduce((n, g) => n + g.kpis.length, 0),
-          hypothesisCount: data.goals.reduce(
-            (n, g) => n + g.hypotheses.length,
-            0
-          ),
-          outcome: "success",
-        },
-        EVENT_NAMES.GOALS_PROGRESS_READ
-      );
-      return NextResponse.json(data, {
-        headers: { "Cache-Control": "no-store" },
-      });
+      const result = await metricHandlers().goals();
+      if (result.ok) {
+        const data = result.body;
+        // App-local event: ctx.log directly (logEvent types only the shared EventName).
+        ctx.log.info(
+          {
+            event: EVENT_NAMES.GOALS_PROGRESS_READ,
+            reqId: ctx.reqId,
+            routeId: ctx.routeId,
+            goalCount: data.goals.length,
+            metricCount: data.goals.reduce((n, g) => n + g.kpis.length, 0),
+            hypothesisCount: data.goals.reduce(
+              (n, g) => n + g.hypotheses.length,
+              0
+            ),
+            outcome: "success",
+          },
+          EVENT_NAMES.GOALS_PROGRESS_READ
+        );
+      }
+      return metricResponse(result);
     } catch (error) {
       return metricHttpError(error);
     }

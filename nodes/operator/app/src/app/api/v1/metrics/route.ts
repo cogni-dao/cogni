@@ -2,21 +2,21 @@
 // SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
- * Module: `@app/api/v1/metrics`
+ * Module: `@app/api/v1/metrics/metrics`
  * Purpose: List metric definitions with their latest attempt (cursor-paged).
- * Scope: Auth + delegation to the goal-metrics facade; contracts come from @cogni-dao/metrics.
+ * Scope: Auth and logging here; parsing, contract validation and error mapping are the published `@cogni-dao/metrics/http` handler, bound in the metrics facade.
  * Invariants: AUTH_VIA_GETSESSIONUSER (bearer agent key or session cookie); responses are no-store.
  * Side-effects: IO (metric service reads/writes)
- * Links: app/_facades/metrics/goal-metrics.server.ts, story.0021
+ * Links: app/_facades/metrics.server.ts, story.0021
  * @public
  */
 
-import { MetricListInputSchema } from "@cogni-dao/metrics/contracts";
 import { NextResponse } from "next/server";
 import {
+  metricHandlers,
   metricHttpError,
-  metricList,
-} from "@/app/_facades/metrics/goal-metrics.server";
+  metricResponse,
+} from "@/app/_facades/metrics.server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
@@ -28,17 +28,10 @@ export const GET = wrapRouteHandlerWithLogging(
   async (_ctx, request, user) => {
     if (!user)
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    const query = new URL(request.url).searchParams;
-    const input = MetricListInputSchema.safeParse({
-      ...(query.has("limit") ? { limit: Number(query.get("limit")) } : {}),
-      ...(query.has("after") ? { after: query.get("after") } : {}),
-    });
-    if (!input.success)
-      return NextResponse.json({ error: "invalid_input" }, { status: 400 });
     try {
-      const response = await metricList(input.data);
-      response.headers.set("Cache-Control", "no-store");
-      return response;
+      return metricResponse(
+        await metricHandlers().list(new URL(request.url).searchParams)
+      );
     } catch (error) {
       return metricHttpError(error);
     }
