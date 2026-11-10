@@ -203,7 +203,10 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
       );
     }
 
-    const result = await this.fetch<PrometheusInstantResult>(url);
+    const result = await this.fetch<PrometheusInstantResult>(
+      url,
+      params.signal
+    );
     return result;
   }
 
@@ -563,7 +566,7 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
   /**
    * Internal fetch with auth, timeout, and error handling.
    */
-  private async fetch<T>(url: URL): Promise<T> {
+  private async fetch<T>(url: URL, signal?: AbortSignal): Promise<T> {
     const authHeader =
       "bearerToken" in this.config
         ? `Bearer ${this.config.bearerToken}`
@@ -583,7 +586,9 @@ export class MimirMetricsAdapter implements MetricsQueryPort {
           Authorization: authHeader,
           Accept: "application/json",
         },
-        signal: controller.signal,
+        signal: signal
+          ? AbortSignal.any([controller.signal, signal])
+          : controller.signal,
       });
 
       if (!response.ok) {
