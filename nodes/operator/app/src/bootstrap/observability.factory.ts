@@ -16,12 +16,17 @@
 
 import { createHash } from "node:crypto";
 import {
+  createGrafanaMimirAdapter,
   HttpLangfuseOwnershipVerifier,
   HttpLangfuseReader,
   HttpLangfuseRootOwnershipVerifier,
   HttpLokiReader,
 } from "@/adapters/server";
-import type { LangfuseReaderPort, LokiReaderPort } from "@/ports";
+import type {
+  LangfuseReaderPort,
+  LokiReaderPort,
+  MetricsQueryPort,
+} from "@/ports";
 import { getNodeId } from "@/shared/config/repoSpec.server";
 import { serverEnv } from "@/shared/env";
 import { TokenBucketRateLimiter } from "./http/rateLimiter";
@@ -36,6 +41,36 @@ export function createLokiReader(): LokiReaderPort | null {
     grafanaUrl: env.GRAFANA_URL,
     token: env.GRAFANA_SERVICE_ACCOUNT_TOKEN,
   });
+}
+
+/**
+ * The operator's Mimir (Prometheus) instant reader for the substrate host-pressure goal calculator (bug.5613),
+ * or null when `GRAFANA_URL`/`GRAFANA_SERVICE_ACCOUNT_TOKEN` are unset. It reads through the governed Grafana
+ * datasource proxy (`createGrafanaMimirAdapter`). Datasource discovery runs on first use, not at boot, and a failed
+ * discovery is retried on the next read, so a Grafana outage at startup cannot pin the reader broken.
+ */
+export function createGoalPrometheusReader(): Pick<
+  MetricsQueryPort,
+  "queryInstant"
+> | null {
+  const env = serverEnv();
+  const { GRAFANA_URL: grafanaUrl, GRAFANA_SERVICE_ACCOUNT_TOKEN: token } = env;
+  if (!grafanaUrl || !token) {
+    return null;
+  }
+  let adapter: ReturnType<typeof createGrafanaMimirAdapter> | undefined;
+  const get = () => {
+    adapter ??= createGrafanaMimirAdapter({
+      grafanaUrl,
+      bearerToken: token,
+      timeoutMs: 10_000,
+    }).catch((error: unknown) => {
+      adapter = undefined;
+      throw error;
+    });
+    return adapter;
+  };
+  return { queryInstant: async (params) => (await get()).queryInstant(params) };
 }
 
 /** Langfuse Cloud default — the writer (LangfuseAdapter/SDK) falls back here when LANGFUSE_BASE_URL is unset. */

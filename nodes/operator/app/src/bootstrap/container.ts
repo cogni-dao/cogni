@@ -198,6 +198,7 @@ import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { startCatalogRegistryReconcileOnBoot } from "@/bootstrap/catalog-registry-reconcile";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
+import { createGoalPrometheusReader } from "@/bootstrap/observability.factory";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import {
   startGovernanceSyncOnBoot,
@@ -967,6 +968,8 @@ function createContainer(): Container {
         appId: env.GH_REVIEW_APP_ID,
         privateKeyBase64: env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
       },
+      // Substrate host pressure (bug.5613): the operator Grafana read credential, or null when unwired.
+      prometheus: createGoalPrometheusReader(),
       environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
       // Compute receipts and skipped invalid definitions must reach Loki.
       log: (event) => log.info(event, "metric.event"),
