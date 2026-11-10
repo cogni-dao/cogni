@@ -25,13 +25,13 @@
 import {
   type DeepChecks,
   DeepProbeFailure,
-  findUnclassifiedSubstrateKeys as pkgFindUnclassifiedSubstrateKeys,
   type ProbeDependency as PkgProbeDependency,
+  type SubstrateDependency as PkgSubstrateDependency,
+  findUnclassifiedSubstrateKeys as pkgFindUnclassifiedSubstrateKeys,
+  runDeepChecks as pkgRunDeepChecks,
   probeKnowledgePlane,
   probeLiteLlmGateway,
   probeRedisStream,
-  runDeepChecks as pkgRunDeepChecks,
-  type SubstrateDependency as PkgSubstrateDependency,
   SUBSTRATE_ENV_KEY_PATTERN,
 } from "@cogni/substrate-health";
 import type { getContainer } from "@/bootstrap/container";
@@ -58,7 +58,8 @@ const DOLTGRES_READYZ_PROBE_ID = "readyz-probe-knowledge-reach";
 /** A fixed run-stream key; `XLEN` of a missing key is 0. */
 const REDIS_READYZ_PROBE_KEY = "readyz:probe";
 
-const wrapInfra = (message: string): Error => new InfraConnectivityError(message);
+const wrapInfra = (message: string): Error =>
+  new InfraConnectivityError(message);
 
 /** Dependencies a deep 503 can name in `unreachable` (the operator's probe-name union). */
 export type DeepDependency =
@@ -91,9 +92,13 @@ async function checkEvmRpc(
   container: Container,
   env: Env
 ): Promise<void> {
-  const result = await checkEvmRpcConnectivity(container.evmOnchainClient, env, {
-    forceLive: true,
-  });
+  const result = await checkEvmRpcConnectivity(
+    container.evmOnchainClient,
+    env,
+    {
+      forceLive: true,
+    }
+  );
   if (!result.ok) {
     const message = `EVM RPC connectivity check failed: ${result.errorMessage ?? "unknown"}`;
     ctx.log.error(
@@ -235,7 +240,10 @@ export const SUBSTRATE_DEPENDENCIES: readonly SubstrateDependency[] = [
     dependency: "litellm-gateway",
     envKeys: ["LITELLM_BASE_URL"],
     isDeclared: always,
-    readyz: { kind: "probe", run: (_ctx, _container, env) => checkLiteLlm(env) },
+    readyz: {
+      kind: "probe",
+      run: (_ctx, _container, env) => checkLiteLlm(env),
+    },
   },
   {
     dependency: "doltgres",

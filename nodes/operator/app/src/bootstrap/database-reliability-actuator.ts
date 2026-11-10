@@ -15,8 +15,8 @@ import { timingSafeEqual } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { ReliabilityStatusV1 } from "@cogni/node-contracts";
-import pino from "pino";
 import { readDeepReadiness } from "@cogni/substrate-health";
+import pino from "pino";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import {

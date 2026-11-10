@@ -98,8 +98,7 @@ function source(input: {
     probe: async ({ host, path }: { host: string; path: string }) => {
       probes.push(`${host}${path}`);
       if (host === CONTROL) return input.control ?? ok();
-      if (path.startsWith("/readyz"))
-        return input.ready?.[host] ?? ok();
+      if (path.startsWith("/readyz")) return input.ready?.[host] ?? ok();
       return ok({ buildSha: SHA_A });
     },
   };
@@ -277,7 +276,10 @@ describe(LANES_DOWN_ID, () => {
       source({
         lanes: [lane("a"), lane("b"), lane("c")],
         ready: {
-          "b.cognidao.org": status(503, { status: "error", unreachable: ["postgres"] }),
+          "b.cognidao.org": status(503, {
+            status: "error",
+            unreachable: ["postgres"],
+          }),
           "c.cognidao.org": timeout,
         },
       })
@@ -420,7 +422,10 @@ describe("classifyReach", () => {
     expect(classifyReach(r, "redis")).toBe("reached");
     expect(classifyReach(r, "scheduler-worker")).toBe("unreached");
     expect(classifyReach(r, "doltgres")).toBe("na");
-    const healthy = status(200, { status: "healthy", checks: { postgres: ok3 } });
+    const healthy = status(200, {
+      status: "healthy",
+      checks: { postgres: ok3 },
+    });
     expect(classifyReach(healthy, "postgres")).toBe("reached");
     expect(classifyReach(healthy, "litellm-gateway")).toBe("na");
   });
@@ -436,7 +441,10 @@ describe("classifyReach", () => {
       expect(classifyReach(ok(), dep)).toBe("unknown");
   });
   it("a 503 without checks only proves the names it lists as unreached", () => {
-    const r = status(503, { status: "error", unreachable: ["temporal", "postgres"] });
+    const r = status(503, {
+      status: "error",
+      unreachable: ["temporal", "postgres"],
+    });
     expect(classifyReach(r, "postgres")).toBe("unreached");
     expect(classifyReach(r, "temporal")).toBe("unreached");
     expect(classifyReach(r, "scheduler-worker")).toBe("unknown");
@@ -445,10 +453,16 @@ describe("classifyReach", () => {
     expect(classifyReach(status(503, {}), "postgres")).toBe("unknown");
     expect(classifyReach(status(503, "not json"), "postgres")).toBe("unknown");
     expect(
-      classifyReach(status(503, { status: "error", unreachable: "postgres" }), "postgres")
+      classifyReach(
+        status(503, { status: "error", unreachable: "postgres" }),
+        "postgres"
+      )
     ).toBe("unknown");
     expect(
-      classifyReach(status(503, { status: "error", unreachable: [1, 2] }), "postgres")
+      classifyReach(
+        status(503, { status: "error", unreachable: [1, 2] }),
+        "postgres"
+      )
     ).toBe("unknown");
     expect(
       classifyReach(
@@ -457,7 +471,10 @@ describe("classifyReach", () => {
       )
     ).toBe("unknown");
     expect(
-      classifyReach(status(502, { status: "error", unreachable: ["postgres"] }), "postgres")
+      classifyReach(
+        status(502, { status: "error", unreachable: ["postgres"] }),
+        "postgres"
+      )
     ).toBe("unknown");
     expect(classifyReach(timeout, "postgres")).toBe("unknown");
   });
@@ -466,7 +483,10 @@ describe("classifyReach", () => {
 describe(SUBSTRATE_REACH_ID, () => {
   const lanes = [lane("a"), lane("b"), lane("c"), lane("d")];
   const ready = {
-    "b.cognidao.org": status(503, { status: "error", unreachable: ["postgres"] }),
+    "b.cognidao.org": status(503, {
+      status: "error",
+      unreachable: ["postgres"],
+    }),
     "c.cognidao.org": status(503, { error: "boom" }),
     "d.cognidao.org": timeout,
   };
@@ -523,7 +543,10 @@ describe(SUBSTRATE_REACH_ID, () => {
         source({
           lanes: seven,
           ready: {
-            "w0.cognidao.org": status(503, { status: "error", unreachable: ["evm-rpc"] }),
+            "w0.cognidao.org": status(503, {
+              status: "error",
+              unreachable: ["evm-rpc"],
+            }),
           },
         })
       ).calcs,

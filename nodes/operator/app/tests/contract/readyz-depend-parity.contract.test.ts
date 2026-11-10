@@ -18,8 +18,8 @@ import { DeepProbeFailure as PkgDeepProbeFailure } from "@cogni/substrate-health
 import { describe, expect, it } from "vitest";
 import {
   buildDeepChecks,
-  DeepProbeFailure as LocalDeepProbeFailure,
   findUnclassifiedSubstrateKeys,
+  DeepProbeFailure as LocalDeepProbeFailure,
   NON_SUBSTRATE_ALLOWLIST,
   SUBSTRATE_DEPENDENCIES,
   SUBSTRATE_ENV_KEY_PATTERN,

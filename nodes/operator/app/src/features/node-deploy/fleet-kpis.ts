@@ -43,11 +43,11 @@
  * @public
  */
 
+import { readDeepReadiness } from "@cogni/substrate-health";
 import type {
   MetricCalculator,
   MetricSample,
 } from "@cogni-dao/metrics/contracts";
-import { readDeepReadiness } from "@cogni/substrate-health";
 import { z } from "zod";
 import type {
   DeliveryProbeResult,

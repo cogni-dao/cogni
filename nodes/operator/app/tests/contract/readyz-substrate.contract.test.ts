@@ -389,7 +389,9 @@ describe("GET /readyz async substrate contract", () => {
     );
     mocks.verifySystemTenant.mockRejectedValue(new Error("pg down"));
     mocks.streamLength.mockRejectedValue(new Error("redis down"));
-    mocks.fetch.mockImplementation(async () => new Response("{}", { status: 502 }));
+    mocks.fetch.mockImplementation(
+      async () => new Response("{}", { status: 502 })
+    );
 
     const response = await GET(request("/readyz?deep=1"));
 
