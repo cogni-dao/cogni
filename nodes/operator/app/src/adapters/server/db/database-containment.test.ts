@@ -197,7 +197,7 @@ describe("PostgresDatabaseContainmentAdapter", () => {
     ]);
     const adapter = new PinoLokiDatabaseContainmentAuditAdapter(
       { info } as never,
-      { queryRange },
+      { queryRange, queryInstant: vi.fn() },
       "candidate-a"
     );
     await adapter.append({

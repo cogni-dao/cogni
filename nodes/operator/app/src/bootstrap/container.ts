@@ -198,7 +198,10 @@ import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { startCatalogRegistryReconcileOnBoot } from "@/bootstrap/catalog-registry-reconcile";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
-import { createGoalPrometheusReader } from "@/bootstrap/observability.factory";
+import {
+  createGoalPrometheusReader,
+  createLokiReader,
+} from "@/bootstrap/observability.factory";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import {
   startGovernanceSyncOnBoot,
@@ -970,6 +973,8 @@ function createContainer(): Container {
       },
       // Substrate host pressure (bug.5613): the operator Grafana read credential, or null when unwired.
       prometheus: createGoalPrometheusReader(),
+      // Fleet AI error rates (task.5468): the operator Grafana read credential, or null when unwired.
+      loki: createLokiReader(),
       environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
       // Compute receipts and skipped invalid definitions must reach Loki.
       log: (event) => log.info(event, "metric.event"),

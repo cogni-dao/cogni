@@ -3,16 +3,22 @@
 
 /**
  * Module: `@adapters/server/observability/loki-reader.adapter`
- * Purpose: HTTP adapter for `LokiReaderPort` — runs a Loki `query_range` against the Grafana Cloud
+ * Purpose: HTTP adapter for `LokiReaderPort` — runs a Loki `query_range` or instant `query` against the Grafana Cloud
  *   datasource-proxy with the operator's read token (same shape as `scripts/loki-query.sh`).
  * Scope: IO only. Credentials/URL are constructor inputs (no env loading here — bootstrap wires them).
- * Invariants: READ_ONLY (query_range); TOKEN_NEVER_LOGGED (no token in errors/logs).
+ * Invariants: READ_ONLY (query_range, query); TOKEN_NEVER_LOGGED (no token in errors/logs).
  * Side-effects: network (fetch to Grafana Cloud)
  * Links: src/ports/loki-reader.port.ts, src/bootstrap/observability.factory.ts
  * @public
  */
 
-import type { LokiLogLine, LokiQueryRange, LokiReaderPort } from "@/ports";
+import type {
+  LokiInstantQuery,
+  LokiInstantSample,
+  LokiLogLine,
+  LokiQueryRange,
+  LokiReaderPort,
+} from "@/ports";
 
 export class HttpLokiReader implements LokiReaderPort {
   private readonly base: string;
@@ -63,6 +69,49 @@ export class HttpLokiReader implements LokiReaderPort {
     lines.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
     return lines.slice(0, range.limit);
   }
+
+  async queryInstant(input: LokiInstantQuery): Promise<LokiInstantSample[]> {
+    const url = new URL(
+      `${this.base}/api/datasources/proxy/uid/${this.datasourceUid}/loki/api/v1/query`
+    );
+    url.searchParams.set("query", input.query);
+    if (input.timeNs) url.searchParams.set("time", input.timeNs);
+
+    const timeout = AbortSignal.timeout(15_000);
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${this.token}` },
+      signal: input.signal ? AbortSignal.any([input.signal, timeout]) : timeout,
+    });
+
+    if (!res.ok) {
+      const body = (await res.text().catch(() => "")).slice(0, 200);
+      throw new Error(`loki query failed: HTTP ${res.status} ${body}`);
+    }
+
+    const json = (await res.json()) as LokiInstantResponse;
+    if (json.data?.resultType !== "vector") {
+      throw new Error(
+        `loki query returned ${json.data?.resultType ?? "no"} result, expected vector`
+      );
+    }
+    const out: LokiInstantSample[] = [];
+    for (const r of json.data.result ?? []) {
+      const value = Number(r.value?.[1]);
+      if (!Number.isFinite(value)) continue;
+      out.push({ labels: r.metric ?? {}, value });
+    }
+    return out;
+  }
+}
+
+interface LokiInstantResponse {
+  readonly data?: {
+    readonly resultType?: string;
+    readonly result?: ReadonlyArray<{
+      readonly metric?: Record<string, string>;
+      readonly value?: readonly [number, string];
+    }>;
+  };
 }
 
 interface LokiQueryRangeResponse {
