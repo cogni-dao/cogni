@@ -10,6 +10,7 @@
  *   - EFFECT_TYPED: effect is `state_change`
  *   - MAY_ENQUEUE: when the base branch requires a merge queue the PR is enqueued
  *     (`enqueued: true`, no `sha`) rather than merged immediately; poll the PR to confirm.
+ *   - HEAD_SHA_PINNED: re-read CI immediately before merge and bind the merge request to that head.
  *   - Agent must verify CI green + approval before calling (enforced by prompt, not code)
  * Side-effects: IO (merges PR via VcsCapability)
  * Links: task.0242
@@ -92,11 +93,17 @@ export function createVcsMergePrImplementation(
 ): ToolImplementation<VcsMergePrInput, VcsMergePrOutput> {
   return {
     execute: async (input: VcsMergePrInput): Promise<VcsMergePrOutput> => {
+      const ci = await deps.vcsCapability.getCiStatus({
+        owner: input.owner,
+        repo: input.repo,
+        prNumber: input.prNumber,
+      });
       const result = await deps.vcsCapability.mergePr({
         owner: input.owner,
         repo: input.repo,
         prNumber: input.prNumber,
         method: input.method,
+        expectedHeadSha: ci.headSha,
       });
       // Normalize the capability's optional `enqueued` to the tool's required field.
       return {

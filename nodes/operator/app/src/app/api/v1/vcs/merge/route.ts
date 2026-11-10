@@ -37,6 +37,8 @@
  *     row), never the body (anti-spoof).
  *   - BRANCH_PROTECTION_IS_AUTHORITY: GitHub independently rejects a non-green merge (405); the
  *     `evaluateMergeGate` pre-check is fast-fail UX + clear errors, not the sole gate.
+ *   - HEAD_SHA_PINNED: every merge attempt carries the exact head SHA inspected by the CI gate;
+ *     GitHub rejects a changed head instead of merging unverified code.
  *   - SIGNED_ENV_PR_BYPASSES_QUEUE: only the `env_manager` authorization path above requests a
  *     direct merge. GitHub still enforces every classic required check; the queue ruleset grants
  *     its sole bypass to the executing App, while this route grants use of that bypass only after
@@ -273,6 +275,7 @@ export const POST = wrapRouteHandlerWithLogging(
         repo,
         prNumber,
         method,
+        expectedHeadSha: ci.headSha,
         ...(authzPath === "env_manager" ? { bypassQueue: true } : {}),
       });
     } catch (error) {
