@@ -114,13 +114,30 @@ esac
 
 agent_key="${COGNI_NODE_API_KEY:-$(read_env_file_value COGNI_NODE_API_KEY)}"
 
+# Capture status separately from the body; never emit response bodies or credentials
+# on a failed fetch. One request preserves the six-second first-boot bound.
 fetch_bundle() {
-  if [[ -n "$agent_key" ]]; then
-    curl -fsS --max-time "$FETCH_TIMEOUT" -H "Authorization: Bearer ${agent_key}" "$url" 2>/dev/null \
-      | jq -r '.markdown // empty' 2>/dev/null
+  bundle=""
+  FETCH_FAILURE=""
+  local response curl_status http_status body
+  if [ -n "$agent_key" ]; then
+    response="$(curl -fsS --max-time "$FETCH_TIMEOUT" -w '\n%{http_code}' -H "Authorization: Bearer ${agent_key}" "$url" 2>/dev/null)"
+    curl_status=$?
   else
-    curl -fsS --max-time "$FETCH_TIMEOUT" "$url" 2>/dev/null \
-      | jq -r '.markdown // empty' 2>/dev/null
+    response="$(curl -fsS --max-time "$FETCH_TIMEOUT" -w '\n%{http_code}' "$url" 2>/dev/null)"
+    curl_status=$?
+  fi
+  http_status="${response##*$'\n'}"
+  body="${response%$'\n'*}"
+  if [ "$curl_status" -ne 0 ] && [ "$curl_status" -ne 22 ]; then
+    FETCH_FAILURE="Transport/client failure (curl exit $curl_status); hub availability is unconfirmed."
+  elif [ "$http_status" = 401 ] || [ "$http_status" = 403 ]; then
+    FETCH_FAILURE="HTTP $http_status: authentication or authorization rejected; this is not evidence of a hub outage."
+  elif [[ "$http_status" != 2[0-9][0-9] ]]; then
+    FETCH_FAILURE="HTTP $http_status: cognition request failed; check the node before diagnosing an outage."
+  elif ! bundle="$(printf '%s' "$body" | jq -er '.markdown | select(type == "string") | select(test("[^[:space:]]"))' 2>/dev/null)"; then
+    bundle=""
+    FETCH_FAILURE="HTTP $http_status: malformed response or missing/non-string/empty markdown bundle."
   fi
 }
 
@@ -146,7 +163,8 @@ refresh_in_background() {
   cache_is_stale || return 0
   (
     local fresh
-    fresh="$(fetch_bundle)"
+    fetch_bundle
+    fresh="$bundle"
     [[ -n "$fresh" ]] && write_cache_atomic "$fresh"
   ) >/dev/null 2>&1 &
 }
@@ -161,30 +179,50 @@ if [[ -s "$CACHE_FILE" ]] && ! cache_is_repo_tracked; then
   exit 0
 fi
 
-bundle="$(fetch_bundle)"
+fetch_bundle
 
 if [[ -n "$bundle" ]]; then
   write_cache_atomic "$bundle"
   printf '%s\n' "$bundle"
-else
-  cat <<EOF
-COGNI COGNITION BOOTSTRAP BLOCKED
-
-The SessionStart hook ran, but it could not fetch the cognition bundle from:
-  $url
-
-Do not continue silently. Tell the user that session cognition did not load and
-ask them to bootstrap the node credentials, then restart or resume the agent.
-
-Most common fixes:
-- register a NODE agent via /api/v1/agent/register
-- save COGNI_NODE_API_KEY in the clone-root .env.cogni
-- review and trust this user-level SessionStart hook via /hooks
-
-If the agent received no bootstrap message at all, the hook probably did not run
-(for Codex, missing hook trust is the usual cause).
-EOF
+  exit 0
 fi
+
+# A failed hook cannot determine what another native instruction path already
+# loaded. Recovery is agent-owned; a failed fetch is not a stop instruction.
+if [ -z "$agent_key" ]; then
+  recovery_reason="No COGNI_NODE_API_KEY was found in the environment or worktree .env.cogni. Inspect the existing clone-root credential and worktree link before concluding credentials are missing."
+else
+  recovery_reason="A node credential is present. Reuse it; do not register a replacement identity or overwrite credentials because this request failed."
+fi
+cat <<EOF
+COGNI COGNITION — bounded recovery required
+
+The SessionStart fetch did not load cognition from:
+  $url
+$FETCH_FAILURE
+$recovery_reason
+
+Own recovery before asking the human to act. Inspect local node URL, credential
+presence/link, and hook delivery without printing secrets. Then make at most two
+additional requests, each bounded to six seconds: this node's /version and one
+cognition retry using existing credentials. Preserve every usable cached bundle.
+Do not create a new identity, replace keys, or loosen authentication automatically.
+
+If a complete cognition contract is already loaded through native instructions,
+continue authorized work under it while repairing this fetch. If no complete
+contract is loaded, continue bounded recovery, local diagnostics, and authorized
+bootstrap repairs under the committed safety floor; do not claim normal contract
+readiness or invent a replacement contract. A failed request alone proves neither
+an outage nor missing credentials.
+
+After recovery, verify native contract delivery. Request human action only for a
+specific remaining dependency outside your authority, supported by the observed
+failure. Restart/resume is needed only when a repaired native import cannot load
+in the current session (for example Claude's already-resolved imports), not as a
+default response to a failed fetch. This notice proves the hook ran; hook trust
+is only a diagnosis when the hook did not run. Report recovery evidence concisely.
+EOF
+
 HOOK
 
 chmod +x "$HOOK_PATH"
