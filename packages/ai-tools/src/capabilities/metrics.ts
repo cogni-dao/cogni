@@ -23,7 +23,13 @@ export type MetricTemplate =
   | "error_rate"
   | "latency_p50"
   | "latency_p95"
-  | "latency_p99";
+  | "latency_p99"
+  // Host/VM health (story.5105): the env's single substrate VM, read from the
+  // reliability-policy series exactly as scripts/vm-health-snapshot.mjs does.
+  | "vm_memory_headroom"
+  | "vm_disk_headroom"
+  | "vm_io_pressure"
+  | "vm_swap_in";
 
 /**
  * Time window for metric queries.
@@ -39,7 +45,7 @@ export interface TemplateQueryParams {
   /** Service name (must be in allowlist) */
   service: string;
   /** Deployment environment (must match Alloy DEPLOY_ENVIRONMENT values) */
-  environment: "local" | "preview" | "production";
+  environment: "local" | "candidate-a" | "preview" | "production";
   /** Time window for the query */
   window: MetricWindow;
 }

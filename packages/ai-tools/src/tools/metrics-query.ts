@@ -40,11 +40,20 @@ export const MetricsQueryInputSchema = z.object({
       "latency_p50",
       "latency_p95",
       "latency_p99",
+      "vm_memory_headroom",
+      "vm_disk_headroom",
+      "vm_io_pressure",
+      "vm_swap_in",
     ])
     .describe("Predefined metric template to query"),
-  service: z.string().max(64).describe("Service name to query metrics for"),
+  service: z
+    .string()
+    .max(64)
+    .describe(
+      "Service name to query metrics for (ignored by vm_* templates; pass cogni-template)"
+    ),
   environment: z
-    .enum(["local", "preview", "production"]) // Must match Alloy DEPLOY_ENVIRONMENT values
+    .enum(["local", "candidate-a", "preview", "production"]) // Must match Alloy DEPLOY_ENVIRONMENT values
     .describe("Deployment environment"),
   window: z
     .enum(["5m", "15m", "1h", "6h"])
@@ -119,7 +128,12 @@ export const metricsQueryContract: ToolContract<
   description:
     "Query system metrics using predefined templates. Returns request rates, error rates, " +
     "and latency percentiles for specified services. Available templates: request_rate, " +
-    "error_rate, latency_p50, latency_p95, latency_p99. Available services: cogni-template.",
+    "error_rate, latency_p50, latency_p95, latency_p99. Available services: cogni-template. " +
+    "For host/VM health ('is production healthy', memory, disk, swap, I/O) use the vm_* " +
+    "templates for the environment's shared VM (candidate-a, preview, production; not local): " +
+    "vm_memory_headroom and vm_disk_headroom (% free, lower is worse), vm_io_pressure " +
+    "(% time stalled on I/O, higher is worse), vm_swap_in (pages/s swapped in over 5m). " +
+    "Report summary.current; an error or no data means the signal is UNKNOWN, never healthy.",
   effect: "read_only",
   inputSchema: MetricsQueryInputSchema,
   outputSchema: MetricsQueryOutputSchema,
