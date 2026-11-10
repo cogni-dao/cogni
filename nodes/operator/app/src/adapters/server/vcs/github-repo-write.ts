@@ -453,7 +453,10 @@ const CandidateControlPlaneApplicationSchema = z.strictObject({
       repoURL: z.literal("https://github.com/cogni-dao/cogni.git"),
       targetRevision: z.literal(CANDIDATE_CONTROL_PLANE_REF),
       path: z.literal("infra/k8s/argocd/control-plane/candidate-a"),
-      directory: z.strictObject({ recurse: z.literal(false) }),
+      // Optional: Argo drops this default-valued block from the live object, so a self-managed
+      // copy that declares it stays OutOfSync and selfHeal re-syncs it forever (bug.5613).
+      // Accept both shapes until the manifests stop declaring it.
+      directory: z.strictObject({ recurse: z.literal(false) }).optional(),
     }),
     destination: z.strictObject({
       server: z.literal("https://kubernetes.default.svc"),
