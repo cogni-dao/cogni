@@ -127,7 +127,7 @@ for fresh_case in complete missing; do
 done
 # Real HTTP exercises the actual reader helpers, with private files and an owned
 # ephemeral loopback server. Kubernetes is mocked only at its native JWT/Service seam.
-for name in openbao_reader_address openbao_reader_request mint_db_reader_token openbao_get_field; do
+for name in openbao_reader_address openbao_http_request openbao_reader_request mint_db_reader_token openbao_get_field; do
   function_source "$name" >> "$TMPROOT/functions.sh"
 done
 late_reader="$(awk '/^DB_READER_TOKEN=""$/ {capture=1} capture && /^# The runner forwards/ {exit} capture {print}' "$SOURCE")"
@@ -144,6 +144,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
   with (directory/'http.calls').open('a') as f: f.write(json.dumps(record)+'\n')
   calls=[json.loads(line) for line in (directory/'http.calls').read_text().splitlines()]
   status=200; response={}
+  if mode.startswith('writer_'):
+   desired={'OPENFGA_STORE_ID':'desired-store','OPENFGA_AUTHORIZATION_MODEL_ID':'desired-model','OPENFGA_AUTHORIZATION_MODEL_HASH':'desired-hash'}
+   bucket=directory/'bucket.json'; values=json.loads(bucket.read_text())
+   if self.path=='/v1/auth/kubernetes/login' and self.command=='POST':
+    assert json.loads(body)=={'role':'production-writer','jwt':'owned-writer-jwt'}
+    logins=[c for c in calls if c['path']==self.path]
+    if mode=='writer_forbidden': status=403; response={'errors':['PRIVATE_WRITER_SECRET']}
+    elif mode=='writer_login_transient' and len(logins)==1: status=503; response={'errors':['PRIVATE_WRITER_SECRET']}
+    else: response={'auth':{'client_token':'owned-writer-secret','lease_duration':3600}}
+   elif self.path=='/v1/cogni/data/production/operator':
+    if self.command=='GET':
+     assert self.headers.get('X-Vault-Token')=='owned-reader-secret'
+     if mode=='writer_read_denied': status=403; response={'errors':['PRIVATE_WRITER_SECRET']}
+     elif mode=='writer_read_malformed': response=None
+     elif values is None: status=404; response={'errors':[]}
+     else: response={'data':{'data':values}}
+    else:
+     assert self.headers.get('X-Vault-Token')=='owned-writer-secret'
+     data=json.loads(body); assert data['data']==desired
+     if self.command=='PATCH':
+      assert self.headers.get('Content-Type')=='application/merge-patch+json'
+      assert set(data)=={'data'}
+      if values is None: status=404; response={'errors':[]}
+      elif mode=='writer_patch_absent': bucket.write_text('null');status=404;response={'errors':[]}
+      elif mode=='writer_patch_unknown404': status=404;response={'errors':['PRIVATE_WRITER_SECRET']}
+      elif mode=='writer_write_denied': status=403; response={'errors':['PRIVATE_WRITER_SECRET']}
+      elif mode=='writer_unconfirmed': self.close_connection=True; self.connection.close(); return
+      else:
+       values.update(data['data']);bucket.write_text(json.dumps(values)); response={'data':{'version':2}}
+       if mode=='writer_lost_ack': self.close_connection=True; self.connection.close(); return
+     elif self.command=='POST':
+      assert data['options']=={'cas':0} and set(data)=={'data','options'}
+      if mode=='writer_cas_race':
+       values={'AUTH_SECRET':'concurrent-sibling'};bucket.write_text(json.dumps(values))
+      if values is not None: status=400; response={'errors':['check-and-set parameter did not match current version']}
+      else: bucket.write_text(json.dumps(data['data']));response={'data':{'version':1}}
+     else: raise AssertionError('unexpected writer method')
+   else: raise AssertionError('writer route escaped exact operator path')
+   payload=b'{' if response is None else json.dumps(response).encode()
+   self.send_response(status);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(payload);return
   if self.command=='POST' and self.path=='/v1/auth/kubernetes/login':
    login=[c for c in calls if c['method']=='POST']
    assert json.loads(body)=={'role':'production-db-reader','jwt':'owned-jwt-secret'}
@@ -170,6 +210,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.send_response(status); self.send_header('Content-Type','application/json'); self.end_headers(); self.wfile.write(payload)
  do_POST=handle_request
  do_GET=handle_request
+ do_PATCH=handle_request
 server=http.server.HTTPServer(('127.0.0.1',0),Handler)
 (root/'http-port').write_text(str(server.server_port))
 server.serve_forever()
@@ -300,6 +341,92 @@ PY_EXPIRY
     fi
     ! grep -qE 'owned-jwt-secret|owned-reader-secret|owned-password|owned-private-error|expired-reader-secret|untrusted-expiry' "$BAO_CACHE_DIR/diagnostics"
     [[ ! -e "$BAO_CACHE_DIR/http-request.conf" && ! -e "$BAO_CACHE_DIR/reader-login.json" ]]
+  )
+done
+# The writer reuses private HTTP transport, never the reader's authority token.
+# Every case starts with a stale path cache to prove the gate fetches canonical KV.
+for name in openbao_writer_request classify_kubectl_resource_lookup_failure read_operator_openfga_current operator_openfga_current_matches patch_operator_openfga_config; do
+  function_source "$name" >> "$TMPROOT/functions.sh"
+done
+for writer_case in writer_noop writer_patch writer_patch_absent writer_patch_unknown404 writer_create writer_cas_race writer_lost_ack writer_unconfirmed writer_write_denied writer_read_denied writer_read_malformed writer_native_absent writer_native_timeout writer_forbidden writer_login_transient; do
+  (
+    source "$TMPROOT/functions.sh"
+    umask 077
+    BAO_CACHE_DIR="$TMPROOT/$writer_case"; mkdir -p "$BAO_CACHE_DIR"
+    BAO_TOKEN_FILE="$BAO_CACHE_DIR/token"
+    printf '%s' owned-reader-secret > "$BAO_TOKEN_FILE"
+    printf '%s' "$(( $(date +%s) + 900 ))" > "${BAO_TOKEN_FILE}.expires-at"
+    printf '%s' "$HTTP_ORIGIN" > "$BAO_CACHE_DIR/service-address"
+    printf '{"case":"%s","directory":"%s"}' "$writer_case" "$BAO_CACHE_DIR" > "$TMPROOT/http-state"
+    export DEPLOY_ENVIRONMENT=production OPENFGA_STORE_ID=desired-store OPENFGA_AUTHORIZATION_MODEL_ID=desired-model OPENFGA_AUTHORIZATION_MODEL_HASH=desired-hash
+    python3 - "$BAO_CACHE_DIR" "$writer_case" <<'PY_BUCKET'
+import json,pathlib,sys
+root=pathlib.Path(sys.argv[1]);mode=sys.argv[2]
+desired={'OPENFGA_STORE_ID':'desired-store','OPENFGA_AUTHORIZATION_MODEL_ID':'desired-model','OPENFGA_AUTHORIZATION_MODEL_HASH':'desired-hash'}
+value={**desired,'AUTH_SECRET':'PRIVATE_BUCKET_SIBLING'}
+if mode!='writer_noop':value['OPENFGA_STORE_ID']='old-store'
+if mode in ('writer_create','writer_cas_race'):value=None
+(root/'bucket.json').write_text(json.dumps(value))
+# A stale apparent success must never suppress a fresh read of the changed bucket.
+(root/'path-operator.json').write_text(json.dumps({'data':{'data':desired}}))
+PY_BUCKET
+    sleep() { :; }
+    timeout() { shift; "$@"; }
+    kubectl() {
+      [[ "$*" == 'create token openbao-operator -n default' ]] || { echo 'forbidden writer kubectl lookup/exec' >&2; return 99; }
+      printf 'mint\n' >> "$BAO_CACHE_DIR/writer-jwt.calls"
+      if [[ "$writer_case" == writer_native_timeout ]]; then echo 'context deadline exceeded PRIVATE_WRITER_SECRET' >&2; return 124; fi
+      if [[ "$writer_case" == writer_native_absent ]]; then echo 'Error from server (NotFound): serviceaccounts "openbao-operator" not found PRIVATE_WRITER_SECRET' >&2; return 1; fi
+      printf '%s' owned-writer-jwt
+    }
+    curl() {
+      [[ "$1" == --disable && "$*" != *owned-reader-secret* && "$*" != *owned-writer-secret* && "$*" != *owned-writer-jwt* ]] || return 98
+      command curl "$@"
+    }
+    if patch_operator_openfga_config >"$BAO_CACHE_DIR/stdout" 2>"$BAO_CACHE_DIR/diagnostics"; then
+      [[ "$writer_case" == writer_noop || "$writer_case" == writer_patch || "$writer_case" == writer_patch_absent || "$writer_case" == writer_create || "$writer_case" == writer_lost_ack || "$writer_case" == writer_login_transient ]]
+    else
+      [[ "$writer_case" != writer_noop && "$writer_case" != writer_patch && "$writer_case" != writer_patch_absent && "$writer_case" != writer_create && "$writer_case" != writer_lost_ack && "$writer_case" != writer_login_transient ]]
+    fi
+    python3 - "$BAO_CACHE_DIR" "$writer_case" <<'PY_WRITER_PROOF'
+import json,pathlib,sys
+root=pathlib.Path(sys.argv[1]);mode=sys.argv[2]
+rows=[json.loads(line) for line in (root/'http.calls').read_text().splitlines()]
+logins=[r for r in rows if r['path']=='/v1/auth/kubernetes/login']
+reads=[r for r in rows if r['method']=='GET']
+writes=[r for r in rows if r['path']!='/v1/auth/kubernetes/login' and r['method']!='GET']
+mints=(root/'writer-jwt.calls').read_text().splitlines() if (root/'writer-jwt.calls').exists() else []
+assert rows[0]['method']=='GET' and all(r['path'] in ('/v1/auth/kubernetes/login','/v1/cogni/data/production/operator') for r in rows)
+value=json.loads((root/'bucket.json').read_text())
+if mode in ('writer_noop','writer_read_denied','writer_read_malformed'):
+ assert len(reads)==1 and not logins and not mints and not writes
+elif mode in ('writer_native_absent','writer_native_timeout'):
+ assert len(reads)==1 and len(mints)==(3 if mode=='writer_native_timeout' else 1) and not logins and not writes
+elif mode=='writer_forbidden':
+ assert len(logins)==2 and len(mints)==2 and not writes and len(reads)==1
+else:
+ assert len(logins)==len(mints)==(2 if mode=='writer_login_transient' else 1)
+ assert len(writes)==(2 if mode=='writer_patch_absent' else 1) and len(reads)==2
+ if mode=='writer_patch_absent': assert [r['method'] for r in writes]==['PATCH','POST']
+ assert writes[0]['method']==('POST' if mode in ('writer_create','writer_cas_race') else 'PATCH')
+ if mode=='writer_cas_race': assert value=={'AUTH_SECRET':'concurrent-sibling'}
+ if mode in ('writer_patch','writer_lost_ack','writer_login_transient'):
+  assert value['AUTH_SECRET']=='PRIVATE_BUCKET_SIBLING' and value['OPENFGA_STORE_ID']=='desired-store'
+ if mode in ('writer_unconfirmed','writer_write_denied','writer_patch_unknown404'): assert value['OPENFGA_STORE_ID']=='old-store'
+PY_WRITER_PROOF
+    if [[ "$writer_case" == writer_noop ]]; then
+      printf '%s' '{"data":{"AUTH_SECRET":"forbidden-field"}}' > "$BAO_CACHE_DIR/invalid-writer.json"
+      request_count="$(wc -l < "$BAO_CACHE_DIR/http.calls")"
+      for bad_route in cogni/data/production/red cogni/data/preview/operator; do
+        if openbao_writer_request PATCH "$bad_route" "$BAO_CACHE_DIR/invalid-writer.json" owned-writer-secret "$BAO_CACHE_DIR/rejected" 20 >>"$BAO_CACHE_DIR/diagnostics" 2>&1; then echo 'Writer scope widened' >&2; exit 1; fi
+      done
+      for bad_method in PATCH POST DELETE; do
+        if openbao_writer_request "$bad_method" cogni/data/production/operator "$BAO_CACHE_DIR/invalid-writer.json" owned-writer-secret "$BAO_CACHE_DIR/rejected" 20 >>"$BAO_CACHE_DIR/diagnostics" 2>&1; then echo 'Unreviewed writer body/method accepted' >&2; exit 1; fi
+      done
+      [[ "$(wc -l < "$BAO_CACHE_DIR/http.calls")" == "$request_count" ]]
+    fi
+    ! grep -qE 'PRIVATE_|owned-reader-secret|owned-writer-secret|owned-writer-jwt' "$BAO_CACHE_DIR/diagnostics" "$BAO_CACHE_DIR/stdout"
+    [[ ! -e "$BAO_CACHE_DIR/http-request.conf" ]]
   )
 done
 # Exercise the actual fixed Service discovery separately: the real HTTP test
