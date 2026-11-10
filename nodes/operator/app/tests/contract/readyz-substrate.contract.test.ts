@@ -4,8 +4,8 @@
 /**
  * Module: `@tests/contract/readyz-substrate.contract`
  * Purpose: Prove the local-only shallow readiness and explicit deep substrate contract.
- * Scope: Exercises the /readyz route with isolated RPC, Temporal, scheduler-worker, knowledge-store, and database probes. Does not perform real network or database IO.
- * Invariants: Default readiness performs zero remote IO; `?deep=1` returns 503 for any missing dependency, knowledge plane included (bug.5386).
+ * Scope: Exercises the /readyz route with isolated RPC, Temporal, scheduler-worker, Postgres, Redis, LiteLLM and knowledge-plane probes. Does not perform real network or database IO.
+ * Invariants: Default readiness performs zero remote IO; `?deep=1` probes every declared dependency concurrently, returns 503 for any failing one (knowledge plane included, bug.5386), and its body carries `checks`, `unreachable` and `buildSha` for `readDeepReadiness` (story.0029).
  * Side-effects: none
  * Links: src/app/(infra)/readyz/route.ts, Cogni-DAO/cogni#1860
  * @internal
@@ -16,7 +16,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   assertEvmRpcConfig: vi.fn(),
-  assertKnowledgeStoreConnectivity: vi.fn(),
+  getKnowledge: vi.fn(),
+  streamLength: vi.fn(),
+  fetch: vi.fn(),
   assertRuntimeSecrets: vi.fn(),
   assertSchedulerWorkerConnectivity: vi.fn(),
   assertTemporalConnectivity: vi.fn(),
@@ -36,7 +38,8 @@ vi.mock("@/bootstrap/container", () => ({
   getContainer: () =>
     mocks.getContainer() ?? {
       evmOnchainClient: {},
-      knowledgeStorePort: { domainExists: async () => false },
+      knowledgeStorePort: { getKnowledge: mocks.getKnowledge },
+      runStream: { streamLength: mocks.streamLength },
       paymentRailsActive: false,
       scheduleControl: {},
       serviceAccountService: {},
@@ -92,8 +95,6 @@ vi.mock("@/shared/env/invariants", async (importOriginal) => {
     ...actual,
     assertEvmRpcConfig: (...args: unknown[]) =>
       mocks.assertEvmRpcConfig(...args),
-    assertKnowledgeStoreConnectivity: (...args: unknown[]) =>
-      mocks.assertKnowledgeStoreConnectivity(...args),
     assertRuntimeSecrets: (...args: unknown[]) =>
       mocks.assertRuntimeSecrets(...args),
     assertSchedulerWorkerConnectivity: (...args: unknown[]) =>
@@ -109,6 +110,7 @@ vi.mock("@/shared/observability/server/metrics", () => ({
   setBuildInfo: (...args: unknown[]) => mocks.setBuildInfo(...args),
 }));
 
+import { readDeepReadiness } from "@cogni/substrate-health";
 import { GET } from "@/app/(infra)/readyz/route";
 import {
   InfraConnectivityError,
@@ -126,10 +128,18 @@ describe("GET /readyz async substrate contract", () => {
     mocks.serverEnv.mockReturnValue({
       APP_BUILD_SHA: "readyz-contract-sha",
       APP_ENV: "production",
+      LITELLM_BASE_URL: "http://litellm.test",
+      LITELLM_MASTER_KEY: "sk-test",
+      DOLTGRES_URL: "postgres://doltgres.test/knowledge",
     });
     mocks.assertTemporalConnectivity.mockResolvedValue(undefined);
     mocks.assertSchedulerWorkerConnectivity.mockResolvedValue(undefined);
-    mocks.assertKnowledgeStoreConnectivity.mockResolvedValue(undefined);
+    mocks.getKnowledge.mockResolvedValue(null);
+    mocks.streamLength.mockResolvedValue(0);
+    mocks.fetch.mockImplementation(
+      async () => new Response(JSON.stringify({ data: [{ model_name: "m" }] }))
+    );
+    vi.stubGlobal("fetch", mocks.fetch);
     mocks.checkEvmRpcConnectivity.mockResolvedValue({ ok: true });
     mocks.verifySystemTenant.mockResolvedValue(undefined);
   });
@@ -216,7 +226,8 @@ describe("GET /readyz async substrate contract", () => {
     mocks.checkEvmRpcConnectivity.mockReturnValue(never);
     mocks.assertTemporalConnectivity.mockReturnValue(never);
     mocks.assertSchedulerWorkerConnectivity.mockReturnValue(never);
-    mocks.assertKnowledgeStoreConnectivity.mockReturnValue(never);
+    mocks.getKnowledge.mockReturnValue(never);
+    mocks.streamLength.mockReturnValue(never);
     mocks.verifySystemTenant.mockReturnValue(never);
 
     const response = await GET(request());
@@ -226,7 +237,9 @@ describe("GET /readyz async substrate contract", () => {
     expect(mocks.checkEvmRpcConnectivity).not.toHaveBeenCalled();
     expect(mocks.assertTemporalConnectivity).not.toHaveBeenCalled();
     expect(mocks.assertSchedulerWorkerConnectivity).not.toHaveBeenCalled();
-    expect(mocks.assertKnowledgeStoreConnectivity).not.toHaveBeenCalled();
+    expect(mocks.getKnowledge).not.toHaveBeenCalled();
+    expect(mocks.streamLength).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
     expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
   });
 
@@ -309,76 +322,110 @@ describe("GET /readyz async substrate contract", () => {
     expect(mocks.error).not.toHaveBeenCalled();
   });
 
-  it("returns 503 from the deep probe when Temporal is unavailable", async () => {
-    mocks.assertTemporalConnectivity.mockRejectedValue(
-      new InfraConnectivityError("Temporal is unavailable")
-    );
-
+  it("probes every declared dependency concurrently and names each in checks", async () => {
     const response = await GET(request("/readyz?deep=1"));
+    const body = await response.json();
 
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({
-      status: "error",
-      reason: "INFRA_UNREACHABLE",
-      message: "Temporal is unavailable",
-    });
-    expect(mocks.assertSchedulerWorkerConnectivity).not.toHaveBeenCalled();
-    expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(Object.keys(body.checks)).toEqual([
+      "evm-rpc",
+      "temporal",
+      "scheduler-worker",
+      "postgres",
+      "redis",
+      "litellm-gateway",
+      "doltgres",
+    ]);
+    expect(mocks.getKnowledge).toHaveBeenCalledOnce();
+    expect(mocks.streamLength).toHaveBeenCalledOnce();
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      "http://litellm.test/model/info",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer sk-test" },
+      })
+    );
+    expect(mocks.info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "substrate.deep.complete" }),
+      "deep readiness: checks complete"
+    );
   });
 
-  it("returns 503 from the deep probe when scheduler-worker is unavailable", async () => {
+  it("skips the knowledge plane when DOLTGRES_URL is not declared", async () => {
+    mocks.serverEnv.mockReturnValue({
+      APP_BUILD_SHA: "readyz-contract-sha",
+      LITELLM_BASE_URL: "http://litellm.test",
+      LITELLM_MASTER_KEY: "sk-test",
+    });
+    const body = await (await GET(request("/readyz?deep=1"))).json();
+    expect(body.checks).not.toHaveProperty("doltgres");
+    expect(mocks.getKnowledge).not.toHaveBeenCalled();
+  });
+
+  it("a failing scheduler-worker does not hide that Postgres answered (story.0029)", async () => {
     mocks.assertSchedulerWorkerConnectivity.mockRejectedValue(
       new InfraConnectivityError("scheduler-worker is unavailable")
     );
 
     const response = await GET(request("/readyz?deep=1"));
+    const body = await response.json();
 
     expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({
+    expect(body).toMatchObject({
       status: "error",
       reason: "INFRA_UNREACHABLE",
       message: "scheduler-worker is unavailable",
+      unreachable: ["scheduler-worker"],
+      buildSha: "readyz-contract-sha",
     });
-    expect(mocks.assertTemporalConnectivity).toHaveBeenCalledOnce();
-    expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
-  });
-  it("does not consult a wedged knowledge plane from shallow readiness (bug.5386)", async () => {
-    mocks.assertKnowledgeStoreConnectivity.mockRejectedValue(
-      new InfraConnectivityError(
-        "Knowledge store connectivity check failed: knowledge store did not answer within 3000ms (pool exhausted or wedged)"
-      )
-    );
-
-    const response = await GET(request());
-
-    expect(response.status).toBe(200);
-    expect(mocks.assertKnowledgeStoreConnectivity).not.toHaveBeenCalled();
-    expect(mocks.error).not.toHaveBeenCalled();
+    expect(mocks.verifySystemTenant).toHaveBeenCalledOnce();
+    const reading = readDeepReadiness(response.status, body);
+    expect(reading.dependencyState("postgres")).toBe("reached");
+    expect(reading.dependencyState("scheduler-worker")).toBe("unreached");
   });
 
-  it("returns 503 from the deep probe when the knowledge plane is wedged (bug.5386)", async () => {
-    // This is the gate. candidate-flight's verify-candidate certified a node
-    // whose entire Doltgres plane was unresponsive; deep readiness must refuse.
-    mocks.assertKnowledgeStoreConnectivity.mockRejectedValue(
-      new InfraConnectivityError("knowledge store is wedged")
+  it("names every failing dependency in registry order; reason and message come from the first", async () => {
+    mocks.assertTemporalConnectivity.mockRejectedValue(
+      new InfraConnectivityError("Temporal is unavailable")
     );
+    mocks.verifySystemTenant.mockRejectedValue(new Error("pg down"));
+    mocks.streamLength.mockRejectedValue(new Error("redis down"));
+    mocks.fetch.mockImplementation(async () => new Response("{}", { status: 502 }));
 
     const response = await GET(request("/readyz?deep=1"));
 
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({
-      status: "error",
       reason: "INFRA_UNREACHABLE",
-      message: "knowledge store is wedged",
+      message: "Temporal is unavailable",
+      unreachable: ["temporal", "postgres", "redis", "litellm-gateway"],
     });
-    expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
   });
 
-  it("probes the container's knowledge store port", async () => {
-    await GET(request("/readyz?deep=1"));
+  it("returns 503 from the deep probe when the knowledge plane is wedged (bug.5386)", async () => {
+    // candidate-flight's verify-candidate once certified a node whose Doltgres
+    // plane was unresponsive; deep readiness must refuse, at the budget.
+    vi.useFakeTimers();
+    mocks.getKnowledge.mockReturnValue(new Promise(() => undefined));
 
-    expect(mocks.assertKnowledgeStoreConnectivity).toHaveBeenCalledWith(
-      expect.objectContaining({ domainExists: expect.any(Function) })
-    );
+    const pending = GET(request("/readyz?deep=1"));
+    await vi.advanceTimersByTimeAsync(3000);
+    const response = await pending;
+    vi.useRealTimers();
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      unreachable: ["doltgres"],
+      message: "doltgres check exceeded 3000ms budget",
+    });
+  });
+
+  it("a config 503 carries no deep evidence", async () => {
+    mocks.assertRuntimeSecrets.mockImplementationOnce(() => {
+      throw new RuntimeSecretError("secret missing");
+    });
+    const body = await (await GET(request("/readyz?deep=1"))).json();
+    expect(body).not.toHaveProperty("unreachable");
+    expect(body).not.toHaveProperty("checks");
   });
 });

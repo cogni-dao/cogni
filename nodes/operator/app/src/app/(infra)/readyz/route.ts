@@ -4,8 +4,8 @@
 /**
  * Module: `@app/readyz`
  * Purpose: HTTP readiness endpoint. The default (k8s probe) path answers only "can this pod serve HTTP?" using local configuration checks.
- * Scope: Validates env, runtime secrets, and EVM RPC configuration without network or database IO. `?deep=1` additionally proves EVM RPC, Temporal, scheduler-worker, Doltgres, and the system tenant for explicit deploy/audit gates.
- * Invariants: Always returns valid readyz schema; force-dynamic runtime. The default path performs zero remote IO and therefore cannot exceed the kubelet deadline because a dependency is slow or wedged. `?deep=1` hard-fails substrate failures (503), and every deep probe MUST be bounded by its own timeout.
+ * Scope: Validates env, runtime secrets, and EVM RPC configuration without network or database IO. `?deep=1` additionally probes every dependency the operator declares (registry: readyz-probes.ts, @cogni-dao/substrate-health) for explicit deploy/audit/recovery gates.
+ * Invariants: Always returns valid readyz schema; force-dynamic runtime. The default path performs zero remote IO and therefore cannot exceed the kubelet deadline because a dependency is slow or wedged. `?deep=1` runs every declared probe concurrently, each bounded by DEEP_CHECK_BUDGET_MS, and hard-fails (503). A deep body carries `checks` (each probed dependency's status); a deep 503 also carries `unreachable` and `buildSha`. Consumers read it only through `readDeepReadiness`. `?proof=recovery|recovery-product` is operator-only and runs before the container is built.
  * Side-effects: HTTP response and structured logging; network/database IO only with `?deep=1`.
  * Notes: Used by Docker HEALTHCHECK, deployment validation, K8s readiness probes.
  *        HTTP status is primary truth: 200 = ready, 503 = not ready.
@@ -21,21 +21,22 @@ import {
   getContainer,
   resolveLocalReliabilityControl,
 } from "@/bootstrap/container";
-import { verifySystemTenant } from "@/bootstrap/healthchecks";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { EnvValidationError, serverEnv } from "@/shared/env";
 import {
   assertEvmRpcConfig,
-  assertKnowledgeStoreConnectivity,
   assertRuntimeSecrets,
-  assertSchedulerWorkerConnectivity,
-  assertTemporalConnectivity,
-  checkEvmRpcConnectivity,
   InfraConnectivityError,
   RuntimeSecretError,
 } from "@/shared/env/invariants";
 import type { RequestContext } from "@/shared/observability";
 import { setBuildInfo } from "@/shared/observability/server/metrics";
+import {
+  buildDeepChecks,
+  type DeepChecks,
+  DeepProbeFailure,
+  runDeepChecks,
+} from "./readyz-probes";
 
 export const dynamic = "force-dynamic";
 
@@ -150,8 +151,11 @@ export const GET = wrapRouteHandlerWithLogging(
     // The kubelet path is deliberately local-only. `?deep=1` is the explicit
     // deploy/audit gate for remote substrate health.
     const deep = new URL(request.url).searchParams.get("deep") === "1";
+    // Set once env parses, so a deep 503 names the revision that answered.
+    let buildSha: string | undefined;
     try {
       const env = serverEnv();
+      buildSha = env.APP_BUILD_SHA || undefined;
 
       // Set build info for metrics (canonical source: APP_BUILD_SHA from serverEnv())
       setBuildInfo(
@@ -164,53 +168,32 @@ export const GET = wrapRouteHandlerWithLogging(
       assertRuntimeSecrets(env);
       assertEvmRpcConfig(env);
 
+      let checks: DeepChecks | undefined;
       if (deep) {
-        const container = getContainer();
-        const evmRpcResult = await checkEvmRpcConnectivity(
-          container.evmOnchainClient,
-          env,
-          { forceLive: true }
+        checks = await runDeepChecks(
+          ctx,
+          buildDeepChecks(ctx, getContainer(), env)
         );
-        if (!evmRpcResult.ok) {
-          const message = `EVM RPC connectivity check failed: ${evmRpcResult.errorMessage ?? "unknown"}`;
-          ctx.log.error(
-            {
-              event: "substrate.evm_rpc.unreachable",
-              severity: "critical",
-              reason: "INFRA_UNREACHABLE",
-              dependency: "evm-rpc",
-              source: evmRpcResult.source,
-              message,
-            },
-            "deep readiness: EVM RPC unreachable"
-          );
-          throw new InfraConnectivityError(message);
-        }
-        ctx.log.info(
-          {
-            event: "substrate.evm_rpc.reachable",
-            dependency: "evm-rpc",
-            source: evmRpcResult.source,
-          },
-          "deep readiness: EVM RPC reachable"
-        );
-
-        await assertTemporalConnectivity(container.scheduleControl, env);
-        await assertSchedulerWorkerConnectivity(env);
-        await assertKnowledgeStoreConnectivity(container.knowledgeStorePort);
-        await verifySystemTenant(container.serviceAccountService);
       }
 
       const payload = {
         status: "healthy" as const,
         timestamp: new Date().toISOString(),
         version: process.env.npm_package_version || undefined,
-        buildSha: env.APP_BUILD_SHA || undefined,
+        buildSha,
+        ...(checks ? { checks } : {}),
       };
 
       const parsed = metaReadyzOperation.output.parse(payload);
       return NextResponse.json(parsed);
-    } catch (error) {
+    } catch (caught) {
+      // A deep probe wraps its first failure and names every failing dependency.
+      const error =
+        caught instanceof DeepProbeFailure ? (caught.primary as Error) : caught;
+      const evidence =
+        caught instanceof DeepProbeFailure
+          ? { unreachable: caught.unreachable, checks: caught.checks, buildSha }
+          : {};
       // HTTP status is primary truth for K8s: 503 = not ready
       // Log failure before returning 503 for deployment debugging
       if (error instanceof EnvValidationError) {
@@ -220,6 +203,7 @@ export const GET = wrapRouteHandlerWithLogging(
             status: "error",
             reason: error.meta.code,
             details: error.meta,
+            ...evidence,
           }),
           {
             status: 503, // Service Unavailable - not ready
@@ -236,6 +220,7 @@ export const GET = wrapRouteHandlerWithLogging(
             status: "error",
             reason: error.code,
             message: error.message,
+            ...evidence,
           }),
           {
             status: 503, // Service Unavailable - not ready
@@ -252,6 +237,7 @@ export const GET = wrapRouteHandlerWithLogging(
             status: "error",
             reason: error.code,
             message: error.message,
+            ...evidence,
           }),
           {
             status: 503, // Service Unavailable - not ready
@@ -266,6 +252,7 @@ export const GET = wrapRouteHandlerWithLogging(
         JSON.stringify({
           status: "error",
           reason: "INTERNAL_ERROR",
+          ...evidence,
         }),
         {
           status: 503, // Service Unavailable - not ready

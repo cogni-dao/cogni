@@ -8,6 +8,7 @@ import {
 import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  databaseRecovered,
   evaluateReliabilityPolicy,
   hasHealthyReadmissionWindow,
   hasHealthyScopedRecoveryWindow,
@@ -18,6 +19,7 @@ import {
   serveEvidenceTtlMs,
   verifyCurrentDatabaseRecovery,
 } from "@/features/nodes/reliability-status";
+import { readDeepReadiness } from "@cogni/substrate-health";
 import type { DatabaseContainmentPort, MetricsQueryPort } from "@/ports";
 
 const routeMocks = vi.hoisted(() => ({
@@ -945,5 +947,52 @@ describe("reliability HTTP boundaries", () => {
     expect(routeMocks.readmit).not.toHaveBeenCalledWith(
       expect.objectContaining({ actorId: "system:spoof" })
     );
+  });
+});
+
+describe("databaseRecovered (story.0029)", () => {
+  const sha = "a".repeat(40);
+  const ok = { status: "ok", durationMs: 4 };
+  const failed = { status: "failed", durationMs: 3000 };
+
+  it("accepts Postgres reached at the target revision while an unrelated dependency fails", () => {
+    const body = {
+      status: "error",
+      unreachable: ["redis"],
+      checks: { postgres: ok, redis: failed },
+      buildSha: sha,
+    };
+    expect(databaseRecovered(readDeepReadiness(503, body), sha)).toBe(true);
+  });
+
+  it("rejects Postgres failed, another revision, or a body with no Postgres evidence", () => {
+    const checks = { postgres: failed };
+    expect(
+      databaseRecovered(
+        readDeepReadiness(503, { status: "error", unreachable: ["postgres"], checks, buildSha: sha }),
+        sha
+      )
+    ).toBe(false);
+    expect(
+      databaseRecovered(
+        readDeepReadiness(200, { status: "healthy", checks: { postgres: ok }, buildSha: "b".repeat(40) }),
+        sha
+      )
+    ).toBe(false);
+    expect(
+      databaseRecovered(readDeepReadiness(503, { status: "error", reason: "ENV_INVALID", buildSha: sha }), sha)
+    ).toBe(false);
+    expect(
+      databaseRecovered(readDeepReadiness(503, { status: "error", unreachable: ["redis"] }), sha)
+    ).toBe(false);
+    expect(
+      databaseRecovered(readDeepReadiness(200, { status: "healthy", checks: { redis: ok }, buildSha: sha }), sha)
+    ).toBe(false);
+  });
+
+  it("keeps a pre-0.2.0 healthy aggregate 200 at the target revision as proof, as before", () => {
+    expect(
+      databaseRecovered(readDeepReadiness(200, { status: "healthy", buildSha: sha }), sha)
+    ).toBe(true);
   });
 });

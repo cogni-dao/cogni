@@ -17,6 +17,7 @@ import type {
   ReliabilityStatusV1,
 } from "@cogni/node-contracts";
 import { RELIABILITY_POLICY_V1 } from "@cogni/node-contracts";
+import type { DeepReadiness } from "@cogni/substrate-health";
 
 import type {
   DatabaseContainmentPort,
@@ -60,6 +61,21 @@ const UNKNOWN_REASON = "required reliability evidence is missing";
 export const EXPECTED_RELIABILITY_REGIONS =
   RELIABILITY_POLICY_V1.expectedRegions;
 export const RELIABILITY_EVIDENCE_TTL_MS = RELIABILITY_POLICY_V1.evidenceTtlMs;
+
+/**
+ * Postgres recovery is proven when the target's own deep readiness, at the target revision, reports
+ * Postgres reached. An unrelated dependency failing the same probe (a 503 that still carries
+ * `checks.postgres: ok`) does not block it (story.0029). A pre-0.2.0 body has no per-dependency checks:
+ * only its aggregate healthy 200 proves Postgres, exactly as before, because every node probes Postgres.
+ */
+export function databaseRecovered(
+  reading: DeepReadiness,
+  targetBuildSha: string
+): boolean {
+  if (reading.buildSha !== targetBuildSha) return false;
+  const postgres = reading.dependencyState("postgres");
+  return postgres === "reached" || (postgres === "unknown" && reading.healthy);
+}
 
 /**
  * Max age of a serve-probe sample before readiness is stale (bug.5527). Probe

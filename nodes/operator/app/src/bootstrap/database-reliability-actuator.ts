@@ -16,6 +16,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { ReliabilityStatusV1 } from "@cogni/node-contracts";
 import pino from "pino";
+import { readDeepReadiness } from "@cogni/substrate-health";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import {
@@ -40,6 +41,7 @@ import {
   DedicatedCellPressureController,
 } from "@/features/nodes/dedicated-cell-pressure";
 import {
+  databaseRecovered,
   hasHealthyScopedRecoveryWindow,
   isReliabilitySweepReady,
   RELIABILITY_EVIDENCE_TTL_MS,
@@ -354,14 +356,17 @@ async function recoveryCheck(
           redirect: "error",
           signal: AbortSignal.timeout(5_000),
         }).then(async (response) => {
+          // Postgres recovery is proven by the target's own Postgres verdict at the
+          // target revision. An unrelated dependency (Redis, LiteLLM, ...) failing the
+          // same deep probe must not block it (story.0029).
           if (
-            !response.ok ||
-            !z
-              .object({
-                status: z.literal("healthy"),
-                buildSha: z.literal(target.sourceSha),
-              })
-              .safeParse(await response.json()).success
+            !databaseRecovered(
+              readDeepReadiness(
+                response.status,
+                await response.json().catch(() => null)
+              ),
+              target.sourceSha
+            )
           ) {
             throw new Error("database_recovery_product_unproved");
           }

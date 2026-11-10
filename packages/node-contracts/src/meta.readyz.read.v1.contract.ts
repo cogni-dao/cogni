@@ -25,6 +25,17 @@ export const metaReadyzOutputSchema = z.object({
   // Canonical source: APP_BUILD_SHA from serverEnv()
   // Aligns buildSha across /metrics, /readyz, and agent.json per BUILD_SHA_IN_METRICS invariant
   buildSha: z.string().optional(),
+  // `?deep=1` only: each probed dependency's status (@cogni-dao/substrate-health
+  // DeepChecks). Absent on the default path.
+  checks: z
+    .record(
+      z.string(),
+      z.object({
+        status: z.enum(["ok", "failed"]),
+        durationMs: z.number(),
+      })
+    )
+    .optional(),
 });
 
 // Protocol-neutral operation metadata.
