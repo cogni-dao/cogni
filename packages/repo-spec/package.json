@@ -26,6 +26,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cogni/node-declarations": "https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz",
     "ajv": "^8.17.1",
     "yaml": "^2.8.3",
     "zod": "^3.24.0"

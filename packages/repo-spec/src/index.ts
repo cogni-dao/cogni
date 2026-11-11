@@ -12,6 +12,29 @@
  */
 
 export {
+  catalogSecretKeysFor,
+  NODE_SECRETS_CATALOG_PATH,
+  type NodeSecretsCatalogEntry,
+  parseNodeSecretsCatalog,
+  type SecretCapability,
+  SecretCapabilitySchema,
+  SecretEnvironmentSchema,
+  type SecretGenerate,
+  SecretGenerateSchema,
+  type SecretSyncTarget,
+  SecretSyncTargetSchema,
+  type SecretsCatalogEntry,
+  SecretsCatalogEntrySchema,
+  SecretsCatalogError,
+  SecretsCatalogFileSchema,
+  type SecretsCatalogIssue,
+  type SecretsCatalogIssueCode,
+  type SecretTier,
+  SecretTierSchema,
+  type SecretTransform,
+  SecretTransformSchema,
+} from "@cogni/node-declarations";
+export {
   type DaoConfig,
   type DaoTokenDistributionConfig,
   extractChainId,
@@ -157,29 +180,6 @@ export {
   type ThresholdCriterion,
   thresholdCriterionSchema,
 } from "./schema.js";
-export {
-  catalogSecretKeysFor,
-  NODE_SECRETS_CATALOG_PATH,
-  type NodeSecretsCatalogEntry,
-  parseNodeSecretsCatalog,
-  type SecretCapability,
-  SecretCapabilitySchema,
-  SecretEnvironmentSchema,
-  type SecretGenerate,
-  SecretGenerateSchema,
-  type SecretSyncTarget,
-  SecretSyncTargetSchema,
-  type SecretsCatalogEntry,
-  SecretsCatalogEntrySchema,
-  SecretsCatalogError,
-  SecretsCatalogFileSchema,
-  type SecretsCatalogIssue,
-  type SecretsCatalogIssueCode,
-  type SecretTier,
-  SecretTierSchema,
-  type SecretTransform,
-  SecretTransformSchema,
-} from "./secrets-catalog.js";
 export { SCORE_V1B1_SOURCE } from "./vendor/score-v1b1.schema.js";
 export {
   checkWorkloadDirectoryEntries,

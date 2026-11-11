@@ -75,6 +75,9 @@ importers:
       '@cogni/node-core':
         specifier: workspace:*
         version: link:packages/node-core
+      '@cogni/node-declarations':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz
+        version: '@cogni-dao/node-declarations@https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz'
       '@cogni/operator-wallet':
         specifier: workspace:*
         version: link:packages/operator-wallet
@@ -1354,6 +1357,9 @@ importers:
 
   packages/repo-spec:
     dependencies:
+      '@cogni/node-declarations':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz
+        version: '@cogni-dao/node-declarations@https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz'
       ajv:
         specifier: ^8.17.1
         version: 8.17.1
@@ -1959,6 +1965,11 @@ packages:
     peerDependenciesMeta:
       react:
         optional: true
+
+  '@cogni-dao/node-declarations@https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz':
+    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz}
+    version: 0.1.0
+    hasBin: true
 
   '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz':
     resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz}
@@ -13602,6 +13613,11 @@ snapshots:
   '@cogni-dao/money-plane@https://github.com/cogni-dao/node-template/releases/download/money-plane-v0.2.0/cogni-dao-money-plane-0.2.0.tgz(react@19.0.0)':
     optionalDependencies:
       react: 19.0.0
+
+  '@cogni-dao/node-declarations@https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz':
+    dependencies:
+      yaml: 2.8.3
+      zod: 3.25.76
 
   '@cogni-dao/scheduling@https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz(postgres@3.4.7)':
     dependencies:

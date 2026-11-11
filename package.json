@@ -209,6 +209,7 @@
     "@cogni/knowledge-store": "workspace:^",
     "@cogni/langgraph-graphs": "workspace:*",
     "@cogni/node-core": "workspace:*",
+    "@cogni/node-declarations": "https://github.com/cogni-dao/node-template/releases/download/node-declarations-v0.1.0/cogni-dao-node-declarations-0.1.0.tgz",
     "@cogni/operator-wallet": "workspace:*",
     "@cogni/repo-spec": "workspace:*",
     "@cogni/scheduler-core": "workspace:*",
