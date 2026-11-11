@@ -11,6 +11,8 @@
  *   GOAL_CHANGE_IS_NODE_ADMIN (task.5286): a merge whose diff touches a `goal-*` row (or a
  *   citation from one) additionally requires `node.administer` on this node, checked BEFORE
  *   the merge — 403 `authz_denied`, 503 `authz_unavailable`. Every other merge is unchanged.
+ *   ANNEX_NOT_CORE (story.0033): a metric row's `serves` and `band` sit beside the hashed spec;
+ *   `validateMetricSpec` strips them before `registry.validate` (malformed 400, band unit mismatch 422).
  * Side-effects: IO (HTTP response, Doltgres read/write via container service)
  * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store
  * @internal
@@ -500,7 +502,8 @@ export async function handleClose(
 
 /**
  * Goal-metric configuration gate (story.0021): a `metricSpec` must parse strictly, name a
- * registered @cogni-dao/metrics calculator, and carry a display its unit can honour;
+ * registered @cogni-dao/metrics calculator, and carry a display its unit can honour (plus an
+ * optional `serves` link and `band` whose target unit matches the metric unit, story.0033);
  * `kpiBindings` must parse, and hypothesis bindings must pin evaluation + baseline.
  */
 function validateMetricEdits(
@@ -540,7 +543,13 @@ function validateMetricEdits(
   return null;
 }
 
-function validateMetricSpec(
+/**
+ * A stored metric spec must parse strictly. The core spec names a registered calculator and
+ * carries a display its unit can honour; `serves` and `band` (story.0033) are validated by
+ * their own schemas (a malformed one is a 400 here, at authoring) and never reach the strict
+ * MetricSpecSchema, so they cannot fork the series hash.
+ */
+export function validateMetricSpec(
   stored: unknown,
   id: string,
   title: string
@@ -551,7 +560,7 @@ function validateMetricSpec(
       { error: "invalid metric definition", issues: parsed.error.issues },
       { status: 400 }
     );
-  const { display, ...spec } = parsed.data;
+  const { display, serves: _serves, band, ...spec } = parsed.data;
   const registry = getContainer().goalMetrics?.registry;
   try {
     registry?.validate({ id, title, revision: "proposed", spec });
@@ -561,16 +570,17 @@ function validateMetricSpec(
       { status: 422 }
     );
   }
-  if (
-    display &&
-    registry &&
-    !displayFits(
-      display,
-      calculatorShape(registry.get(spec.calculatorId), spec.params).unit
-    )
-  )
+  const unit = registry
+    ? calculatorShape(registry.get(spec.calculatorId), spec.params).unit
+    : null;
+  if (display && unit !== null && !displayFits(display, unit))
     return NextResponse.json(
       { error: "display does not fit the metric unit (slo needs %)" },
+      { status: 422 }
+    );
+  if (band && unit !== null && band.target.unit !== unit)
+    return NextResponse.json(
+      { error: `band target unit must match the metric unit (${unit})` },
       { status: 422 }
     );
   return null;
