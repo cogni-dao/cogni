@@ -60,6 +60,7 @@ export * from "./billing-ingest.internal.v1.contract";
 export * from "./cognition.v1.contract";
 // ── Chat errors ─────────────────────────────────────────────────────────────
 export * from "./error.chat.v1.contract";
+export * from "./github.comment.attestation.v1.contract";
 export * from "./governance.status.v1.contract";
 // ── Governance ──────────────────────────────────────────────────────────────
 export * from "./governance-schedules-sync.internal.v1.contract";

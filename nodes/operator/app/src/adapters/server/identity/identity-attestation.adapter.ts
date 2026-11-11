@@ -4,11 +4,11 @@
 /** Live catalog and Ed25519 signing adapters for identity attestations. */
 
 import type { KeyObject } from "node:crypto";
-
+import { GITHUB_COMMENT_ATTESTATION_TYP } from "@cogni/node-contracts";
 import { SignJWT } from "jose";
-
 import type {
   DeployPlanePort,
+  GithubCommentAttestationJwtClaims,
   IdentityAttestationJwtClaims,
   IdentityAttestationRepositoryPort,
   IdentityAttestationSignerPort,
@@ -35,17 +35,26 @@ export type FindNodeRow = (nodeId: string) => Promise<{
   readonly deployEnvs: readonly string[];
 } | null>;
 
+const REPO_URL = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i;
+
 function registeredOwner(owner: string, repoUrl: string): string | null {
   const normalized = owner?.trim().toLowerCase();
-  const match =
-    /^https:\/\/github\.com\/([^/\s]+)\/[^/\s]+(?:\.git)?\/?$/i.exec(
-      repoUrl?.trim() ?? ""
-    );
+  const match = REPO_URL.exec(repoUrl?.trim() ?? "");
   return normalized &&
     /^[a-z0-9][a-z0-9-]*$/.test(normalized) &&
     match?.[1]?.toLowerCase() === normalized
     ? normalized
     : null;
+}
+
+/**
+ * The repository NAME of the registry row's `repoUrl` (lowercase), only when its owner is the row's registered owner. The proof-comment route
+ * needs the name: the owner comes from the operator's env, the name from the registry, never from the slug (task.0095).
+ */
+function registeredRepoName(owner: string, repoUrl: string): string | null {
+  if (registeredOwner(owner, repoUrl) === null) return null;
+  const name = REPO_URL.exec(repoUrl.trim())?.[2]?.toLowerCase() ?? null;
+  return name && /^[a-z0-9._-]{1,100}$/.test(name) ? name : null;
 }
 
 /**
@@ -131,6 +140,7 @@ export class OperatorIdentityAttestationRepository
           nodeId: row.id,
           slug: row.slug,
           repoOwner: registeredOwner(row.repoOwner, row.repoUrl),
+          repoName: registeredRepoName(row.repoOwner, row.repoUrl),
           deployEnvs: row.deployEnvs,
         };
       }
@@ -158,6 +168,7 @@ export class OperatorIdentityAttestationRepository
       nodeId: node.nodeId,
       slug: node.slug,
       repoOwner: registeredOwner(node.repoOwner, node.repoUrl),
+      repoName: registeredRepoName(node.repoOwner, node.repoUrl),
       deployEnvs: node.deployEnvs,
     };
   }
@@ -172,6 +183,19 @@ export class JoseIdentityAttestationSigner
     const kid = await attestationKeyId(this.signingKey);
     return new SignJWT({ ...claims })
       .setProtectedHeader({ alg: ATTESTATION_ALG, typ: "JWT", kid })
+      .sign(this.signingKey);
+  }
+
+  async signProofComment(
+    claims: GithubCommentAttestationJwtClaims
+  ): Promise<string> {
+    const kid = await attestationKeyId(this.signingKey);
+    return new SignJWT({ ...claims })
+      .setProtectedHeader({
+        alg: ATTESTATION_ALG,
+        typ: GITHUB_COMMENT_ATTESTATION_TYP,
+        kid,
+      })
       .sign(this.signingKey);
   }
 }

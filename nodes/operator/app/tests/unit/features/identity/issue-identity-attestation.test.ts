@@ -21,6 +21,8 @@ import {
   resolveWorkloadZoneBinding,
 } from "@/shared/node-registry/fleet-ownership";
 
+/** The proof-comment signing method is not under test here (task.0095 covers it). */
+const signProofComment = async () => "unused";
 const NODE_ID = "22222222-2222-4222-8222-222222222222";
 const REQUEST = {
   protocol: IDENTITY_ATTESTATION_V1_PROTOCOL_SHA256,
@@ -40,10 +42,11 @@ function service(overrides?: {
         nodeId: NODE_ID,
         slug: "toks4",
         repoOwner: "cogni-dao",
+        repoName: null,
         deployEnvs: ["candidate-a", "production"],
       }),
     };
-  const signer = overrides?.signer ?? { sign: vi.fn(async () => "signed.jwt") };
+  const signer = overrides?.signer ?? { sign: vi.fn(async () => "signed.jwt"), signProofComment };
   return createIdentityAttestationService({
     repository,
     fleetZoneBindings: [{ fleetOwner: "cogni-dao", zoneName: "cognidao.org" }],
@@ -56,7 +59,7 @@ function service(overrides?: {
 describe("identity attestation issuance service", () => {
   it("signs the GitHub identity supplied by the caller for the exact node request", async () => {
     const sign = vi.fn(async () => "signed.jwt");
-    const issued = await service({ signer: { sign } }).issue({
+    const issued = await service({ signer: { sign, signProofComment } }).issue({
       github: AUTHENTICATED_GITHUB,
       issuer: "https://cognidao.org",
       request: REQUEST,
@@ -91,7 +94,7 @@ describe("identity attestation issuance service", () => {
   it("rejects an origin outside the registered deployment set before signing", async () => {
     const sign = vi.fn(async () => "signed.jwt");
     await expect(
-      service({ signer: { sign } }).issue({
+      service({ signer: { sign, signProofComment } }).issue({
         github: AUTHENTICATED_GITHUB,
         issuer: "https://cognidao.org",
         request: { ...REQUEST, targetOrigin: "https://attacker.example" },
@@ -109,7 +112,7 @@ describe("identity attestation issuance service", () => {
     };
 
     await expect(
-      service({ repository, signer: { sign } }).issue({
+      service({ repository, signer: { sign, signProofComment } }).issue({
         github: AUTHENTICATED_GITHUB,
         issuer: "https://cognidao.org",
         request: REQUEST,
@@ -120,7 +123,7 @@ describe("identity attestation issuance service", () => {
 
   it("resolves the node for the entry leg without signing anything", async () => {
     const sign = vi.fn(async () => "signed.jwt");
-    const node = await service({ signer: { sign } }).resolveNode({
+    const node = await service({ signer: { sign, signProofComment } }).resolveNode({
       request: REQUEST,
     });
 
@@ -168,6 +171,7 @@ describe("broker node lookup ordering (bug.5063)", () => {
       nodeId: NODE_ID,
       slug: "toks4",
       repoOwner: "cogni-dao",
+      repoName: "toks4",
       deployEnvs: ["candidate-a", "production"],
     });
     // The whole point: no GitHub round trip in front of the human.
@@ -210,11 +214,12 @@ describe("registered fleet origin binding", () => {
         slug: "toks4",
         deployEnvs: ["candidate-a"],
         repoOwner: "cogni-test-org",
+        repoName: null,
       }),
     };
     const broker = createIdentityAttestationService({
       repository,
-      signer: { sign: async () => "signed" },
+      signer: { sign: async () => "signed", signProofComment },
       clock: { now: () => "2026-08-17T00:00:00.000Z" },
       createJti: () => NODE_ID,
       fleetZoneBindings: [
@@ -281,10 +286,11 @@ describe("fleet configuration", () => {
           nodeId: NODE_ID,
           slug: "toks4",
           repoOwner: owner,
+        repoName: null,
           deployEnvs: ["preview"],
         }),
       },
-      signer: { sign },
+      signer: { sign, signProofComment },
       clock: { now: () => "2026-08-17T00:00:00.000Z" },
       createJti: () => NODE_ID,
       fleetZoneBindings: resolveRegisteredFleetZones({
@@ -342,10 +348,11 @@ describe("origin revalidation", () => {
           nodeId: NODE_ID,
           slug: "toks4",
           repoOwner: owner,
+        repoName: null,
           deployEnvs: ["candidate-a"],
         }),
       },
-      signer: { sign },
+      signer: { sign, signProofComment },
       clock: { now: () => "2026-08-17T00:00:00.000Z" },
       createJti: () => NODE_ID,
       fleetZoneBindings: resolveRegisteredFleetZones({
@@ -427,10 +434,11 @@ describe("both fleets on one broker", () => {
           nodeId: NODE_ID,
           slug: "toks4",
           repoOwner: owner,
+        repoName: null,
           deployEnvs: ["candidate-a"],
         }),
       },
-      signer: { sign },
+      signer: { sign, signProofComment },
       clock: { now: () => "2026-08-17T00:00:00.000Z" },
       createJti: () => NODE_ID,
       fleetZoneBindings: resolveRegisteredFleetZones({
@@ -472,10 +480,11 @@ describe("both fleets on one broker", () => {
           nodeId: NODE_ID,
           slug: "toks4",
           repoOwner: "cogni-dao",
+        repoName: null,
           deployEnvs: ["candidate-a"],
         }),
       },
-      signer: { sign: async () => "signed" },
+      signer: { sign: async () => "signed", signProofComment },
       clock: { now: () => "2026-08-17T00:00:00.000Z" },
       createJti: () => NODE_ID,
       fleetZoneBindings: [

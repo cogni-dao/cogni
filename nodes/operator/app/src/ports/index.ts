@@ -237,6 +237,10 @@ export type {
   UpcomingRun,
 } from "./governance-status.port";
 export type {
+  GithubCommentAttestationJwtClaims,
+  GithubIssueCommentRead,
+  GithubProofCommentReaderPort,
+  GithubRead,
   IdentityAttestationGithubIdentity,
   IdentityAttestationJwtClaims,
   IdentityAttestationNode,

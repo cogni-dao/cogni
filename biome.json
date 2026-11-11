@@ -28,6 +28,13 @@
   "extends": ["./biome/base.json", "./biome/app.json", "./biome/tests.json"],
   "overrides": [
     {
+      "includes": [
+        "packages/node-contracts/src/github.comment.attestation.v1.contract.ts"
+      ],
+      "formatter": { "enabled": false },
+      "assist": { "enabled": false }
+    },
+    {
       "includes": ["tests/ci-invariants/**"],
       "linter": {
         "rules": {

@@ -14,7 +14,10 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { TokenBucketRateLimiter } from "@/bootstrap/http/rateLimiter";
+import {
+  extractEdgeClientIp,
+  TokenBucketRateLimiter,
+} from "@/bootstrap/http/rateLimiter";
 import {
   makeWrapPublicRoute,
   type WrapPublicRouteDeps,
@@ -235,6 +238,70 @@ describe("makeWrapPublicRoute - Rate Limit Bypass", () => {
       expect(response.headers.get("Cache-Control")).toBe(
         "public, max-age=120, stale-while-revalidate=600"
       );
+    });
+    it("leaves a Cache-Control the handler set (a route that signs a fact answers no-store)", async () => {
+      const limiter = new TokenBucketRateLimiter({
+        maxTokens: 10,
+        refillRate: 1,
+        burstSize: 5,
+      });
+      const wrapPublicRoute = makeWrapPublicRoute({
+        rateLimitBypass: {
+          enabled: false,
+          headerName: "x-stack-test",
+          headerValue: "1",
+        },
+        rateLimiter: limiter,
+        DEPLOY_ENVIRONMENT: "test",
+      });
+      const wrapped = wrapPublicRoute({ routeId: "test.route" }, async () =>
+        NextResponse.json(
+          { ok: true },
+          { headers: { "cache-control": "no-store" } }
+        )
+      );
+      const response = await wrapped(createRequest({}));
+      expect(response.headers.get("Cache-Control")).toBe("no-store");
+    });
+
+    it("a route with its own limiter and edge client key: clients behind the same x-real-ip get separate buckets, and the shared bucket is untouched", async () => {
+      const shared = new TokenBucketRateLimiter({
+        maxTokens: 10,
+        refillRate: 1,
+        burstSize: 5,
+      });
+      const sharedSpy = vi.spyOn(shared, "consume");
+      const own = new TokenBucketRateLimiter({
+        maxTokens: 1,
+        refillRate: 1 / 3600,
+        burstSize: 0,
+      });
+      const wrapPublicRoute = makeWrapPublicRoute({
+        rateLimitBypass: {
+          enabled: false,
+          headerName: "x-stack-test",
+          headerValue: "1",
+        },
+        rateLimiter: shared,
+        DEPLOY_ENVIRONMENT: "test",
+      });
+      const wrapped = wrapPublicRoute(
+        {
+          routeId: "test.edge",
+          limiter: own,
+          clientKey: extractEdgeClientIp,
+        },
+        async () => NextResponse.json({ ok: true })
+      );
+      // Behind Cloudflare every client carries the SAME x-real-ip. Only cf-connecting-ip tells them apart.
+      const from = (cf: string) =>
+        wrapped(
+          createRequest({ "x-real-ip": "10.0.0.1", "cf-connecting-ip": cf })
+        );
+      expect((await from("203.0.113.1")).status).toBe(200);
+      expect((await from("203.0.113.1")).status).toBe(429); // that client is over its own bucket
+      expect((await from("203.0.113.2")).status).toBe(200); // another client is not locked out
+      expect(sharedSpy).not.toHaveBeenCalled(); // and no other public route's bucket is spent
     });
   });
 });

@@ -40,6 +40,7 @@ All contract files re-exported via `src/index.ts`. Selective re-export for `ai.c
 
 - `vcs.flight.v1.contract` — node artifact identity plus an optional paired exact parent workflow SHA/ref for maintainer-authorized remote-node flight
 - `identity.attestation.v1.contract` — frozen operator↔node identity protocol, canonical HTTPS-origin schema, and cross-repository protocol fingerprint
+- `github.comment.attestation.v1.contract` — frozen operator↔node proof-comment protocol (task.0095): own `typ`/`type`, strict request, found/not_found claims; byte-identical copy in node-template
 
 **Internal scheduler-worker → node-app contracts (task.0280):**
 

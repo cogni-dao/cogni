@@ -146,6 +146,7 @@ export {
   type ProbeDeployConfig,
 } from "./deploy/probe-deploy.adapter";
 export { DrizzleGovernanceStatusAdapter } from "./governance/drizzle-governance-status.adapter";
+export { GithubAppProofCommentReader } from "./identity/github-proof-comment-reader.adapter";
 export {
   JoseIdentityAttestationSigner,
   OperatorIdentityAttestationRepository,

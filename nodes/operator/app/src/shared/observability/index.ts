@@ -73,6 +73,11 @@ export const EVENT_NAMES = {
   IDENTITY_BROKER_AUTHENTICATED: "feature.identity_broker.authenticated",
   IDENTITY_BROKER_COMPLETE: "feature.identity_broker.complete",
   IDENTITY_BROKER_REJECTED: "feature.identity_broker.rejected",
+  // Proof-comment attestation route (task.0095): one terminal event per request. NEVER log a comment body, login, nonce, token, header or secret.
+  // The numeric GitHub id may be logged. `callerReqId` is the node's x-request-id: one proof is one query across both services.
+  IDENTITY_PROOF_COMMENT_ISSUED: "identity.proof_comment.issued",
+  IDENTITY_PROOF_COMMENT_REFUSED: "identity.proof_comment.refused",
+  IDENTITY_PROOF_COMMENT_GITHUB_FAILED: "identity.proof_comment.github_failed",
   DNS_REVERSE_RECONCILE_SKIPPED: "dns.reverse_reconcile.skipped",
   DNS_FORWARD_RECONCILE_SKIPPED: "dns.forward_reconcile.skipped",
   // Goal metrics (@cogni-dao/metrics, story.0021): one refresh tick and one goals read.

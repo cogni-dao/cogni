@@ -87,12 +87,13 @@ export function validateAttestationReturnTo(
   }
 }
 
-interface BrokerConfig {
+export interface BrokerConfig {
   issuer: string;
   signingKey: KeyObject;
 }
 
-function resolveBrokerConfig(): BrokerConfig {
+/** Issuer origin and signing key. Shared with the proof-comment facade (task.0095): the same key signs both token types. */
+export function resolveBrokerConfig(): BrokerConfig {
   const env = serverEnv();
   const issuer = canonicalOrigin(env.APP_BASE_URL);
   if (
