@@ -41,6 +41,7 @@ describe("agent-authority migration carries its hand-written objects", () => {
       'CREATE TRIGGER "agent_principals_no_wallet_binding"',
       'CREATE TRIGGER "agent_credentials_external_principal_only"',
       "'spawn_grant','rotation','key_upgrade','binding_recovery','recovery_grant'",
+      'DROP TABLE IF EXISTS "agent_credentials" CASCADE',
     ]) {
       expect(sql, `missing hand-written object: ${needle}`).toContain(needle);
     }

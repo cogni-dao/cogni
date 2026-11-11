@@ -1,3 +1,15 @@
+-- 0063 owns agent_credentials on the operator. No migration on main creates this table (main's ledger ends at 0062), so on a fresh
+-- database and on production the DROP below is a no-op. It exists for ONE database: the operator candidate database, where an
+-- `agent_credentials` table already exists. That table is a leak from draft PR #2784 (story.5075): its migration 0055_closed_darwin
+-- created agent_credentials alongside the actors/* tables, and a flight of that draft applied it there (drizzle records migrations by
+-- HASH, not index, so the old-numbered leak coexists with main's later 0055-0062). It has a different column set and no 0063 ledger
+-- row, so CREATE TABLE below fails on it (observed live: candidate migrate container, PostgresError 42P07, 2026-11-11 ~18:0xZ).
+-- CASCADE removes only that table with its own indexes and constraints: #2784's sibling tables (agent_spawn_grants,
+-- agent_recovery_grants, actors/*) reference it only via their own FKs, which CASCADE detaches; they stay, same as node-template's
+-- 0039 left its #204 siblings. This mirrors node-template 0039's CEO-approved remediation of the identical class
+-- (https://github.com/cogni-dao/node-template/pull/303, recorded on story.5147); the operator instance is recorded on
+-- https://cognidao.org/work/items/story.5156. Once any database applies 0063, it is immutable.
+DROP TABLE IF EXISTS "agent_credentials" CASCADE;--> statement-breakpoint
 CREATE TABLE "agent_credentials" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" text NOT NULL,
@@ -76,6 +88,7 @@ BEGIN
   RETURN NEW;
 END
 $$;--> statement-breakpoint
+DROP TRIGGER IF EXISTS "agent_principals_no_wallet_binding" ON "user_bindings";--> statement-breakpoint
 CREATE TRIGGER "agent_principals_no_wallet_binding"
   BEFORE INSERT OR UPDATE OF user_id, provider ON "user_bindings"
   FOR EACH ROW EXECUTE FUNCTION agent_principals_refuse_wallet_binding();--> statement-breakpoint
@@ -107,6 +120,7 @@ BEGIN
   RETURN NEW;
 END
 $$;--> statement-breakpoint
+DROP TRIGGER IF EXISTS "agent_credentials_external_principal_only" ON "agent_credentials";--> statement-breakpoint
 CREATE TRIGGER "agent_credentials_external_principal_only"
   BEFORE INSERT OR UPDATE OF user_id ON "agent_credentials"
   FOR EACH ROW EXECUTE FUNCTION agent_credentials_require_external_principal();
