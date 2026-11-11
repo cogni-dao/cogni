@@ -6,7 +6,7 @@ The full triage contract now lives in the operator hub. Read it, in order, with 
 2. `GET https://cognidao.org/api/v1/knowledge/work-item-scores-design` — the axes, the rank formula, and the evidence rule.
 3. `GET https://cognidao.org/api/v1/knowledge/dao-goals-design` — priority is the node admin's, not yours.
 
-Then triage the item below exactly as that contract says: read its current `revision`; score the six axes (an evidence URL at `v >= 4`, never the item's own page); apply ONE `PATCH` setting `scores` + `status` with `expectedRevision`; never set `priority`; route a `story` to its remaining-work status, never `done`.
+Then triage the item below exactly as that contract says: read its current `revision`; score the six axes (an evidence URL at `v >= 4`, never the item's own page); apply ONE `PATCH` setting `scores` + `status` with `expectedRevision` and a `reason` (one line, at most 25 words, saying why; the PATCH is a 400 without it); never set `priority`; route a `story` to its remaining-work status, never `done`.
 
 If the hub is unavailable, keep the item at its current status and report the failed retrieval. Do not guess.
 

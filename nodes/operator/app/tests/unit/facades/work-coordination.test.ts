@@ -188,7 +188,31 @@ describe("app/_facades/work/coordination.server", () => {
     expect(patchWorkItem).toHaveBeenCalledWith(
       {
         id: "task.5007",
+        reason: "Link PR #1201",
         set: { branch: "feat/session", pr: "1201" },
+      },
+      { id: "user-1", displayName: "agent-one" }
+    );
+  });
+
+  it("sends a fixed code reason when only a branch is linked (task.0086)", async () => {
+    vi.mocked(port.linkPr).mockResolvedValue(
+      session({ branch: "feat/session" })
+    );
+
+    await linkWorkItemSessionPr({
+      workItemId: "task.5007",
+      body: { branch: "feat/session" },
+      sessionUser: USER,
+      statusUrl: "/status",
+      now: NOW,
+    });
+
+    expect(patchWorkItem).toHaveBeenCalledWith(
+      {
+        id: "task.5007",
+        reason: "Link work item branch",
+        set: { branch: "feat/session" },
       },
       { id: "user-1", displayName: "agent-one" }
     );

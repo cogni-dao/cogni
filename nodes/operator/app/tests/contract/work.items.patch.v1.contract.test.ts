@@ -12,6 +12,7 @@
  *   - STRICT_REJECTS_UNKNOWN: unknown keys 400 with the bad key surfaced — no
  *     silent stripping that triggers the misleading `set must contain at least one
  *     field` error.
+ *   - REASON_REQUIRED (task.0086): a patch without a valid reason is refused; cites are optional and bounded.
  *   - EMPTY_SET_REFINEMENT: `set: {}` still returns the empty-set message.
  * Side-effects: none
  * Links: bug.5005, packages/node-contracts/src/work.items.patch.v1.contract.ts
@@ -21,10 +22,13 @@
 import { workItemsPatchOperation } from "@cogni/node-contracts";
 import { describe, expect, it } from "vitest";
 
+const REASON = "Say why this changes";
+
 describe("workItemsPatchOperation.input", () => {
   it("accepts deployVerified:true", () => {
     const result = workItemsPatchOperation.input.safeParse({
       id: "bug.5005",
+      reason: REASON,
       set: { deployVerified: true },
     });
     expect(result.success).toBe(true);
@@ -36,6 +40,7 @@ describe("workItemsPatchOperation.input", () => {
   it("accepts projectId:null (clearing the field)", () => {
     const result = workItemsPatchOperation.input.safeParse({
       id: "task.5005",
+      reason: REASON,
       set: { projectId: null },
     });
     expect(result.success).toBe(true);
@@ -48,6 +53,7 @@ describe("workItemsPatchOperation.input", () => {
     expect(
       workItemsPatchOperation.input.safeParse({
         id: "task.5005",
+        reason: REASON,
         set: { parentId: "task.5004", blockedBy: null },
       }).success
     ).toBe(true);
@@ -56,6 +62,7 @@ describe("workItemsPatchOperation.input", () => {
   it("rejects unknown keys with the bad key surfaced in issues[]", () => {
     const result = workItemsPatchOperation.input.safeParse({
       id: "bug.5005",
+      reason: REASON,
       set: { garbage: 1 },
     });
     expect(result.success).toBe(false);
@@ -74,6 +81,7 @@ describe("workItemsPatchOperation.input", () => {
     // the missing `set`, so the 400 tells the caller how to fix it.
     const result = workItemsPatchOperation.input.safeParse({
       id: "bug.5242",
+      reason: REASON,
       patch: { status: "needs_closeout" },
     });
     expect(result.success).toBe(false);
@@ -88,6 +96,7 @@ describe("workItemsPatchOperation.input", () => {
   it("accepts an optional top-level expectedRevision (compare-and-set, story.5096)", () => {
     const result = workItemsPatchOperation.input.safeParse({
       id: "task.5282",
+      reason: REASON,
       expectedRevision: 4,
       set: { priority: 1, rank: 2 },
     });
@@ -102,6 +111,7 @@ describe("workItemsPatchOperation.input", () => {
       expect(
         workItemsPatchOperation.input.safeParse({
           id: "task.5282",
+          reason: REASON,
           expectedRevision,
           set: { priority: 1 },
         }).success
@@ -109,9 +119,51 @@ describe("workItemsPatchOperation.input", () => {
     }
   });
 
+  it("requires a reason: missing, blank or over 25 words is refused with an issue at reason (task.0086)", () => {
+    const tooLong = Array.from({ length: 26 }, () => "why").join(" ");
+    for (const reason of [undefined, "", "   ", tooLong]) {
+      const result = workItemsPatchOperation.input.safeParse({
+        id: "task.5282",
+        ...(reason !== undefined && { reason }),
+        set: { priority: 1 },
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.flatMap((i) => i.path)).toContain("reason");
+      }
+    }
+  });
+
+  it("accepts optional cites and rejects more than eight or a repeated id (task.0086)", () => {
+    const cite = (id: string) => ({ id });
+    const base = { id: "task.5282", reason: REASON, set: { priority: 1 } };
+    expect(
+      workItemsPatchOperation.input.safeParse({
+        ...base,
+        cites: [
+          cite("node-test-contract"),
+          { id: "other", contribution: "contrib-x-1" },
+        ],
+      }).success
+    ).toBe(true);
+    expect(
+      workItemsPatchOperation.input.safeParse({
+        ...base,
+        cites: Array.from({ length: 9 }, (_, i) => cite(`atom-${i}`)),
+      }).success
+    ).toBe(false);
+    expect(
+      workItemsPatchOperation.input.safeParse({
+        ...base,
+        cites: [cite("same"), cite("same")],
+      }).success
+    ).toBe(false);
+  });
+
   it("rejects an empty set with the empty-set message", () => {
     const result = workItemsPatchOperation.input.safeParse({
       id: "bug.5005",
+      reason: REASON,
       set: {},
     });
     expect(result.success).toBe(false);
@@ -124,6 +176,7 @@ describe("workItemsPatchOperation.input", () => {
   it("preserves the existing whitelist (title, status, branch, ...)", () => {
     const result = workItemsPatchOperation.input.safeParse({
       id: "bug.5005",
+      reason: REASON,
       set: {
         title: "renamed",
         status: "needs_closeout",

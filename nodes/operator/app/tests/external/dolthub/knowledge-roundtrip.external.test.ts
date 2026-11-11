@@ -235,7 +235,11 @@ describe.skipIf(!hasRequiredEnv)(
         "e2e-agent"
       );
       const patched = await wi.patch(
-        { id: created.id, set: { status: "in_progress" } } as never,
+        {
+          id: created.id,
+          reason: "Start the round trip",
+          set: { status: "in_progress" },
+        } as never,
         "e2e-agent"
       );
       expect(patched?.status).toBe("in_progress");

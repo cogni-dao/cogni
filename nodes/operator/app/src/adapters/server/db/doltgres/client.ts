@@ -7,6 +7,7 @@
  * Evaluation: the released work-items parser accepts any safe HTTPS source without host configuration.
  * Scope: Builds the injected Dolt content adapter; does not construct PostgreSQL coordination sessions.
  * Invariants: One writer; reader width two and generation budget four; lazy construction.
+ *   CITE_READS_OFF_THE_WRITER (task.0086): cited atoms resolve on a separate lazy width-one pool.
  *   Missing DOLTGRES_URL throws DoltgresNotConfiguredError.
  *   OPERATOR_KEEPS_THE_5000_FLOOR: operator's store holds its imported pre-API
  *   markdown corpus below 5000, so its allocator must clear it. Nodes booting an
@@ -17,6 +18,7 @@
  */
 
 import { buildDoltgresClient } from "@cogni/knowledge-store/adapters/doltgres";
+import { createDoltgresEntryResolver } from "@cogni/shared-knowledge-store/adapters/doltgres";
 import {
   DoltgresWorkItemAdapter,
   OPERATOR_ID_FLOOR,
@@ -37,6 +39,7 @@ export class DoltgresNotConfiguredError extends Error {
 
 let _sql: Sql | null = null;
 let _readSql: Sql | null = null;
+let _citesSql: Sql | null = null;
 let _adapter: DoltgresWorkItemAdapter | null = null;
 
 function createSql(): Sql {
@@ -90,6 +93,27 @@ function getDoltgresReadSql(): Sql {
   return _readSql;
 }
 
+/**
+ * CITE_READS_OFF_THE_WRITER (task.0086): the entry resolver pins a patch's cites with `AS OF`
+ * reads and never checks out a branch, so it runs on its own pool and never waits on the writer
+ * lock a patch holds. Width one: a patch carries at most eight cites, resolved in a few reads.
+ * Lazy: the client is built on the first cited patch, so a patch without cites costs no connection.
+ */
+function getDoltgresCitesSql(): Sql {
+  if (!_citesSql) {
+    const env = serverEnv();
+    if (!env.DOLTGRES_URL) {
+      throw new DoltgresNotConfiguredError();
+    }
+    _citesSql = buildDoltgresClient({
+      connectionString: env.DOLTGRES_URL,
+      applicationName: `cogni_work_items_cites_${env.SERVICE_NAME ?? "app"}`,
+      max: 1,
+    });
+  }
+  return _citesSql;
+}
+
 // NODE_IDENTITY_IS_THE_APP'S, NOT THIS MODULE'S. Work items are node-sovereign:
 // this adapter only ever touches the emitting node's own `knowledge_<slug>`
 // store, and no node serves another node's items. So this module must not
@@ -127,6 +151,10 @@ export function getDoltgresWorkItemsAdapter(
       // the adapter stays latched on a dead pool — the 2026-10-03 poly incident
       // (bug.5358). The factory is the same one the singleton was built from.
       recreateClient: createSql,
+      // task.0086: pins a patch's cites to commits with lock-free reads, never on the writer connection.
+      entryResolver: createDoltgresEntryResolver({
+        unsafe: (query) => getDoltgresCitesSql().unsafe(query),
+      }),
     });
   return _adapter;
 }

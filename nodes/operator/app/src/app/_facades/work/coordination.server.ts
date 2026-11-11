@@ -7,7 +7,8 @@
  * Scope: Binds session identity and maps session DTOs through the existing PG
  *   port. Claims/PR linking and coordination without a session read durable content;
  *   heartbeat and persisted-session recovery do not read Dolt or initialize providers.
- * Invariants: DOLT_IS_SOURCE_OF_TRUTH, PORT_VIA_CONTAINER.
+ * Invariants: DOLT_IS_SOURCE_OF_TRUTH, PORT_VIA_CONTAINER, SYSTEM_WRITER_FIXED_REASON (the PR link patch sends `Link PR #<n>`
+ *   or `Link work item branch`, a code-owned history reason, never model-written; task.0086).
  * Side-effects: IO through injected ports and work-item facade.
  * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
  * @internal
@@ -140,6 +141,13 @@ export async function heartbeatWorkItemSession(input: {
   };
 }
 
+/** The history reason for linking a session's PR or branch to its work item (task.0086). */
+function linkPrReason(body: WorkItemSessionPrInput): string {
+  return body.prNumber !== undefined
+    ? `Link PR #${body.prNumber}`
+    : "Link work item branch";
+}
+
 export async function linkWorkItemSessionPr(input: {
   readonly workItemId: string;
   readonly body: WorkItemSessionPrInput;
@@ -170,6 +178,8 @@ export async function linkWorkItemSessionPr(input: {
   const patchedWorkItem = await patchWorkItem(
     {
       id: input.workItemId,
+      // SYSTEM_WRITER_FIXED_REASON (task.0086): a code-owned line, never model-written.
+      reason: linkPrReason(input.body),
       set: {
         ...(input.body.branch !== undefined && { branch: input.body.branch }),
         ...(input.body.prNumber !== undefined && {

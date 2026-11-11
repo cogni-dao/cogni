@@ -357,11 +357,17 @@ describe("createWorkItemCapability", () => {
     const result = await cap.patch({
       id: "task.5282",
       expectedRevision: 4,
+      reason: "Raise the rank",
       set: { priority: 2, rank: 2 },
     });
 
     expect(store.patch).toHaveBeenCalledWith(
-      { id: "task.5282", expectedRevision: 4, set: { priority: 2, rank: 2 } },
+      {
+        id: "task.5282",
+        expectedRevision: 4,
+        reason: "Raise the rank",
+        set: { priority: 2, rank: 2 },
+      },
       "actor:system"
     );
     expect(result).toMatchObject({ priority: 2, rank: 2, revision: 5 });
@@ -378,12 +384,34 @@ describe("createWorkItemCapability", () => {
       backlogWriter: { store, principalId: "actor:system" },
     });
 
-    await cap.patch({ id: "task.5282", set: { labels: ["x"] } });
+    await cap.patch({
+      id: "task.5282",
+      reason: "Label it",
+      set: { labels: ["x"] },
+    });
 
     expect(store.patch).toHaveBeenCalledWith(
-      { id: "task.5282", set: { labels: ["x"] } },
+      { id: "task.5282", reason: "Label it", set: { labels: ["x"] } },
       "actor:system"
     );
+  });
+
+  it("passes a missing reason to the store, the one enforcer, which refuses it (task.0086)", async () => {
+    const md = markdownPorts();
+    const refused = Object.assign(new Error("reason is required"), {
+      name: "ChangeReasonInvalidError",
+    });
+    const store = { patch: vi.fn().mockRejectedValue(refused) };
+    const cap = createWorkItemCapability({
+      workItemQuery: md.query,
+      workItemCommand: md.command,
+      backlogWriter: { store, principalId: "actor:system" },
+    });
+
+    await expect(
+      cap.patch({ id: "task.5282", set: { labels: ["x"] } })
+    ).rejects.toBe(refused);
+    expect(store.patch).toHaveBeenCalledTimes(1);
   });
 
   it("maps the store's revision conflict to WorkItemPatchConflictError", async () => {
@@ -402,7 +430,12 @@ describe("createWorkItemCapability", () => {
     });
 
     const err = await cap
-      .patch({ id: "task.5282", expectedRevision: 4, set: { priority: 2 } })
+      .patch({
+        id: "task.5282",
+        expectedRevision: 4,
+        reason: "Raise priority",
+        set: { priority: 2 },
+      })
       .catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(WorkItemPatchConflictError);
@@ -426,7 +459,11 @@ describe("createWorkItemCapability", () => {
     });
 
     await expect(
-      cap.patch({ id: "task.5282", set: { summary: "x" } })
+      cap.patch({
+        id: "task.5282",
+        reason: "Edit summary",
+        set: { summary: "x" },
+      })
     ).rejects.toBe(denied);
   });
 
@@ -438,7 +475,12 @@ describe("createWorkItemCapability", () => {
     });
 
     await expect(
-      cap.patch({ id: "task.5282", expectedRevision: 4, set: { priority: 2 } })
+      cap.patch({
+        id: "task.5282",
+        expectedRevision: 4,
+        reason: "Raise priority",
+        set: { priority: 2 },
+      })
     ).rejects.toThrow("requires the Doltgres backlog writer");
     expect(md.command.patch).not.toHaveBeenCalled();
   });
@@ -454,10 +496,14 @@ describe("createWorkItemCapability", () => {
       backlogWriter: { store, principalId: "actor:system" },
     });
 
-    const result = await cap.patch({ id: "task.5282", set: { priority } });
+    const result = await cap.patch({
+      id: "task.5282",
+      reason: "Set priority",
+      set: { priority },
+    });
 
     expect(store.patch).toHaveBeenCalledWith(
-      { id: "task.5282", set: { priority } },
+      { id: "task.5282", reason: "Set priority", set: { priority } },
       "actor:system"
     );
     expect(result.id).toBe("task.5282");
@@ -485,10 +531,16 @@ describe("shared evaluation capability adoption", () => {
     const result = await capability.patch({
       id: scored.id,
       expectedRevision: 4,
+      reason: "Score it",
       set: { scores },
     });
     expect(store.patch).toHaveBeenCalledWith(
-      { id: scored.id, expectedRevision: 4, set: { scores } },
+      {
+        id: scored.id,
+        expectedRevision: 4,
+        reason: "Score it",
+        set: { scores },
+      },
       "actor:test"
     );
     expect(result).toMatchObject({

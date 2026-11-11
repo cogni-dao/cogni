@@ -171,6 +171,55 @@ export class WorkItemScoresInvalidError extends Error {
   }
 }
 
+/**
+ * Thrown when a patch's `reason` is missing or breaks the shared rule (task.0086).
+ * PERMANENT, CALLER'S ERROR: the adapter is the one enforcer, refused before any
+ * lock, so nothing was written; the route answers 400 with an issue at `reason`.
+ */
+export class ChangeReasonInvalidError extends Error {
+  readonly code = "reason_invalid" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "ChangeReasonInvalidError";
+  }
+}
+
+/** A patch's `cites` broke the cite rules (the zod schema normally says so first). 400, nothing written. */
+export class CitesInvalidError extends Error {
+  readonly code = "cites_invalid" as const;
+  constructor(readonly issues: readonly string[]) {
+    super("Invalid cites");
+    this.name = "CitesInvalidError";
+  }
+}
+
+/** A patch carries cites but no resolver is wired on this node. 400, nothing written. */
+export class CitesUnsupportedError extends Error {
+  readonly code = "cites_unsupported" as const;
+  constructor(message = "cites are not supported on this node") {
+    super(message);
+    this.name = "CitesUnsupportedError";
+  }
+}
+
+/** A cited id is unknown, or its inbox is closed or lacks it. 400, nothing written. */
+export class EntryUnresolvedError extends Error {
+  readonly code = "cite_unresolved" as const;
+  constructor(readonly ids: readonly string[]) {
+    super(`Cited entries not found: ${ids.join(", ")}`);
+    this.name = "EntryUnresolvedError";
+  }
+}
+
+/** The cite resolver failed or ran past its deadline. 503, nothing written. */
+export class EntryResolverUnavailableError extends Error {
+  readonly code = "cite_resolver_unavailable" as const;
+  constructor(message = "cite resolver unavailable") {
+    super(message);
+    this.name = "EntryResolverUnavailableError";
+  }
+}
+
 function isScoresIssue(value: unknown): value is WorkItemScoresIssue {
   const issue = value as Partial<WorkItemScoresIssue> | null;
   return (
@@ -225,6 +274,27 @@ function mapStoreError(e: unknown): unknown {
     return new WorkItemScoresInvalidError(
       Array.isArray(issues) ? issues.filter(isScoresIssue) : []
     );
+  }
+  // task.0086: the adapter is the one enforcer of reason and cites. The facade returns its
+  // own copy of each class so the app layer never imports the adapter subpath.
+  if (name === "ChangeReasonInvalidError") {
+    return new ChangeReasonInvalidError(message);
+  }
+  if (name === "CitesInvalidError") {
+    const issues = (e as { issues?: unknown }).issues;
+    return new CitesInvalidError(
+      Array.isArray(issues) ? issues.map(String) : [message]
+    );
+  }
+  if (name === "CitesUnsupportedError") {
+    return new CitesUnsupportedError(message || undefined);
+  }
+  if (name === "EntryUnresolvedError") {
+    const ids = (e as { ids?: unknown }).ids;
+    return new EntryUnresolvedError(Array.isArray(ids) ? ids.map(String) : []);
+  }
+  if (name === "EntryResolverUnavailableError") {
+    return new EntryResolverUnavailableError(message || undefined);
   }
   if (name === "WorkItemsBusyError") {
     return new WorkItemsBusyError(message);
@@ -494,7 +564,8 @@ export async function patchWorkItem(
           expectedRevision: input.expectedRevision,
         }),
         set: dropUndefined(input.set),
-        ...(input.reason !== undefined && { reason: input.reason }),
+        reason: input.reason,
+        ...(input.cites !== undefined && { cites: input.cites }),
       },
       authorTagFromSession(sessionUser)
     );

@@ -179,13 +179,13 @@ curl -fsS -X POST "$BASE/api/v1/work/items/$ID/heartbeat" \
 curl -fsS -X PATCH "$BASE/api/v1/work/items/$ID" \
   -H "Authorization: Bearer $API_KEY" \
   -H "content-type: application/json" \
-  -d '{"set":{"summary":"Node-local PATCH readback passed."}}' \
+  -d '{"reason":"Record the readback summary","set":{"summary":"Node-local PATCH readback passed."}}' \
   | jq -e --arg id "$ID" '.id == $id and .summary == "Node-local PATCH readback passed."'
 
 curl -fsS -X PATCH "$BASE/api/v1/work/items/$ID" \
   -H "Authorization: Bearer $API_KEY" \
   -H "content-type: application/json" \
-  -d '{"set":{"status":"done"}}' >/dev/null
+  -d '{"reason":"Close after the readback passed","set":{"status":"done"}}' >/dev/null
 
 # Independently read back the exact durable item state.
 curl -fsS "$BASE/api/v1/work/items/$ID" \

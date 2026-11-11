@@ -6,6 +6,7 @@
  * Purpose: HTTP endpoints for getting, patching, and deleting a single work item by ID.
  * Scope: Auth-protected GET/PATCH and retired DELETE response; does not implement persistence or allow hard deletion.
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, DURABLE_IDENTITY_NEVER_REUSED, CODED_WRITE_ERRORS.
+ * Reason + cites (task.0086): a missing or over-cap reason is HTTP 400 `invalid input` with an issue at `reason`; an unknown cite id or a closed inbox is HTTP 400 `cite_unresolved`; cites with no resolver wired is HTTP 400 `cites_unsupported`; a resolver failure is HTTP 503. Nothing is written in each case.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
@@ -101,7 +102,10 @@ export const PATCH = wrapRouteHandlerWithLogging<{
         id: sessionUser.id,
         displayName: sessionUser.displayName,
       });
-      ctx.log.info({ workItemId: id }, "work.items.patch_success");
+      ctx.log.info(
+        { workItemId: id, citeCount: parseResult.data.cites?.length ?? 0 },
+        "work.items.patch_success"
+      );
       return NextResponse.json(workItemsPatchOperation.output.parse(patched));
     } catch (e) {
       // Coded responses: 400 work_item_scores_invalid (story.5111), 403

@@ -245,7 +245,14 @@ describe("renderBundleMarkdown", () => {
         `PATCH ${baseInput.origin}/api/v1/work/items/{id}`
       );
       // The two contract details agents most often get wrong.
-      expect(markdown).toContain('{"set":{...}}');
+      expect(markdown).toContain('"set":{...}');
+      // task.0086: the reason is required, so the example carries one.
+      expect(markdown).toContain(
+        '{"reason":"<why, one line, at most 25 words>","set":{...}}'
+      );
+      expect(markdown).toContain(
+        '{"reason":"PR merged","set":{"status":"done"}}'
+      );
       expect(markdown).toContain("There is no `in_progress`");
     }
 
