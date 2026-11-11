@@ -290,7 +290,7 @@ describe("(c) work-item priority is not node-admin (task.5306)", () => {
         const res = await fetch({
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ set: { priority } }),
+          body: JSON.stringify({ reason: "Set priority", set: { priority } }),
         });
         status = res.status;
         json = await res.json();
