@@ -23,9 +23,11 @@
  *     means every lane is down, never unknown. (Drift keeps its older all-unreachable rule; separate follow-up.)
  *   - UNBOUND_HOST_IS_NOT_PROBED: a lane whose declared host cannot be probed (invalid target) is declared,
  *     not probed and not down. `probed < declared` is the guardrail's signal.
- *   - REACH_NEEDS_A_NAMED_LIST: only a 200 (reaches every dependency) or a 503 whose JSON body carries
- *     `unreachable: string[]` is a known reach reading. Every other answer is unknown for reach: excluded
- *     from numerator and denominator, counted. No free-text message parsing.
+ *   - REACH_IS_ATTRIBUTED: reach is read only through `readDeepReadiness` (@cogni-dao/substrate-health): a
+ *     lane's `checks[dependency]` is reached/unreached, a lane that does not probe it is na, and anything
+ *     else is unknown. na and unknown are excluded from numerator and denominator and counted. A body without
+ *     `checks` counts as reached only on a healthy 200 and only for the four names every deep probe has
+ *     always run (dated transition, story.0029). No free-text message parsing.
  *   - UPTIME_IS_STORED_FACTS: uptime = 100 x (1 - sum(down) / sum(probed)) over stored `ok` SCHEDULED lanes-down
  *     readings with the `fleet:declared=,probed=,down=` evidence, one per refresh slot. Gaps stay gaps. Under
  *     24 h of readings, or under half of the window's expected slots (definition cadence, else 300 s), is
@@ -41,6 +43,7 @@
  * @public
  */
 
+import { readDeepReadiness } from "@cogni/substrate-health";
 import type {
   MetricCalculator,
   MetricSample,
@@ -61,17 +64,29 @@ export const LANES_DOWN_ID = "fleet.lanes-down@1";
 export const SUBSTRATE_REACH_ID = "fleet.substrate-reach@1";
 export const UPTIME_ID = "fleet.uptime@1";
 
-/**
- * The shared dependencies a lane's deep readyz may name as unreachable. Doltgres is deliberately absent: the
- * template readyz does not check it, so a 200 would count it reachable while it may be down (a false green).
- */
-export const SUBSTRATE_DEPENDENCIES = [
+/** Every dependency a lane's deep readyz can probe (the @cogni-dao/substrate-health probe names). */
+export const REACH_DEPENDENCIES = [
   "postgres",
   "temporal",
   "scheduler-worker",
   "evm-rpc",
+  "redis",
+  "litellm-gateway",
+  "doltgres",
 ] as const;
-export type SubstrateDependency = (typeof SUBSTRATE_DEPENDENCIES)[number];
+export type ReachDependency = (typeof REACH_DEPENDENCIES)[number];
+
+/**
+ * TRANSITION (story.0029, exit: every lane serves substrate-health >= 0.2.0): a lane without per-dependency
+ * `checks` still reads as reached on an aggregate healthy 200, but only for the names every deep probe has
+ * always covered. Any other name on such a lane is unknown, never a false green.
+ */
+const AGGREGATE_ONLY_DEPENDENCIES: ReadonlySet<string> = new Set([
+  "postgres",
+  "temporal",
+  "scheduler-worker",
+  "evm-rpc",
+]);
 
 /** Most stored readings one uptime reading integrates: 28 days at the 5-minute cadence is 8,064. */
 export const MAX_UPTIME_READINGS = 12_000;
@@ -116,36 +131,30 @@ export function classifyLaneReadiness(
     : { kind: "down", reason: `readyz_status/${ready.status}` };
 }
 
-export type ReachVerdict = "reached" | "unreached" | "unknown";
-
-/** The `unreachable` string list of a readyz JSON body, or undefined when absent or not a string list. */
-export function unreachableList(body: string): readonly string[] | undefined {
-  try {
-    const v = (JSON.parse(body) as { unreachable?: unknown } | null)
-      ?.unreachable;
-    return Array.isArray(v) && v.every((x) => typeof x === "string")
-      ? (v as string[])
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
+export type ReachVerdict = "reached" | "unreached" | "na" | "unknown";
 
 /**
- * Whether one lane reaches `dependency`. A 200 reaches every dependency. A 503 that names its unreachable
- * dependencies reaches the rest. Everything else (a timeout, a 503 without the list, any other status) is
- * unknown: it must never count as reachable, and it must not count as unreachable either.
+ * Whether one lane reaches `dependency`, read only through `readDeepReadiness`. A lane that attributes its
+ * checks answers reached, unreached or na (it does not probe that name). A timeout, another status or a body
+ * without evidence for that name is unknown: it never counts as reachable or unreachable.
  */
 export function classifyReach(
   ready: DeliveryProbeResult,
-  dependency: SubstrateDependency
+  dependency: ReachDependency
 ): ReachVerdict {
   if (ready.kind === "unreachable") return "unknown";
-  if (ready.status === 200) return "reached";
-  if (ready.status !== 503) return "unknown";
-  const list = unreachableList(ready.body);
-  if (!list) return "unknown";
-  return list.includes(dependency) ? "unreached" : "reached";
+  let body: unknown = null;
+  try {
+    body = JSON.parse(ready.body);
+  } catch {
+    // Not JSON: no evidence.
+  }
+  const reading = readDeepReadiness(ready.status, body);
+  const state = reading.dependencyState(dependency);
+  if (state !== "unknown") return state;
+  return reading.healthy && AGGREGATE_ONLY_DEPENDENCIES.has(dependency)
+    ? "reached"
+    : "unknown";
 }
 
 const EVIDENCE_LINE = /^fleet:declared=(\d+),probed=(\d+),down=(\d+)$/;
@@ -320,7 +329,7 @@ export function createFleetCalculators(
   // ---- fleet.substrate-reach: % of known lanes that reach one dependency --------------------
   const reachParams = z.strictObject({
     env: envSchema,
-    dependency: z.enum(SUBSTRATE_DEPENDENCIES),
+    dependency: z.enum(REACH_DEPENDENCIES),
   });
   const substrateReach: MetricCalculator = {
     id: SUBSTRATE_REACH_ID,
@@ -342,10 +351,11 @@ export function createFleetCalculators(
       const reached = verdicts.filter((v) => v.reach === "reached").length;
       const unreached = verdicts.filter((v) => v.reach === "unreached");
       const unknown = verdicts.filter((v) => v.reach === "unknown").length;
+      const na = verdicts.filter((v) => v.reach === "na").length;
       const known = reached + unreached.length;
       const evidence = [
         ...head,
-        `fleet:declared=${snap.laneCount},known=${known},reached=${reached},unknown=${unknown}`,
+        `fleet:declared=${snap.laneCount},known=${known},reached=${reached},unknown=${unknown},na=${na}`,
         ...unreached
           .slice(0, MAX_EVIDENCE)
           .map(({ lane }) => laneRef(lane, `unreachable/${p.dependency}`)),

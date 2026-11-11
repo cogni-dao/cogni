@@ -448,6 +448,9 @@ importers:
       '@cogni/shared-knowledge-store':
         specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.13.1/cogni-dao-knowledge-store-0.13.1.tgz
         version: '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.13.1/cogni-dao-knowledge-store-0.13.1.tgz'
+      '@cogni/substrate-health':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.2.0/cogni-dao-substrate-health-0.2.0.tgz
+        version: '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.2.0/cogni-dao-substrate-health-0.2.0.tgz'
       '@cogni/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.7.1/cogni-dao-work-items-0.7.1.tgz
         version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.7.1/cogni-dao-work-items-0.7.1.tgz'
@@ -1965,6 +1968,10 @@ packages:
     peerDependenciesMeta:
       postgres:
         optional: true
+
+  '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.2.0/cogni-dao-substrate-health-0.2.0.tgz':
+    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.2.0/cogni-dao-substrate-health-0.2.0.tgz}
+    version: 0.2.0
 
   '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.7.1/cogni-dao-work-items-0.7.1.tgz':
     resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.7.1/cogni-dao-work-items-0.7.1.tgz}
@@ -13601,6 +13608,8 @@ snapshots:
       zod: 4.3.6
     optionalDependencies:
       postgres: 3.4.7
+
+  '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.2.0/cogni-dao-substrate-health-0.2.0.tgz': {}
 
   '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.7.1/cogni-dao-work-items-0.7.1.tgz':
     dependencies:

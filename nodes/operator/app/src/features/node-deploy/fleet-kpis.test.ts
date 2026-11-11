@@ -48,7 +48,7 @@ const CONTROL = "cognidao.org";
 /** The host of a recorded `host/path` probe. */
 const hostOf = (probe: string) => probe.split("/")[0];
 
-const ok = (body: unknown = {}): DeliveryProbeResult => ({
+const ok = (body: unknown = { status: "healthy" }): DeliveryProbeResult => ({
   kind: "response",
   status: 200,
   body: JSON.stringify(body),
@@ -98,8 +98,7 @@ function source(input: {
     probe: async ({ host, path }: { host: string; path: string }) => {
       probes.push(`${host}${path}`);
       if (host === CONTROL) return input.control ?? ok();
-      if (path.startsWith("/readyz"))
-        return input.ready?.[host] ?? ok({ status: "ready" });
+      if (path.startsWith("/readyz")) return input.ready?.[host] ?? ok();
       return ok({ buildSha: SHA_A });
     },
   };
@@ -277,7 +276,10 @@ describe(LANES_DOWN_ID, () => {
       source({
         lanes: [lane("a"), lane("b"), lane("c")],
         ready: {
-          "b.cognidao.org": status(503, { unreachable: ["postgres"] }),
+          "b.cognidao.org": status(503, {
+            status: "error",
+            unreachable: ["postgres"],
+          }),
           "c.cognidao.org": timeout,
         },
       })
@@ -407,7 +409,27 @@ describe(LANES_DOWN_ID, () => {
 });
 
 describe("classifyReach", () => {
-  it("200 reaches every dependency", () => {
+  const ok3 = { status: "ok", durationMs: 3 };
+  const failed = { status: "failed", durationMs: 3000 };
+  it("reads attributed checks: ok is reached, failed is unreached, an unprobed name is na", () => {
+    const r = status(503, {
+      status: "error",
+      unreachable: ["scheduler-worker"],
+      checks: { postgres: ok3, "scheduler-worker": failed, redis: ok3 },
+      buildSha: "abc",
+    });
+    expect(classifyReach(r, "postgres")).toBe("reached");
+    expect(classifyReach(r, "redis")).toBe("reached");
+    expect(classifyReach(r, "scheduler-worker")).toBe("unreached");
+    expect(classifyReach(r, "doltgres")).toBe("na");
+    const healthy = status(200, {
+      status: "healthy",
+      checks: { postgres: ok3 },
+    });
+    expect(classifyReach(healthy, "postgres")).toBe("reached");
+    expect(classifyReach(healthy, "litellm-gateway")).toBe("na");
+  });
+  it("an aggregate 200 without checks reaches only the four always-probed names", () => {
     for (const dep of [
       "postgres",
       "temporal",
@@ -415,24 +437,32 @@ describe("classifyReach", () => {
       "evm-rpc",
     ] as const)
       expect(classifyReach(ok(), dep)).toBe("reached");
+    for (const dep of ["redis", "litellm-gateway", "doltgres"] as const)
+      expect(classifyReach(ok(), dep)).toBe("unknown");
   });
-  it("a 503 with an unreachable list reaches dep iff dep is not in it", () => {
-    const r = status(503, { unreachable: ["temporal", "postgres"] });
+  it("a 503 without checks only proves the names it lists as unreached", () => {
+    const r = status(503, {
+      status: "error",
+      unreachable: ["temporal", "postgres"],
+    });
     expect(classifyReach(r, "postgres")).toBe("unreached");
     expect(classifyReach(r, "temporal")).toBe("unreached");
-    expect(classifyReach(r, "scheduler-worker")).toBe("reached");
-    expect(classifyReach(status(503, { unreachable: [] }), "postgres")).toBe(
-      "reached"
-    );
+    expect(classifyReach(r, "scheduler-worker")).toBe("unknown");
   });
   it("a 503 without a usable list, any other status and a timeout are unknown; free text is never parsed", () => {
     expect(classifyReach(status(503, {}), "postgres")).toBe("unknown");
     expect(classifyReach(status(503, "not json"), "postgres")).toBe("unknown");
     expect(
-      classifyReach(status(503, { unreachable: "postgres" }), "postgres")
+      classifyReach(
+        status(503, { status: "error", unreachable: "postgres" }),
+        "postgres"
+      )
     ).toBe("unknown");
     expect(
-      classifyReach(status(503, { unreachable: [1, 2] }), "postgres")
+      classifyReach(
+        status(503, { status: "error", unreachable: [1, 2] }),
+        "postgres"
+      )
     ).toBe("unknown");
     expect(
       classifyReach(
@@ -441,7 +471,10 @@ describe("classifyReach", () => {
       )
     ).toBe("unknown");
     expect(
-      classifyReach(status(502, { unreachable: ["postgres"] }), "postgres")
+      classifyReach(
+        status(502, { status: "error", unreachable: ["postgres"] }),
+        "postgres"
+      )
     ).toBe("unknown");
     expect(classifyReach(timeout, "postgres")).toBe("unknown");
   });
@@ -450,7 +483,10 @@ describe("classifyReach", () => {
 describe(SUBSTRATE_REACH_ID, () => {
   const lanes = [lane("a"), lane("b"), lane("c"), lane("d")];
   const ready = {
-    "b.cognidao.org": status(503, { unreachable: ["postgres"] }),
+    "b.cognidao.org": status(503, {
+      status: "error",
+      unreachable: ["postgres"],
+    }),
     "c.cognidao.org": status(503, { error: "boom" }),
     "d.cognidao.org": timeout,
   };
@@ -465,7 +501,7 @@ describe(SUBSTRATE_REACH_ID, () => {
     expect(pg.evidenceRefs).toEqual(
       expect.arrayContaining([
         "fleet:dependency=postgres",
-        "fleet:declared=4,known=2,reached=1,unknown=2",
+        "fleet:declared=4,known=2,reached=1,unknown=2,na=0",
         `lane:${NODE}/production/b:unreachable/postgres`,
       ])
     );
@@ -507,7 +543,10 @@ describe(SUBSTRATE_REACH_ID, () => {
         source({
           lanes: seven,
           ready: {
-            "w0.cognidao.org": status(503, { unreachable: ["evm-rpc"] }),
+            "w0.cognidao.org": status(503, {
+              status: "error",
+              unreachable: ["evm-rpc"],
+            }),
           },
         })
       ).calcs,
@@ -521,11 +560,12 @@ describe(SUBSTRATE_REACH_ID, () => {
       (c) => c.id === SUBSTRATE_REACH_ID
     ) as MetricCalculator;
     expect(() =>
-      calc.paramsSchema.parse({ env: "production", dependency: "doltgres" })
+      calc.paramsSchema.parse({ env: "production", dependency: "openfga" })
     ).toThrow();
-    expect(() =>
-      calc.paramsSchema.parse({ env: "production", dependency: "redis" })
-    ).toThrow();
+    for (const dependency of ["redis", "litellm-gateway", "doltgres"])
+      expect(
+        calc.paramsSchema.parse({ env: "production", dependency })
+      ).toEqual({ env: "production", dependency });
   });
 });
 
