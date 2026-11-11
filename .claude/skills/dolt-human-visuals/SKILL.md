@@ -11,6 +11,7 @@ metadata:
 > The contract lives in the node-template hub, not here. This file is only the trigger.
 
 Read these node-template-owned entries with `COGNI_NODE_TEMPLATE_API_KEY` (on node-template itself, `COGNI_NODE_API_KEY`), then follow them:
+
 - `GET https://node-template.cognidao.org/api/v1/knowledge/knowledge-human-visuals` — the diagram-first budget, fragment-only shape, theme tokens, `cogni-*` classes and review checklist
 - Reference atom: `GET https://node-template.cognidao.org/api/v1/knowledge/cogni-harness-design`
 
