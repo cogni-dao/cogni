@@ -71,7 +71,7 @@ import {
   isNodeOwnedSecretKey,
   isOffClusterWorkloadSecretKey,
 } from "@/shared/secrets/node-secrets-reserved.data";
-import { hostForEnv, hostOwnedBy } from "./edge";
+import { hostForEnv, hostOwnedBy, siblingLabel } from "./edge";
 import { runtimeOwnedEnvKeys } from "./node-app-env";
 
 const APP_PROFILE_KEYS: ReadonlySet<string> = new Set(
@@ -189,7 +189,14 @@ export function resolveWorkloadDeclaration(input: {
         workload.expose.http.host,
         "production",
         input.nodeSlug,
-        isWorkerService(spec, workload.name) ? workload.name : undefined
+        siblingLabel({
+          binding: input.workloadZone,
+          host: workload.expose.http.host,
+          env: "production",
+          slug: input.nodeSlug,
+          workload: workload.name,
+          worker: isWorkerService(spec, workload.name),
+        })
       )
     )
       throw new DeclarationError(
