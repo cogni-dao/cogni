@@ -12,7 +12,6 @@
 import { execSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parse as parseYaml } from "yaml";
 import {
   type SecretCapability,
   SecretEnvironmentSchema,
@@ -22,7 +21,8 @@ import {
   SecretsCatalogFileSchema,
   type SecretTier,
   type SecretTransform,
-} from "../../packages/repo-spec/src/secrets-catalog";
+} from "@cogni/node-declarations";
+import { parse as parseYaml } from "yaml";
 
 // ── Generators ─────────────────────────────────────────────────────────────
 // Kept here (not in setup-secrets.ts) so the YAML `generate.kind` discriminator

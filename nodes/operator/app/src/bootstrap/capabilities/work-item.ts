@@ -26,6 +26,8 @@
  *   - PATCH_CAS_PASSTHROUGH: a caller `expectedRevision` is forwarded as the store's
  *     compare-and-set; the store's `WorkItemRevisionConflictError` becomes the ai-tools
  *     `WorkItemPatchConflictError` (nothing written). Absent ⇒ unconditioned patch.
+ *   - MOVES_READ_AT_READ_TIME (story.0033): a `query` that returns exactly one item (the `core__work_item_read` path) adds each move's
+ *     baseline, current reading and verdict from `moveReadings`; a list or page read returns the stored moves only, so a page costs no metric lookup.
  * Evaluation: returns package rankScore and forwards whole-score CAS patches without changing priority.
  * Side-effects: none (factory only)
  * Links: docs/spec/development-lifecycle.md
@@ -41,13 +43,14 @@ import {
 } from "@cogni/shared-ai-tools";
 import type {
   ActorKind,
+  MoveReadingPort,
   WorkItem,
   WorkItemCommandPort,
   WorkItemQueryPort,
   WorkItemStatus,
   WorkItemType,
 } from "@cogni/work-items";
-import { toWorkItemDto, toWorkItemId } from "@cogni/work-items";
+import { judgeMoves, toWorkItemDto, toWorkItemId } from "@cogni/work-items";
 import {
   WorkItemRevisionConflictError,
   type WorkItemsDoltgresPort,
@@ -66,6 +69,8 @@ export interface WorkItemCapabilityDeps {
    * Doltgres `pageInfo`) is accepted and ignored.
    */
   readonly backlogReader?: Pick<WorkItemQueryPort, "list">;
+  /** Reads the metrics a single item moves; absent means no metrics service (every move reads `unknown`). */
+  readonly moveReadings?: MoveReadingPort | undefined;
   /**
    * Doltgres write path for `patch` (the store behind `PATCH /api/v1/work/items/{id}`).
    * When set, `patch` writes there as `principalId` instead of the markdown ports.
@@ -125,6 +130,17 @@ export function createWorkItemCapability(
     });
   }
 
+  /** A one-item read gets each move judged from its observations (bounded: at most 3 moves). */
+  async function withMoveReadings(
+    items: readonly WorkItemInfo[]
+  ): Promise<readonly WorkItemInfo[]> {
+    const only = items.length === 1 ? items[0] : undefined;
+    if (!only?.moves?.length) return items;
+    return [
+      { ...only, moves: await judgeMoves(only.moves, deps.moveReadings) },
+    ];
+  }
+
   return {
     async queryPage(params) {
       const result = await listPage(params);
@@ -138,7 +154,7 @@ export function createWorkItemCapability(
 
     async query(params): Promise<readonly WorkItemInfo[]> {
       const result = await listPage(params);
-      return result.items.map(toWorkItemInfo);
+      return withMoveReadings(result.items.map(toWorkItemInfo));
     },
 
     async transitionStatus(input): Promise<WorkItemTransitionResult> {

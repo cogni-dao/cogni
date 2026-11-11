@@ -11,6 +11,7 @@
  * @public
  */
 
+import { RETIRED_SECRET_REFS_MESSAGE } from "@cogni/node-declarations";
 import { z } from "zod";
 
 /**
@@ -304,11 +305,11 @@ const serviceEnvKeySchema = z
 /**
  * `secret_refs` is retired (bug.5254). A node secret has ONE declaration: its entry in
  * `.cogni/secrets-catalog.yaml`, whose `workloads` names the services that receive it. A repo-spec that
- * still carries `secret_refs` (top level or on a service) is refused with this fixed message, never
- * stripped (CD1: a declared field is never ignored). The text names fields only, so it echoes no value.
+ * still carries `secret_refs` (top level or on a service) is refused with the fixed message, never
+ * stripped (CD1: a declared field is never ignored). The message is owned by
+ * `@cogni-dao/node-declarations` (the node CI check and this deploy refusal share one literal).
  */
-export const RETIRED_SECRET_REFS_MESSAGE =
-  "secret_refs is retired: declare each node secret in .cogni/secrets-catalog.yaml with `workloads` (bug.5254)";
+export { RETIRED_SECRET_REFS_MESSAGE };
 
 /** The refused `secret_refs` field: absent parses, any value (even `[]`) fails with the fixed message. */
 const retiredSecretRefsSchema = z
