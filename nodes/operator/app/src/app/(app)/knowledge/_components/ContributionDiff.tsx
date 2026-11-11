@@ -63,12 +63,29 @@ function citationHref(id: string): string {
     : `/knowledge/${encodeURIComponent(id)}`;
 }
 
+/** A confidence value as "60%", or "—" when that side has none. */
+function percent(value: unknown): string {
+  return value == null ? "—" : `${String(value)}%`;
+}
+
+/** Before and after confidence of a modified row, when both sides carry it and it moved. */
+function confidenceMove(d: EntryDiffRow | null) {
+  if (d?.changeType !== "modified") return null;
+  const from = d.before?.confidencePct;
+  const to = d.after?.confidencePct;
+  return from !== undefined && to !== undefined && from !== to
+    ? { from, to }
+    : null;
+}
+
 /** Fields whose value differs between the two sides of a modified row. */
 function changedFields(d: EntryDiffRow): string[] {
   const before = d.before ?? {};
   const after = d.after ?? {};
   return [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(
-    (field) => JSON.stringify(before[field]) !== JSON.stringify(after[field])
+    (field) =>
+      field !== "confidencePct" &&
+      JSON.stringify(before[field]) !== JSON.stringify(after[field])
   );
 }
 
@@ -146,6 +163,7 @@ export function ContributionDiff({
           domain?: string;
         } | null;
         const isHtml = row?.entryType === "html";
+        const confidence = confidenceMove(d);
         const changed = d?.changeType === "modified" ? changedFields(d) : [];
         return (
           <div
@@ -181,6 +199,12 @@ export function ContributionDiff({
               {row?.entryType && (
                 <span className="font-mono text-muted-foreground/70 text-xs">
                   {row.entryType}
+                </span>
+              )}
+              {confidence && (
+                <span className="text-muted-foreground tabular-nums">
+                  confidence {percent(confidence.from)} →{" "}
+                  {percent(confidence.to)}
                 </span>
               )}
             </div>

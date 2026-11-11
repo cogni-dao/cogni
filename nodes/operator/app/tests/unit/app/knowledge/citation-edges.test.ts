@@ -59,10 +59,17 @@ describe("citationEdgesFromDiff", () => {
     });
   });
 
-  it("ignores entry rows and malformed edge rows", () => {
+  it("ignores entry rows", () => {
     expect(
       citationEdgesFromDiff([
         { changeType: "added", rowId: "e", before: null, after: { id: "e" } },
+      ])
+    ).toEqual([]);
+  });
+
+  it("throws on a malformed edge row instead of dropping the link", () => {
+    expect(() =>
+      citationEdgesFromDiff([
         {
           changeType: "citation_added",
           rowId: "bad",
@@ -70,6 +77,6 @@ describe("citationEdgesFromDiff", () => {
           after: { citingId: "a-entry" },
         },
       ])
-    ).toEqual([]);
+    ).toThrow(/malformed citation diff row bad/);
   });
 });

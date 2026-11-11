@@ -8,7 +8,8 @@
  * Scope: Pure adapter from the workspace store's `citation_added` / `citation_removed`
  *   rows to the published `ContributionCitationDiffEntry` shape. Does no IO and holds
  *   no relation wording; labels come from `describeCitation`.
- * Invariants: EVERY_DIFF_EDGE_LISTED, CITATION_DIFF_FOR_REVIEW. The workspace diff
+ * Invariants: EVERY_DIFF_EDGE_LISTED (a malformed row throws, so the route errors
+ *   visibly instead of dropping a link), CITATION_DIFF_FOR_REVIEW. The workspace diff
  *   does not report edge context or a re-contexted edge, so `context` is null and
  *   `modified` never appears until the operator reads `diffCitations` from the published store.
  * Side-effects: none
@@ -43,7 +44,10 @@ export function citationEdgesFromDiff(
       typeof citedId !== "string" ||
       typeof citationType !== "string"
     ) {
-      continue;
+      // A link the reviewer cannot read is a failed diff, never a hidden edge.
+      throw new Error(
+        `malformed citation diff row ${entry.rowId}: citingId, citedId and citationType must be strings`
+      );
     }
     edges.push({
       changeType: entry.changeType === "citation_added" ? "added" : "removed",

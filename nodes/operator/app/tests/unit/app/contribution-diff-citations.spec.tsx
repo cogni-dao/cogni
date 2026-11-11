@@ -166,6 +166,35 @@ describe("ContributionDiff citations", () => {
     ).toBeTruthy();
   });
 
+  it("shows a modified entry's confidence move in its header, not in Changed", async () => {
+    const row = {
+      id: "agent-development",
+      title: "Add an agent graph",
+      content: "Old body",
+      useWhen: null,
+      entryType: "guide",
+      domain: "build-agents",
+    };
+    respond({
+      contributionId: "c",
+      branch: "b",
+      entries: [
+        {
+          changeType: "modified",
+          rowId: "agent-development",
+          before: { ...row, confidencePct: 40 },
+          after: { ...row, content: "New body", confidencePct: 55 },
+        },
+      ],
+      citations: [],
+    });
+    render(<ContributionDiff contributionId="c" />);
+
+    await screen.findByText("New body");
+    expect(screen.getByText(/confidence 40% → 55%/)).toBeTruthy();
+    expect(screen.getByText("Changed: content")).toBeTruthy();
+  });
+
   it("says no changes only when neither rows nor edges changed", async () => {
     respond({ contributionId: "c", branch: "b", entries: [], citations: [] });
     render(<ContributionDiff contributionId="c" />);
