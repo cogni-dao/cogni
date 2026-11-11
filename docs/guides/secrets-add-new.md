@@ -115,7 +115,7 @@ service from OpenBao (names only in logs, never values). Read the release steps 
 `GET /api/v1/deploy/workloads/releases/{id}` to confirm the release went live.
 
 The catalog carries **key names only, never values** — values live in OpenBao
-(§ Runtime Path, above). See [`packages/repo-spec/src/secrets-catalog.ts`](../../packages/repo-spec/src/secrets-catalog.ts)
+(§ Runtime Path, above). See the published `@cogni-dao/node-declarations` package (`secrets-catalog`, re-exported by `@cogni/repo-spec`)
 for the entry schema and [`packages/repo-spec/src/node-app-deployment.ts`](../../packages/repo-spec/src/node-app-deployment.ts)
 for the profile contract.
 
