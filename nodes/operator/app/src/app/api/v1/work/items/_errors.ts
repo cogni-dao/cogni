@@ -9,6 +9,7 @@
  *   - ERRORCODE_IS_THE_CONTRACT: every mapped response carries a stable `errorCode`; callers branch on it, never on the message text.
  *   - PERMANENT_VS_RETRYABLE: author-scoped refusal → 403 `authz_denied`; store unavailability → 503 `work_items_busy` + retry hint.
  *   - SCORES_INVALID_IS_400: a `scores` write the package validator (`parseWorkItemScores`, run once by the adapter) rejected → 400 `work_item_scores_invalid` carrying its `issues`; nothing was written (story.5111).
+ *   - REASON_AND_CITES_ARE_CODED (task.0086): a missing or over-cap reason → 400 `reason_invalid`; broken cite rules → 400 `cites_invalid`; an unknown cite id or closed inbox → 400 `cite_unresolved` with the `ids`; cites with no resolver wired → 400 `cites_unsupported`; a resolver failure → 503 `cite_resolver_unavailable`. Nothing is written in each case.
  *   - CAS_CONFLICT_IS_409: a lost `expectedRevision` compare-and-set → 409 `revision_conflict` carrying `currentRevision`; nothing was written.
  *   - UNRECOGNIZED_STAYS_500: an unmapped error returns null so the route rethrows and the wrapper answers 500 — the catch is never broadened.
  * Side-effects: IO (HTTP response construction, structured log entry)
@@ -19,6 +20,11 @@
 import { NextResponse } from "next/server";
 
 import {
+  ChangeReasonInvalidError,
+  CitesInvalidError,
+  CitesUnsupportedError,
+  EntryResolverUnavailableError,
+  EntryUnresolvedError,
   WorkItemAuthorizationError,
   WorkItemDeletionRetiredError,
   WorkItemNotFoundError,
@@ -73,6 +79,66 @@ function classify(error: unknown): Mapped | null {
       errorCode: error.code,
       error: "invalid input",
       details: { issues: error.issues },
+    };
+  }
+
+  // PERMANENT, CALLER'S ERROR (task.0086). The adapter is the one enforcer of the
+  // reason and cite rules and refused before any lock; each issue names its path.
+  if (error instanceof ChangeReasonInvalidError) {
+    return {
+      status: 400,
+      errorCode: error.code,
+      error: "invalid input",
+      details: {
+        issues: [{ code: "custom", path: ["reason"], message }],
+      },
+    };
+  }
+  if (error instanceof CitesInvalidError) {
+    return {
+      status: 400,
+      errorCode: error.code,
+      error: "invalid input",
+      details: {
+        issues: error.issues.map((issue) => ({
+          code: "custom",
+          path: ["cites"],
+          message: issue,
+        })),
+      },
+    };
+  }
+  if (error instanceof EntryUnresolvedError) {
+    return {
+      status: 400,
+      errorCode: error.code,
+      error: "invalid input",
+      details: {
+        ids: error.ids,
+        issues: error.ids.map((cited) => ({
+          code: "custom",
+          path: ["cites"],
+          message: `cited entry not found: ${cited}`,
+        })),
+      },
+    };
+  }
+  if (error instanceof CitesUnsupportedError) {
+    return {
+      status: 400,
+      errorCode: error.code,
+      error: "invalid input",
+      details: {
+        issues: [{ code: "custom", path: ["cites"], message }],
+      },
+    };
+  }
+  // The resolver failed or ran past its deadline; nothing was written.
+  if (error instanceof EntryResolverUnavailableError) {
+    return {
+      status: 503,
+      errorCode: error.code,
+      error: message || "cite resolver unavailable",
     };
   }
 

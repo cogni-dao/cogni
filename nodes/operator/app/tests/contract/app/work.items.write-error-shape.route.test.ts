@@ -9,6 +9,7 @@
  *   - AUTHZ_IS_403: `WorkItemAuthorizationError` → 403 `errorCode:"authz_denied"` (same vocabulary as POST /api/v1/vcs/merge).
  *   - BUSY_IS_503: `WorkItemsBusyError` → 503 `errorCode:"work_items_busy"` + retry hint, on PATCH and on create.
  *   - CAS_CONFLICT_IS_409: the store's `WorkItemRevisionConflictError` → 409 `errorCode:"revision_conflict"` + `currentRevision` (story.5096).
+ *   - REASON_AND_CITES_ARE_CODED (task.0086): the adapter's reason and cite refusals → 400 `reason_invalid` / `cites_invalid` / `cite_unresolved` / `cites_unsupported`, and a resolver failure → 503 `cite_resolver_unavailable`.
  *   - UNKNOWN_STAYS_500: any other store error still answers an opaque 500 — the catch was not broadened.
  * Side-effects: none
  * Links: nodes/operator/app/src/app/api/v1/work/items/_errors.ts, bug.5408
@@ -91,7 +92,10 @@ function storeError(name: string, message: string): Error {
   return e;
 }
 
-const PATCH_BODY = JSON.stringify({ set: { status: "needs_closeout" } });
+const PATCH_BODY = JSON.stringify({
+  reason: "Close after review",
+  set: { status: "needs_closeout" },
+});
 
 describe("work-item write error shape (bug.5408)", () => {
   beforeEach(() => {
@@ -202,6 +206,85 @@ describe("work-item write error shape (bug.5408)", () => {
     );
   });
 
+  it.each([
+    {
+      name: "ChangeReasonInvalidError",
+      extra: {},
+      status: 400,
+      errorCode: "reason_invalid",
+      path: "reason",
+    },
+    {
+      name: "CitesInvalidError",
+      extra: { issues: ["cites must hold at most 8 entries"] },
+      status: 400,
+      errorCode: "cites_invalid",
+      path: "cites",
+    },
+    {
+      name: "EntryUnresolvedError",
+      extra: { ids: ["no-such-atom"] },
+      status: 400,
+      errorCode: "cite_unresolved",
+      path: "cites",
+    },
+    {
+      name: "CitesUnsupportedError",
+      extra: {},
+      status: 400,
+      errorCode: "cites_unsupported",
+      path: "cites",
+    },
+  ])("maps $name to $status $errorCode with an issue at $path (task.0086)", async ({
+    name,
+    extra,
+    status,
+    errorCode,
+    path,
+  }) => {
+    patchMock.mockRejectedValue(
+      Object.assign(storeError(name, "refused before any write"), extra)
+    );
+    await testApiHandler({
+      appHandler: byIdHandler,
+      params: { id: "bug.5117" },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: PATCH_BODY,
+        });
+        expect(res.status).toBe(status);
+        const json = await res.json();
+        expect(json.errorCode).toBe(errorCode);
+        expect(json.error).toBe("invalid input");
+        expect(json.issues[0].path).toEqual([path]);
+        expect(json.retryable).toBeUndefined();
+      },
+    });
+  });
+
+  it("maps a failed cite resolver to 503 cite_resolver_unavailable (task.0086)", async () => {
+    patchMock.mockRejectedValue(
+      storeError("EntryResolverUnavailableError", "cite resolver timed out")
+    );
+    await testApiHandler({
+      appHandler: byIdHandler,
+      params: { id: "bug.5117" },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: PATCH_BODY,
+        });
+        expect(res.status).toBe(503);
+        const json = await res.json();
+        expect(json.errorCode).toBe("cite_resolver_unavailable");
+        expect(json.error).toBe("cite resolver timed out");
+      },
+    });
+  });
+
   it("maps a store outage on create to the same 503 work_items_busy", async () => {
     createMock.mockRejectedValue(
       storeError(
@@ -263,7 +346,11 @@ describe("work-item write error shape (bug.5408)", () => {
         const res = await fetch({
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ expectedRevision: 4, set: { priority: 2 } }),
+          body: JSON.stringify({
+            expectedRevision: 4,
+            reason: "Raise priority",
+            set: { priority: 2 },
+          }),
         });
         expect(res.status).toBe(409);
         const json = await res.json();
@@ -274,7 +361,12 @@ describe("work-item write error shape (bug.5408)", () => {
       },
     });
     expect(patchMock).toHaveBeenCalledWith(
-      { id: "task.5282", expectedRevision: 4, set: { priority: 2 } },
+      {
+        id: "task.5282",
+        expectedRevision: 4,
+        reason: "Raise priority",
+        set: { priority: 2 },
+      },
       expect.any(String)
     );
     expect(logWarn).toHaveBeenCalledWith(

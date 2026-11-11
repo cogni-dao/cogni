@@ -93,7 +93,10 @@ describe("PATCH /api/v1/work/items/:id", () => {
         const res = await fetch({
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ set: { status: "needs_closeout" } }),
+          body: JSON.stringify({
+            reason: "Move to closeout",
+            set: { status: "needs_closeout" },
+          }),
         });
         expect(res.status).toBe(200);
         const json = await res.json();
@@ -105,6 +108,48 @@ describe("PATCH /api/v1/work/items/:id", () => {
     const [arg] = patchMock.mock.calls[0];
     expect(arg.id).toBe("bug.5242");
     expect(arg.set).toEqual({ status: "needs_closeout" });
+    expect(arg.reason).toBe("Move to closeout");
+  });
+
+  it("rejects a PATCH with no reason with 400 and an issue at reason (task.0086)", async () => {
+    await testApiHandler({
+      appHandler,
+      params: { id: "bug.5242" },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ set: { status: "needs_closeout" } }),
+        });
+        expect(res.status).toBe(400);
+        const json = await res.json();
+        expect(json.error).toBe("invalid input");
+        expect(JSON.stringify(json.issues)).toContain("reason");
+      },
+    });
+    expect(patchMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards valid cites to the adapter (task.0086)", async () => {
+    patchMock.mockResolvedValue(PATCHED_ITEM);
+    await testApiHandler({
+      appHandler,
+      params: { id: "bug.5242" },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            reason: "Move to closeout",
+            cites: [{ id: "node-test-contract" }],
+            set: { status: "needs_closeout" },
+          }),
+        });
+        expect(res.status).toBe(200);
+      },
+    });
+    const [arg] = patchMock.mock.calls[0];
+    expect(arg.cites).toEqual([{ id: "node-test-contract" }]);
   });
 
   it("rejects the wrong { patch } wrapper with 400 and surfaces the bad key (bug.5242)", async () => {
@@ -115,7 +160,10 @@ describe("PATCH /api/v1/work/items/:id", () => {
         const res = await fetch({
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ patch: { status: "needs_closeout" } }),
+          body: JSON.stringify({
+            reason: "Move to closeout",
+            patch: { status: "needs_closeout" },
+          }),
         });
         expect(res.status).toBe(400);
         const json = await res.json();
@@ -135,7 +183,10 @@ describe("PATCH /api/v1/work/items/:id", () => {
         const res = await fetch({
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ set: { status: "needs_closeout" } }),
+          body: JSON.stringify({
+            reason: "Move to closeout",
+            set: { status: "needs_closeout" },
+          }),
         });
         expect(res.status).toBe(401);
       },

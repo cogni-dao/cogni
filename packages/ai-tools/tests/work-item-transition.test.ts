@@ -5,7 +5,7 @@
  * Module: `@cogni/ai-tools/tests/work-item-transition`
  * Purpose: Unit tests for core__work_item_transition patch — optional `expectedRevision` compare-and-set (story.5096).
  * Scope: Does not hit a store; verifies capability passthrough, the non-throwing conflict result, and unchanged behavior without expectedRevision.
- * Invariants: PATCH_CAS_OPTIONAL, CONFLICT_IS_A_RESULT; output validates against WorkItemTransitionOutputSchema.
+ * Invariants: PATCH_REASON_REQUIRED, PATCH_CAS_OPTIONAL, CONFLICT_IS_A_RESULT; output validates against WorkItemTransitionOutputSchema.
  * Side-effects: none
  * Links: src/tools/work-item-transition.ts
  * @internal
@@ -74,6 +74,7 @@ describe("core__work_item_transition patch", () => {
     const out = await tool.execute({
       action: "patch",
       id: "task.5001",
+      reason: "Raise the rank",
       priority: 1,
       rank: 4,
       expectedRevision: 7,
@@ -82,6 +83,7 @@ describe("core__work_item_transition patch", () => {
     expect(cap.patch).toHaveBeenCalledWith({
       id: "task.5001",
       expectedRevision: 7,
+      reason: "Raise the rank",
       set: { priority: 1, rank: 4 },
     });
     expect(out).toMatchObject({ success: true, action: "patch", revision: 8 });
@@ -94,12 +96,60 @@ describe("core__work_item_transition patch", () => {
       workItemCapability: cap,
     });
 
-    await tool.execute({ action: "patch", id: "task.5001", priority: 2 });
+    await tool.execute({
+      action: "patch",
+      id: "task.5001",
+      reason: "Lower priority",
+      priority: 2,
+    });
 
     expect(cap.patch).toHaveBeenCalledWith({
       id: "task.5001",
+      reason: "Lower priority",
       set: { priority: 2 },
     });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["blank", "   "],
+    ["over 25 words", Array.from({ length: 26 }, () => "why").join(" ")],
+  ])("refuses a patch whose reason is %s and writes nothing (task.0086)", async (_label, reason) => {
+    const cap = capability(async () => PATCHED);
+    const tool = createWorkItemTransitionImplementation({
+      workItemCapability: cap,
+    });
+
+    await expect(
+      tool.execute({
+        action: "patch",
+        id: "task.5001",
+        priority: 2,
+        ...(reason !== undefined && { reason }),
+      })
+    ).rejects.toThrow(/reason/);
+    expect(cap.patch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the reason optional on a status transition", async () => {
+    const cap = capability(async () => PATCHED);
+    (cap.transitionStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: "task.5001",
+      previousStatus: "needs_implement",
+      newStatus: "done",
+      revision: 9,
+    });
+    const tool = createWorkItemTransitionImplementation({
+      workItemCapability: cap,
+    });
+
+    const out = await tool.execute({
+      action: "transition",
+      id: "task.5001",
+      toStatus: "done",
+    });
+
+    expect(out).toMatchObject({ success: true, action: "transition" });
   });
 
   it("maps a lost compare-and-set to a non-throwing revision_conflict result", async () => {
@@ -113,6 +163,7 @@ describe("core__work_item_transition patch", () => {
     const out = await tool.execute({
       action: "patch",
       id: "task.5001",
+      reason: "Raise priority",
       priority: 1,
       expectedRevision: 7,
     });
@@ -139,6 +190,7 @@ describe("core__work_item_transition patch", () => {
       tool.execute({
         action: "patch",
         id: "task.5001",
+        reason: "Raise priority",
         priority: 1,
         expectedRevision: 7,
       })

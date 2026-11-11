@@ -95,6 +95,8 @@ export interface WorkItemCapability {
   patch(input: {
     id: string;
     expectedRevision?: number;
+    /** Why this change happens (task.0086): required; one line, at most 25 words and 240 characters; stored in history, never in the item. */
+    reason: string;
     set: {
       priority?: number;
       rank?: number;

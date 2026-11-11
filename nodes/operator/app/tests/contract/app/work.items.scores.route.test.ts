@@ -188,7 +188,11 @@ describe("work-item scores HTTP boundary (story.5111)", () => {
       async test({ fetch }) {
         const res = await fetch({
           method: "PATCH",
-          ...json({ expectedRevision: 3, set: { scores: { goal: { v: 5 } } } }),
+          ...json({
+            expectedRevision: 3,
+            reason: "Score the goal",
+            set: { scores: { goal: { v: 5 } } },
+          }),
         });
         expect(res.status).toBe(400);
         expect(await res.json()).toMatchObject({
@@ -258,14 +262,14 @@ describe("work-item scores HTTP boundary (story.5111)", () => {
 
         const res = await fetch({
           method: "PATCH",
-          ...json({ set: { scores: patched } }),
+          ...json({ reason: "Rescore", set: { scores: patched } }),
         });
         expect(res.status).toBe(200);
         expect((await res.json()).scores).toEqual(patched);
 
         const cleared = await fetch({
           method: "PATCH",
-          ...json({ set: { scores: null } }),
+          ...json({ reason: "Clear scores", set: { scores: null } }),
         });
         expect(cleared.status).toBe(200);
         expect(await cleared.json()).not.toHaveProperty("scores");

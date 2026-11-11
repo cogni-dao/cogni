@@ -128,9 +128,16 @@ describe("GET /.well-known/agent.json", () => {
     // Creating is a first-class step of the loop, not an undocumented aside.
     expect(body.process.requiredLoop).toContain("adopt_or_create_work_item");
 
-    // story.0023: a PATCH may say why, and the reason is readable back from history.
+    // story.0023 + task.0086: a PATCH must say why (the reason is readable back from
+    // history), and may cite the hub atoms it used.
     expect(body.actions.updateWorkItem.inputSchema.properties).toHaveProperty(
       "reason"
+    );
+    expect(body.actions.updateWorkItem.inputSchema.required).toContain(
+      "reason"
+    );
+    expect(body.actions.updateWorkItem.inputSchema.properties).toHaveProperty(
+      "cites"
     );
   });
 

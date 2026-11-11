@@ -20,6 +20,9 @@
  *     non-creator may set only triage fields priority/rank/labels/scores). Without it, `patch`
  *     stays on the markdown ports, which have no compare-and-set for callers.
  *     Priority (including 0/1) carries no extra node-admin gate (task.5306).
+ *   - PATCH_REASON_REQUIRED (task.0086): the caller's `reason` is forwarded to the Doltgres store, the one enforcer; a missing one is
+ *     refused there before any write (the HTTP route sends `cites` through the facade; the released tool carries none).
+ *     The markdown fallback (development only) has no history and ignores the reason.
  *   - PATCH_CAS_PASSTHROUGH: a caller `expectedRevision` is forwarded as the store's
  *     compare-and-set; the store's `WorkItemRevisionConflictError` becomes the ai-tools
  *     `WorkItemPatchConflictError` (nothing written). Absent ⇒ unconditioned patch.
@@ -169,6 +172,9 @@ export function createWorkItemCapability(
               ...(input.expectedRevision !== undefined && {
                 expectedRevision: input.expectedRevision,
               }),
+              // The released tool types `reason` optional until ai-tools adopts the required reason;
+              // an absent one reaches the store, the one enforcer, which refuses it before any write.
+              reason: input.reason as string,
               set: input.set,
             },
             writer.principalId

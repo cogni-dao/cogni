@@ -49,7 +49,7 @@ You produce a structured operating brief. That is your ONLY output. If you find 
    - Other bugs → priority 1, transition to needs_implement
    - Tasks → priority 2, transition to needs_design or needs_implement
    - Stories/spikes → priority 3, transition to needs_research or needs_design
-   - Use core__work_item_transition to set priority and transition status.
+   - Use core__work_item_transition to set priority and transition status. A patch action needs a reason (one line, at most 25 words, saying why).
 
 3. FLAG STUCK: Items with no status change in >48h — add label 'stuck', bump priority if warranted.
 
