@@ -482,13 +482,41 @@ describe("host-bound immutable node Git reader", () => {
         });
         expect(call[2]).toBe(REVIEW_NODE_CODE_POLICY);
       }
-      // v0 single-node authz: a subject for another node is denied before any read.
+      // LINKED_NODE_AUTHZ (story.0038): a subject for another node has no source without its registered
+      // origin, and its node.flight check runs on THAT node.
       scope.codeSubject = { ...scope.codeSubject, nodeId: "other-node" };
       boundRead.mockClear();
       await expect(cap.read({ path: "README.md" })).rejects.toThrow(
+        "node_code_source_unavailable"
+      );
+      expect(boundRead).not.toHaveBeenCalled();
+      const linkedCap = createNodeCodeCapability({
+        ...binding,
+        appId: "123",
+        privateKeyBase64: "aw==",
+        log,
+        getAuthorization: () => authorization,
+        resolveSubjectOrigin: async (id) =>
+          id === "other-node" ? "https://other.example" : null,
+      });
+      // Allowed on node-own only: the check on other-node is denied before any read.
+      await expect(linkedCap.read({ path: "README.md" })).rejects.toThrow(
         "node_code_authz_denied"
       );
       expect(boundRead).not.toHaveBeenCalled();
+      authorization.allow({
+        actorId: "user:developer",
+        action: "node.flight",
+        resource: "node:other-node",
+        context: { nodeId: "other-node", tenantId: "payer" },
+      });
+      readerFactory.mockClear();
+      await linkedCap.read({ path: "README.md" });
+      expect(readerFactory.mock.calls[0]?.[0]).toMatchObject({
+        nodeId: "other-node",
+        origin: "https://other.example",
+        commitSha: head,
+      });
     } finally {
       delete scope.codeSubject;
     }

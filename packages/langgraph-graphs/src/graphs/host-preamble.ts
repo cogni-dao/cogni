@@ -15,6 +15,9 @@
  *   - BYTE_STABLE_FOR_COGNI: the rendered text for `cogni` is unchanged by the extraction.
  *   - ARCHITECT_OPT_IN (task.5455): `includeArchitect: true` renders the host-read node architect
  *     entry after the mission. Only pr-review sets it; without the flag the text is byte-identical.
+ *   - RULES_OPT_IN (story.0038): `includeRules: true` renders the host-read rule bodies of a linked node
+ *     after the architect entry. Only pr-review sets it; without rules (or the flag) the text is
+ *     byte-identical.
  * Side-effects: none
  * Links: graphs/operator/cogni.ts, graphs/pr-review/graph.ts,
  *   https://cognidao.org/knowledge/pr-review-grounded-gate
@@ -34,6 +37,8 @@ export interface HostPreambleInput {
   readonly requireIndex?: boolean;
   /** Render the host-injected node architect entry after the mission (pr-review only). */
   readonly includeArchitect?: boolean;
+  /** Render the host-read rule bodies of a linked node after the architect (pr-review only). */
+  readonly includeRules?: boolean;
 }
 
 /** Render the host-owned preamble text. Throws (fail-closed) on missing grounding. */
@@ -53,12 +58,26 @@ export function buildHostPreambleText(input: HostPreambleInput): string {
   const architectBlock = architect?.content.trim()
     ? `\n\nHost-owned node architect (${architect.id}):\n${architect.content}`
     : "";
+  const rules = input.includeRules ? (sourceContext.rules ?? []) : [];
+  const rulesBlock = rules.length
+    ? `\n\nHost-read rules of this node's hub (${rules.length} entries; full bodies, already read for you):\n${rules
+        .map((r) => `### ${r.id}\n${r.content}`)
+        .join("\n\n")}`
+    : "";
   const indexBlock = index.length
-    ? `\n\nYour governing index (${index.length} entries; metadata only — read bodies on demand). Select the entries whose use-when fits your task and read each full body with core__knowledge_read before acting:\n${index
+    ? `\n\nYour governing index (${index.length} entries; metadata only — ${
+        rules.length
+          ? "the rule bodies are above; other entries are listed for context and are not readable in this run"
+          : "read bodies on demand"
+      }). ${
+        rules.length
+          ? "Select the entries whose use-when fits your task:"
+          : "Select the entries whose use-when fits your task and read each full body with core__knowledge_read before acting:"
+      }\n${index
         .map((e) => `- ${e.id} · ${e.domain} · ${e.entryType} — ${e.useWhen}`)
         .join("\n")}`
     : "";
-  return `${input.prompt}\n\nHost-owned node mission (${mission.sourceRef}; serving build ${mission.buildSha ?? "local/unversioned"}):\n${mission.content}${architectBlock}${indexBlock}\n\n${input.coverage}`;
+  return `${input.prompt}\n\nHost-owned node mission (${mission.sourceRef}; serving build ${mission.buildSha ?? "local/unversioned"}):\n${mission.content}${architectBlock}${rulesBlock}${indexBlock}\n\n${input.coverage}`;
 }
 
 /** The preamble as a SystemMessage, built per invoke (never stored). */

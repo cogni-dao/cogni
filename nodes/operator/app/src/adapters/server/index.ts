@@ -60,6 +60,7 @@ export {
   type LangGraphDevProviderConfig,
   LangGraphInProcAgentCatalogProvider,
   LangGraphInProcProvider,
+  selectArchitectEntryId,
 } from "./ai/langgraph";
 export { LiteLlmAdapter } from "./ai/litellm.adapter";
 export { RedisRunStreamAdapter } from "./ai/redis-run-stream.adapter";
@@ -204,6 +205,19 @@ export {
   type ProdLivenessDeps,
   resolveNodeLiveness,
 } from "./node-registry/prod-liveness";
+export { DrizzleNodeServiceLinkStore } from "./node-service-links/drizzle-link-store.adapter";
+export { JoseServiceEnrollmentSigner } from "./node-service-links/enrollment-signer.adapter";
+// Review GitHub plane (worker-delegated PR review — bug.5000)
+// Node service links — the operator's side of node-service enrollment (story.0038)
+export { HttpNodeEnrollmentTransport } from "./node-service-links/enrollment-transport.adapter";
+export { JoseServiceKeyCrypto } from "./node-service-links/link-key-crypto.adapter";
+export {
+  createNodeHostTransport,
+  type NodeHostResult,
+  type NodeHostTransport,
+  scrubAgentKeys,
+} from "./node-service-links/node-host-transport";
+export { DrizzleServiceConnectionWriter } from "./node-service-links/service-connection-writer.adapter";
 export { DrizzleNodeMigrationReportStore } from "./observability/drizzle-node-migration-report.adapter";
 export { HttpLangfuseOwnershipVerifier } from "./observability/langfuse-ownership.adapter";
 export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
@@ -224,10 +238,10 @@ export {
   RipgrepAdapter,
   type RipgrepAdapterConfig,
 } from "./repo";
-// Review GitHub plane (worker-delegated PR review — bug.5000)
 export {
   CHECK_RUN_NAME as REVIEW_CHECK_RUN_NAME,
   createGithubReviewAdapter,
+  DEFAULT_REVIEW_MODELREF,
   type GithubReviewAdapter,
 } from "./review/github-review.adapter";
 export { GitHubReviewKpiSource } from "./review/review-kpi-source.adapter";

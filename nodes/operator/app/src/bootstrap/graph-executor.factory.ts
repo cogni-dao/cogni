@@ -56,6 +56,7 @@ import {
   runInScope,
 } from "@/adapters/server/ai/execution-scope";
 import { OPERATOR_CORE_TOOL_BUNDLE } from "@/bootstrap/ai/evaluation-baseline";
+import { createLinkedNodeSourceReader } from "@/bootstrap/review/linked-node-source";
 import type {
   AiExecutionErrorCode,
   BillingContext,
@@ -577,7 +578,9 @@ function createInProcProvider(
             (await container.knowledgeStorePort?.getKnowledge(id))?.content ??
             null,
         }
-      : undefined
+      : undefined,
+    // Host-owned reader of a LINKED node's grounding (story.0038): X's hub through X's own key.
+    createLinkedNodeSourceReader()
   );
 }
 

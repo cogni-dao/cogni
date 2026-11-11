@@ -10,6 +10,8 @@
  * - TENANT_SCOPED: Verifies billing_account_id matches before decryption.
  * - ENCRYPTED_AT_REST: AEAD decrypt with AAD binding.
  * - TOKENS_NEVER_LOGGED: Never logs credential values.
+ * - SERVICE_KEY_UNDER_SYSTEM_SCOPE (story.0038): `resolveServiceConnection` reads the system tenant's
+ *   `cogni-node` row for one audience under the system principal's RLS scope, never the run actor's.
  * Side-effects: IO (database read, optional token refresh + write)
  * Links: docs/spec/tenant-connections.md, src/ports/connection-broker.port.ts
  * @internal
@@ -17,8 +19,14 @@
 
 import { withTenantScope } from "@cogni/db-client";
 import { connections } from "@cogni/db-schema";
-import type { ActorId } from "@cogni/ids";
-import { type AeadAAD, aeadDecrypt, aeadEncrypt } from "@cogni/node-shared";
+import { type ActorId, toUserId, userActor } from "@cogni/ids";
+import {
+  type AeadAAD,
+  aeadDecrypt,
+  aeadEncrypt,
+  COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+  COGNI_SYSTEM_PRINCIPAL_USER_ID,
+} from "@cogni/node-shared";
 import { and, eq, isNull } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
@@ -50,6 +58,9 @@ export interface DrizzleConnectionBrokerConfig {
   /** Provider-specific refresh functions. Key = provider name. */
   refreshFns?: Record<string, TokenRefreshFn>;
 }
+
+/** Provider value of the operator's X-issued node-service keys (story.0038). */
+export const SERVICE_CONNECTION_PROVIDER = "cogni-node";
 
 /** Buffer window before expiry to trigger proactive refresh (5 minutes) */
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
@@ -104,11 +115,49 @@ export class DrizzleConnectionBrokerAdapter implements ConnectionBrokerPort {
       throw new ConnectionNotFoundError(connectionId);
     }
 
-    // AEAD decrypt with AAD binding
+    return this.openRow(row, scope.actorId);
+  }
+
+  async resolveServiceConnection(input: {
+    audience: string;
+  }): Promise<ResolvedConnection> {
+    const rows = await withTenantScope(
+      this
+        .db as unknown as import("drizzle-orm/postgres-js").PostgresJsDatabase,
+      userActor(toUserId(COGNI_SYSTEM_PRINCIPAL_USER_ID)),
+      async (tx) =>
+        tx
+          .select()
+          .from(connections)
+          .where(
+            and(
+              eq(connections.provider, SERVICE_CONNECTION_PROVIDER),
+              eq(connections.audience, input.audience),
+              eq(connections.billingAccountId, COGNI_SYSTEM_BILLING_ACCOUNT_ID),
+              isNull(connections.revokedAt)
+            )
+          )
+          .limit(1)
+    );
+    const row = rows[0];
+    if (!row) {
+      throw new ConnectionNotFoundError("service:cogni-node");
+    }
+    return this.openRow(row, COGNI_SYSTEM_PRINCIPAL_USER_ID);
+  }
+
+  /** AEAD-open one already-authorized row, refresh when due, stamp last use. */
+  private async openRow(
+    row: typeof connections.$inferSelect,
+    actorId: string
+  ): Promise<ResolvedConnection> {
+    const connectionId = row.id;
+    // AEAD decrypt with AAD binding (audience bound only when the row carries one)
     const aad: AeadAAD = {
       billing_account_id: row.billingAccountId,
       connection_id: connectionId,
       provider: row.provider,
+      audience: row.audience,
     };
 
     let blob: CredentialBlob;
@@ -143,7 +192,7 @@ export class DrizzleConnectionBrokerAdapter implements ConnectionBrokerPort {
             row.provider,
             blob,
             refreshFn,
-            scope.actorId
+            actorId
           );
           this.refreshLocks.set(connectionId, refreshPromise);
           try {
@@ -159,7 +208,7 @@ export class DrizzleConnectionBrokerAdapter implements ConnectionBrokerPort {
     withTenantScope(
       this
         .db as unknown as import("drizzle-orm/postgres-js").PostgresJsDatabase,
-      scope.actorId as ActorId,
+      actorId as ActorId,
       async (tx) =>
         tx
           .update(connections)

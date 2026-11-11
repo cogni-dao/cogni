@@ -8,7 +8,9 @@
  * Invariants: ToolRunner and this bound capability independently require computed node.flight authority; reject wrong execution node.
  *   REVIEW_READS_PR_HEAD (story.5102): when the run scope carries a host-validated `codeSubject`, every
  *   call builds a NEW reader for `codeSubject.owner/repo@headSha` with REVIEW_NODE_CODE_POLICY — the
- *   serving-code reader is never mutated. v0 single-node authz: a subject for another node is denied.
+ *   serving-code reader is never mutated. LINKED_NODE_AUTHZ (story.0038): the `node.flight` check runs on the
+ *   node the subject names (a developer of X holds it on X); a subject for another node needs its registered
+ *   origin from `resolveSubjectOrigin`, else no source.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/subtask.5027, story.5102
  * @internal
@@ -35,6 +37,11 @@ export function createNodeCodeCapability(deps: {
   commitSha: string | undefined;
   appId: string | undefined;
   privateKeyBase64: string | undefined;
+  /**
+   * Registered origin of ANOTHER node a review subject may name (story.0038). Absent or null → a
+   * subject for another node has no source (`node_code_source_unavailable`).
+   */
+  resolveSubjectOrigin?: (nodeId: string) => Promise<string | null>;
   log: {
     info(fields: Record<string, unknown>): void;
     warn(fields: Record<string, unknown>): void;
@@ -95,11 +102,21 @@ export function createNodeCodeCapability(deps: {
     if (!scope.actorUserId || scope.nodeId !== deps.nodeId)
       throw new Error("node_code_scope_unavailable");
     const subject = scope.codeSubject;
-    // v0 single-node authz: node.flight below is checked on THIS node only.
-    if (subject && subject.nodeId !== deps.nodeId)
-      throw new Error("node_code_authz_denied");
+    // The node whose code is read: this node, or (story.0038) the linked node a review subject names.
+    const subjectNodeId = subject?.nodeId ?? deps.nodeId;
     if (subject ? !adapter || !origin : !reader)
       throw new Error("node_code_source_unavailable");
+    let subjectOrigin = origin;
+    if (subject && subject.nodeId !== deps.nodeId) {
+      let resolved: string | null = null;
+      try {
+        resolved = (await deps.resolveSubjectOrigin?.(subject.nodeId)) ?? null;
+      } catch {
+        resolved = null;
+      }
+      if (!resolved) throw new Error("node_code_source_unavailable");
+      subjectOrigin = resolved;
+    }
     const authorization = deps.getAuthorization?.();
     if (!authorization) throw new Error("node_code_authz_unavailable");
     let decision: AuthzDecision;
@@ -107,9 +124,9 @@ export function createNodeCodeCapability(deps: {
       decision = await authorization.check({
         actorId: `user:${scope.actorUserId}`,
         action: "node.flight",
-        resource: authzNodeResource(deps.nodeId),
+        resource: authzNodeResource(subjectNodeId),
         context: {
-          nodeId: deps.nodeId,
+          nodeId: subjectNodeId,
           tenantId: scope.billing.billingAccountId,
           ...(scope.grantId ? { grantId: scope.grantId } : {}),
         },
@@ -123,12 +140,12 @@ export function createNodeCodeCapability(deps: {
           ? "node_code_authz_unavailable"
           : "node_code_authz_denied"
       );
-    if (subject && adapter && origin) {
+    if (subject && adapter && subjectOrigin) {
       // A fresh reader per call, bound to the PR head; the serving reader stays untouched.
       return adapter.nodeCodeReader(
         {
-          nodeId: deps.nodeId,
-          origin,
+          nodeId: subjectNodeId,
+          origin: subjectOrigin,
           owner: subject.owner,
           repo: subject.repo,
           commitSha: subject.headSha,

@@ -84,6 +84,7 @@ export * from "./meta.readyz.read.v1.contract";
 export * from "./meta.route-manifest.read.v1.contract";
 export * from "./meta.version.read.v1.contract";
 // ── Nodes ──────────────────────────────────────────────────────────────────
+export * from "./node.service-link.v1.contract";
 export * from "./nodes.operations-overview.v1.contract";
 export * from "./nodes.reliability-status.v1.contract";
 // ── Payments ────────────────────────────────────────────────────────────────

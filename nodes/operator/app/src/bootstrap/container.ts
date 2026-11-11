@@ -205,6 +205,7 @@ import {
   startGovernanceSyncOnBoot,
   startMetricsSyncOnBoot,
 } from "@/bootstrap/startup-reconcile";
+import { registeredNodeOrigin } from "@/features/node-service-links/node-origin";
 import {
   type AttributionProfileResolver,
   createAttributionProfileResolver,
@@ -214,6 +215,7 @@ import {
   createNodeDistributionConfigResolver,
   type NodeDistributionConfigResolver,
 } from "@/features/nodes/node-distribution-config";
+import { resolveNodeRef } from "@/features/nodes/node-lookup";
 import type {
   AccountService,
   AiTelemetryPort,
@@ -909,6 +911,17 @@ function createContainer(): Container {
     commitSha: env.APP_BUILD_SHA,
     appId: env.GH_REVIEW_APP_ID,
     privateKeyBase64: env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
+    // story.0038: a review subject may name a linked node; its origin comes from the node registry.
+    resolveSubjectOrigin: async (subjectNodeId) => {
+      const node = await resolveNodeRef(serviceDb, subjectNodeId);
+      return node
+        ? registeredNodeOrigin({
+            slug: node.slug,
+            deployEnvs: node.deployEnvs,
+            env,
+          })
+        : null;
+    },
     log,
   });
 

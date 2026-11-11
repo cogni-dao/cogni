@@ -9,7 +9,8 @@
  *   - Per TEMPORAL_DETERMINISM: No I/O in workflow code
  *   - REVIEW_IS_DEV_TRIGGERED (story.5102): only the POST /api/v1/vcs/review verb starts this
  *     workflow, with the stable id pr-review:{owner}/{repo}/{pr}/{headSha}. No event starts one.
- *   - ONE_ACTOR_ONE_ACCOUNT: the requesting developer is the graph run actor and the payer.
+ *   - ONE_ACTOR_ONE_ACCOUNT: holds for the operator's own PRs. For a linked node (`payerKind: system_free`,
+ *     story.0038) the actor is the developer, the payer is the system tenant and the model is free only.
  *   - CHECK_IS_REQUEST_BOUND: the check run's external_id is the request id.
  *   - DEV_TRIGGERED_REVIEW_PATCH: story.5102 changes are gated by patched() so in-flight
  *     histories started by the retired webhook trigger replay unchanged.
@@ -107,6 +108,7 @@ async function devTriggeredReview(input: PrReviewWorkflowInput): Promise<void> {
     requestId,
     requestedBy,
     codeSubject,
+    payerKind,
   } = input;
 
   const context = await fetchPrContextActivity({
@@ -116,6 +118,8 @@ async function devTriggeredReview(input: PrReviewWorkflowInput): Promise<void> {
     installationId,
     headSha,
     baseSha,
+    // story.0038: a system-paid review always runs the operator's default free model.
+    ...(payerKind === "system_free" ? { payerKind } : {}),
   });
 
   if (context.reviewEnabled === false) {
@@ -207,6 +211,8 @@ async function devTriggeredReview(input: PrReviewWorkflowInput): Promise<void> {
             billingAccountId,
             virtualKeyId,
             codeSubject,
+            // story.0038: the graph run route picks the system payer only on this marker.
+            ...(payerKind === "system_free" ? { payerKind } : {}),
           },
           runKind: "user_immediate" as const,
           triggerSource: "api:vcs_review",

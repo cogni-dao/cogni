@@ -19,6 +19,9 @@
  *   - VERDICT_SURVIVES_REPLAY (story.5102): finalize persists the run's structured output (≤64 KB JSON,
  *     else null) and BOTH cached replay branches return it, so a worker whose first attempt timed out
  *     reads the same verdict on retry. The live response returns the same bounded value.
+ *   - PAYER_IS_SYSTEM_ONLY_FOR_FREE_REVIEW (story.0038): `payerKind: "system_free"` is honored only for the
+ *     pr-review graph on the system billing account; preflight and the BYO usage commit then run through the
+ *     system principal's account service while the actor stays the developer. Anything else naming it is 403.
  *   - REVIEW_SUBJECT_IS_HOST_BOUND (story.5102): `input.codeSubject` binds to the run scope only for
  *     catalog entries declaring `codeSubject` and only when owner/repo match `resolveNodeRepo(nodeId)`.
  * Side-effects: IO (HTTP request/response, database, graph execution, Redis stream publishing, thread persistence)
@@ -35,7 +38,13 @@ import {
   InternalGraphRunInputSchema,
   type InternalGraphRunOutput,
 } from "@cogni/node-contracts";
-import { AnalyticsEvents, capture } from "@cogni/node-shared";
+import {
+  AnalyticsEvents,
+  COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+  COGNI_SYSTEM_PRINCIPAL_USER_ID,
+  capture,
+  EVENT_NAMES,
+} from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getContainer } from "@/bootstrap/container";
@@ -579,6 +588,29 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     }
     const codeSubject = codeSubjectDecision.codeSubject;
 
+    // PAYER_IS_SYSTEM_ONLY_FOR_FREE_REVIEW (story.0038): permanent request validation, before the claim.
+    const payerKindInput = input.payerKind;
+    if (payerKindInput !== undefined && payerKindInput !== "system_free") {
+      return NextResponse.json(
+        { error: "payerKind is not supported" },
+        { status: 400 }
+      );
+    }
+    const systemFreePayer = payerKindInput === "system_free";
+    if (
+      systemFreePayer &&
+      (graphId !== "langgraph:pr-review" ||
+        billingAccountId !== COGNI_SYSTEM_BILLING_ACCOUNT_ID)
+    ) {
+      log.warn(
+        { graphId, runId, billingAccountId },
+        "system_free payer refused: not the pr-review graph on the system account"
+      );
+      return NextResponse.json(
+        { error: "system_free payer not permitted" },
+        { status: 403 }
+      );
+    }
     // Claim only after permanent request validation. INSERT races are resolved
     // by ON CONFLICT + re-read; expired pending leases are reclaimed atomically.
     const claimResult =
@@ -621,7 +653,29 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     runId = claimResult.request.runId;
     if (!stateKey) sessionId = `run:${runId}`;
 
+    // PAYER_IS_SYSTEM_ONLY_FOR_FREE_REVIEW (story.0038): the system tenant pays only for a linked-node
+    // review (`payerKind: "system_free"` on the pr-review graph, payer = the system account). Row-level
+    // security shows `billing_accounts` only to their owner, so the developer-scoped service would hide
+    // that account; preflight and the usage commit read the payer through the system principal's scope.
+    // The run ACTOR stays the developer (`createScopedGraphExecutor({ actorId })` below). Any other run
+    // naming `system_free`, or a `system_free` run on another account, is refused before it starts.
     const accountService = container.accountsForUser(toUserId(actorUserId));
+    // The system payer reads billing through the system principal (see PAYER_IS_SYSTEM_ONLY_FOR_FREE_REVIEW).
+    const payerAccountService = systemFreePayer
+      ? container.accountsForUser(toUserId(COGNI_SYSTEM_PRINCIPAL_USER_ID))
+      : accountService;
+    if (systemFreePayer) {
+      log.info(
+        {
+          event: EVENT_NAMES.AI_REVIEW_FREE_PAYER_SELECTED,
+          runId,
+          graphId,
+          billingAccountId,
+          modelId: modelRef.modelId,
+        },
+        EVENT_NAMES.AI_REVIEW_FREE_PAYER_SELECTED
+      );
+    }
 
     // Create preflight credit check closure
     // Per CREDITS_ENFORCED_AT_EXECUTION_PORT: decorator handles all execution paths
@@ -634,7 +688,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         billingAccountId,
         messages: [...msgs],
         model: m,
-        accountService,
+        accountService: payerAccountService,
       });
 
     // Create graph executor and run
@@ -650,7 +704,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
             attempt: fact.attempt,
             ingressRequestId: fact.runId,
           },
-          accountService,
+          payerAccountService,
           log as import("pino").Logger
         );
       },

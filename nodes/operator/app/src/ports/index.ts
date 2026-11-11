@@ -257,6 +257,12 @@ export type {
   ProviderLeaseLogLine,
   ProviderLeaseLogReaderPort,
 } from "./lease-log.port";
+export {
+  type LinkedNodeSource,
+  LinkedNodeSourceError,
+  type LinkedNodeSourceReader,
+  type LinkedNodeSubject,
+} from "./linked-node-source.port";
 // LlmError types re-exported for adapters (adapters can only import from ports)
 // Features should import directly from @/core
 export {
@@ -418,6 +424,19 @@ export type {
   NodeRuntimeSecretsPort,
 } from "./node-runtime.port";
 export { NodeRuntimeSecretsError } from "./node-runtime.port";
+export {
+  type EnrollmentAccepted,
+  type EnrollmentPollResult,
+  EnrollmentTransportError,
+  type NewNodeServiceLink,
+  type NodeEnrollmentTransportPort,
+  type NodeServiceLinkRecord,
+  type NodeServiceLinkStorePort,
+  OpenServiceLinkExistsError,
+  type ServiceConnectionWriterPort,
+  type ServiceEnrollmentSignerPort,
+  type ServiceKeyCryptoPort,
+} from "./node-service-link.port";
 export type {
   OnChainVerifier,
   VerificationResult,

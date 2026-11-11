@@ -70,9 +70,9 @@ export const PrReviewWorkflowInputSchema = z
     baseSha: Sha40,
     /** GitHub App installation ID for this repo. */
     installationId: z.number().int().positive(),
-    /** Requesting developer (UUID). ONE_ACTOR_ONE_ACCOUNT: the run actor. */
+    /** Requesting developer (UUID). The run actor (always the developer, whoever pays). */
     actorUserId: z.string().uuid(),
-    /** Requesting developer's own billing account (UUID). ONE_ACTOR_ONE_ACCOUNT: the payer. */
+    /** Payer billing account (UUID): the developer's own, or the system tenant when `payerKind` is `system_free`. */
     billingAccountId: z.string().uuid(),
     /** The developer billing account's default virtual key. */
     virtualKeyId: z.string().min(1),
@@ -82,6 +82,14 @@ export const PrReviewWorkflowInputSchema = z
     requestedBy: z.string().uuid(),
     /** Repository and commits the review graph may read. */
     codeSubject: ReviewCodeSubjectSchema,
+    /**
+     * Who pays (story.0038). `developer` (default): the requesting developer's own account pays, and
+     * the reviewed repo-spec may pick the model. `system_free`: a linked node's review; the system tenant
+     * pays a $0 receipt, `billingAccountId` is the system account, the actor stays the developer, and the
+     * model is ALWAYS the operator default (the repo-spec's `review.model` is ignored). Histories started
+     * before this field existed replay unchanged: it is read only on the dev-triggered path.
+     */
+    payerKind: z.enum(["developer", "system_free"]).default("developer"),
   })
   .strict();
 // .strict() mode: typo'd field names (`virtualKeyld` with lowercase L,

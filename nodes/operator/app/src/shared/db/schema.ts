@@ -28,6 +28,7 @@ export * from "./akash-tx-allocations";
 export * from "./compute-cost-intervals";
 export * from "./metric-observations";
 export * from "./node-migration-reports";
+export * from "./node-service-links";
 export * from "./node-workloads";
 export * from "./nodes";
 export * from "./work-item-sessions";

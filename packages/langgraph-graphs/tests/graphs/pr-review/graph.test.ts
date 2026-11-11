@@ -415,3 +415,49 @@ describe("buildReviewUserMessage", () => {
     expect(msg).toContain("(no description)");
   });
 });
+
+describe("host-read rules of a linked node (story.0038)", () => {
+  const sourceContext = {
+    nodeId: "node-x",
+    origin: "https://x.example",
+    mission: {
+      content: "Run node X.",
+      sourceRef: "org/repo@aaaaaaaa:.cogni/repo-spec.yaml#intent.mission",
+      buildSha: null,
+    },
+    governingIndex: [
+      {
+        id: "x-rule",
+        domain: "method",
+        entryType: "rule",
+        useWhen: "any change",
+      },
+    ],
+    rules: [{ id: "x-rule", content: "RULE BODY" }],
+  };
+
+  it("renders the rule bodies after the mission and marks the index bodies as already read", () => {
+    const text = buildHostPreambleText({
+      sourceContext,
+      prompt: "P",
+      coverage: "C",
+      requireIndex: true,
+      includeRules: true,
+    });
+    expect(text).toContain("Host-read rules of this node's hub (1 entries");
+    expect(text).toContain("### x-rule\nRULE BODY");
+    expect(text).toContain("the rule bodies are above");
+    expect(text).not.toContain("read each full body with core__knowledge_read");
+  });
+
+  it("without the opt-in the rules are not rendered (byte-identical to before)", () => {
+    const text = buildHostPreambleText({
+      sourceContext,
+      prompt: "P",
+      coverage: "C",
+      requireIndex: true,
+    });
+    expect(text).not.toContain("RULE BODY");
+    expect(text).toContain("read each full body with core__knowledge_read");
+  });
+});

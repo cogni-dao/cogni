@@ -99,6 +99,20 @@ export const EVENT_NAMES = {
   VCS_REVIEW_REQUEST_COMPLETE: "feature.vcs_review.request_complete",
   VCS_RUN_CI_REQUEST_COMPLETE: "feature.vcs_run_ci.request_complete",
 
+  // Node service links (story.0038): the operator's side of node-service enrollment.
+  // None of these carries a key, a hash, a header or a device code.
+  AGENT_NODE_LINK_REQUESTED: "agent.node_link.requested",
+  AGENT_NODE_LINK_CONNECTED: "agent.node_link.connected",
+  AGENT_NODE_LINK_FAILED: "agent.node_link.failed",
+  AGENT_NODE_LINK_KEY_REJECTED: "agent.node_link.key_rejected",
+  /** One per host-bound call to a linked node (target, audience host, method, path template, status). */
+  AGENT_NODE_CALL: "agent.node_call",
+  AGENT_NODE_CALL_BLOCKED: "agent.node_call.blocked",
+  /** The X-issued key is 10 days from its 30-day expiry (machine rotation ships before day 20). */
+  AGENT_NODE_KEY_EXPIRING: "agent.node_key.expiring",
+  /** A linked-node review chose the system free payer (payerKind system_free on the pr-review graph). */
+  AI_REVIEW_FREE_PAYER_SELECTED: "ai.review.free_payer_selected",
+
   // Adapter Events
   ADAPTER_LITELLM_COMPLETION_RESULT: "adapter.litellm.completion_result",
   ADAPTER_LITELLM_STREAM_RESULT: "adapter.litellm.stream_result",

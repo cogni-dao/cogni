@@ -55,4 +55,16 @@ export interface ConnectionBrokerPort {
     connectionId: string,
     scope: ConnectionScope
   ): Promise<ResolvedConnection>;
+
+  /**
+   * Resolve the operator's X-issued service key for one node origin (story.0038). Reads the
+   * `cogni-node` row held by the system tenant under the system principal's scope: the stored key is
+   * visible only to its creator (RLS), and a developer-scoped read would hide it. ONLY the host-owned
+   * node-source reader calls this — never the run actor, a tool or a model-visible path.
+   * @throws ConnectionNotFoundError when no active link key exists for the audience.
+   */
+  resolveServiceConnection(input: {
+    /** Stored origin of the served node (`https://<X host>`). */
+    readonly audience: string;
+  }): Promise<ResolvedConnection>;
 }

@@ -41,6 +41,7 @@ const CONNECTION_PROVIDERS = [
   "github",
   "google",
   "bluesky",
+  "cogni-node",
 ] as const;
 
 const CREDENTIAL_TYPES = [
@@ -53,7 +54,7 @@ const CREDENTIAL_TYPES = [
 /**
  * Encrypted connections for external services.
  * Per spec.tenant-connections: AEAD encrypted JSON blob with AAD binding
- * {billing_account_id, connection_id, provider}.
+ * {billing_account_id, connection_id, provider[, audience]} — `audience` is bound only when set.
  */
 export const connections = pgTable(
   "connections",
@@ -63,6 +64,11 @@ export const connections = pgTable(
       .notNull()
       .references(() => billingAccounts.id, { onDelete: "cascade" }),
     provider: text("provider").notNull(),
+    /**
+     * Origin of the service a `cogni-node` key is valid for (`https://<X host>`); null for every other
+     * provider. Part of the unique index and of the AEAD bound data (story.0038).
+     */
+    audience: text("audience"),
     credentialType: text("credential_type").notNull(),
     /** AEAD encrypted JSON blob (nonce prepended). Never store plaintext tokens. */
     encryptedCredentials: bytea("encrypted_credentials").notNull(),
@@ -97,8 +103,12 @@ export const connections = pgTable(
       )})`
     ),
     index("connections_billing_account_id_idx").on(table.billingAccountId),
-    uniqueIndex("connections_billing_account_provider_active_idx")
-      .on(table.billingAccountId, table.provider)
+    uniqueIndex("connections_billing_account_provider_audience_active_idx")
+      .on(
+        table.billingAccountId,
+        table.provider,
+        sql`coalesce(${table.audience}, '')`
+      )
       .where(sql`${table.revokedAt} IS NULL`),
   ]
 ).enableRLS();
