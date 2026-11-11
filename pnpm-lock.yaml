@@ -398,8 +398,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/ingestion-core
       '@cogni/knowledge-base-ui':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.7.0/cogni-dao-knowledge-base-ui-0.7.0.tgz
-        version: '@cogni-dao/knowledge-base-ui@https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.7.0/cogni-dao-knowledge-base-ui-0.7.0.tgz(odbpxpnmsgqgsytt3nsminpwce)'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.7.1/cogni-dao-knowledge-base-ui-0.7.1.tgz
+        version: '@cogni-dao/knowledge-base-ui@https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.7.1/cogni-dao-knowledge-base-ui-0.7.1.tgz(odbpxpnmsgqgsytt3nsminpwce)'
       '@cogni/knowledge-store':
         specifier: workspace:*
         version: link:../../../packages/knowledge-store
@@ -1898,9 +1898,9 @@ packages:
     resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.1/cogni-dao-doltgres-admission-0.1.1.tgz}
     version: 0.1.1
 
-  '@cogni-dao/knowledge-base-ui@https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.7.0/cogni-dao-knowledge-base-ui-0.7.0.tgz':
-    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.7.0/cogni-dao-knowledge-base-ui-0.7.0.tgz}
-    version: 0.7.0
+  '@cogni-dao/knowledge-base-ui@https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.7.1/cogni-dao-knowledge-base-ui-0.7.1.tgz':
+    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.7.1/cogni-dao-knowledge-base-ui-0.7.1.tgz}
+    version: 0.7.1
     peerDependencies:
       '@cogni-dao/metrics': '>=0.7.0 <1'
       '@cogni/knowledge-store': '>=0.13.0 <1'
@@ -13533,7 +13533,7 @@ snapshots:
 
   '@cogni-dao/doltgres-admission@https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.1/cogni-dao-doltgres-admission-0.1.1.tgz': {}
 
-  '@cogni-dao/knowledge-base-ui@https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.7.0/cogni-dao-knowledge-base-ui-0.7.0.tgz(odbpxpnmsgqgsytt3nsminpwce)':
+  '@cogni-dao/knowledge-base-ui@https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.7.1/cogni-dao-knowledge-base-ui-0.7.1.tgz(odbpxpnmsgqgsytt3nsminpwce)':
     dependencies:
       '@cogni/work-items': '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.7.1/cogni-dao-work-items-0.7.1.tgz'
       '@dnd-kit/core': 6.3.1(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
