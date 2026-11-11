@@ -133,6 +133,7 @@ export const EVENT_NAMES = {
   SCHEDULE_DETAIL_READ: "schedules.detail_read",
   SCHEDULE_HISTORY_READ: "schedules.history_read",
   KNOWLEDGE_MERGE_CHECK_COMPLETE: "knowledge.merge_check.complete",
+  KNOWLEDGE_CONTRIBUTION_DIFF_COMPLETE: "knowledge.contribution_diff.complete",
   AI_THREAD_READ: "ai.thread_read",
 
   // Governance Domain
