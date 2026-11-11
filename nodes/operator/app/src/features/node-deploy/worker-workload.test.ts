@@ -505,12 +505,73 @@ describe("a worker host cannot collide with another host (WORKER_HOST_IS_UNAMBIG
     );
   });
 
-  it("a workload that is not a lowered worker never gets a <slug>-<workload> host", async () => {
+  it("the workload named app never gets a <slug>-app host", async () => {
     await refused(
       harness("red", ["red"]),
+      "app",
+      "red-app.cognidao.org",
+      "app"
+    );
+  });
+
+  it("a second node-app workload keeps the same collision rules as a worker", async () => {
+    await refused(
+      harness("red", ["red", "red-sandbox"]),
       "sandbox",
       "red-sandbox.cognidao.org",
       "app"
     );
+    await refused(
+      harness("red", ["red"]),
+      "canary-b",
+      "red-canary-b.cognidao.org",
+      "app"
+    );
+  });
+});
+
+describe("a second node-app workload of the same node (task.5480, the canary lane)", () => {
+  const CANARY = manifest(
+    "canary",
+    3200,
+    "red-canary.cognidao.org",
+    SANDBOX_IMAGE
+  );
+
+  it("lowers with the node-app profile (not a worker) on <slug>-<workload> that follows the environment", () => {
+    const w = resolve({
+      manifests: [APP, CANARY],
+      workload: "canary",
+      secretsCatalogText: null,
+      env: "candidate-a",
+    });
+    expect(w.runtimeProfile).toBeUndefined();
+    expect(w.secretKeys).toEqual(
+      expect.arrayContaining([...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS])
+    );
+    expect(w.expose).toEqual({
+      http: { host: "red-canary-test.cognidao.org" },
+    });
+  });
+
+  it("still refuses a manifest host that is neither the node's own nor <slug>-<workload>", () => {
+    expect(() =>
+      resolve({
+        manifests: [
+          APP,
+          manifest("canary", 3200, "red-other.cognidao.org", SANDBOX_IMAGE),
+        ],
+        workload: "canary",
+        secretsCatalogText: null,
+      })
+    ).toThrow(expect.objectContaining({ code: "workload_manifest_refused" }));
+  });
+
+  it("deploys on its own host in candidate-a without touching the app host", async () => {
+    const h = harness();
+    expect(await release(h, "red-canary.cognidao.org", "app", "canary")).toBe(
+      "driven"
+    );
+    expect(h.payer.createRequests).toHaveLength(1);
   });
 });

@@ -128,6 +128,7 @@ import {
   HOST_ENVS,
   hostOwnedBy,
   sameHostname,
+  siblingLabel,
   workerHostRefusal,
 } from "./edge";
 import {
@@ -1384,7 +1385,16 @@ export class NodeDeploySequencer {
       edge.assertHost(host);
       if (this.d.runtime) {
         const owner = await this.d.runtime.catalog.entryFor(key.nodeId);
-        const worker = w.runtimeProfile === "worker" ? w.name : undefined;
+        const worker = owner
+          ? siblingLabel({
+              binding: edge.binding,
+              host,
+              env: key.env,
+              slug: owner.slug,
+              workload: w.name,
+              worker: w.runtimeProfile === "worker",
+            })
+          : undefined;
         if (
           !owner ||
           !isFleetOwnedRow(owner.row, edge.binding.fleetOwner) ||

@@ -295,6 +295,38 @@ function setHappyForkHandlers(): void {
       }
       throw new Error(`Unexpected blob content: ${content}`);
     },
+    // task.5480 — node-template may carry sibling manifests (its `canary` lane); a born node keeps only app.yaml.
+    "GET /repos/{owner}/{repo}/git/trees/{tree_sha}": (params) => {
+      expect(params).toMatchObject({
+        owner: "Cogni-DAO",
+        repo: "atlas",
+        tree_sha: "template-tree",
+      });
+      return {
+        truncated: false,
+        tree: [
+          { path: ".cogni/workloads", mode: "040000", type: "tree", sha: "d" },
+          {
+            path: ".cogni/workloads/app.yaml",
+            mode: "100644",
+            type: "blob",
+            sha: "template-app",
+          },
+          {
+            path: ".cogni/workloads/canary.yaml",
+            mode: "100644",
+            type: "blob",
+            sha: "template-canary",
+          },
+          {
+            path: ".cogni/repo-spec.yaml",
+            mode: "100644",
+            type: "blob",
+            sha: "template-spec",
+          },
+        ],
+      };
+    },
     "POST /repos/{owner}/{repo}/git/trees": (params) => {
       expect(params).toMatchObject({
         owner: "Cogni-DAO",
@@ -315,6 +347,12 @@ function setHappyForkHandlers(): void {
           mode: "100644",
           type: "blob",
           sha: "workload-manifest-blob",
+        },
+        {
+          path: ".cogni/workloads/canary.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: null,
         },
       ]);
       return { sha: "identity-tree" };
@@ -933,6 +971,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
         { length: 2 },
         () => "POST /repos/{owner}/{repo}/git/blobs"
       ),
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",
       "POST /repos/{owner}/{repo}/git/refs",
@@ -1248,6 +1287,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
         { length: 2 },
         () => "POST /repos/{owner}/{repo}/git/blobs"
       ),
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
       "POST /repos/{owner}/{repo}/git/trees",
       "POST /repos/{owner}/{repo}/git/commits",
       "POST /repos/{owner}/{repo}/git/refs",

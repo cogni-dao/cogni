@@ -78,6 +78,7 @@ export {
   updateSchedulerEndpointHost,
 } from "./scheduler-endpoints";
 export {
+  NODE_APP_WORKLOAD_MANIFEST_DIR,
   NODE_APP_WORKLOAD_MANIFEST_PATH,
   type RenderNodeAppWorkloadManifestInput,
   renderNodeAppWorkloadManifest,

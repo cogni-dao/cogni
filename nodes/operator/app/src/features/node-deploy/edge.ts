@@ -107,6 +107,28 @@ export function hostOwnedBy(
 }
 
 /**
+ * SIBLING_LABEL (task.5480): the workload name a release claims as its `<slug>-<workload>` host label, or
+ * undefined when it keeps the node's own host. A worker always claims it (task.5272). A non-worker (a
+ * second node-app workload of the same node, e.g. node-template's `canary`) claims it only when its host
+ * is not already the node's own, and the workload named `app` never does. The claim then faces the same
+ * `workerHostRefusal` collision rules as a worker.
+ */
+export function siblingLabel(input: {
+  readonly binding: WorkloadZoneBinding;
+  readonly host: string;
+  readonly env: string;
+  readonly slug: string;
+  readonly workload: string;
+  readonly worker: boolean;
+}): string | undefined {
+  if (input.worker) return input.workload;
+  if (input.workload === "app") return undefined;
+  return hostOwnedBy(input.binding, input.host, input.env, input.slug)
+    ? undefined
+    : input.workload;
+}
+
+/**
  * WORKER_HOST_IS_UNAMBIGUOUS (task.5272): why a sibling worker `<slug>-<workload>[-env]` host may NOT be
  * claimed, or undefined when it may. A worker host is checked at the pre-create step, after
  * `hostOwnedBy(.., workload)`; it must not collide with any host another catalog node (or this node's
