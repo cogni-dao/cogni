@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2025 Cogni-DAO
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 /**
  * Module: `@tests/component/db/agent-credentials.int.test`
- * Purpose: The v2 agent key store against real Postgres with migration 0063 applied (story.5156). Runs the package's OWN conformance suite
+ * Purpose: The revocable agent key store against real Postgres with migration 0063 applied (story.5156). Runs the package's OWN conformance suite
  *   (`runCredentialConformance`, SUITE_GATES_RELEASE) over the real SQL, then the rows only SQL can prove: the RLS wall, the
  *   external-principal trigger, hash uniqueness, the renew check and the same-users.id upgrade.
- * Scope: `@cogni-dao/agent-grants/credentials` + migration 0063; does not exercise HTTP. Port of node-template's agent-credentials.int.test.ts
- *   (the internal-principal probe seeds its own row; the operator has no NODE_AI_PRINCIPAL_USER_ID seed).
+ * Scope: `@cogni-dao/agent-grants/credentials` + migration 0039. No HTTP.
  * Invariants:
  *   - SERVICE_ROLE_ONLY: the app role sees no `agent_credentials` row.
  *   - TOKEN_HASH_ONLY: only the sha256 of a key is stored.
@@ -20,13 +19,15 @@
 import { randomUUID } from "node:crypto";
 import { runCredentialConformance } from "@cogni-dao/agent-grants/conformance";
 import {
+  agentRolesHasRoles,
+  assertV1NotSuperseded,
   type CredentialSql,
   confirmCredential,
   createPostgresCredentialStore,
   hashAgentKey,
   type MintedKey,
   rotateCredential,
-  upgradeFromV1,
+  upgradeSignedKey,
   verifyBearer,
 } from "@cogni-dao/agent-grants/credentials";
 import postgres, { type Sql } from "postgres";
@@ -43,7 +44,9 @@ describe("agent credentials (real Postgres)", () => {
     return id;
   };
   const store = () =>
-    createPostgresCredentialStore(service as unknown as CredentialSql);
+    createPostgresCredentialStore(service as unknown as CredentialSql, {
+      hasRoles: agentRolesHasRoles(service as unknown as CredentialSql),
+    });
   const ok = (m: MintedKey) => {
     if (!m.ok) throw new Error(`refused: ${m.reason}`);
     return m;
@@ -112,10 +115,17 @@ describe("agent credentials (real Postgres)", () => {
       else
         await service`UPDATE agent_credentials SET expires_at = now() - interval '2 hour', renew_until = now() - interval '1 minute' WHERE id = ${credentialId}`;
     },
+    async addRoles(userId) {
+      const admin = await makeUser();
+      await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${userId}, 'probe:scope', ${admin}, now())`;
+    },
     broken: () =>
-      createPostgresCredentialStore((async () => {
-        throw new Error("db down");
-      }) as unknown as CredentialSql),
+      createPostgresCredentialStore(
+        (async () => {
+          throw new Error("db down");
+        }) as unknown as CredentialSql,
+        { hasRoles: async () => false }
+      ),
     storedHash: async (credentialId) =>
       (
         await service`SELECT token_hash FROM agent_credentials WHERE id = ${credentialId}`
@@ -129,7 +139,7 @@ describe("agent credentials (real Postgres)", () => {
   describe("schema (rows only SQL can prove)", () => {
     it("the app role sees no credential row (FORCE RLS, no policy) and cannot write one", async () => {
       const user = await makeUser();
-      ok(await upgradeFromV1(store(), { userId: user }));
+      ok(await upgradeSignedKey(store(), { userId: user }));
       expect(await app`SELECT 1 FROM agent_credentials`).toHaveLength(0);
       await expect(
         app`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
@@ -137,13 +147,62 @@ describe("agent credentials (real Postgres)", () => {
       ).rejects.toThrow();
     });
 
+    it("FAIL_CLOSED_ON_WRONG_ROLE: a store over the app role (no BYPASSRLS, FORCE RLS) is unavailable, never 'never confirmed'", async () => {
+      const user = await makeUser();
+      const key = ok(await upgradeSignedKey(store(), { userId: user }));
+      await confirmCredential(store(), { credentialId: key.credentialId });
+      const wrongRole = createPostgresCredentialStore(
+        app as unknown as CredentialSql,
+        { hasRoles: async () => false }
+      );
+      // The raw read the old store did returns zero rows for this role: the gate would have silently turned off.
+      expect(
+        await app`SELECT 1 FROM agent_credentials WHERE user_id = ${user} AND confirmed_at IS NOT NULL LIMIT 1`
+      ).toHaveLength(0);
+      await expect(
+        assertV1NotSuperseded(wrongRole, user)
+      ).rejects.toMatchObject({ code: "authz_unavailable" });
+      expect(await verifyBearer(wrongRole, key.apiKey)).toEqual({
+        ok: false,
+        reason: "unavailable",
+      });
+      // The right role still reads the confirmed credential.
+      await expect(assertV1NotSuperseded(store(), user)).rejects.toMatchObject({
+        code: "v1_superseded",
+      });
+    });
+
+    it("hasRoles is the node's read: a true answer refuses upgrade without a binding even with no agent_roles row; a throw is an outage", async () => {
+      const user = await makeUser();
+      const sql = service as unknown as CredentialSql;
+      const openFga = createPostgresCredentialStore(sql, {
+        hasRoles: async () => true,
+      });
+      expect(await upgradeSignedKey(openFga, { userId: user })).toEqual({
+        ok: false,
+        reason: "binding_required",
+      });
+      await service`INSERT INTO user_bindings (id, user_id, provider, external_id) VALUES (${randomUUID()}, ${user}, 'github', ${`gh-${randomUUID()}`})`;
+      expect(await upgradeSignedKey(openFga, { userId: user })).toMatchObject({
+        ok: true,
+      });
+      const down = createPostgresCredentialStore(sql, {
+        hasRoles: async () => {
+          throw new Error("openfga down");
+        },
+      });
+      await expect(
+        upgradeSignedKey(down, { userId: user })
+      ).rejects.toMatchObject({ code: "authz_unavailable" });
+    });
+
     it("only a user with an EXTERNAL agent principal may hold a credential (trigger)", async () => {
       const plain = await makeUser();
-      const internal = await makeUser();
-      await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('internal', ${`int-${internal}`}, ${internal})`;
       const insert = (userId: string) =>
         service`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
-          VALUES (${userId}, ${randomUUID()}, 'legacy_upgrade', now() + interval '1 day', now() + interval '2 day')`;
+          VALUES (${userId}, ${randomUUID()}, 'key_upgrade', now() + interval '1 day', now() + interval '2 day')`;
+      const internal = await makeUser();
+      await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('internal', ${`int-${internal}`}, ${internal})`;
       await expect(insert(plain)).rejects.toThrow(
         /requires an external agent principal/
       );
@@ -154,7 +213,7 @@ describe("agent credentials (real Postgres)", () => {
 
     it("a duplicate hash is refused, and renew_until must pass expires_at", async () => {
       const user = await makeUser();
-      const key = ok(await upgradeFromV1(store(), { userId: user }));
+      const key = ok(await upgradeSignedKey(store(), { userId: user }));
       await expect(
         service`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
           VALUES (${user}, ${await hashAgentKey(key.apiKey)}, 'rotation', now(), now() + interval '1 day')`
@@ -167,7 +226,7 @@ describe("agent credentials (real Postgres)", () => {
 
     it("the state function derives from timestamps alone", async () => {
       const key = ok(
-        await upgradeFromV1(store(), { userId: await makeUser() })
+        await upgradeSignedKey(store(), { userId: await makeUser() })
       );
       expect(await stateOf(key.credentialId)).toBe("pending");
       await confirmCredential(store(), { credentialId: key.credentialId });
@@ -181,7 +240,7 @@ describe("agent credentials (real Postgres)", () => {
       const user = await makeUser();
       const before = (await service`SELECT count(*)::int AS n FROM users`)[0]
         ?.n;
-      const key = ok(await upgradeFromV1(store(), { userId: user }));
+      const key = ok(await upgradeSignedKey(store(), { userId: user }));
       expect(key.userId).toBe(user);
       expect((await service`SELECT count(*)::int AS n FROM users`)[0]?.n).toBe(
         before
@@ -193,7 +252,7 @@ describe("agent credentials (real Postgres)", () => {
 
     it("confirm refuses when the predecessor was revoked meanwhile (409 predecessor_revoked)", async () => {
       const user = await makeUser();
-      const old = ok(await upgradeFromV1(store(), { userId: user }));
+      const old = ok(await upgradeSignedKey(store(), { userId: user }));
       await confirmCredential(store(), { credentialId: old.credentialId });
       const next = ok(
         await rotateCredential(store(), { credentialId: old.credentialId })
@@ -202,14 +261,6 @@ describe("agent credentials (real Postgres)", () => {
       expect(
         await confirmCredential(store(), { credentialId: next.credentialId })
       ).toEqual({ ok: false, reason: "predecessor_revoked" });
-    });
-
-    it("the wallet-binding trigger refuses a wallet for any agent principal (AGENTS_HOLD_NO_WALLET)", async () => {
-      const user = await makeUser();
-      ok(await upgradeFromV1(store(), { userId: user }));
-      await expect(
-        service`INSERT INTO user_bindings (id, user_id, provider, external_id) VALUES (${randomUUID()}, ${user}, 'wallet', ${`0x${randomUUID().replaceAll("-", "").slice(0, 40)}`})`
-      ).rejects.toThrow(/cannot bind a wallet/);
     });
   });
 });

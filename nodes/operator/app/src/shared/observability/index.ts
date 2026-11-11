@@ -21,6 +21,10 @@ export const EVENT_NAMES = {
   AGENT_CREDENTIAL_REVOKED: "agent.credential.revoked",
   AGENT_CREDENTIAL_REFUSED: "agent.credential.refused",
   AGENT_CREDENTIAL_STORE_UNAVAILABLE: "agent.credential.store_unavailable",
+  AGENT_CREDENTIAL_V1_SUPERSEDED_DENIED:
+    "agent.credential.v1_superseded_denied",
+  AGENT_CREDENTIAL_INVALID_DENIED: "agent.credential.invalid_denied",
+  AGENT_CREDENTIAL_RATE_LIMITED: "agent.credential.rate_limited",
   FINANCE_REPORT_READ: "finance.report.read",
   ADAPTER_GITHUB_NODE_CODE_ERROR: "adapter.github_node_code.error",
   ADAPTER_GITHUB_REPO_WRITE_ERROR: "adapter.github_repo_write.error",

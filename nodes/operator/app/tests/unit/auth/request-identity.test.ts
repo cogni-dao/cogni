@@ -46,8 +46,11 @@ vi.mock("@/bootstrap/agent-credentials", () => ({
     everConfirmed: (...args: unknown[]) => mockEverConfirmed(...args),
     lookup: (...args: unknown[]) => mockLookup(...args),
   }),
+  admitCredentialLookup: () => true,
+  recordCredentialMiss: () => {},
 }));
 
+import { formatRevocableKey } from "@cogni-dao/agent-grants/credentials";
 import {
   issueAgentApiKey,
   peekAgentKeyExpiry,
@@ -125,7 +128,7 @@ describe("resolveRequestIdentity — v2 hashed keys and v1 supersession (task.54
   });
 
   it("resolves an active v2 key from the store and never touches the session", async () => {
-    const token = `cogni_ag_sk_v2_${"a".repeat(43)}`;
+    const token = formatRevocableKey("a".repeat(43));
     mockHeaders.mockResolvedValue(
       headersFromRecord({ authorization: `Bearer ${token}` })
     );
@@ -147,7 +150,7 @@ describe("resolveRequestIdentity — v2 hashed keys and v1 supersession (task.54
   it("returns null for a revoked/unknown v2 key (BEARER_CLAIMS_EXCLUSIVE: no cookie fallback)", async () => {
     mockHeaders.mockResolvedValue(
       headersFromRecord({
-        authorization: `Bearer cogni_ag_sk_v2_${"b".repeat(43)}`,
+        authorization: `Bearer ${formatRevocableKey("b".repeat(43))}`,
       })
     );
 
@@ -158,7 +161,7 @@ describe("resolveRequestIdentity — v2 hashed keys and v1 supersession (task.54
   it("throws CredentialStoreUnavailableError on a v2 store outage (503, never a false 401)", async () => {
     mockHeaders.mockResolvedValue(
       headersFromRecord({
-        authorization: `Bearer cogni_ag_sk_v2_${"c".repeat(43)}`,
+        authorization: `Bearer ${formatRevocableKey("c".repeat(43))}`,
       })
     );
     mockLookup.mockRejectedValue(new Error("db down"));
@@ -201,7 +204,7 @@ describe("peekAgentKeyExpiry — agent-key liveness for /agent/me", () => {
   it("returns the store expiry for an active v2 bearer", async () => {
     mockHeaders.mockResolvedValue(
       headersFromRecord({
-        authorization: `Bearer cogni_ag_sk_v2_${"d".repeat(43)}`,
+        authorization: `Bearer ${formatRevocableKey("d".repeat(43))}`,
       })
     );
     const exp = new Date(Date.now() + 86_400_000);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2025 Cogni-DAO
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
 
 import type {
   ConfirmResult,
@@ -125,12 +125,12 @@ export function memoryCredentialStore(init: {
       for (const r of rows)
         if (
           r.userId === userId &&
-          r.createdFrom === "legacy_upgrade" &&
+          r.createdFrom === "key_upgrade" &&
           r.confirmedAt === null &&
           r.revokedAt === null
         )
           revokeRow(r, "superseded");
-      const row = pending(userId, tokenHash, "legacy_upgrade", null, policy);
+      const row = pending(userId, tokenHash, "key_upgrade", null, policy);
       return {
         ok: true,
         credentialId: row.id,
@@ -189,6 +189,9 @@ export function memoryCredentialStore(init: {
         : undefined;
       if (pred?.revokedAt !== null && pred)
         return { ok: false, reason: "predecessor_revoked" };
+      const u = init.users[r.userId];
+      if (r.createdFrom === "key_upgrade" && u?.roles && !u.github)
+        return { ok: false, reason: "binding_required" };
       r.confirmedAt = clock.now;
       r.expiresAt = plus(policy.ttlSec);
       r.renewUntil = plus(policy.ttlSec + policy.renewWindowSec);
@@ -222,6 +225,7 @@ export function memoryCredentialStore(init: {
     rows,
     clock,
     outage,
+    users: init.users,
     advance: (sec: number) => {
       clock.now += sec * 1000;
     },

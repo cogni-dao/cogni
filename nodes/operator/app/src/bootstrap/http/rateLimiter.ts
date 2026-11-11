@@ -25,6 +25,11 @@ interface RateLimiterConfig {
   maxTokens: number; // Bucket capacity (e.g., 10)
   refillRate: number; // Tokens per second (e.g., 10/60 = 0.166...)
   burstSize: number; // Burst allowance beyond maxTokens (e.g., 5)
+  /**
+   * Cap on distinct keys (a bounded LRU). Past it, the least-recently-seen bucket is evicted to make room, so a flood of invented keys cannot grow
+   * the map without bound and never makes unrelated clients share a bucket. Default: no cap.
+   */
+  maxKeys?: number;
 }
 
 /**
@@ -49,6 +54,11 @@ export class TokenBucketRateLimiter {
   public consume(key: string): boolean {
     const now = Date.now();
     let bucket = this.buckets.get(key);
+    if (bucket) {
+      // Most recently seen goes last, so the first entry is always the least recently seen.
+      this.buckets.delete(key);
+      this.buckets.set(key, bucket);
+    }
 
     if (!bucket) {
       // New client - initialize with full bucket including burst capacity
@@ -56,6 +66,11 @@ export class TokenBucketRateLimiter {
         tokens: this.config.maxTokens + this.config.burstSize,
         lastSeen: now,
       };
+      const { maxKeys } = this.config;
+      if (maxKeys !== undefined && this.buckets.size >= maxKeys) {
+        const oldest = this.buckets.keys().next();
+        if (!oldest.done) this.buckets.delete(oldest.value);
+      }
       this.buckets.set(key, bucket);
     }
 
@@ -77,6 +92,18 @@ export class TokenBucketRateLimiter {
     }
 
     return false;
+  }
+
+  /**
+   * CHECK-only: would this key pass right now? Spends nothing (ADMIT_BEFORE_STORE pairs it with an explicit spend on miss).
+   */
+  public hasTokens(key: string): boolean {
+    const bucket = this.buckets.get(key);
+    if (!bucket) return true; // a client with no bucket always passes: only a miss creates one
+    const refilled =
+      bucket.tokens +
+      ((Date.now() - bucket.lastSeen) / 1000) * this.config.refillRate;
+    return refilled >= 1;
   }
 
   /**
@@ -169,4 +196,61 @@ export const publicApiLimiter = new TokenBucketRateLimiter({
   maxTokens: 10,
   refillRate: 10 / 60, // 10 tokens per 60 seconds
   burstSize: 5,
+});
+
+/**
+ * Client key for the credential-lookup limiter. Operator divergence from node-template (recorded, edge-driven): the operator's prod edge is its
+ * own Caddy (`header_up X-Real-IP {remote_host}`, infra/compose/edge/configs/Caddyfile.tmpl), so `x-real-ip` is the trusted source here;
+ * `cf-connecting-ip` is the fallback for Cloudflare-fronted lanes (candidate). Nothing else is trusted. A shape that does not parse is "unknown".
+ * Residual risk is the same as node-template's: a client that reaches the origin without the edge picks its own bucket; `maxKeys` bounds only
+ * memory, a valid key never spends a token, and `hasTokens` passes clients with no bucket, so legitimate agents cannot be throttled through this.
+ */
+export function extractEdgeClientIp(request: {
+  headers: { get(name: string): string | null };
+}): string {
+  const ip = (
+    request.headers.get("x-real-ip") ?? request.headers.get("cf-connecting-ip")
+  )?.trim();
+  if (!ip || ip.length > 45 || !/^[0-9a-fA-F:.]+$/.test(ip)) return "unknown";
+  return ip.includes(":") ? ipv6Prefix64(ip) : ip;
+}
+
+/**
+ * An IPv6 client is keyed by its /64 prefix (one subscriber normally holds a whole /64, so keying on the full address would hand it unlimited
+ * buckets). An IPv4-mapped address (`::ffff:a.b.c.d`) is keyed as that IPv4 address. A shape that does not parse is "unknown".
+ */
+function ipv6Prefix64(ip: string): string {
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+  if (mapped?.[1]) return mapped[1];
+  const halves = ip.split("::");
+  if (halves.length > 2) return "unknown";
+  const side = (text: string | undefined) => (text ? text.split(":") : []);
+  const head = side(halves[0]);
+  const tail = side(halves[1]);
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? head.length !== 8 : missing < 1) return "unknown";
+  const groups =
+    halves.length === 1
+      ? head
+      : [...head, ...Array<string>(missing).fill("0"), ...tail];
+  if (!groups.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g))) return "unknown";
+  return `${groups
+    .slice(0, 4)
+    .map((g) => Number.parseInt(g, 16).toString(16))
+    .join(":")}::/64`;
+}
+
+/**
+ * Per-IP limit on revocable-key lookups that find nothing (task.5474 / story.5156). Every shape-valid revocable bearer costs one query on the small
+ * service pool, so an unauthenticated flood of well-formed random keys could starve the other service-pool users.
+ * SPEND_ON_MISS: a request checks the bucket first (`hasTokens`, over the limit = 429, no store read) and spends a token only when the lookup finds
+ * no usable key (`consume`). A valid key never spends, so a busy legitimate agent is never throttled by its own traffic. 300 misses/min sustained + 100
+ * burst per client; keys that fail the shape or checksum never reach it. Per-instance state, same limitation as the public limiter. At most
+ * 10 000 distinct clients are tracked (`maxKeys`, bounded LRU): the least-recently-seen bucket is evicted, never shared.
+ */
+export const credentialLookupLimiter = new TokenBucketRateLimiter({
+  maxTokens: 300,
+  refillRate: 300 / 60,
+  burstSize: 100,
+  maxKeys: 10_000,
 });

@@ -39,6 +39,10 @@ vi.mock("@/shared/config", () => ({
 }));
 
 // Import after mocks
+import {
+  formatRevocableKey,
+  REVOCABLE_KEY_PREFIX,
+} from "@cogni-dao/agent-grants/credentials";
 import { proxy } from "@/proxy";
 
 // --- Helpers ---
@@ -390,29 +394,40 @@ describe("proxy — unmatched routes", () => {
   });
 });
 
-// story.5156 / task.5474 D1: the perimeter admits BOTH key generations; handlers do the real verification.
-describe("proxy — v2 agent bearer (cogni_ag_sk_v2_)", () => {
-  function makeV2Request(path: string): NextRequest {
+// story.5156 / task.5474 D1 + CHECKSUM_BEFORE_DB: the perimeter admits both key generations, but a revocable bearer
+// must pass shape AND checksum here, before any database read. The format has one definition, in the package.
+describe("proxy — revocable agent bearer", () => {
+  function bearerRequest(path: string, token: string): NextRequest {
     return new NextRequest(new URL(path, "http://localhost:3000"), {
-      headers: {
-        authorization: `Bearer cogni_ag_sk_v2_${"a".repeat(43)}`,
-      },
+      headers: { authorization: `Bearer ${token}` },
     });
   }
 
-  it("passes a v2 bearer through the agent lane without a session read", async () => {
-    const res = await proxy(makeV2Request("/api/v1/agent/runs"));
+  it("passes a well-formed revocable bearer through the agent lane without a session read", async () => {
+    const res = await proxy(
+      bearerRequest("/api/v1/agent/runs", formatRevocableKey("a".repeat(43)))
+    );
 
     expect(res.status).toBe(200);
+    expect(mockGetToken).not.toHaveBeenCalled();
+  });
+
+  it("rejects a revocable bearer with a bad checksum at the perimeter (401, no session read)", async () => {
+    const res = await proxy(
+      bearerRequest(
+        "/api/v1/agent/runs",
+        `${REVOCABLE_KEY_PREFIX}${"a".repeat(47)}`
+      )
+    );
+
+    expect(res.status).toBe(401);
     expect(mockGetToken).not.toHaveBeenCalled();
   });
 
   it("still rejects a non-cogni bearer with no session on /api/v1/*", async () => {
     mockGetToken.mockResolvedValue(null);
     const res = await proxy(
-      new NextRequest(new URL("/api/v1/agent/runs", "http://localhost:3000"), {
-        headers: { authorization: "Bearer not-a-cogni-key" },
-      })
+      bearerRequest("/api/v1/agent/runs", "not-a-cogni-key")
     );
 
     expect(res.status).toBe(401);

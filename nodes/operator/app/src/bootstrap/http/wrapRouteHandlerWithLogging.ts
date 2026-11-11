@@ -22,12 +22,15 @@
 
 import type { SessionUser } from "@cogni/node-shared";
 import {
+  CredentialRateLimitedError,
   CredentialStoreUnavailableError,
+  credentialErrorHttp,
+  isRevocableKey,
+  storeFailureFields,
   V1SupersededError,
 } from "@cogni-dao/agent-grants/credentials";
 import { headers } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
-import type { Logger as PinoLogger } from "pino";
 import { withRootSpan } from "@/bootstrap/otel";
 import {
   createRequestContext,
@@ -40,6 +43,39 @@ import {
   type RequestContext,
   statusBucket,
 } from "@/shared/observability";
+
+/** One log line for a credential outcome that answers before the handler. Fields: routeId, plus userId (v1_superseded) or errorClass and sqlState (outage). Never a key, a hash or a message. */
+function logCredentialRefusal(
+  log: RequestContext["log"],
+  error: unknown,
+  routeId: string
+): void {
+  if (error instanceof V1SupersededError) {
+    // A signed key used after its user confirmed a revocable key: the best "leaked signed key is being replayed" signal. userId only.
+    log.warn(
+      {
+        event: EVENT_NAMES.AGENT_CREDENTIAL_V1_SUPERSEDED_DENIED,
+        routeId,
+        userId: error.userId,
+      },
+      EVENT_NAMES.AGENT_CREDENTIAL_V1_SUPERSEDED_DENIED
+    );
+  } else if (error instanceof CredentialRateLimitedError) {
+    log.warn(
+      { event: EVENT_NAMES.AGENT_CREDENTIAL_RATE_LIMITED, routeId },
+      EVENT_NAMES.AGENT_CREDENTIAL_RATE_LIMITED
+    );
+  } else if (error instanceof CredentialStoreUnavailableError) {
+    log.warn(
+      {
+        event: EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE,
+        routeId,
+        ...storeFailureFields(error),
+      },
+      EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE
+    );
+  }
+}
 
 // Agent bearer token prefix (kept in sync with the auth layer's issuer). Used
 // ONLY to decode a rejected token's expiry for a human-readable challenge
@@ -218,46 +254,6 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
       ? await options.getRequestDependencies()
       : (await import("@/bootstrap/container")).getContainer();
 
-    // Fetch session based on auth mode. A v2 key whose store cannot answer is 503, never a false 401
-    // (STORE_OUTAGE_IS_NOT_401, task.5474); a superseded v1 key is a distinct 401 `v1_superseded`.
-    let sessionUser: SessionUser | null = null;
-    if (options.auth && options.auth.mode !== "none") {
-      try {
-        sessionUser = await options.auth.getSessionUser();
-      } catch (error) {
-        if (error instanceof V1SupersededError) {
-          return NextResponse.json(
-            { error: error.code },
-            {
-              status: 401,
-              headers: {
-                "cache-control": "no-store",
-                "www-authenticate": 'Bearer error="invalid_token"',
-              },
-            }
-          );
-        }
-        if (!(error instanceof CredentialStoreUnavailableError)) throw error;
-        // `container` is a union of the DI container and injected request dependencies, whose pino
-        // identities differ; pin one so the LogFn overloads resolve.
-        const log = container.log as PinoLogger;
-        log.warn(
-          {
-            event: EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE,
-            routeId: options.routeId,
-          },
-          EVENT_NAMES.AGENT_CREDENTIAL_STORE_UNAVAILABLE
-        );
-        return NextResponse.json(
-          { error: "authz_unavailable" },
-          {
-            status: 503,
-            headers: { "cache-control": "no-store", "retry-after": "5" },
-          }
-        );
-      }
-    }
-
     // Get config once before try block to avoid env failures masking real errors
     const { unhandledErrorPolicy } = container.config;
 
@@ -267,6 +263,21 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
       `${request.method} ${options.routeId}`,
       { route_id: options.routeId },
       async ({ traceId, span }) => {
+        const start = performance.now();
+
+        // Resolve the session INSIDE the span, so a credential outcome (401 v1_superseded, 429, 503) is logged, measured and traced like every
+        // other response. The error is held here and answered in the try below, where `finally` logs the request end and records the metric
+        // exactly once. A revocable key whose store cannot answer is 503, never a false 401 (STORE_OUTAGE_IS_NOT_401).
+        let sessionUser: SessionUser | null = null;
+        let sessionError: unknown;
+        if (options.auth && options.auth.mode !== "none") {
+          try {
+            sessionUser = await options.auth.getSessionUser();
+          } catch (error) {
+            sessionError = error;
+          }
+        }
+
         const ctx = createRequestContext(
           { baseLog: container.log, clock: container.clock },
           request,
@@ -281,16 +292,42 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
         span.setAttribute("request_id", ctx.reqId);
 
         logRequestStart(ctx.log);
-        const start = performance.now();
 
         // Track response for metrics/logging (captured in try/catch, used in finally)
         let responseStatus = 500;
         let response: NextResponse;
 
         try {
+          if (sessionError !== undefined) {
+            const refusal = credentialErrorHttp(sessionError);
+            if (!refusal) throw sessionError;
+            logCredentialRefusal(ctx.log, sessionError, options.routeId);
+            responseStatus = refusal.status;
+            response = NextResponse.json(refusal.body, {
+              status: refusal.status,
+              headers: { ...refusal.headers },
+            });
+            return response;
+          }
+
           // Check session requirement before calling handler
           if (options.auth?.mode === "required" && !sessionUser) {
             responseStatus = 401;
+            // A refused revocable key (unknown, revoked, expired, wrong state) is a credential denial; logged with routeId only.
+            if (
+              isRevocableKey(
+                request.headers.get("authorization")?.slice("Bearer ".length) ??
+                  ""
+              )
+            ) {
+              ctx.log.warn(
+                {
+                  event: EVENT_NAMES.AGENT_CREDENTIAL_INVALID_DENIED,
+                  routeId: options.routeId,
+                },
+                EVENT_NAMES.AGENT_CREDENTIAL_INVALID_DENIED
+              );
+            }
             // Distinguish "presented-but-invalid credential" (e.g. an expired
             // bearer → RFC 6750 §3 `invalid_token`) from "no credential at all"
             // (bare `Bearer` challenge, session-required semantics preserved).

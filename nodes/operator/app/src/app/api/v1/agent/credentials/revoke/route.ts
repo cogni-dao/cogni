@@ -3,10 +3,10 @@
 
 /**
  * Module: `@app/api/v1/agent/credentials/revoke`
- * Purpose: Revoke one v2 key of the caller's own user: the calling key (no body) or a sibling by `credentialId` (leak response).
+ * Purpose: Revoke one revocable key of the caller's own user: the calling key (no body) or a sibling by `credentialId` (leak response).
  *   The revoked key answers 401 on its next call; every other key stays valid (A7). A pending successor of the revoked key dies with it.
- * Scope: Auth shell, body parse, response mapping; does not implement the SQL. SQL lives in `@cogni-dao/agent-grants/credentials`. 1-1 port of
- *   node-template revoke/route.ts (story.5156).
+ * Scope: Auth shell, body parse, delegation; does not implement the SQL or the result-to-HTTP mapping (`credentialHttp`) — those live in
+ *   `@cogni-dao/agent-grants/credentials`. 1-1 port of node-template revoke/route.ts (story.5156).
  * Invariants:
  *   - OWN_KEYS_ONLY: another user's credential id, a revoked id and an unknown id are all the same 404 `not_found`.
  *   - NEVER_CACHED: the very next verify reads the revoked row.
@@ -16,11 +16,14 @@
  */
 
 import { revokeAgentCredentialOperation } from "@cogni/node-contracts";
-import { revokeCredential } from "@cogni-dao/agent-grants/credentials";
+import {
+  credentialHttp,
+  revokeCredential,
+} from "@cogni-dao/agent-grants/credentials";
 
 import {
   credentialBearerRoute,
-  credentialJson,
+  credentialResponse,
 } from "@/app/_lib/auth/agent-credential-route";
 import { getAgentCredentialStore } from "@/bootstrap/agent-credentials";
 import { EVENT_NAMES } from "@/shared/observability";
@@ -34,7 +37,8 @@ export const POST = credentialBearerRoute({
   async handle({ ctx, request, caller }) {
     const body = await request.json().catch(() => ({}));
     const parsed = revokeAgentCredentialOperation.input.safeParse(body ?? {});
-    if (!parsed.success) return credentialJson({ error: "invalid input" }, 400);
+    if (!parsed.success)
+      return credentialResponse(credentialHttp({ op: "invalid_input" }));
     const credentialId = parsed.data.credentialId ?? caller.credentialId;
 
     const revoked = await revokeCredential(getAgentCredentialStore(), {
@@ -42,21 +46,19 @@ export const POST = credentialBearerRoute({
       userId: caller.userId,
       revokedBy: caller.userId,
     });
-    if (!revoked) return credentialJson({ error: "not_found" }, 404);
-    ctx.log.info(
-      {
-        event: EVENT_NAMES.AGENT_CREDENTIAL_REVOKED,
-        userId: caller.userId,
-        credentialId,
-        viaCredentialId: caller.credentialId,
-      },
-      EVENT_NAMES.AGENT_CREDENTIAL_REVOKED
-    );
-    return credentialJson(
-      revokeAgentCredentialOperation.output.parse({
-        credentialId,
-        revoked: true,
-      })
+    if (revoked) {
+      ctx.log.info(
+        {
+          event: EVENT_NAMES.AGENT_CREDENTIAL_REVOKED,
+          userId: caller.userId,
+          credentialId,
+          viaCredentialId: caller.credentialId,
+        },
+        EVENT_NAMES.AGENT_CREDENTIAL_REVOKED
+      );
+    }
+    return credentialResponse(
+      credentialHttp({ op: "revoke", credentialId, revoked })
     );
   },
 });

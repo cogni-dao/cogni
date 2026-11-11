@@ -4,20 +4,20 @@
 /**
  * Module: `@app/_lib/auth/request-identity`
  * Purpose: Unified request identity resolver — returns a SessionUser for
- *   a valid HMAC-signed machine bearer token (`cogni_ag_sk_v1_...`), a revocable hashed v2 key (`cogni_ag_sk_v2_...`,
+ *   a valid HMAC-signed machine bearer token (`cogni_ag_sk_v1_...`), a revocable hashed key (the package's `REVOCABLE_KEY_PREFIX` token,
  *   one store lookup), or a browser session cookie. One entry point for all auth surfaces.
  * Scope: Bearer parser + HMAC signer/verifier (issueAgentApiKey exported to
  *   the register route only), and resolveRequestIdentity which
  *   wrapRouteHandlerWithLogging consumes via `auth.getSessionUser`. The v1 path reads no database; only a v2 key
- *   reads the credential store (`verifyAgentKeyV2`). Session IO happens via getServerSessionUser.
+ *   reads the credential store (`verifyRevocableKey`). Session IO happens via getServerSessionUser.
  * Invariants:
- *   - V1_PATH_UNCHANGED (task.5474 C2): `parseAgentToken` and its HMAC/expiry checks are byte-for-byte what they were. A v2 key is routed
+ *   - V1_PATH_UNCHANGED (task.5474 C2): `parseAgentToken` and its HMAC/expiry checks are byte-for-byte what they were. A revocable key is routed
  *     BEFORE them by prefix; it never reaches the v1 verifier.
  *   - V1_SUPERSEDED: once the verified v1 identity's user holds a CONFIRMED v2 credential (revoked or not), the request is refused with
  *     `V1SupersededError` (401 `v1_superseded`). Revoking the v2 key therefore cannot revive a leaked v1 key. One store read per v1 request.
- *   - V2_STORE_OUTAGE_IS_503: a store failure throws `CredentialStoreUnavailableError` (the route wrapper answers 503), never null (401).
- *   - V2_ACTIVE_ONLY: the generic resolver admits only an `active` v2 key. A pending or renew_only key reaches only the
- *     credential routes that opt in through `verifyAgentKeyV2`.
+ *   - REVOCABLE_STORE_OUTAGE_IS_503: a store failure throws `CredentialStoreUnavailableError` (the route wrapper answers 503), never null (401).
+ *   - REVOCABLE_ACTIVE_ONLY: the generic resolver admits only an `active` revocable key. A pending or renew_only key reaches only the
+ *     credential routes that opt in through `verifyRevocableKey`. A client over the lookup limit is 429 (`CredentialRateLimitedError`).
  *   - NO_AUTH_CYCLE: imports getServerSessionUser DIRECTLY from @/lib/auth/server.
  *     Must NOT import getSessionUser from @/app/_lib/auth/session (that module
  *     re-exports this resolver and would create unbounded async recursion on
@@ -36,9 +36,10 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { SessionUser } from "@cogni/node-shared";
 import {
   assertV1NotSuperseded,
+  CredentialRateLimitedError,
   type CredentialState,
   CredentialStoreUnavailableError,
-  isAgentKeyV2,
+  isRevocableKey,
   type VerifyResult,
   verifyBearer,
 } from "@cogni-dao/agent-grants/credentials";
@@ -133,7 +134,7 @@ export async function peekAgentKeyExpiry(): Promise<number | null> {
   }
   const bearer = extractBearerToken(h.get("authorization"));
   if (!bearer) return null;
-  if (isAgentKeyV2(bearer)) {
+  if (isRevocableKey(bearer)) {
     // v2 expiry is a store fact, not a token claim. A broken store yields null (the /me route stays readable).
     try {
       const [{ getAgentCredentialStore }, { hashAgentKey }] = await Promise.all(
@@ -157,20 +158,26 @@ export async function peekAgentKeyExpiry(): Promise<number | null> {
 }
 
 /**
- * Verify a v2 key against the credential store, accepting the listed states. Used by the credential routes (rotate, confirm, revoke) that
+ * Verify a revocable key against the credential store, accepting the listed states. Used by the credential routes (rotate, confirm, revoke) that
  * take a pending or renew_only key. The store is loaded lazily: the v1 and session paths never touch it.
  */
-export async function verifyAgentKeyV2(
+export async function verifyRevocableKey(
   token: string,
   allow: readonly CredentialState[]
 ): Promise<VerifyResult> {
-  const { getAgentCredentialStore } = await import(
-    "@/bootstrap/agent-credentials"
-  );
-  return verifyBearer(getAgentCredentialStore(), token, allow);
+  const {
+    getAgentCredentialStore,
+    admitCredentialLookup,
+    recordCredentialMiss,
+  } = await import("@/bootstrap/agent-credentials");
+  const h = await headers();
+  return verifyBearer(getAgentCredentialStore(), token, allow, {
+    admit: () => admitCredentialLookup(h),
+    onInvalid: () => recordCredentialMiss(h),
+  });
 }
 
-/** The bearer token of the current request, if any (the credential routes read it to tell v1 from v2). */
+/** The bearer token of the current request, if any (the credential routes read it to tell a signed key from a revocable one). */
 export async function currentBearerToken(): Promise<string | null> {
   try {
     return extractBearerToken((await headers()).get("authorization"));
@@ -197,8 +204,8 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
   }
   const bearer = extractBearerToken(h.get("authorization"));
   if (bearer) {
-    if (isAgentKeyV2(bearer)) {
-      const verified = await verifyAgentKeyV2(bearer, ["active"]);
+    if (isRevocableKey(bearer)) {
+      const verified = await verifyRevocableKey(bearer, ["active"]);
       if (verified.ok) {
         return {
           id: verified.userId,
@@ -208,7 +215,9 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
         };
       }
       if (verified.reason === "unavailable")
-        throw new CredentialStoreUnavailableError();
+        throw new CredentialStoreUnavailableError(verified.cause);
+      if (verified.reason === "rate_limited")
+        throw new CredentialRateLimitedError();
       return null;
     }
     const payload = parseAgentToken(bearer);
