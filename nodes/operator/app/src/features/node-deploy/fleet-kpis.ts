@@ -25,9 +25,7 @@
  *     not probed and not down. `probed < declared` is the guardrail's signal.
  *   - REACH_IS_ATTRIBUTED: reach is read only through `readDeepReadiness` (@cogni-dao/substrate-health): a
  *     lane's `checks[dependency]` is reached/unreached, a lane that does not probe it is na, and anything
- *     else is unknown. na and unknown are excluded from numerator and denominator and counted. A body without
- *     `checks` counts as reached only on a healthy 200 and only for the four names every deep probe has
- *     always run (dated transition, story.0029). No free-text message parsing.
+ *     else is unknown. na and unknown are excluded from numerator and denominator and counted. A body without `checks` is unknown (task.0088 retired the aggregate-only transition). No free-text message parsing.
  *   - UPTIME_IS_STORED_FACTS: uptime = 100 x (1 - sum(down) / sum(probed)) over stored `ok` SCHEDULED lanes-down
  *     readings with the `fleet:declared=,probed=,down=` evidence, one per refresh slot. Gaps stay gaps. Under
  *     24 h of readings, or under half of the window's expected slots (definition cadence, else 300 s), is
@@ -75,18 +73,6 @@ export const REACH_DEPENDENCIES = [
   "doltgres",
 ] as const;
 export type ReachDependency = (typeof REACH_DEPENDENCIES)[number];
-
-/**
- * TRANSITION (story.0029, exit: every lane serves substrate-health >= 0.2.0): a lane without per-dependency
- * `checks` still reads as reached on an aggregate healthy 200, but only for the names every deep probe has
- * always covered. Any other name on such a lane is unknown, never a false green.
- */
-const AGGREGATE_ONLY_DEPENDENCIES: ReadonlySet<string> = new Set([
-  "postgres",
-  "temporal",
-  "scheduler-worker",
-  "evm-rpc",
-]);
 
 /** Most stored readings one uptime reading integrates: 28 days at the 5-minute cadence is 8,064. */
 export const MAX_UPTIME_READINGS = 12_000;
@@ -149,12 +135,7 @@ export function classifyReach(
   } catch {
     // Not JSON: no evidence.
   }
-  const reading = readDeepReadiness(ready.status, body);
-  const state = reading.dependencyState(dependency);
-  if (state !== "unknown") return state;
-  return reading.healthy && AGGREGATE_ONLY_DEPENDENCIES.has(dependency)
-    ? "reached"
-    : "unknown";
+  return readDeepReadiness(ready.status, body).dependencyState(dependency);
 }
 
 const EVIDENCE_LINE = /^fleet:declared=(\d+),probed=(\d+),down=(\d+)$/;
