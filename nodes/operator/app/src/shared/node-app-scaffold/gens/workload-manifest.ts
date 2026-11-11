@@ -16,8 +16,11 @@
  * @public
  */
 
+/** Repo-relative directory of a node's workload manifests in its OWN repo. */
+export const NODE_APP_WORKLOAD_MANIFEST_DIR = ".cogni/workloads";
+
 /** Repo-relative path of a node's app workload manifest in its OWN repo. */
-export const NODE_APP_WORKLOAD_MANIFEST_PATH = ".cogni/workloads/app.yaml";
+export const NODE_APP_WORKLOAD_MANIFEST_PATH = `${NODE_APP_WORKLOAD_MANIFEST_DIR}/app.yaml`;
 
 export interface RenderNodeAppWorkloadManifestInput {
   readonly slug: string;

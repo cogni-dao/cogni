@@ -83,6 +83,7 @@ import {
   insertCaddyBlock,
   insertNetworkNode,
   insertSchedulerEndpoint,
+  NODE_APP_WORKLOAD_MANIFEST_DIR,
   NODE_APP_WORKLOAD_MANIFEST_PATH,
   NODE_DEPLOY_ENVS,
   NODE_FORMATION_ENVS,
@@ -3001,6 +3002,35 @@ export class GitHubRepoWriter implements DeployPlanePort {
         domainRoot: this.config.forkDomainRoot,
       })
     );
+    // task.5480 — node-template may declare sibling workloads (its `canary` lane) on its own host.
+    // A born node declares only its app: every release validates the whole manifest set, so an
+    // inherited `canary.yaml` (host node-template-canary) would refuse the node's own releases.
+    const { data: templateTree } = await octokit.request(
+      "GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
+      { owner, repo: slug, tree_sha: baseTreeSha, recursive: "1" }
+    );
+    if (templateTree.truncated)
+      throw deployPlaneError(
+        "template_tree_truncated",
+        `${owner}/${slug}@${baseCommitSha} tree is too large to read; refusing to mint`,
+        409
+      );
+    const inheritedManifests = templateTree.tree
+      .filter(
+        (e) =>
+          e.type === "blob" &&
+          e.path !== undefined &&
+          e.path.startsWith(`${NODE_APP_WORKLOAD_MANIFEST_DIR}/`) &&
+          e.path !== NODE_APP_WORKLOAD_MANIFEST_PATH
+      )
+      .map(
+        (e): GitTreeEntry => ({
+          path: e.path as string,
+          mode: "100644",
+          type: "blob",
+          sha: null,
+        })
+      );
     const { data: tree } = await octokit.request(
       "POST /repos/{owner}/{repo}/git/trees",
       {
@@ -3020,6 +3050,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
             type: "blob",
             sha: workloadManifestSha,
           },
+          ...inheritedManifests,
         ],
       }
     );
