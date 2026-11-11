@@ -48,7 +48,27 @@ const CONTROL = "cognidao.org";
 /** The host of a recorded `host/path` probe. */
 const hostOf = (probe: string) => probe.split("/")[0];
 
-const ok = (body: unknown = { status: "healthy" }): DeliveryProbeResult => ({
+const ALL_PROBES = [
+  "postgres",
+  "temporal",
+  "scheduler-worker",
+  "evm-rpc",
+  "redis",
+  "litellm-gateway",
+  "doltgres",
+] as const;
+/** A substrate-health 0.2.0 deep body: every probe `ok` except `failed`. */
+const deepBody = (failed: readonly string[] = []) => ({
+  status: failed.length ? "error" : "healthy",
+  ...(failed.length ? { unreachable: failed } : {}),
+  checks: Object.fromEntries(
+    ALL_PROBES.map((d) => [
+      d,
+      { status: failed.includes(d) ? "failed" : "ok", durationMs: 1 },
+    ])
+  ),
+});
+const ok = (body: unknown = deepBody()): DeliveryProbeResult => ({
   kind: "response",
   status: 200,
   body: JSON.stringify(body),
@@ -429,16 +449,9 @@ describe("classifyReach", () => {
     expect(classifyReach(healthy, "postgres")).toBe("reached");
     expect(classifyReach(healthy, "litellm-gateway")).toBe("na");
   });
-  it("an aggregate 200 without checks reaches only the four always-probed names", () => {
-    for (const dep of [
-      "postgres",
-      "temporal",
-      "scheduler-worker",
-      "evm-rpc",
-    ] as const)
-      expect(classifyReach(ok(), dep)).toBe("reached");
-    for (const dep of ["redis", "litellm-gateway", "doltgres"] as const)
-      expect(classifyReach(ok(), dep)).toBe("unknown");
+  it("an aggregate 200 without checks is unknown for every name (task.0088)", () => {
+    for (const dep of ALL_PROBES)
+      expect(classifyReach(ok({ status: "healthy" }), dep)).toBe("unknown");
   });
   it("a 503 without checks only proves the names it lists as unreached", () => {
     const r = status(503, {
@@ -483,10 +496,7 @@ describe("classifyReach", () => {
 describe(SUBSTRATE_REACH_ID, () => {
   const lanes = [lane("a"), lane("b"), lane("c"), lane("d")];
   const ready = {
-    "b.cognidao.org": status(503, {
-      status: "error",
-      unreachable: ["postgres"],
-    }),
+    "b.cognidao.org": status(503, deepBody(["postgres"])),
     "c.cognidao.org": status(503, { error: "boom" }),
     "d.cognidao.org": timeout,
   };
@@ -543,10 +553,7 @@ describe(SUBSTRATE_REACH_ID, () => {
         source({
           lanes: seven,
           ready: {
-            "w0.cognidao.org": status(503, {
-              status: "error",
-              unreachable: ["evm-rpc"],
-            }),
+            "w0.cognidao.org": status(503, deepBody(["evm-rpc"])),
           },
         })
       ).calcs,
