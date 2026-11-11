@@ -10,6 +10,7 @@
  * @public
  */
 
+import { KNOWLEDGE_CONTRIBUTION_DIFF_ERROR_CODES } from "@cogni/node-shared";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
@@ -42,11 +43,11 @@ export const GET = wrapRouteHandlerWithLogging<{
         outcome: status < 400 ? "success" : "error",
         errorCode:
           status === 404
-            ? "contribution_not_found"
+            ? KNOWLEDGE_CONTRIBUTION_DIFF_ERROR_CODES.NOT_FOUND
             : status === 503
-              ? "backend_unavailable"
+              ? KNOWLEDGE_CONTRIBUTION_DIFF_ERROR_CODES.BACKEND_UNAVAILABLE
               : status >= 400
-                ? "diff_failed"
+                ? KNOWLEDGE_CONTRIBUTION_DIFF_ERROR_CODES.DIFF_FAILED
                 : undefined,
         durationMs: Math.round(performance.now() - startedAt),
       });

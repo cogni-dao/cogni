@@ -23,6 +23,12 @@ export const WORK_ITEMS_LIST_ERROR_CODES = {
   INTERNAL_ERROR: "internal_error",
 } as const;
 
+export const KNOWLEDGE_CONTRIBUTION_DIFF_ERROR_CODES = {
+  NOT_FOUND: "contribution_not_found",
+  BACKEND_UNAVAILABLE: "backend_unavailable",
+  DIFF_FAILED: "diff_failed",
+} as const;
+
 export const EVENT_NAMES = {
   WORK_ITEMS_LIST_COMPLETE: "work.items.list_complete",
   // AI Domain - Server
