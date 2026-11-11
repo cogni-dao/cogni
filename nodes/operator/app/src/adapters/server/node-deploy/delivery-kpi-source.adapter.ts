@@ -97,6 +97,8 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
     const rows = await cancellable(
       s`
         SELECT r.id, r.node_id, r.env, r.workload, r.created_at,
+          r.source_sha, r.created_by,
+          r.spec -> '_admissionRefusal' ->> 'reason' AS admission_refusal_reason,
           (d.release_id = r.id) AS current,
           ag.activated_at,
           ag.activated_step_at,
@@ -159,6 +161,12 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
         nodeId: String(r.node_id),
         env: String(r.env),
         workload: String(r.workload),
+        sourceSha: String(r.source_sha),
+        createdBy: String(r.created_by),
+        admissionRefusalReason:
+          r.admission_refusal_reason == null
+            ? undefined
+            : String(r.admission_refusal_reason),
         createdAt: new Date(r.created_at as string | Date),
         activatedAt: date(r.activated_at),
         activatedStepAt: date(r.activated_step_at),

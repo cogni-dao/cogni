@@ -12,6 +12,9 @@
  *   - STRICT_INPUT: unknown keys are a 400.
  *   - READ_MODEL_IS_ADDITIVE: the timeline/state fields only ADD to the pre-existing GET shape.
  *     `GET /deploy/workloads/releases/{releaseId}` shares GET's authz gate and addressing.
+ *   - LANE_VIEW_IS_READ_ONLY (task.5479): `GET /deploy/workloads/lanes` is a sibling read over the same
+ *     durable rows (serving, in-flight, trailing-24h superseded/parked history, per-lane KPIs). It
+ *     shares GET's authz gate and addressing, writes nothing and admits or refuses nothing.
  * Side-effects: none (schemas only)
  * Links: src/app/api/v1/deploy/workloads/route.ts, features/node-deploy/sequencer.ts,
  *   features/node-deploy/release-view.ts
@@ -219,3 +222,117 @@ export type DeployReleaseTimeline = z.infer<typeof DeployReleaseTimelineSchema>;
 export type DeployWorkloadView = z.infer<typeof DeployWorkloadViewSchema>;
 export type DeployWorkloadsRead = z.infer<typeof DeployWorkloadsReadSchema>;
 export type DeployReleaseDetail = z.infer<typeof DeployReleaseDetailSchema>;
+
+// ---------------------------------------------------------------------------------------------
+// Lane view (task.5479, story.5159): queue awareness + per-lane KPIs. A LANE is one
+// `{node, env, workload}`; its releases queue on ONE desired row, so a newer release supersedes an
+// older one that has not finished. Derivation rules live in `features/node-deploy/lane-view.ts`.
+// ---------------------------------------------------------------------------------------------
+
+/** `GET /api/v1/deploy/workloads/lanes?nodeId=&env=[&workload=]` — same addressing as the list. */
+export const DeployLanesQuerySchema = DeployWorkloadQuerySchema;
+
+/** The release a lane serves right now (an attempt of it holds the live lease). */
+export const DeployLaneServingSchema = z.object({
+  releaseId: z.string(),
+  sourceSha: z.string().nullable(),
+  sha8: z.string().nullable(),
+  /** Principal that recorded the serving release (`user:<id>`), when the release row is readable. */
+  requestedBy: z.string().nullable(),
+  /** First activation of the serving attempt; falls back to its last phase change. */
+  servingSince: z.string().nullable(),
+});
+
+/** The release the lane is working on now: the desired release while it is not yet serving or parked. */
+export const DeployLaneInFlightSchema = z.object({
+  releaseId: z.string(),
+  sourceSha: z.string(),
+  sha8: z.string(),
+  state: z.enum(["queued", "deploying", "failed"]),
+  /** Attempts the sequencer has made for this release. */
+  attempts: z.number().int().nonnegative(),
+  recordedAt: z.string().nullable(),
+  /** First attempt's creation; null while `queued`. */
+  startedAt: z.string().nullable(),
+  /** Principal that recorded the release (`user:<id>`): who is deploying. */
+  requestedBy: z.string(),
+  /** Milliseconds since the release was recorded. */
+  waitingMs: z.number().int().nonnegative().nullable(),
+});
+
+/** A release that ended without serving: replaced by a newer release, or parked by the sequencer. */
+export const DeployLaneHistoryEntrySchema = z.object({
+  releaseId: z.string(),
+  sourceSha: z.string(),
+  sha8: z.string(),
+  outcome: z.enum(["superseded", "parked"]),
+  requestedBy: z.string(),
+  recordedAt: z.string(),
+  /** Superseded: when the replacing release was recorded. Parked: the durable park instant. */
+  endedAt: z.string(),
+  reason: z.string(),
+  /** An attempt of this release had already failed before it ended. */
+  hadFailedAttempt: z.boolean(),
+  /** Superseded only: the release that replaced it, and who recorded it. */
+  supersededBy: z
+    .object({
+      releaseId: z.string(),
+      sha8: z.string(),
+      requestedBy: z.string(),
+    })
+    .nullable(),
+});
+
+/** One trailing window of the lane's KPIs. Ratios are null when nothing finished (never 0 or 1). */
+export const DeployLaneWindowKpisSchema = z.object({
+  windowHours: z.number().int().positive(),
+  /** Releases that first activated in the window. */
+  activated: z.number().int().nonnegative(),
+  /** Releases the sequencer parked in the window. */
+  parked: z.number().int().nonnegative(),
+  /** `activated / (activated + parked)`. */
+  successRatio: z.number().min(0).max(1).nullable(),
+  /** Lead time (POST to first activation) of the activated releases, nearest-rank. */
+  leadTimeP50Ms: z.number().int().nonnegative().nullable(),
+  leadTimeP90Ms: z.number().int().nonnegative().nullable(),
+  /** Releases replaced by a newer one before they finished, ended in the window. */
+  superseded: z.number().int().nonnegative(),
+});
+
+export const DeployLaneViewSchema = z.object({
+  workload: z.string(),
+  desiredState: z.enum(["running", "stopped"]),
+  /** The desired release and its state (a parked desired release is not in flight). */
+  desired: z.object({
+    releaseId: z.string(),
+    sourceSha: z.string().nullable(),
+    releaseState: DeployReleaseStateSchema,
+    parkedReason: z.string().nullable(),
+  }),
+  serving: DeployLaneServingSchema.nullable(),
+  inFlight: DeployLaneInFlightSchema.nullable(),
+  /** Newest first; superseded and parked releases that ended in the trailing 24 hours. */
+  history24h: z.array(DeployLaneHistoryEntrySchema),
+  kpis: z.object({
+    last24h: DeployLaneWindowKpisSchema,
+    last7d: DeployLaneWindowKpisSchema,
+  }),
+});
+
+export const DeployLanesReadSchema = z.object({
+  nodeId: z.string().uuid(),
+  env: DeployWorkloadEnvSchema,
+  asOf: z.string(),
+  /** The release read hit its row bound: windows may undercount. */
+  truncated: z.boolean(),
+  lanes: z.array(DeployLaneViewSchema),
+});
+
+export type DeployLaneServing = z.infer<typeof DeployLaneServingSchema>;
+export type DeployLaneInFlight = z.infer<typeof DeployLaneInFlightSchema>;
+export type DeployLaneHistoryEntry = z.infer<
+  typeof DeployLaneHistoryEntrySchema
+>;
+export type DeployLaneWindowKpis = z.infer<typeof DeployLaneWindowKpisSchema>;
+export type DeployLaneView = z.infer<typeof DeployLaneViewSchema>;
+export type DeployLanesRead = z.infer<typeof DeployLanesReadSchema>;
