@@ -103,13 +103,22 @@ function entryBody(body: string): string | null {
   }
 }
 
+interface ReadContext {
+  readonly stats: { calls: number; ok: number; notOk: number; failed: number };
+  audienceHost?: string;
+  credentialId?: string;
+}
+
 /** The host-owned reader used by the in-process provider for linked-node review runs. */
 export function createLinkedNodeSourceReader(): LinkedNodeSourceReader {
   const log = makeLogger({ component: "linked-node-source" });
   // One summary line per run (below), not one event per fetch: a run reads up to 22 entries.
   const transport = createNodeHostTransport({ log, perCallEvents: false });
 
-  return async (subject): Promise<LinkedNodeSource> => {
+  const read = async (
+    subject: Parameters<LinkedNodeSourceReader>[0],
+    ctx: ReadContext
+  ): Promise<LinkedNodeSource> => {
     const container = getContainer();
     const broker = container.serviceConnectionResolver;
     const links = getNodeServiceLinkService();
@@ -125,6 +134,7 @@ export function createLinkedNodeSourceReader(): LinkedNodeSourceReader {
       env: serverEnv(),
     });
     if (!origin) throw new LinkedNodeSourceError("node_origin_unresolved");
+    ctx.audienceHost = new URL(origin).host;
 
     let connection: Awaited<ReturnType<typeof broker.resolveServiceConnection>>;
     try {
@@ -132,24 +142,8 @@ export function createLinkedNodeSourceReader(): LinkedNodeSourceReader {
     } catch {
       throw new LinkedNodeSourceError("node_not_linked");
     }
-
-    const stats = { calls: 0, ok: 0, notOk: 0, failed: 0 };
-    const startedAt = performance.now();
-    const summarize = (outcome: "success" | "error") =>
-      log.info(
-        {
-          event: EVENT_NAMES.AGENT_NODE_CALL,
-          targetNodeId: subject.nodeId,
-          audienceHost: new URL(origin).host,
-          method: "GET",
-          pathTemplate: "/api/v1/knowledge/*",
-          outcome,
-          ...stats,
-          durationMs: Math.round(performance.now() - startedAt),
-          credentialId: connection.connectionId,
-        },
-        EVENT_NAMES.AGENT_NODE_CALL
-      );
+    ctx.credentialId = connection.connectionId;
+    const stats = ctx.stats;
     const get = async (path: string): Promise<string> => {
       stats.calls++;
       const result = await transport.get({
@@ -255,13 +249,39 @@ export function createLinkedNodeSourceReader(): LinkedNodeSourceReader {
         rules,
       };
     };
-    let outcome: "success" | "error" = "error";
+    return build();
+  };
+
+  /** ONE terminal `agent.node_call` per run: info on success, warn with a stable errorCode on every failure. */
+  return async (subject) => {
+    const ctx: ReadContext = {
+      stats: { calls: 0, ok: 0, notOk: 0, failed: 0 },
+    };
+    const startedAt = performance.now();
+    let errorCode: string | undefined;
     try {
-      const source = await build();
-      outcome = "success";
-      return source;
+      return await read(subject, ctx);
+    } catch (error) {
+      errorCode =
+        error instanceof LinkedNodeSourceError
+          ? error.code
+          : "node_source_unexpected";
+      throw error;
     } finally {
-      summarize(outcome);
+      const fields = {
+        event: EVENT_NAMES.AGENT_NODE_CALL,
+        targetNodeId: subject.nodeId,
+        ...(ctx.audienceHost ? { audienceHost: ctx.audienceHost } : {}),
+        method: "GET",
+        pathTemplate: "/api/v1/knowledge/*",
+        outcome: errorCode ? "error" : "success",
+        ...ctx.stats,
+        durationMs: Math.round(performance.now() - startedAt),
+        ...(ctx.credentialId ? { credentialId: ctx.credentialId } : {}),
+        ...(errorCode ? { errorCode } : {}),
+      };
+      if (errorCode) log.warn(fields, EVENT_NAMES.AGENT_NODE_CALL);
+      else log.info(fields, EVENT_NAMES.AGENT_NODE_CALL);
     }
   };
 }
