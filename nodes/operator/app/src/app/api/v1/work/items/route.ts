@@ -6,6 +6,7 @@
  * Purpose: HTTP endpoints for listing and creating work items.
  * Scope: Auth-protected GET (list from one configured backend) and POST (create — Doltgres only).
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, ID_RANGE_RESERVED, CODED_WRITE_ERRORS.
+ * Moves (story.0033): POST accepts `moves`; an unknown or deprecated new metric id is HTTP 400 `cite_unresolved` at `moves`; a baseline failure is HTTP 503 `metric_baseline_unavailable`.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write)
  * Links: contracts/work.items.{list,create}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @public
@@ -210,7 +211,8 @@ export const POST = wrapRouteHandlerWithLogging(
       // authz_denied (permanent), 503 work_items_busy (retryable), 503
       // not-ready, 409 exists. Anything unrecognized rethrows
       // to the wrapper's 500 — the catch is NOT broadened (bug.5408).
-      const coded = workItemsWriteErrorResponse(ctx, e);
+      // story.0033: a `moves` issue on a create names the path `moves`.
+      const coded = workItemsWriteErrorResponse(ctx, e, ["moves"]);
       if (coded) return coded;
       throw e;
     }

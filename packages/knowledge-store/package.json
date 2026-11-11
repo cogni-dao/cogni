@@ -45,7 +45,7 @@
     "@cogni-dao/doltgres-admission": "https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.1/cogni-dao-doltgres-admission-0.1.1.tgz",
     "@cogni/ai-tools": "workspace:*",
     "zod": "^4.1.12",
-    "@cogni/shared-knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.15.0/cogni-dao-knowledge-store-0.15.0.tgz"
+    "@cogni/shared-knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.16.0/cogni-dao-knowledge-store-0.16.0.tgz"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

@@ -8,7 +8,8 @@
  * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED.
  *   Priority (including 0/1) carries no extra node-admin gate (task.5306); the store's own
  *   author-scoped write authority applies unchanged.
- * Side-effects: IO (filesystem read via port; database read/write via Doltgres port)
+ * Moves (story.0033): create and patch accept `moves` (new ids are resolved and baselined by the store). A single-item read, a create response and a patch response add each move's baseline, current reading and verdict from the goal-metric observations (at most 3 moves); list reads return the stored moves only. An unknown or deprecated metric id is `EntryUnresolvedError` (field `moves`); a non-empty write with no metric wiring is `MovesUnsupportedError`; a bad list is `MovesInvalidError`; a failed baseline read is `MetricBaselineUnavailableError`.
+ * Side-effects: IO (filesystem read via port; database read/write via Doltgres port; goal-metric reads for moves)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
  */
@@ -30,11 +31,13 @@ import type {
   WorkSummaryReadOptions,
 } from "@cogni/work-items";
 import {
+  judgeMoves,
   toWorkItemDto,
   toWorkItemId,
   WorkItemSummarySchema,
 } from "@cogni/work-items";
 
+import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import { getContainer } from "@/bootstrap/container";
 
 /**
@@ -202,12 +205,49 @@ export class CitesUnsupportedError extends Error {
   }
 }
 
-/** A cited id is unknown, or its inbox is closed or lacks it. 400, nothing written. */
+/**
+ * A cited id is unknown, or its inbox is closed or lacks it. 400, nothing written.
+ * With `field: "moves"` the ids are metric ids that are unknown or deprecated (story.0033).
+ */
 export class EntryUnresolvedError extends Error {
   readonly code = "cite_unresolved" as const;
-  constructor(readonly ids: readonly string[]) {
-    super(`Cited entries not found: ${ids.join(", ")}`);
+  constructor(
+    readonly ids: readonly string[],
+    readonly field: "cites" | "moves" = "cites"
+  ) {
+    super(
+      field === "moves"
+        ? `Metrics not found or deprecated: ${ids.join(", ")}`
+        : `Cited entries not found: ${ids.join(", ")}`
+    );
     this.name = "EntryUnresolvedError";
+  }
+}
+
+/** A write's `moves` broke the bounds (the zod schema normally says so first). 400, nothing written. */
+export class MovesInvalidError extends Error {
+  readonly code = "moves_invalid" as const;
+  constructor(readonly issues: readonly string[]) {
+    super("Invalid moves");
+    this.name = "MovesInvalidError";
+  }
+}
+
+/** A write carries a non-empty `moves` but no metric wiring is present on this node. 400, nothing written. */
+export class MovesUnsupportedError extends Error {
+  readonly code = "moves_unsupported" as const;
+  constructor(message = "moves are not supported on this node") {
+    super(message);
+    this.name = "MovesUnsupportedError";
+  }
+}
+
+/** The metric baseline reader failed or ran past its deadline. 503, nothing written. */
+export class MetricBaselineUnavailableError extends Error {
+  readonly code = "metric_baseline_unavailable" as const;
+  constructor(message = "Metric baseline is unavailable; retry shortly") {
+    super(message);
+    this.name = "MetricBaselineUnavailableError";
   }
 }
 
@@ -290,8 +330,24 @@ function mapStoreError(e: unknown): unknown {
     return new CitesUnsupportedError(message || undefined);
   }
   if (name === "EntryUnresolvedError") {
-    const ids = (e as { ids?: unknown }).ids;
-    return new EntryUnresolvedError(Array.isArray(ids) ? ids.map(String) : []);
+    const { ids, field } = e as { ids?: unknown; field?: unknown };
+    return new EntryUnresolvedError(
+      Array.isArray(ids) ? ids.map(String) : [],
+      field === "moves" ? "moves" : "cites"
+    );
+  }
+  // story.0033: the adapter validates `moves`, resolves new metric ids and pins the baseline.
+  if (name === "MovesInvalidError") {
+    const issues = (e as { issues?: unknown }).issues;
+    return new MovesInvalidError(
+      Array.isArray(issues) ? issues.map(String) : [message]
+    );
+  }
+  if (name === "MovesUnsupportedError") {
+    return new MovesUnsupportedError(message || undefined);
+  }
+  if (name === "MetricBaselineUnavailableError") {
+    return new MetricBaselineUnavailableError(message || undefined);
   }
   if (name === "EntryResolverUnavailableError") {
     return new EntryResolverUnavailableError(message || undefined);
@@ -319,6 +375,20 @@ function mapStoreError(e: unknown): unknown {
 }
 
 const toDto = toWorkItemDto;
+
+/**
+ * MOVES_READ_AT_READ_TIME: add each move's baseline, current reading and verdict to a
+ * single item. Never throws: a lookup that fails reads `unknown`. A list read does not call this.
+ */
+async function withMoveReadings(dto: WorkItemDto): Promise<WorkItemDto> {
+  if (!dto.moves?.length) return dto;
+  const container = getContainer();
+  // No goal-metric service on this node: every move reads `unknown` (metrics_unavailable).
+  const readings = container.goalMetrics
+    ? createMoveMetricPorts(() => container.goalMetrics).readings
+    : undefined;
+  return { ...dto, moves: await judgeMoves(dto.moves, readings) };
+}
 
 function authorTagFromSession(user: {
   id: string;
@@ -506,7 +576,7 @@ export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
   // Doltgres returns null, so unimported legacy IDs still resolve during transition.
   try {
     const item = await container.doltgresWorkItems.get(toWorkItemId(id));
-    if (item) return toDto(item);
+    if (item) return await withMoveReadings(toDto(item));
   } catch (e) {
     if ((e as Error)?.name !== "DoltgresNotConfiguredError") throw e;
   }
@@ -542,10 +612,11 @@ export async function createWorkItem(
         ...(input.rank !== undefined && { rank: input.rank }),
         ...(input.estimate !== undefined && { estimate: input.estimate }),
         ...(input.scores !== undefined && { scores: input.scores }),
+        ...(input.moves !== undefined && { moves: input.moves }),
       },
       authorTagFromSession(sessionUser)
     );
-    return toDto(created);
+    return await withMoveReadings(toDto(created));
   } catch (e) {
     throw mapStoreError(e);
   }
@@ -570,7 +641,7 @@ export async function patchWorkItem(
       authorTagFromSession(sessionUser)
     );
     if (!patched) throw new WorkItemNotFoundError(input.id);
-    return toDto(patched);
+    return await withMoveReadings(toDto(patched));
   } catch (e) {
     throw mapStoreError(e);
   }

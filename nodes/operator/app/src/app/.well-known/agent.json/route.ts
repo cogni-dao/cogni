@@ -14,6 +14,7 @@
  * Invariants:
  *   - NO_INTERNAL_BIND_ADDR: URLs must never expose `0.0.0.0:3000` or other
  *     in-pod addresses. Always derive origin from forwarded headers first.
+ *   - MOVES_SCHEMA_IS_THE_CONTRACT (story.0033): the create and PATCH `moves` schemas come from the shared work-items schema (at most 3 of { metricId, direction }) and offer no baseline; the GET output schema carries the pinned baseline and the read-time fields.
  * Side-effects: none
  * Links: docs/spec/development-lifecycle.md, docs/guides/agent-api-validation.md
  * @public
@@ -25,6 +26,7 @@ import {
   knowledgeHistoryOperation,
   reviewOperation,
   workItemsCreateOperation,
+  workItemsGetOperation,
   workItemsHistoryOperation,
   workItemsPatchOperation,
 } from "@cogni/node-contracts";
@@ -199,6 +201,16 @@ export async function GET(request: Request) {
         auth: { type: "bearer" },
         inputSchema: z.toJSONSchema(workItemsCreateOperation.input),
         outputSchema: z.toJSONSchema(workItemsCreateOperation.output),
+      },
+      // MOVES_READ_SHOWS_THE_BASELINE (story.0033): a single-item read returns each move with its pinned
+      // baseline and, at read time, the current reading and `moved`. The create and PATCH schemas above
+      // take `{ metricId, direction }` only; the server pins the baseline.
+      getWorkItem: {
+        method: "GET",
+        endpoint: `${origin}/api/v1/work/items/{id}`,
+        auth: { type: "bearer" },
+        inputSchema: z.toJSONSchema(workItemsGetOperation.input),
+        outputSchema: z.toJSONSchema(workItemsGetOperation.output),
       },
       updateWorkItem: {
         method: "PATCH",

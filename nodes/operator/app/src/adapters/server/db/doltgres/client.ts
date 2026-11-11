@@ -8,6 +8,8 @@
  * Scope: Builds the injected Dolt content adapter; does not construct PostgreSQL coordination sessions.
  * Invariants: One writer; reader width two and generation budget four; lazy construction.
  *   CITE_READS_OFF_THE_WRITER (task.0086): cited atoms resolve on a separate lazy width-one pool.
+ *   MOVES_BASELINE_IS_INJECTED (story.0033): the metric baseline port comes from the caller (the container binds it
+ *   to the goal-metric service); this module never imports the metrics package.
  *   Missing DOLTGRES_URL throws DoltgresNotConfiguredError.
  *   OPERATOR_KEEPS_THE_5000_FLOOR: operator's store holds its imported pre-API
  *   markdown corpus below 5000, so its allocator must clear it. Nodes booting an
@@ -19,6 +21,7 @@
 
 import { buildDoltgresClient } from "@cogni/knowledge-store/adapters/doltgres";
 import { createDoltgresEntryResolver } from "@cogni/shared-knowledge-store/adapters/doltgres";
+import type { MetricBaselinePort } from "@cogni/work-items";
 import {
   DoltgresWorkItemAdapter,
   OPERATOR_ID_FLOOR,
@@ -132,7 +135,8 @@ function getDoltgresCitesSql(): Sql {
 // TARGET node and which then leaks an operator line into that node's per-node
 // log view.
 export function getDoltgresWorkItemsAdapter(
-  logger?: Logger
+  logger?: Logger,
+  deps: { readonly metricBaseline?: MetricBaselinePort } = {}
 ): DoltgresWorkItemAdapter {
   if (!_adapter)
     _adapter = new DoltgresWorkItemAdapter(getDoltgresSql(), {
@@ -155,6 +159,9 @@ export function getDoltgresWorkItemsAdapter(
       entryResolver: createDoltgresEntryResolver({
         unsafe: (query) => getDoltgresCitesSql().unsafe(query),
       }),
+      // story.0033: a `moves` entry pins the metric's latest good observation as its baseline.
+      // Absent ⇒ a non-empty `moves` write is refused (`MovesUnsupportedError`), nothing written.
+      ...(deps.metricBaseline ? { metricBaseline: deps.metricBaseline } : {}),
     });
   return _adapter;
 }

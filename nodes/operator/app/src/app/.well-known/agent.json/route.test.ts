@@ -167,4 +167,53 @@ describe("GET /.well-known/agent.json", () => {
       "properties"
     );
   });
+
+  // story.0033: an agent can set `moves` on a work item and sees the baseline on the read.
+  it("offers moves on the create and PATCH actions, without a baseline, and shows it on the read (story.0033)", async () => {
+    const { GET } = await import("./route");
+    const response = await GET(
+      new Request("http://0.0.0.0:3000/.well-known/agent.json", {
+        headers: {
+          "x-forwarded-host": "operator.example",
+          "x-forwarded-proto": "https",
+        },
+      })
+    );
+    const body = await response.json();
+
+    const moves =
+      body.actions.updateWorkItem.inputSchema.properties.set.properties.moves;
+    expect(moves).toMatchObject({ type: "array", maxItems: 3 });
+    expect(moves.description).toContain("never send one");
+    expect(moves.items.required).toEqual(["metricId", "direction"]);
+    expect(moves.items.properties.metricId).toMatchObject({
+      minLength: 1,
+      maxLength: 40,
+    });
+    expect(moves.items.properties.direction.enum).toEqual(["up", "down"]);
+    expect(moves.items.properties).not.toHaveProperty("baselineObservationId");
+
+    // A create names its metrics at filing time with the same schema.
+    const onCreate = body.actions.createWorkItem.inputSchema.properties.moves;
+    expect(onCreate).toMatchObject({ type: "array", maxItems: 3 });
+    expect(onCreate.description).toContain("never send one");
+    expect(onCreate.items.properties).not.toHaveProperty(
+      "baselineObservationId"
+    );
+
+    expect(body.actions.getWorkItem).toMatchObject({
+      method: "GET",
+      endpoint: "https://operator.example/api/v1/work/items/{id}",
+    });
+    const read =
+      body.actions.getWorkItem.outputSchema.properties.moves.items.properties;
+    expect(read).toHaveProperty("baselineObservationId");
+    expect(read.moved.enum).toEqual([
+      "as_declared",
+      "against",
+      "flat",
+      "unknown",
+    ]);
+    expect(read.unknownReason.enum).toContain("metric_deprecated");
+  });
 });
