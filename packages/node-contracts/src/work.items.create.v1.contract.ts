@@ -11,11 +11,13 @@
  *   - ID is server-allocated by default; client-supplied `id` is allowed for ID-preserving bulk imports (legacy markdown corpus → Doltgres). Server validates the format and rejects collisions with existing rows.
  *   - status defaults to "needs_triage" if not provided
  *   - node defaults to "shared"
+ *   - MOVES_SERVER_PINS_BASELINE (story.0033): `moves` is `[{ metricId, direction }]`, at most 3; the store pins each new entry's baseline, so a create never carries one.
  * Side-effects: none
  * Links: /api/v1/work/items route, docs/spec/work-items-port.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
  */
 
+import { WorkItemMovesInputSchema } from "@cogni/work-items";
 import { z } from "zod";
 
 import {
@@ -65,6 +67,8 @@ export const workItemsCreateOperation = {
     rank: z.number().int().optional(),
     estimate: z.number().int().optional(),
     scores: WorkItemScoresInputSchema.optional(),
+    // story.0033: a new item names the metrics it moves when it is filed. The server pins each baseline.
+    moves: WorkItemMovesInputSchema.optional(),
     labels: z.array(z.string()).optional(),
     specRefs: z.array(z.string()).optional(),
     assignees: z.array(SubjectRefSchema).optional(),

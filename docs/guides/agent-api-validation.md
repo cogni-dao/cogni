@@ -187,6 +187,11 @@ curl -fsS -X PATCH "$BASE/api/v1/work/items/$ID" \
   -H "content-type: application/json" \
   -d '{"reason":"Close after the readback passed","set":{"status":"done"}}' >/dev/null
 
+# Optional (story.0033): name the metrics the item moves. Send `{ metricId, direction }` only; the server
+# resolves each new metric id and pins its baseline once. `[]` means the item moves no metric.
+# curl -fsS -X PATCH "$BASE/api/v1/work/items/$ID" ... -d '{"reason":"This raises the ratio","set":{"moves":[{"metricId":"convergence-ratio","direction":"up"}]}}'
+# A single-item GET then returns each move with its baseline, current reading and `moved`.
+
 # Independently read back the exact durable item state.
 curl -fsS "$BASE/api/v1/work/items/$ID" \
   -H "Authorization: Bearer $API_KEY" \

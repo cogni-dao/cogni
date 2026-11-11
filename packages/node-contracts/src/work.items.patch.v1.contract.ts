@@ -24,6 +24,7 @@
  *     (task.0052, story.0023). The package schema owns the rule; the adapter applies it again.
  *   - OPTIONAL_CITES (task.0086): top-level `cites` (at most 8 hub atoms) are pinned to commits in history; an unknown id is a 400.
  *     The package schema owns the cite rules.
+ *   - MOVES_SERVER_PINS_BASELINE (story.0033): `set.moves` is `[{ metricId, direction }]`, at most 3, or `[]`; the shared schema drops any other key on an entry and the store pins the baseline.
  * Side-effects: none
  * Links: /api/v1/work/items/[id] route, docs/spec/work-items-port.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -31,6 +32,7 @@
 
 import {
   ChangeReasonSchema,
+  WorkItemMovesInputSchema,
   WorkItemPatchInputSchema,
 } from "@cogni/work-items";
 import { z } from "zod";
@@ -82,6 +84,8 @@ export const workItemsPatchOperation = {
         estimate: z.number().int().optional(),
         // null clears the column back to SQL NULL (scores read as absent).
         scores: WorkItemScoresInputSchema.nullable().optional(),
+        // story.0033: [] = this item moves no metric (the edit reason says why). The server pins each baseline.
+        moves: WorkItemMovesInputSchema.optional(),
         labels: z.array(z.string()).optional(),
         specRefs: z.array(z.string()).optional(),
         branch: z.string().optional(),

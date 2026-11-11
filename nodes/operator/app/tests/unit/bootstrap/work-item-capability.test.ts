@@ -13,6 +13,7 @@
  *     `WorkItemRevisionConflictError` into the ai-tools `WorkItemPatchConflictError`
  *   - NO_PRIORITY_GUARD (task.5306): a priority-0/1 patch writes through like any other priority;
  *     there is no bespoke node-admin gate on it
+ *   - MOVES_READ_AT_READ_TIME (story.0033): a read that returns exactly one item (the `core__work_item_read` path) judges each move from observations; a page returns the stored moves and looks up nothing
  * Side-effects: none
  * Links: src/bootstrap/capabilities/work-item.ts
  * @internal
@@ -36,9 +37,11 @@ import type {
 } from "@cogni/work-items";
 import { toWorkItemDto, WorkItemDtoSchema } from "@cogni/work-items";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
+import { MetricError } from "@cogni-dao/metrics/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
+import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 
 function item(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -549,6 +552,115 @@ describe("shared evaluation capability adoption", () => {
       priority: 2,
       estimate: 7,
       revision: 5,
+    });
+  });
+});
+
+// story.0033: a one-item read (core__work_item_read) judges each move; a page does not.
+describe("work-item moves at read time", () => {
+  const OBS = "11111111-1111-4111-8111-111111111111";
+  const withMoves = item({
+    moves: [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
+  });
+  const ok = (value: number) => ({
+    id: OBS,
+    status: "ok",
+    value,
+    observedAt: "2026-11-10T00:00:00.000Z",
+  });
+  const metrics = (baseline: number, current: number) => ({
+    observation: vi.fn().mockResolvedValue({ observation: ok(baseline) }),
+    read: vi.fn().mockResolvedValue({ lastGood: ok(current) }),
+  });
+  const capability = (
+    items: WorkItem[],
+    service: ReturnType<typeof metrics> | undefined
+  ) =>
+    createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      workItemCommand: markdownPorts().command,
+      backlogReader: {
+        list: vi.fn().mockResolvedValue({
+          items,
+          pageInfo: { endCursor: null, hasMore: false },
+        }),
+      } as unknown as Pick<WorkItemQueryPort, "list">,
+      moveReadings: createMoveMetricPorts(() => service as never).readings,
+    });
+
+  it("a read that returns one item adds the baseline, current reading and verdict", async () => {
+    const service = metrics(1, 3);
+    const [read] = await capability([withMoves], service).query({
+      ids: ["task.5282"],
+      limit: 1,
+    });
+    expect(read?.moves).toEqual([
+      {
+        metricId: "m-1",
+        direction: "up",
+        baselineObservationId: OBS,
+        baseline: { value: 1, observedAt: "2026-11-10T00:00:00.000Z" },
+        current: { value: 3, observedAt: "2026-11-10T00:00:00.000Z" },
+        moved: "as_declared",
+      },
+    ]);
+    expect(service.observation).toHaveBeenCalledTimes(1);
+    expect(service.read).toHaveBeenCalledTimes(1);
+  });
+
+  it("a page of items returns the stored moves and looks up nothing", async () => {
+    const service = metrics(1, 3);
+    const items = await capability(
+      [withMoves, { ...withMoves, id: "task.5283" as WorkItemId }],
+      service
+    ).query({});
+    expect(items.map((entry) => entry.moves)).toEqual([
+      [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
+      [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
+    ]);
+    expect(service.observation).not.toHaveBeenCalled();
+    expect(service.read).not.toHaveBeenCalled();
+  });
+
+  it("a deprecated metric (metric_not_found) reads unknown with metric_deprecated", async () => {
+    const service = {
+      observation: vi
+        .fn()
+        .mockRejectedValue(new MetricError("metric_not_found", 404)),
+      read: vi.fn(),
+    };
+    const [read] = await capability([withMoves], service as never).query({
+      ids: ["task.5282"],
+    });
+    expect(read?.moves?.[0]).toMatchObject({
+      moved: "unknown",
+      unknownReason: "metric_deprecated",
+    });
+    expect(service.read).not.toHaveBeenCalled();
+  });
+
+  it("with no metrics service the move reads unknown", async () => {
+    const [read] = await capability([withMoves], undefined).query({
+      ids: ["task.5282"],
+    });
+    expect(read?.moves?.[0]).toMatchObject({ moved: "unknown" });
+  });
+
+  it("the complete-read tool returns the judged moves", async () => {
+    const service = metrics(5, 2);
+    const down = item({
+      moves: [
+        { metricId: "m-1", direction: "down", baselineObservationId: OBS },
+      ],
+    });
+    const tool = createWorkItemReadImplementation({
+      workItemCapability: capability([down], service),
+    });
+    const result = await tool.execute({ id: "task.5282" }, {} as never);
+    expect(result.item.moves?.[0]).toMatchObject({
+      baseline: { value: 5 },
+      current: { value: 2 },
+      moved: "as_declared",
     });
   });
 });

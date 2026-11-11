@@ -27,6 +27,10 @@ import {
   WorkItemQueryOutputSchema,
   workItemQueryContract,
 } from "../src/tools/work-item-query";
+import {
+  createWorkItemReadImplementation,
+  workItemReadContract,
+} from "../src/tools/work-item-read";
 
 function capabilityReturning(
   items: readonly WorkItemInfo[]
@@ -138,5 +142,41 @@ describe("core__work_item_query", () => {
     expect(cap.query).toHaveBeenCalledWith(
       expect.objectContaining({ actor: undefined, limit: 5 })
     );
+  });
+
+  // story.0033: `moves` flows through both tools as the capability returns it.
+  it("lists moves as stored and says a read gives the verdict (story.0033)", async () => {
+    const move = {
+      metricId: "convergence-ratio",
+      direction: "up" as const,
+      baselineObservationId: "11111111-1111-4111-8111-111111111111",
+    };
+    const impl = createWorkItemQueryImplementation({
+      workItemCapability: capabilityReturning([{ ...BASE, moves: [move] }]),
+    });
+    const out = await impl.execute({});
+    expect(out.items[0]?.moves).toEqual([move]);
+    expect(workItemQueryContract.description).toContain("core__work_item_read");
+    expect(workItemQueryContract.description).toContain("moves");
+  });
+
+  it("the complete read returns the judged move and its tool text names the verdict (story.0033)", async () => {
+    const judged = {
+      metricId: "convergence-ratio",
+      direction: "up" as const,
+      baselineObservationId: "11111111-1111-4111-8111-111111111111",
+      baseline: { value: 1, observedAt: "2026-11-01T00:00:00.000Z" },
+      current: { value: 2, observedAt: "2026-11-10T00:00:00.000Z" },
+      moved: "as_declared" as const,
+    };
+    const impl = createWorkItemReadImplementation({
+      workItemCapability: capabilityReturning([
+        { ...BASE, revision: 3, moves: [judged] },
+      ]),
+    });
+    const out = await impl.execute({ id: BASE.id }, {} as never);
+    expect(out.item.moves).toEqual([judged]);
+    expect(workItemReadContract.description).toContain("moved");
+    expect(workItemReadContract.description).toContain("unknown is never zero");
   });
 });

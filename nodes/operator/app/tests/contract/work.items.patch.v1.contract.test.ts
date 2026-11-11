@@ -13,13 +13,17 @@
  *     silent stripping that triggers the misleading `set must contain at least one
  *     field` error.
  *   - REASON_REQUIRED (task.0086): a patch without a valid reason is refused; cites are optional and bounded.
+ *   - MOVES_SERVER_PINS_BASELINE (story.0033): `set.moves` (patch) and `moves` (create) take at most 3 `{ metricId, direction }`; a baseline an agent sends is dropped, never kept.
  *   - EMPTY_SET_REFINEMENT: `set: {}` still returns the empty-set message.
  * Side-effects: none
  * Links: bug.5005, packages/node-contracts/src/work.items.patch.v1.contract.ts
  * @internal
  */
 
-import { workItemsPatchOperation } from "@cogni/node-contracts";
+import {
+  workItemsCreateOperation,
+  workItemsPatchOperation,
+} from "@cogni/node-contracts";
 import { describe, expect, it } from "vitest";
 
 const REASON = "Say why this changes";
@@ -185,5 +189,54 @@ describe("workItemsPatchOperation.input", () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+});
+
+describe("moves on the patch and create contracts (story.0033)", () => {
+  const move = { metricId: "convergence-ratio", direction: "up" } as const;
+  const patchWith = (moves: unknown) =>
+    workItemsPatchOperation.input.safeParse({
+      id: "task.5001",
+      reason: REASON,
+      set: { moves },
+    });
+  const createWith = (moves: unknown) =>
+    workItemsCreateOperation.input.safeParse({
+      type: "task",
+      title: "Filed with a metric",
+      moves,
+    });
+
+  it("accepts one move, and [] meaning none, on both writes", () => {
+    for (const parse of [patchWith, createWith]) {
+      expect(parse([move]).success).toBe(true);
+      expect(parse([]).success).toBe(true);
+    }
+  });
+
+  it("drops a baseline or reading an agent sends back", () => {
+    const sent = {
+      ...move,
+      baselineObservationId: "11111111-1111-4111-8111-111111111111",
+      moved: "against",
+    };
+    const patched = patchWith([sent]);
+    expect(patched.success && patched.data.set.moves).toEqual([move]);
+    const created = createWith([sent]);
+    expect(created.success && created.data.moves).toEqual([move]);
+  });
+
+  it.each([
+    [
+      "four entries",
+      [1, 2, 3, 4].map((i) => ({ metricId: `m-${i}`, direction: "up" })),
+    ],
+    ["a repeated id", [move, { ...move, direction: "down" }]],
+    ["a bad direction", [{ metricId: "m", direction: "sideways" }]],
+    ["an empty id", [{ metricId: "", direction: "up" }]],
+    ["a 41-character id", [{ metricId: "x".repeat(41), direction: "up" }]],
+  ])("rejects %s on both writes", (_name, moves) => {
+    expect(patchWith(moves).success).toBe(false);
+    expect(createWith(moves).success).toBe(false);
   });
 });

@@ -3,11 +3,12 @@
 
 /**
  * Module: `@tests/unit/adapters/server/db/doltgres-work-items-wiring`
- * Purpose: Prove the production work-items adapter is built with a cite resolver (task.0086).
+ * Purpose: Prove the production work-items adapter is built with a cite resolver (task.0086) and takes the metric baseline port the container injects (story.0033).
  * Scope: Calls the real `getDoltgresWorkItemsAdapter()` with the Doltgres client builder mocked; no database, docker or network.
  * Invariants:
  *   - RESOLVER_IS_WIRED: the adapter carries an `entryResolver`, so a patch with cites is never refused as `cites_unsupported`.
  *   - RESOLVER_READS_OFF_THE_WRITER: the resolver reads on its own lazy width-one pool, not the writer or read client.
+ *   - BASELINE_IS_INJECTED (story.0033): the adapter carries the caller's `metricBaseline` port; with none given it carries none, so a non-empty `moves` write is refused.
  *   - FAILS_WITHOUT_THE_WIRING: removing `entryResolver` from client.ts fails every test here.
  * Side-effects: none
  * Links: src/adapters/server/db/doltgres/client.ts, hub change-history-design
@@ -65,11 +66,13 @@ describe("operator work-items adapter wiring (task.0086)", () => {
     vi.resetModules();
   });
 
-  async function adapter() {
+  async function adapter(deps?: {
+    metricBaseline?: { latestObservationId: () => Promise<string | null> };
+  }) {
     const { getDoltgresWorkItemsAdapter } = await import(
       "@/adapters/server/db/doltgres/client"
     );
-    return getDoltgresWorkItemsAdapter();
+    return getDoltgresWorkItemsAdapter(undefined, deps);
   }
 
   it("builds the adapter with the cite resolver set", async () => {
@@ -77,6 +80,20 @@ describe("operator work-items adapter wiring (task.0086)", () => {
     expect(
       (wired as unknown as { entryResolver?: unknown }).entryResolver
     ).toBe(resolver);
+  });
+
+  it("carries the metric baseline port the container injects, and none by default (story.0033)", async () => {
+    const metricBaseline = { latestObservationId: vi.fn(async () => null) };
+    const wired = await adapter({ metricBaseline });
+    expect(
+      (wired as unknown as { metricBaseline?: unknown }).metricBaseline
+    ).toBe(metricBaseline);
+
+    vi.resetModules();
+    const bare = await adapter();
+    expect(
+      (bare as unknown as { metricBaseline?: unknown }).metricBaseline
+    ).toBeUndefined();
   });
 
   it("does not refuse a patch with cites as cites_unsupported", async () => {

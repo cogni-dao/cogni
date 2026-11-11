@@ -6,6 +6,7 @@
  * Purpose: Read one complete work item through the existing query capability.
  * Scope: Exact-ID read only. Never clips an item's constraints or performs a write. Does not perform source mutations.
  * Invariants: Explicit failure on missing, ambiguous, or oversized source.
+ *   MOVES_READ_AT_READ_TIME (story.0033): `item.moves` carries each move's pinned baseline, the current reading and `moved`; the capability adds them for this one-item read, and `unknown` is never zero.
  * Side-effects: IO (work-item query).
  * Links: https://cognidao.org/work/items/task.5367
  * @public
@@ -33,7 +34,8 @@ export const workItemReadContract: ToolContract<
 > = {
   name: WORK_ITEM_READ_NAME,
   description:
-    "Read one complete work item by exact ID, including full outcome and constraints. Required before proposing a next action for that item. Oversized sources fail explicitly; discovery excerpts are not full reads.",
+    "Read one complete work item by exact ID, including full outcome and constraints. Required before proposing a next action for that item. Oversized sources fail explicitly; discovery excerpts are not full reads. " +
+    "`moves` lists the metrics the item moves: each has its pinned baseline, the current reading and `moved` (as_declared, against, flat or unknown). unknown is never zero: it means a reading is missing.",
   effect: "read_only",
   requires: "node.collaborate",
   inputSchema,

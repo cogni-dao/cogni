@@ -195,6 +195,7 @@ import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
 import { createVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
+import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import { startCatalogRegistryReconcileOnBoot } from "@/bootstrap/catalog-registry-reconcile";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
@@ -1071,9 +1072,15 @@ function createContainer(): Container {
     log.warn("Knowledge store not configured (DOLTGRES_URL not set)");
   }
 
+  const moveMetrics = createMoveMetricPorts(() => goalMetrics);
   let doltgresWorkItems: WorkItemsContentPort;
   try {
-    doltgresWorkItems = getDoltgresWorkItemsAdapter(log);
+    // story.0033: a `moves` entry pins the metric's latest good observation, read from
+    // the goal-metric service. `goalMetrics` is read at call time, so a node without
+    // DOLTGRES_URL (no service) refuses a non-empty `moves` write and reads `unknown`.
+    doltgresWorkItems = getDoltgresWorkItemsAdapter(log, {
+      metricBaseline: moveMetrics.baselines,
+    });
   } catch (e) {
     if (!(e instanceof DoltgresNotConfiguredError)) throw e;
     const notConfigured = () => {
@@ -1101,6 +1108,7 @@ function createContainer(): Container {
   const workItemCapability = createWorkItemCapability({
     workItemQuery: workItemAdapter,
     workItemCommand: workItemAdapter,
+    moveReadings: moveMetrics.readings,
     backlogReader: doltgresWorkItems,
     backlogWriter: {
       store: doltgresWorkItems,

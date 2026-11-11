@@ -7,6 +7,7 @@
  * Scope: Auth-protected GET/PATCH and retired DELETE response; does not implement persistence or allow hard deletion.
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, DURABLE_IDENTITY_NEVER_REUSED, CODED_WRITE_ERRORS.
  * Reason + cites (task.0086): a missing or over-cap reason is HTTP 400 `invalid input` with an issue at `reason`; an unknown cite id or a closed inbox is HTTP 400 `cite_unresolved`; cites with no resolver wired is HTTP 400 `cites_unsupported`; a resolver failure is HTTP 503. Nothing is written in each case.
+ * Moves (story.0033): `set.moves` with an unknown or deprecated metric id is HTTP 400 `cite_unresolved` with an issue at `set.moves`; a bad list is HTTP 400 `moves_invalid`; a non-empty list with no metric wiring is HTTP 400 `moves_unsupported`; a baseline failure is HTTP 503 `metric_baseline_unavailable`. The client never sets a baseline: the server pins it. The GET, PATCH response adds each move's baseline, current reading and verdict.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
