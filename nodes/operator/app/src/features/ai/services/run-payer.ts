@@ -78,7 +78,11 @@ export function decideRunPayer(input: {
     input.modelRef.providerKey !== input.defaultModelRef.providerKey ||
     input.modelRef.modelId !== input.defaultModelRef.modelId
   ) {
-    return { ok: false, status: 403, errorCode: "system_free_model_not_default" };
+    return {
+      ok: false,
+      status: 403,
+      errorCode: "system_free_model_not_default",
+    };
   }
   if (!input.modelIsFree) {
     return { ok: false, status: 403, errorCode: "system_free_model_not_free" };

@@ -25,8 +25,8 @@
  */
 
 import type { ResolvedConnection } from "@/ports";
-import { readBoundedBody } from "./bounded-body";
 import { EVENT_NAMES } from "@/shared/observability";
+import { readBoundedBody } from "./bounded-body";
 
 const TIMEOUT_MS = 10_000;
 const MAX_BODY_BYTES = 1024 * 1024;

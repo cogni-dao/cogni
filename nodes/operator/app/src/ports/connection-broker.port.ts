@@ -55,7 +55,6 @@ export interface ConnectionBrokerPort {
     connectionId: string,
     scope: ConnectionScope
   ): Promise<ResolvedConnection>;
-
 }
 
 /**

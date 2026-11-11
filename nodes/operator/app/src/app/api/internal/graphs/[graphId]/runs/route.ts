@@ -54,6 +54,7 @@ import {
 } from "@/bootstrap/graph-executor.factory";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { resolveRunCodeSubject } from "@/bootstrap/review/code-subject";
+import { DEFAULT_REVIEW_MODELREF } from "@/bootstrap/review/resolve-review-route";
 import {
   assembleAssistantMessage,
   executeStream,
@@ -63,8 +64,6 @@ import {
   createRunBillingHooks,
   decideRunPayer,
 } from "@/features/ai/services/run-payer";
-import { isModelFree } from "@/shared/ai/model-catalog.server";
-import { DEFAULT_REVIEW_MODELREF } from "@/bootstrap/review/resolve-review-route";
 import { isInsufficientCreditsPortError, ThreadConflictError } from "@/ports";
 import {
   isGrantExpiredError,
@@ -72,6 +71,7 @@ import {
   isGrantRevokedError,
   isGrantScopeMismatchError,
 } from "@/ports/server";
+import { isModelFree } from "@/shared/ai/model-catalog.server";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 

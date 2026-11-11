@@ -21,13 +21,13 @@
  */
 
 import { z } from "zod";
-import { readBoundedBody } from "./bounded-body";
 import {
   type EnrollmentAccepted,
   type EnrollmentPollResult,
   EnrollmentTransportError,
   type NodeEnrollmentTransportPort,
 } from "@/ports";
+import { readBoundedBody } from "./bounded-body";
 
 const TIMEOUT_MS = 10_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
@@ -67,7 +67,8 @@ async function call(
   let json: Record<string, unknown> = {};
   try {
     const body = await readBoundedBody(response, MAX_RESPONSE_BYTES);
-    if (!body.ok) throw new EnrollmentTransportError("bad_response", response.status);
+    if (!body.ok)
+      throw new EnrollmentTransportError("bad_response", response.status);
     if (body.bytes.length > 0) {
       const parsed: unknown = JSON.parse(body.bytes.toString("utf8"));
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {

@@ -230,10 +230,7 @@ export class DrizzleNodeServiceLinkStore implements NodeServiceLinkStorePort {
         updatedAt: now,
       })
       .where(
-        and(
-          eq(nodeServiceLinks.id, id),
-          eq(nodeServiceLinks.state, "pending")
-        )
+        and(eq(nodeServiceLinks.id, id), eq(nodeServiceLinks.state, "pending"))
       )
       .returning({ id: nodeServiceLinks.id });
     return rows.length === 1;
