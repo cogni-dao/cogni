@@ -1,5 +1,5 @@
 {
-  "id": "8d8fa1ef-8aaa-421e-af97-3faf9799b883",
+  "id": "9ec301f8-99cc-4313-9b28-1594d44da045",
   "prevId": "178d2e29-addc-4491-b459-afe95ee0f8fe",
   "version": "7",
   "dialect": "postgresql",
@@ -163,7 +163,7 @@
       "checkConstraints": {
         "agent_credentials_created_from_canonical": {
           "name": "agent_credentials_created_from_canonical",
-          "value": "\"agent_credentials\".\"created_from\" IN ('spawn_grant','rotation','legacy_upgrade','binding_recovery','recovery_grant')"
+          "value": "\"agent_credentials\".\"created_from\" IN ('spawn_grant','rotation','key_upgrade','binding_recovery','recovery_grant')"
         },
         "agent_credentials_renew_after_expiry": {
           "name": "agent_credentials_renew_after_expiry",

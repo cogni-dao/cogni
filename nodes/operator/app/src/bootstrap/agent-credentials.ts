@@ -26,7 +26,7 @@ import {
   type HasRoles,
 } from "@cogni-dao/agent-grants/credentials";
 
-import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
+import { resolveServiceDb } from "@/bootstrap/container";
 import {
   credentialLookupLimiter,
   extractEdgeClientIp,
@@ -34,8 +34,8 @@ import {
 
 let store: CredentialStore | undefined;
 
-/** OpenFGA deploy tuples OR agent_roles rows (operator-only composition; node-template reads agent_roles alone). */
-function operatorHasRoles(client: CredentialSql): HasRoles {
+/** OpenFGA deploy tuples OR agent_roles rows (operator-only composition; node-template reads agent_roles alone). Exported for its unit test. */
+export function operatorHasRoles(client: CredentialSql): HasRoles {
   const sqlRoles = agentRolesHasRoles(client);
   return async (userId: string) => {
     if (await sqlRoles(userId)) return true;
@@ -57,7 +57,7 @@ function operatorHasRoles(client: CredentialSql): HasRoles {
 /** A missing or broken service connection is an outage (503), never a 500 or a 401. */
 export function getAgentCredentialStore(): CredentialStore {
   try {
-    const client = getServiceDb().$client as unknown as CredentialSql;
+    const client = resolveServiceDb().$client as unknown as CredentialSql;
     store ??= createPostgresCredentialStore(client, {
       hasRoles: operatorHasRoles(client),
     });

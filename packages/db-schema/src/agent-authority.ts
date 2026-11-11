@@ -134,7 +134,7 @@ export const agentCredentials = pgTable(
     }),
     check(
       "agent_credentials_created_from_canonical",
-      sql`${table.createdFrom} IN ('spawn_grant','rotation','legacy_upgrade','binding_recovery','recovery_grant')`
+      sql`${table.createdFrom} IN ('spawn_grant','rotation','key_upgrade','binding_recovery','recovery_grant')`
     ),
     check(
       "agent_credentials_renew_after_expiry",
