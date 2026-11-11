@@ -200,6 +200,58 @@ describe("buildLaneView (bug.5621 worked example)", () => {
 });
 
 describe("buildLaneView edges", () => {
+  it("lane scoping: a release of another workload recorded between lane releases is never a successor", () => {
+    // app: 1 (t-3h) -> 2 (t-2h, current). db: 9 recorded at t-2h30m, between them.
+    const lane = buildLaneView({
+      ...input,
+      releases: [
+        facts(1, { createdAt: ago(3) }),
+        facts(9, { workload: "db", createdAt: ago(2, 30) }),
+        facts(2, { createdAt: ago(2), current: true }),
+      ],
+    });
+    expect(lane.history24h).toHaveLength(1);
+    expect(lane.history24h[0]).toMatchObject({
+      releaseId: ID(1),
+      endedAt: ago(2).toISOString(),
+      supersededBy: { releaseId: ID(2) },
+    });
+  });
+
+  it("percentiles are nearest-rank over the activated releases (p50 of 4 = 2nd, p90 = 4th)", () => {
+    const lead = [60_000, 120_000, 180_000, 600_000];
+    const lane = buildLaneView({
+      ...input,
+      releases: lead.map((ms, i) =>
+        facts(i + 1, {
+          createdAt: ago(5 - i),
+          activatedAt: new Date(ago(5 - i).getTime() + ms),
+          served: true,
+        })
+      ),
+    });
+    expect(lane.kpis.last24h).toMatchObject({
+      activated: 4,
+      leadTimeP50Ms: 120_000,
+      leadTimeP90Ms: 600_000,
+    });
+  });
+
+  it("window edge: a park exactly at the 24h boundary is inside; one second older is outside", () => {
+    const at = (s: number) =>
+      new Date(NOW.getTime() - 24 * 3_600_000 - s * 1000);
+    const lane = buildLaneView({
+      ...input,
+      releases: [
+        facts(1, { createdAt: ago(30), parkedAt: at(0) }),
+        facts(2, { createdAt: ago(30), parkedAt: at(1) }),
+      ],
+    });
+    expect(lane.history24h.map((h) => h.releaseId)).toEqual([ID(1)]);
+    expect(lane.kpis.last24h.parked).toBe(1);
+    expect(lane.kpis.last7d.parked).toBe(2);
+  });
+
   it("windows: a release that ended 30h ago is in the 7d KPIs but not in the 24h history or KPIs", () => {
     const old: DeliveryReleaseFacts[] = [
       facts(1, { createdAt: ago(40), activatedAt: ago(39, 50), served: true }),

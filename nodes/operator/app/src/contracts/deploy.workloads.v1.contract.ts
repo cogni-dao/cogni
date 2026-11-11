@@ -232,7 +232,10 @@ export type DeployReleaseDetail = z.infer<typeof DeployReleaseDetailSchema>;
 /** `GET /api/v1/deploy/workloads/lanes?nodeId=&env=[&workload=]` — same addressing as the list. */
 export const DeployLanesQuerySchema = DeployWorkloadQuerySchema;
 
-/** The release a lane serves right now (an attempt of it holds the live lease). */
+/**
+ * The release a lane serves right now: an attempt of it is in phase `active` (the sequencer's ledger
+ * claim, as in `GET /deploy/workloads`; not a `/version` probe).
+ */
 export const DeployLaneServingSchema = z.object({
   releaseId: z.string(),
   sourceSha: z.string().nullable(),
@@ -243,7 +246,11 @@ export const DeployLaneServingSchema = z.object({
   servingSince: z.string().nullable(),
 });
 
-/** The release the lane is working on now: the desired release while it is not yet serving or parked. */
+/**
+ * The release the lane is working on now: the desired release while it is not yet serving or parked.
+ * A lane has ONE desired row, so queue depth is this field (0 or 1) plus `kpis.*.superseded`: releases
+ * that were replaced before they finished are the ones that waited.
+ */
 export const DeployLaneInFlightSchema = z.object({
   releaseId: z.string(),
   sourceSha: z.string(),
@@ -323,7 +330,7 @@ export const DeployLanesReadSchema = z.object({
   nodeId: z.string().uuid(),
   env: DeployWorkloadEnvSchema,
   asOf: z.string(),
-  /** The release read hit its row bound: windows may undercount. */
+  /** The release read hit its row bound: the NEWEST releases may be missing, so windows may undercount. */
   truncated: z.boolean(),
   lanes: z.array(DeployLaneViewSchema),
 });
