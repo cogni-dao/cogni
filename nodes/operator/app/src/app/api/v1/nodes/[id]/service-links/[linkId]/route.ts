@@ -84,7 +84,7 @@ async function handle(
     const link = await links.get(rbac.node.nodeId, linkId);
     return link ? NextResponse.json(view(link)) : fail(404, "link_not_found");
   }
-  const existing = await links.get(rbac.node.nodeId, linkId);
+  const existing = await links.find(rbac.node.nodeId, linkId);
   if (!existing) return fail(404, "link_not_found");
   await links.remove(existing);
   return NextResponse.json({ linkId, state: "superseded" });

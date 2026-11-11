@@ -35,6 +35,7 @@ export function consumeLinkedReview(input: {
   readonly developerId: string;
   readonly nodeId: string;
 }): boolean {
-  if (!perNode.consume(input.nodeId)) return false;
-  return perDeveloper.consume(input.developerId);
+  // Developer first: a developer over their own cap must not spend the node's shared budget.
+  if (!perDeveloper.consume(input.developerId)) return false;
+  return perNode.consume(input.nodeId);
 }

@@ -44,6 +44,15 @@ A low score on complies-with-governing-hub-rules MUST cite the rule it breaks; a
 If you could not read the evidence you needed to judge, set insufficientEvidence to true.`;
 
 /**
+ * Verdict instruction for a LINKED node (story.0038): the run has no knowledge tool, so the ids a verdict may cite are
+ * the rule (and architect) entries whose full bodies the host put in the preamble.
+ */
+export const PR_REVIEW_VERDICT_INSTRUCTION_LINKED = `You have gathered the evidence. Now return the verdict for every metric in the evaluation criteria.
+For each metric give: metric (exact name), value (0.0-1.0), observations (short strings), citations (the exact ids of the host-read rules or architect entry shown in full in the host preamble that the score rests on; [] when none).
+A low score on complies-with-governing-hub-rules MUST cite the rule it breaks; a high score cites the rules you checked. Never cite an id that is not shown in full in the host preamble.
+If you could not read the evidence you needed to judge, set insufficientEvidence to true.`;
+
+/**
  * Build the user message for a PR review evaluation.
  * Combines pre-fetched evidence with the rule's evaluation statements.
  */

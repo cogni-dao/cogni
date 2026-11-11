@@ -133,6 +133,7 @@ export type {
   ConnectionBrokerPort,
   ConnectionScope,
   ResolvedConnection,
+  ServiceConnectionResolverPort,
 } from "./connection-broker.port";
 export type {
   DatabaseCellAppliedProbeQualificationPort,

@@ -103,4 +103,46 @@ describe("node host transport", () => {
   it("scrubAgentKeys leaves ordinary text alone", () => {
     expect(scrubAgentKeys("no key here")).toBe("no key here");
   });
+
+  it("refuses a declared content-length above 1 MiB and stops a streamed body at the cap, with a warn event", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("{}", { headers: { "content-length": "2000000" } })
+    );
+    await expect(call("/api/v1/knowledge/index")).resolves.toEqual({
+      ok: false,
+      reason: "too_large",
+    });
+    const big = new Uint8Array(512 * 1024);
+    let pulled = 0;
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream({
+          pull(controller) {
+            pulled += 1;
+            controller.enqueue(big);
+            if (pulled > 100) controller.close();
+          },
+        })
+      )
+    );
+    await expect(call("/api/v1/knowledge/index")).resolves.toEqual({
+      ok: false,
+      reason: "too_large",
+    });
+    // The counter stops the read near the cap, far before the stream's end.
+    expect(pulled).toBeLessThan(10);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "node_response_too_large" }),
+      "agent.node_call"
+    );
+  });
+
+  it("an unreachable node logs a warn with a stable errorCode", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("boom"));
+    await call("/api/v1/knowledge/index");
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "node_unreachable" }),
+      "agent.node_call"
+    );
+  });
 });

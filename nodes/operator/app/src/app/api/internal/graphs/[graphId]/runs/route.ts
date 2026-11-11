@@ -59,9 +59,12 @@ import {
   executeStream,
   redactSecretsInMessages,
 } from "@/features/ai/public.server";
-import { commitUsageFact } from "@/features/ai/services/billing";
-import { preflightCreditCheck } from "@/features/ai/services/preflight-credit-check";
-import type { PreflightCreditCheckFn } from "@/ports";
+import {
+  createRunBillingHooks,
+  decideRunPayer,
+} from "@/features/ai/services/run-payer";
+import { isModelFree } from "@/shared/ai/model-catalog.server";
+import { DEFAULT_REVIEW_MODELREF } from "@/bootstrap/review/resolve-review-route";
 import { isInsufficientCreditsPortError, ThreadConflictError } from "@/ports";
 import {
   isGrantExpiredError,
@@ -589,28 +592,35 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     const codeSubject = codeSubjectDecision.codeSubject;
 
     // PAYER_IS_SYSTEM_ONLY_FOR_FREE_REVIEW (story.0038): permanent request validation, before the claim.
-    const payerKindInput = input.payerKind;
-    if (payerKindInput !== undefined && payerKindInput !== "system_free") {
-      return NextResponse.json(
-        { error: "payerKind is not supported" },
-        { status: 400 }
-      );
-    }
-    const systemFreePayer = payerKindInput === "system_free";
-    if (
-      systemFreePayer &&
-      (graphId !== "langgraph:pr-review" ||
-        billingAccountId !== COGNI_SYSTEM_BILLING_ACCOUNT_ID)
-    ) {
+    const payerDecision = decideRunPayer({
+      payerKind: input.payerKind,
+      graphId,
+      billingAccountId,
+      systemBillingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+      modelRef,
+      defaultModelRef: DEFAULT_REVIEW_MODELREF,
+      modelIsFree:
+        input.payerKind === "system_free"
+          ? await isModelFree(modelRef.modelId)
+          : false,
+    });
+    if (!payerDecision.ok) {
       log.warn(
-        { graphId, runId, billingAccountId },
-        "system_free payer refused: not the pr-review graph on the system account"
+        {
+          graphId,
+          runId,
+          billingAccountId,
+          errorCode: payerDecision.errorCode,
+          status: payerDecision.status,
+        },
+        "run payer refused"
       );
       return NextResponse.json(
-        { error: "system_free payer not permitted" },
-        { status: 403 }
+        { error: payerDecision.errorCode, errorCode: payerDecision.errorCode },
+        { status: payerDecision.status }
       );
     }
+    const systemFreePayer = payerDecision.systemFree;
     // Claim only after permanent request validation. INSERT races are resolved
     // by ON CONFLICT + re-read; expired pending leases are reclaimed atomically.
     const claimResult =
@@ -677,37 +687,16 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       );
     }
 
-    // Create preflight credit check closure
-    // Per CREDITS_ENFORCED_AT_EXECUTION_PORT: decorator handles all execution paths
-    const preflightCheckFn: PreflightCreditCheckFn = (
-      billingAccountId,
-      m,
-      msgs
-    ) =>
-      preflightCreditCheck({
-        billingAccountId,
-        messages: [...msgs],
-        model: m,
-        accountService: payerAccountService,
-      });
+    // Per CREDITS_ENFORCED_AT_EXECUTION_PORT: preflight and BYO commit read the payer through one service.
+    const { preflightCheckFn, commitByoUsage } =
+      createRunBillingHooks(payerAccountService);
 
     // Create graph executor and run
     const executor = createGraphExecutor(executeStream, toUserId(actorUserId));
     const scopedExecutor = createScopedGraphExecutor({
       executor,
       preflightCheckFn,
-      commitByoUsage: async (fact, log) => {
-        await commitUsageFact(
-          fact,
-          {
-            runId: fact.runId,
-            attempt: fact.attempt,
-            ingressRequestId: fact.runId,
-          },
-          payerAccountService,
-          log as import("pino").Logger
-        );
-      },
+      commitByoUsage,
       billing: {
         billingAccountId,
         virtualKeyId,

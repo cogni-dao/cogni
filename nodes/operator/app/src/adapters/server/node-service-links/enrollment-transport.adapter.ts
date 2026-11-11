@@ -12,12 +12,16 @@
  *   - BOUNDED: 10 s timeout and a 64 KiB response cap per call.
  *   - RFC8628_ERRORS: poll errors `authorization_pending`, `slow_down`, `access_denied`, `expired_token`
  *     map to typed results; an unknown error is `bad_response`.
+ *   - REAL_SIZE_CAP: the 64 KiB cap is enforced while reading; X's answers are parsed with zod and its
+ *     interval and expiry are clamped.
  *   - NOTHING_SECRET_LOGGED: this module never logs a token, device code, JWE or key.
  * Side-effects: IO (HTTPS to node X)
  * Links: https://node-template.cognidao.org/knowledge/node-service-enrollment, story.0038
  * @internal
  */
 
+import { z } from "zod";
+import { readBoundedBody } from "./bounded-body";
 import {
   type EnrollmentAccepted,
   type EnrollmentPollResult,
@@ -60,25 +64,47 @@ async function call(
   if (response.status >= 500) {
     throw new EnrollmentTransportError("origin_unreachable", response.status);
   }
-  const buffer = Buffer.from(await response.arrayBuffer());
   let json: Record<string, unknown> = {};
-  if (buffer.length > 0 && buffer.length <= MAX_RESPONSE_BYTES) {
-    try {
-      const parsed: unknown = JSON.parse(buffer.toString("utf8"));
+  try {
+    const body = await readBoundedBody(response, MAX_RESPONSE_BYTES);
+    if (!body.ok) throw new EnrollmentTransportError("bad_response", response.status);
+    if (body.bytes.length > 0) {
+      const parsed: unknown = JSON.parse(body.bytes.toString("utf8"));
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         json = parsed as Record<string, unknown>;
       }
-    } catch {
-      /* non-JSON body: handled by the caller from the status */
     }
+  } catch (error) {
+    if (error instanceof EnrollmentTransportError) throw error;
+    // A stream failure or a non-JSON body: the status alone decides.
+    json = {};
   }
   return { status: response.status, json };
 }
 
-const num = (...vals: unknown[]): number | undefined =>
-  vals.find((v): v is number => typeof v === "number" && Number.isFinite(v));
-const str = (...vals: unknown[]): string | undefined =>
-  vals.find((v): v is string => typeof v === "string" && v.length > 0);
+/** X's answer to the signed token: camelCase `deviceCode`, RFC 8628 `expires_in` and `interval` (design text). */
+const AcceptedSchema = z.object({
+  deviceCode: z.string().min(1).max(512),
+  expires_in: z.number().int().positive(),
+  interval: z.number().int().positive(),
+});
+const IssuedSchema = z.object({ sealedKey: z.string().min(1).max(16_384) });
+const PollErrorSchema = z.object({
+  error: z.enum([
+    "authorization_pending",
+    "slow_down",
+    "access_denied",
+    "expired_token",
+  ]),
+});
+
+/** The device code lives at most 24 h (design); X's interval is bounded so a hostile X cannot stall or flood polls. */
+const MAX_EXPIRES_IN_S = 86_400;
+const MIN_EXPIRES_IN_S = 60;
+const MIN_INTERVAL_S = 5;
+const MAX_INTERVAL_S = 60;
+const clamp = (n: number, lo: number, hi: number) =>
+  Math.min(hi, Math.max(lo, n));
 
 export class HttpNodeEnrollmentTransport
   implements NodeEnrollmentTransportPort
@@ -91,7 +117,7 @@ export class HttpNodeEnrollmentTransport
       body: { token },
     });
     if (status === 401) {
-      const code = str(json.errorCode, json.error);
+      const code = typeof json.error === "string" ? json.error : json.errorCode;
       throw new EnrollmentTransportError(
         code === "replayed_token" ? "replayed_token" : "enrollment_rejected",
         status
@@ -100,12 +126,18 @@ export class HttpNodeEnrollmentTransport
     if (status < 200 || status >= 300) {
       throw new EnrollmentTransportError("enrollment_rejected", status);
     }
-    const deviceCode = str(json.deviceCode, json.device_code);
-    if (!deviceCode) throw new EnrollmentTransportError("bad_response", status);
+    const accepted = AcceptedSchema.safeParse(json);
+    if (!accepted.success) {
+      throw new EnrollmentTransportError("bad_response", status);
+    }
     return {
-      deviceCode,
-      expiresInS: num(json.expires_in, json.expiresIn) ?? 86_400,
-      intervalS: num(json.interval) ?? 5,
+      deviceCode: accepted.data.deviceCode,
+      expiresInS: clamp(
+        accepted.data.expires_in,
+        MIN_EXPIRES_IN_S,
+        MAX_EXPIRES_IN_S
+      ),
+      intervalS: clamp(accepted.data.interval, MIN_INTERVAL_S, MAX_INTERVAL_S),
     };
   }
 
@@ -116,24 +148,12 @@ export class HttpNodeEnrollmentTransport
     const { status, json } = await call(origin, TOKEN_PATH, {
       body: { deviceCode },
     });
-    const sealedKey = str(
-      json.sealedKey,
-      json.sealed_key,
-      json.jwe,
-      json.keyJwe
-    );
-    if (status >= 200 && status < 300 && sealedKey) {
-      return { kind: "issued", sealedKey };
+    const issued = IssuedSchema.safeParse(json);
+    if (status >= 200 && status < 300 && issued.success) {
+      return { kind: "issued", sealedKey: issued.data.sealedKey };
     }
-    const error = str(json.error, json.errorCode);
-    if (
-      error === "authorization_pending" ||
-      error === "slow_down" ||
-      error === "access_denied" ||
-      error === "expired_token"
-    ) {
-      return { kind: error };
-    }
+    const failure = PollErrorSchema.safeParse(json);
+    if (failure.success) return { kind: failure.data.error };
     throw new EnrollmentTransportError("bad_response", status);
   }
 

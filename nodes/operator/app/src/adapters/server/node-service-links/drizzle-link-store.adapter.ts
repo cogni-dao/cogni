@@ -216,9 +216,9 @@ export class DrizzleNodeServiceLinkStore implements NodeServiceLinkStorePort {
       .where(eq(nodeServiceLinks.id, id));
   }
 
-  async markConnected(id: string, connectionId: string): Promise<void> {
+  async markConnected(id: string, connectionId: string): Promise<boolean> {
     const now = new Date();
-    await this.config.db
+    const rows = await this.config.db
       .update(nodeServiceLinks)
       .set({
         state: "connected",
@@ -229,7 +229,14 @@ export class DrizzleNodeServiceLinkStore implements NodeServiceLinkStorePort {
         connectedAt: now,
         updatedAt: now,
       })
-      .where(eq(nodeServiceLinks.id, id));
+      .where(
+        and(
+          eq(nodeServiceLinks.id, id),
+          eq(nodeServiceLinks.state, "pending")
+        )
+      )
+      .returning({ id: nodeServiceLinks.id });
+    return rows.length === 1;
   }
 
   async markState(

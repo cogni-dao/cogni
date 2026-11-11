@@ -98,6 +98,9 @@ export interface NodeServiceLinkService {
   }): Promise<StartServiceLinkResult>;
   /** Run at most one poll step for a `pending` link; returns the link as it stands after. */
   step(link: NodeServiceLinkRecord): Promise<NodeServiceLinkRecord>;
+  /** The link as stored, with NO poll step (DELETE reads with this). */
+  find(nodeId: string, linkId: string): Promise<NodeServiceLinkRecord | null>;
+  /** The link after one poll step. */
   get(nodeId: string, linkId: string): Promise<NodeServiceLinkRecord | null>;
   /** The open link for a node and service after one poll step (review start uses this). */
   openLink(
@@ -215,8 +218,20 @@ export function createNodeServiceLinkService(
           },
           EVENT_NAMES.AGENT_NODE_LINK_FAILED
         );
+      } else if (!(await store.markConnected(link.id, connectionId))) {
+        // The link moved while we polled (removed or failed): the new key must not outlive it.
+        await deps.connections.revoke(connectionId);
+        log.warn(
+          {
+            event: EVENT_NAMES.AGENT_NODE_LINK_FAILED,
+            linkId: link.id,
+            targetNodeId: link.nodeId,
+            service: link.service,
+            errorCode: "link_not_pending",
+          },
+          EVENT_NAMES.AGENT_NODE_LINK_FAILED
+        );
       } else {
-        await store.markConnected(link.id, connectionId);
         log.info(
           {
             event: EVENT_NAMES.AGENT_NODE_LINK_CONNECTED,
@@ -335,6 +350,11 @@ export function createNodeServiceLinkService(
     },
 
     step,
+
+    async find(nodeId, linkId) {
+      const link = await store.findById(linkId);
+      return link && link.nodeId === nodeId ? link : null;
+    },
 
     async get(nodeId, linkId) {
       const link = await store.findById(linkId);

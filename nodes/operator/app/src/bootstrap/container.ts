@@ -223,6 +223,7 @@ import type {
   ComputeCostReport,
   ComputeCostStorePort,
   ConnectionBrokerPort,
+  ServiceConnectionResolverPort,
   DatabasePlacementResolverPort,
   DataSourceRegistration,
   EpochsRead,
@@ -409,6 +410,8 @@ export interface Container {
   treasurySettlement: TreasurySettlementPort | undefined;
   /** Connection broker — undefined when CONNECTIONS_ENCRYPTION_KEY not set */
   connectionBroker: ConnectionBrokerPort | undefined;
+  /** Narrow resolver of the operator's X-issued node keys (story.0038); never handed to providers. */
+  serviceConnectionResolver: ServiceConnectionResolverPort | undefined;
   /** Authorization port — undefined until OpenFGA env is configured */
   authorization: AuthorizationPort | undefined;
   /** Model catalog — aggregates all providers for model listing */
@@ -1281,7 +1284,7 @@ function createContainer(): Container {
 
   // Connection broker — BYO-AI credential resolution
   // Undefined when CONNECTIONS_ENCRYPTION_KEY not set
-  const connectionBroker: ConnectionBrokerPort | undefined = (() => {
+  const connectionAdapter: DrizzleConnectionBrokerAdapter | undefined = (() => {
     if (!env.CONNECTIONS_ENCRYPTION_KEY) return undefined;
     const keyBuf = Buffer.from(env.CONNECTIONS_ENCRYPTION_KEY, "hex");
     if (keyBuf.length !== 32) {
@@ -1435,7 +1438,8 @@ function createContainer(): Container {
     treasurySettlement: operatorWallet
       ? new SplitTreasurySettlementAdapter(operatorWallet, USDC_TOKEN_ADDRESS)
       : undefined,
-    connectionBroker,
+    connectionBroker: connectionAdapter,
+    serviceConnectionResolver: connectionAdapter,
     authorization,
     // Multi-provider model ports
     ...(() => {
@@ -1445,7 +1449,7 @@ function createContainer(): Container {
       const codexMcpConfig = mcpServersToCodexConfig(parseMcpConfigFromEnv());
       const codexProvider = new CodexModelProvider(codexMcpConfig);
       const openAiCompatibleProvider = new OpenAiCompatibleModelProvider(
-        connectionBroker,
+        connectionAdapter,
         resolveAppDb
       );
       const providers = [

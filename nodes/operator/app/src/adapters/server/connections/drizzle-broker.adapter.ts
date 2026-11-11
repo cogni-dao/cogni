@@ -30,7 +30,11 @@ import {
 import { and, eq, isNull } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
-import type { ConnectionBrokerPort, ResolvedConnection } from "@/ports";
+import type {
+  ConnectionBrokerPort,
+  ResolvedConnection,
+  ServiceConnectionResolverPort,
+} from "@/ports";
 
 /** Parsed credential blob shape (provider-agnostic) */
 interface CredentialBlob {
@@ -65,7 +69,9 @@ export const SERVICE_CONNECTION_PROVIDER = "cogni-node";
 /** Buffer window before expiry to trigger proactive refresh (5 minutes) */
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
-export class DrizzleConnectionBrokerAdapter implements ConnectionBrokerPort {
+export class DrizzleConnectionBrokerAdapter
+  implements ConnectionBrokerPort, ServiceConnectionResolverPort
+{
   private readonly db: NodePgDatabase;
   private readonly encryptionKey: Buffer;
   private readonly encryptionKeyId: string;

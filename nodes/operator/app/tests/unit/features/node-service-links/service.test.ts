@@ -96,14 +96,15 @@ function setup(over: { poll?: unknown[]; confirmOk?: boolean } = {}) {
     }),
     markConnected: vi.fn(async (id: string, connectionId: string) => {
       const r = rows.get(id);
-      if (r)
-        rows.set(id, {
-          ...r,
-          state: "connected",
-          connectionId,
-          connectedAt: now,
-        });
+      if (!r || r.state !== "pending") return false;
+      rows.set(id, {
+        ...r,
+        state: "connected",
+        connectionId,
+        connectedAt: now,
+      });
       secrets.delete(id);
+      return true;
     }),
     markState: vi.fn(
       async (
@@ -328,5 +329,28 @@ describe("node service link service", () => {
     await expect(
       t.service.get("33333333-3333-4333-8333-333333333333", started.link.id)
     ).resolves.toBeNull();
+  });
+
+  it("race: a link that left pending while polling is not connected and the new key is revoked", async () => {
+    const t = setup({ poll: [{ kind: "issued", sealedKey: "JWE" }] });
+    const started = await t.service.start(startInput);
+    if (!started.ok) throw new Error("start failed");
+    t.store.markConnected.mockResolvedValueOnce(false);
+    t.advance(6);
+    const link = await t.service.get(NODE, started.link.id);
+    expect(link?.state).toBe("pending");
+    expect(t.connections.revoke).toHaveBeenCalledWith(
+      "99999999-9999-4999-8999-999999999999"
+    );
+  });
+
+  it("find reads the stored link without a poll step", async () => {
+    const t = setup();
+    const started = await t.service.start(startInput);
+    if (!started.ok) throw new Error("start failed");
+    await expect(t.service.find(NODE, started.link.id)).resolves.toMatchObject({
+      state: "pending",
+    });
+    expect(t.transport.pollToken).not.toHaveBeenCalled();
   });
 });

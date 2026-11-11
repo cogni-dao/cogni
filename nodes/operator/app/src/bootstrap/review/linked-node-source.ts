@@ -109,7 +109,7 @@ export function createLinkedNodeSourceReader(): LinkedNodeSourceReader {
 
   return async (subject): Promise<LinkedNodeSource> => {
     const container = getContainer();
-    const broker = container.connectionBroker;
+    const broker = container.serviceConnectionResolver;
     const links = getNodeServiceLinkService();
     if (!broker || !links) throw new LinkedNodeSourceError("node_not_linked");
 

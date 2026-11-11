@@ -69,6 +69,7 @@ import {
   PR_REVIEW_COVERAGE_LINKED,
   PR_REVIEW_SYSTEM_PROMPT,
   PR_REVIEW_VERDICT_INSTRUCTION,
+  PR_REVIEW_VERDICT_INSTRUCTION_LINKED,
 } from "./prompts";
 
 /** Graph name constant for routing. */
@@ -220,6 +221,25 @@ function scanEvidence(messages: readonly BaseMessage[]): {
   return { files, entries, hubEntries };
 }
 
+/**
+ * HOST_READ_RULES (story.0038): add the host-injected architect and a linked node's host-read rule bodies to the evidence
+ * entries, so a verdict that cites one is accepted. Returns the count of host-read rules (the linked hub read).
+ */
+export function addHostReadEvidence(
+  evidence: PrReviewEvidence,
+  sourceContext: CreateReactAgentGraphOptions["sourceContext"]
+): { hostRules: number } {
+  const injected = sourceContext?.architect;
+  if (injected?.content.trim() && !evidence.entries.includes(injected.id))
+    evidence.entries.push(injected.id);
+  const hostRules = (sourceContext?.rules ?? []).filter((r) =>
+    r.content.trim()
+  );
+  for (const r of hostRules)
+    if (!evidence.entries.includes(r.id)) evidence.entries.push(r.id);
+  return { hostRules: hostRules.length };
+}
+
 /** VERDICT_CITES_WHAT_IT_READ: should this verdict be treated as "could not evaluate"? */
 export function isUncited(
   verdict: PrReviewVerdict,
@@ -276,9 +296,10 @@ export function createPrReviewGraph(opts: CreateReactAgentGraphOptions) {
     const model = (opts.llm as unknown as StructuredModel).withStructuredOutput(
       format.schema
     );
-    const instruction = format.prompt
-      ? `${PR_REVIEW_VERDICT_INSTRUCTION}\n\n${format.prompt}`
+    const base = opts.sourceContext?.rules?.length
+      ? PR_REVIEW_VERDICT_INSTRUCTION_LINKED
       : PR_REVIEW_VERDICT_INSTRUCTION;
+    const instruction = format.prompt ? `${base}\n\n${format.prompt}` : base;
     let lastError: unknown;
     for (let attempt = 0; attempt < MAX_VERDICT_ATTEMPTS; attempt++) {
       try {
@@ -316,20 +337,9 @@ export function createPrReviewGraph(opts: CreateReactAgentGraphOptions) {
     .addNode("finalize", (s: S) => {
       if (!s.modelVerdict) return {};
       const evidence = collectReviewEvidence(s.messages);
-      // HOST_OWNED_ARCHITECT (task.5455): the host put this entry's full body in the preamble, so
-      // the reviewer has read it. Count it as read evidence so a citation of it is accepted.
-      // noHubRead below stays tool-only: the reviewer must still read the rules itself.
-      const injected = opts.sourceContext?.architect;
-      if (injected?.content.trim() && !evidence.entries.includes(injected.id))
-        evidence.entries.push(injected.id);
-      // HOST_READ_RULES (story.0038): a linked node's rule bodies were read by the host through the
-      // node's key and sit in the preamble. They count as read evidence (so citing one is accepted)
-      // and as the hub read, so NO_VERDICT_WITHOUT_HUB_READ still means "no rule was read".
-      const hostRules = (opts.sourceContext?.rules ?? []).filter((r) =>
-        r.content.trim()
-      );
-      for (const r of hostRules)
-        if (!evidence.entries.includes(r.id)) evidence.entries.push(r.id);
+      // HOST_OWNED_ARCHITECT (task.5455) and HOST_READ_RULES (story.0038): host-read bodies count as read evidence.
+      // noHubRead stays tool-only for the operator's own PRs; for a linked node the host-read rules are the hub read.
+      const { hostRules } = addHostReadEvidence(evidence, opts.sourceContext);
       return {
         structuredResponse: {
           ...s.modelVerdict,
@@ -337,7 +347,7 @@ export function createPrReviewGraph(opts: CreateReactAgentGraphOptions) {
           uncited: isUncited(s.modelVerdict, evidence),
           noCodeRead: evidence.files.length === 0,
           noHubRead:
-            collectHubReads(s.messages).length === 0 && hostRules.length === 0,
+            collectHubReads(s.messages).length === 0 && hostRules === 0,
           buildSha: opts.sourceContext?.mission?.buildSha ?? null,
           ...(s.abortReason ? { abortReason: s.abortReason } : {}),
         },

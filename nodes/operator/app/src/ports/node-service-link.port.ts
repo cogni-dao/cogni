@@ -89,8 +89,11 @@ export interface NodeServiceLinkStorePort {
    */
   claimPoll(id: string, now: Date, minGapMs: number): Promise<boolean>;
   setPollInterval(id: string, pollIntervalS: number): Promise<void>;
-  /** `pending` to `connected`; clears the device code and the private key. */
-  markConnected(id: string, connectionId: string): Promise<void>;
+  /**
+   * `pending` to `connected`, only while the row is STILL `pending` (one conditional update); clears the device code
+   * and the private key. Returns false when the link moved meanwhile (removed, failed): the caller revokes the key.
+   */
+  markConnected(id: string, connectionId: string): Promise<boolean>;
   /** Move to a non-`connected` state; clears secrets. */
   markState(
     id: string,

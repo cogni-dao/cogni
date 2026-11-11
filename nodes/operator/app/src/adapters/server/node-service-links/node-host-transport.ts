@@ -16,6 +16,7 @@
  *   - HEADER_ADDED_LAST: the Authorization header is set after all other options, from the connection.
  *   - NO_RESPONSE_HEADERS: the result carries a status and a body only.
  *   - SCRUB_BACKSTOP: any `cogni_ag_sk_v1_` or `cogni_ag_sk_v2_` pattern in a body becomes `[REDACTED]`.
+ *   - REAL_SIZE_CAP: the 1 MiB cap is enforced while reading (content-length refusal plus a streamed byte counter).
  *   - NOTHING_SECRET_LOGGED: events carry the target node, audience host, method, path TEMPLATE, status,
  *     duration and the credential id; never a key, hash, header or body.
  * Side-effects: IO (HTTPS to node X), log events
@@ -24,6 +25,7 @@
  */
 
 import type { ResolvedConnection } from "@/ports";
+import { readBoundedBody } from "./bounded-body";
 import { EVENT_NAMES } from "@/shared/observability";
 
 const TIMEOUT_MS = 10_000;
@@ -121,24 +123,25 @@ export function createNodeHostTransport(deps: { readonly log: NodeHostLog }) {
         return blocked("origin_mismatch");
       }
 
-      const log = (status: number | null) =>
-        deps.log.info(
-          {
-            event: EVENT_NAMES.AGENT_NODE_CALL,
-            targetNodeId: request.targetNodeId,
-            audienceHost: url.host,
-            method: "GET",
-            pathTemplate: allowed.template,
-            status,
-            durationMs: Math.round(performance.now() - started),
-            credentialId: request.connection.connectionId,
-          },
-          EVENT_NAMES.AGENT_NODE_CALL
-        );
+      const log = (status: number | null, errorCode?: string) => {
+        const fields = {
+          event: EVENT_NAMES.AGENT_NODE_CALL,
+          targetNodeId: request.targetNodeId,
+          audienceHost: url.host,
+          method: "GET",
+          pathTemplate: allowed.template,
+          status,
+          durationMs: Math.round(performance.now() - started),
+          credentialId: request.connection.connectionId,
+          ...(errorCode ? { errorCode } : {}),
+        };
+        if (errorCode) deps.log.warn(fields, EVENT_NAMES.AGENT_NODE_CALL);
+        else deps.log.info(fields, EVENT_NAMES.AGENT_NODE_CALL);
+      };
 
-      let response: Response;
+      // The body is read inside the try: a stream failure is `unreachable`, an oversized body `too_large`.
       try {
-        response = await fetch(url, {
+        const response = await fetch(url, {
           method: "GET",
           redirect: "manual",
           signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -148,20 +151,21 @@ export function createNodeHostTransport(deps: { readonly log: NodeHostLog }) {
             authorization: `Bearer ${request.connection.credentials.accessToken}`,
           },
         });
+        const body = await readBoundedBody(response, MAX_BODY_BYTES);
+        if (!body.ok) {
+          log(response.status, "node_response_too_large");
+          return { ok: false, reason: "too_large" };
+        }
+        log(response.status);
+        return {
+          ok: true,
+          status: response.status,
+          body: scrubAgentKeys(body.bytes.toString("utf8")),
+        };
       } catch {
-        log(null);
+        log(null, "node_unreachable");
         return { ok: false, reason: "unreachable" };
       }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      log(response.status);
-      if (buffer.length > MAX_BODY_BYTES) {
-        return { ok: false, reason: "too_large" };
-      }
-      return {
-        ok: true,
-        status: response.status,
-        body: scrubAgentKeys(buffer.toString("utf8")),
-      };
     },
   };
 }

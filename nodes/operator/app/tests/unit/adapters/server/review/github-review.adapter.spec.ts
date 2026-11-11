@@ -331,7 +331,7 @@ describe("fetchPrContext — review on/off + model (repo-spec driven)", () => {
       readFileSync(
         resolve(
           __dirname,
-          "../../../../../../../infra/compose/runtime/configs/litellm.config.yaml"
+          "../../../../../../../../infra/compose/runtime/configs/litellm.config.yaml"
         ),
         "utf8"
       )

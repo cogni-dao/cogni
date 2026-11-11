@@ -56,11 +56,17 @@ export interface ConnectionBrokerPort {
     scope: ConnectionScope
   ): Promise<ResolvedConnection>;
 
+}
+
+/**
+ * Narrow port for the operator's X-issued service keys (story.0038). Separate from `ConnectionBrokerPort` on purpose:
+ * the broker is handed to LLM providers, and a provider must never be able to ask for a node key.
+ */
+export interface ServiceConnectionResolverPort {
   /**
-   * Resolve the operator's X-issued service key for one node origin (story.0038). Reads the
-   * `cogni-node` row held by the system tenant under the system principal's scope: the stored key is
-   * visible only to its creator (RLS), and a developer-scoped read would hide it. ONLY the host-owned
-   * node-source reader calls this — never the run actor, a tool or a model-visible path.
+   * Resolve the system tenant's `cogni-node` key for one node origin under the system principal's scope: the stored key
+   * is visible only to its creator (RLS), and a developer-scoped read would hide it. ONLY the host-owned node-source
+   * reader calls this, never the run actor, a tool or a model-visible path.
    * @throws ConnectionNotFoundError when no active link key exists for the audience.
    */
   resolveServiceConnection(input: {

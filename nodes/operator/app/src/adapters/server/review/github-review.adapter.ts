@@ -728,7 +728,7 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
       prompt:
         "Respond with a JSON object containing a `metrics` array, a `summary` string and an optional `insufficientEvidence` boolean. " +
         "Each metric entry must have: `metric` (name), `value` (0.0-1.0), `observations` (string array) and `citations` " +
-        "(string array of the exact hub entry ids you read with core__knowledge_read that the score rests on; empty when none).",
+        "(string array of the exact hub entry ids you read in full that the score rests on, by core__knowledge_read or shown in full in the host preamble; empty when none).",
       schemaId: "evaluation-output",
     };
 
