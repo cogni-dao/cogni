@@ -78,6 +78,7 @@ import { domainColumns } from "./_components/domain-columns";
 import { KnowledgeGoalsBoard } from "./_components/GoalsMount";
 import { GraphView } from "./_components/GraphView";
 import { KnowledgeDetail } from "./_components/KnowledgeDetail";
+import { ReviewedClosePanel } from "./_components/ReviewedClosePanel";
 
 type ViewMode = "browse" | "domains" | "inbox" | "chains" | "graph" | "goals";
 
@@ -193,6 +194,12 @@ export function KnowledgeDashboardView({
 
   return (
     <div className="flex flex-col gap-4 p-5 md:p-6">
+      {searchParams.get("reviewClose") !== null && (
+        <ReviewedClosePanel
+          key={searchParams.get("reviewClose")}
+          value={searchParams.get("reviewClose") ?? ""}
+        />
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <h1 className="font-semibold text-xl tracking-tight md:text-2xl">

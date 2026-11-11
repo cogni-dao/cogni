@@ -181,6 +181,7 @@ export interface KnowledgeContributionPort {
     contributionId: string;
     principal: Principal;
     reason: string;
+    expectedHeadCommit?: string | null;
   }): Promise<void>;
 }
 
@@ -188,6 +189,17 @@ export class ContributionConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ContributionConflictError";
+  }
+}
+
+export class ContributionHeadChangedError extends ContributionConflictError {
+  readonly code = "contribution_head_changed";
+
+  constructor() {
+    super(
+      "Contribution changed since review; review its new head before closing."
+    );
+    this.name = "ContributionHeadChangedError";
   }
 }
 
