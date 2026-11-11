@@ -24,7 +24,8 @@
  *     write check runs; the copy decision is the pure `features/review/queue-verdict`. A queue
  *     verdict counts as already written only when THIS App wrote a completed run (redelivery no-ops).
  *   - SERVED_DEFAULT_MODEL: the default review model is `deepseek-v4-flash` (served, the fleet default_free);
- *     a node may override it with repo-spec `review.model`.
+ *     a node may override it with repo-spec `review.model`, EXCEPT when `payerKind` is `system_free`
+ *     (story.0038): the system tenant pays only for the default model and `review.model` is ignored.
  * Side-effects: IO (GitHub REST API)
  * Links: bug.5000, story.5102, docs/spec/node-ci-cd-contract.md#single-domain-scope,
  *   services/scheduler-worker/src/adapters/review-http.ts, github-auth.ts
@@ -246,6 +247,65 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
     };
   }
 
+  /**
+   * Is the review App installed on `owner/repo`? A 404 is "not installed" (false); any other failure
+   * throws (callers report githubReady unknown, never a false "ready").
+   */
+  async function isReviewAppInstalled(target: {
+    owner: string;
+    repo: string;
+  }): Promise<boolean> {
+    try {
+      await resolveInstallationId(target);
+      return true;
+    } catch (error) {
+      if ((error as { status?: unknown })?.status === 404) return false;
+      throw error;
+    }
+  }
+
+  /**
+   * Read a node's mission (`intent.mission`) from its repo-spec at a pinned commit (story.0038). The
+   * mission of a LINKED node comes from its own declared source, the repo-spec, at the PR's pinned base.
+   * Returns null when the file is absent, unparseable or has no mission (callers fail closed).
+   */
+  async function readNodeMission(target: {
+    owner: string;
+    repo: string;
+    ref: string;
+  }): Promise<string | null> {
+    const installationId = await resolveInstallationId(target);
+    const octokit = createInstallationOctokit(
+      installationId,
+      appId,
+      privateKeyBase64,
+      VERB_REQUEST_TIMEOUT_MS
+    );
+    let yaml: string;
+    try {
+      yaml = await fetchRepoFile(
+        octokit,
+        target.owner,
+        target.repo,
+        ".cogni/repo-spec.yaml",
+        target.ref
+      );
+    } catch (error) {
+      if ((error as { status?: unknown })?.status === 404) return null;
+      throw error;
+    }
+    try {
+      const mission = (
+        parseYaml(yaml) as { intent?: { mission?: unknown } } | null
+      )?.intent?.mission;
+      return typeof mission === "string" && mission.trim()
+        ? mission.trim()
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Every run of the verdict check on a commit (`filter: all`, so a re-run never hides a verdict). */
   async function listVerdictRuns(
     octokit: Octokit,
@@ -437,6 +497,10 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
   ): Promise<PrReviewContext> {
     const octokit = octokitFor(target.installationId);
     const { owner, repo, prNumber } = target;
+    // SYSTEM_FREE_MODEL_IS_ALWAYS_THE_DEFAULT (story.0038): when the system tenant pays, the model is
+    // DEFAULT_REVIEW_MODELREF and the reviewed repo-spec's `review.model` is ignored entirely. No
+    // catalog lookup is a free test here (`isModelFreeFromCache` is true for every ChatGPT id).
+    const systemFree = target.payerKind === "system_free";
 
     const [prResponse, filesResponse] = await Promise.all([
       octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
@@ -540,7 +604,7 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
       gatesConfig = extractGatesConfig(parsedSpec);
       const reviewConfig = extractReviewConfig(parsedSpec);
       reviewEnabled = reviewConfig.enabled;
-      if (reviewConfig.model) {
+      if (reviewConfig.model && !systemFree) {
         modelRef = { providerKey: "platform", modelId: reviewConfig.model };
       }
     } catch {
@@ -556,7 +620,11 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
         model?: unknown;
       };
       reviewEnabled = review.enabled !== false;
-      if (typeof review.model === "string" && review.model.length > 0) {
+      if (
+        typeof review.model === "string" &&
+        review.model.length > 0 &&
+        !systemFree
+      ) {
         modelRef = { providerKey: "platform", modelId: review.model };
       }
     }
@@ -660,7 +728,7 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
       prompt:
         "Respond with a JSON object containing a `metrics` array, a `summary` string and an optional `insufficientEvidence` boolean. " +
         "Each metric entry must have: `metric` (name), `value` (0.0-1.0), `observations` (string array) and `citations` " +
-        "(string array of the exact hub entry ids you read with core__knowledge_read that the score rests on; empty when none).",
+        "(string array of the exact hub entry ids you read in full that the score rests on, by core__knowledge_read or shown in full in the host preamble; empty when none).",
       schemaId: "evaluation-output",
     };
 
@@ -688,6 +756,8 @@ export function createGithubReviewAdapter(deps: GithubReviewAdapterDeps) {
     postPrComment,
     fetchPrContext,
     resolvePullRequest,
+    isReviewAppInstalled,
+    readNodeMission,
     readQueueVerdictInputs,
     writeQueueVerdict,
   };

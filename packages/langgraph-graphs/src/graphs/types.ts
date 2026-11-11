@@ -81,6 +81,15 @@ export interface CreateReactAgentGraphOptions {
       readonly content: string;
       readonly sourceRef: string;
     };
+    /**
+     * Host-read rule bodies of a LINKED node (story.0038): the full bodies of the reviewed node's index
+     * rows of type `rule`, read by the host through the node's X-issued key. Rendered into the
+     * preamble only when the graph opts in (`includeRules`); finalize counts them as read evidence.
+     */
+    readonly rules?: ReadonlyArray<{
+      readonly id: string;
+      readonly content: string;
+    }>;
     readonly governingIndex?: ReadonlyArray<{
       readonly id: string;
       readonly domain: string;

@@ -22,9 +22,13 @@ import { NextResponse } from "next/server";
 import type { Logger } from "pino";
 import {
   createGithubReviewAdapter,
+  DEFAULT_REVIEW_MODELREF,
   type GithubReviewAdapter,
 } from "@/adapters/server";
 import { serverEnv } from "@/shared/env";
+
+/** The default free review model (re-exported so the app layer never imports an adapter). */
+export { DEFAULT_REVIEW_MODELREF };
 
 type Resolved =
   | { ok: true; adapter: GithubReviewAdapter }

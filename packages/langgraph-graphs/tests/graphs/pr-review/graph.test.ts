@@ -21,6 +21,7 @@ import {
 } from "../../../src/catalog";
 import { buildHostPreambleText } from "../../../src/graphs/host-preamble";
 import {
+  addHostReadEvidence,
   collectHubReads,
   collectReviewEvidence,
   createPrReviewGraph,
@@ -29,7 +30,10 @@ import {
   PR_REVIEW_GRAPH_NAME,
   PR_REVIEW_TOOL_IDS,
 } from "../../../src/graphs/pr-review/graph";
-import { buildReviewUserMessage } from "../../../src/graphs/pr-review/prompts";
+import {
+  buildReviewUserMessage,
+  PR_REVIEW_VERDICT_INSTRUCTION_LINKED,
+} from "../../../src/graphs/pr-review/prompts";
 import { CogniCompletionAdapter } from "../../../src/runtime/cogni/completion-adapter";
 
 describe("PR Review Graph", () => {
@@ -413,5 +417,90 @@ describe("buildReviewUserMessage", () => {
     });
 
     expect(msg).toContain("(no description)");
+  });
+});
+
+describe("host-read rules of a linked node (story.0038)", () => {
+  const sourceContext = {
+    nodeId: "node-x",
+    origin: "https://x.example",
+    mission: {
+      content: "Run node X.",
+      sourceRef: "org/repo@aaaaaaaa:.cogni/repo-spec.yaml#intent.mission",
+      buildSha: null,
+    },
+    governingIndex: [
+      {
+        id: "x-rule",
+        domain: "method",
+        entryType: "rule",
+        useWhen: "any change",
+      },
+    ],
+    rules: [{ id: "x-rule", content: "RULE BODY" }],
+  };
+
+  it("renders the rule bodies after the mission and marks the index bodies as already read", () => {
+    const text = buildHostPreambleText({
+      sourceContext,
+      prompt: "P",
+      coverage: "C",
+      requireIndex: true,
+      includeRules: true,
+    });
+    expect(text).toContain("Host-read rules of this node's hub (1 entries");
+    expect(text).toContain("### x-rule\nRULE BODY");
+    expect(text).toContain("the rule bodies are above");
+    expect(text).not.toContain("read each full body with core__knowledge_read");
+  });
+
+  it("without the opt-in the rules are not rendered (byte-identical to before)", () => {
+    const text = buildHostPreambleText({
+      sourceContext,
+      prompt: "P",
+      coverage: "C",
+      requireIndex: true,
+    });
+    expect(text).not.toContain("RULE BODY");
+    expect(text).toContain("read each full body with core__knowledge_read");
+  });
+
+  it("a failing hub verdict that cites a host-read rule is NOT uncited (linked run has no knowledge tool)", () => {
+    const evidence = { files: ["a.ts"], entries: [] as string[] };
+    const { hostRules } = addHostReadEvidence(evidence, sourceContext);
+    expect(hostRules).toBe(1);
+    expect(evidence.entries).toEqual(["x-rule"]);
+    const verdict = {
+      metrics: [
+        {
+          metric: HUB_RULE_METRIC,
+          value: 0.2,
+          observations: ["breaks x-rule"],
+          citations: ["x-rule"],
+        },
+      ],
+      summary: "fails",
+    };
+    expect(isUncited(verdict, evidence)).toBe(false);
+    // Citing an id that was not host-read is still uncited.
+    const other = {
+      summary: "fails",
+      metrics: [
+        {
+          metric: HUB_RULE_METRIC,
+          value: 0.2,
+          observations: [],
+          citations: ["other"],
+        },
+      ],
+    };
+    expect(isUncited(other, evidence)).toBe(true);
+  });
+
+  it("the linked verdict instruction names host-read rules, not core__knowledge_read", () => {
+    expect(PR_REVIEW_VERDICT_INSTRUCTION_LINKED).toContain("host preamble");
+    expect(PR_REVIEW_VERDICT_INSTRUCTION_LINKED).not.toContain(
+      "core__knowledge_read"
+    );
   });
 });

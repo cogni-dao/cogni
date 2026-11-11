@@ -93,6 +93,8 @@ export interface FetchPrContextInput {
   headSha?: string;
   /** Pinned base SHA (story.5102). */
   baseSha?: string;
+  /** `system_free` (story.0038): the operator ignores the repo-spec `review.model`. */
+  payerKind?: "developer" | "system_free";
 }
 
 export interface PostRoutingDiagnosticInput {
@@ -181,6 +183,7 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
         installationId: input.installationId,
         ...(input.headSha ? { headSha: input.headSha } : {}),
         ...(input.baseSha ? { baseSha: input.baseSha } : {}),
+        ...(input.payerKind ? { payerKind: input.payerKind } : {}),
       });
     } catch (err) {
       translateHttpError(err, "fetchPrContextActivity");

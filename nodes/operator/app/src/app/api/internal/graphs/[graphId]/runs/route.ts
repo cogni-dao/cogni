@@ -19,6 +19,9 @@
  *   - VERDICT_SURVIVES_REPLAY (story.5102): finalize persists the run's structured output (≤64 KB JSON,
  *     else null) and BOTH cached replay branches return it, so a worker whose first attempt timed out
  *     reads the same verdict on retry. The live response returns the same bounded value.
+ *   - PAYER_IS_SYSTEM_ONLY_FOR_FREE_REVIEW (story.0038): `payerKind: "system_free"` is honored only for the
+ *     pr-review graph on the system billing account; preflight and the BYO usage commit then run through the
+ *     system principal's account service while the actor stays the developer. Anything else naming it is 403.
  *   - REVIEW_SUBJECT_IS_HOST_BOUND (story.5102): `input.codeSubject` binds to the run scope only for
  *     catalog entries declaring `codeSubject` and only when owner/repo match `resolveNodeRepo(nodeId)`.
  * Side-effects: IO (HTTP request/response, database, graph execution, Redis stream publishing, thread persistence)
@@ -35,7 +38,13 @@ import {
   InternalGraphRunInputSchema,
   type InternalGraphRunOutput,
 } from "@cogni/node-contracts";
-import { AnalyticsEvents, capture } from "@cogni/node-shared";
+import {
+  AnalyticsEvents,
+  COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+  COGNI_SYSTEM_PRINCIPAL_USER_ID,
+  capture,
+  EVENT_NAMES,
+} from "@cogni/node-shared";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getContainer } from "@/bootstrap/container";
@@ -45,14 +54,17 @@ import {
 } from "@/bootstrap/graph-executor.factory";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import { resolveRunCodeSubject } from "@/bootstrap/review/code-subject";
+import { DEFAULT_REVIEW_MODELREF } from "@/bootstrap/review/resolve-review-route";
 import {
   assembleAssistantMessage,
   executeStream,
   redactSecretsInMessages,
 } from "@/features/ai/public.server";
-import { commitUsageFact } from "@/features/ai/services/billing";
-import { preflightCreditCheck } from "@/features/ai/services/preflight-credit-check";
-import type { PreflightCreditCheckFn } from "@/ports";
+import {
+  createRunBillingHooks,
+  decideRunPayer,
+  selectPayerAccountService,
+} from "@/features/ai/services/run-payer";
 import { isInsufficientCreditsPortError, ThreadConflictError } from "@/ports";
 import {
   isGrantExpiredError,
@@ -60,6 +72,7 @@ import {
   isGrantRevokedError,
   isGrantScopeMismatchError,
 } from "@/ports/server";
+import { isModelFree } from "@/shared/ai/model-catalog.server";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 
@@ -579,6 +592,37 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     }
     const codeSubject = codeSubjectDecision.codeSubject;
 
+    // PAYER_IS_SYSTEM_ONLY_FOR_FREE_REVIEW (story.0038): permanent request validation, before the claim.
+    const payerDecision = decideRunPayer({
+      payerKind: input.payerKind,
+      graphId,
+      billingAccountId,
+      systemBillingAccountId: COGNI_SYSTEM_BILLING_ACCOUNT_ID,
+      modelRef,
+      defaultModelRef: DEFAULT_REVIEW_MODELREF,
+      modelIsFree:
+        input.payerKind === "system_free"
+          ? await isModelFree(modelRef.modelId)
+          : false,
+    });
+    if (!payerDecision.ok) {
+      log.warn(
+        {
+          event: EVENT_NAMES.AI_REVIEW_PAYER_REFUSED,
+          graphId,
+          runId,
+          billingAccountId,
+          errorCode: payerDecision.errorCode,
+          status: payerDecision.status,
+        },
+        EVENT_NAMES.AI_REVIEW_PAYER_REFUSED
+      );
+      return NextResponse.json(
+        { error: payerDecision.errorCode, errorCode: payerDecision.errorCode },
+        { status: payerDecision.status }
+      );
+    }
+    const systemFreePayer = payerDecision.systemFree;
     // Claim only after permanent request validation. INSERT races are resolved
     // by ON CONFLICT + re-read; expired pending leases are reclaimed atomically.
     const claimResult =
@@ -621,39 +665,43 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     runId = claimResult.request.runId;
     if (!stateKey) sessionId = `run:${runId}`;
 
+    // PAYER_IS_SYSTEM_ONLY_FOR_FREE_REVIEW (story.0038): the system tenant pays only for a linked-node
+    // review (`payerKind: "system_free"` on the pr-review graph, payer = the system account). Row-level
+    // security shows `billing_accounts` only to their owner, so the developer-scoped service would hide
+    // that account; preflight and the usage commit read the payer through the system principal's scope.
+    // The run ACTOR stays the developer (`createScopedGraphExecutor({ actorId })` below). Any other run
+    // naming `system_free`, or a `system_free` run on another account, is refused before it starts.
     const accountService = container.accountsForUser(toUserId(actorUserId));
+    // The system payer reads billing through the system principal (see PAYER_IS_SYSTEM_ONLY_FOR_FREE_REVIEW).
+    const payerAccountService = selectPayerAccountService({
+      systemFree: systemFreePayer,
+      actorAccountService: accountService,
+      accountsForUser: (id) => container.accountsForUser(id),
+      systemPrincipalUserId: COGNI_SYSTEM_PRINCIPAL_USER_ID,
+    });
+    if (systemFreePayer) {
+      log.info(
+        {
+          event: EVENT_NAMES.AI_REVIEW_FREE_PAYER_SELECTED,
+          runId,
+          graphId,
+          billingAccountId,
+          modelId: modelRef.modelId,
+        },
+        EVENT_NAMES.AI_REVIEW_FREE_PAYER_SELECTED
+      );
+    }
 
-    // Create preflight credit check closure
-    // Per CREDITS_ENFORCED_AT_EXECUTION_PORT: decorator handles all execution paths
-    const preflightCheckFn: PreflightCreditCheckFn = (
-      billingAccountId,
-      m,
-      msgs
-    ) =>
-      preflightCreditCheck({
-        billingAccountId,
-        messages: [...msgs],
-        model: m,
-        accountService,
-      });
+    // Per CREDITS_ENFORCED_AT_EXECUTION_PORT: preflight and BYO commit read the payer through one service.
+    const { preflightCheckFn, commitByoUsage } =
+      createRunBillingHooks(payerAccountService);
 
     // Create graph executor and run
     const executor = createGraphExecutor(executeStream, toUserId(actorUserId));
     const scopedExecutor = createScopedGraphExecutor({
       executor,
       preflightCheckFn,
-      commitByoUsage: async (fact, log) => {
-        await commitUsageFact(
-          fact,
-          {
-            runId: fact.runId,
-            attempt: fact.attempt,
-            ingressRequestId: fact.runId,
-          },
-          accountService,
-          log as import("pino").Logger
-        );
-      },
+      commitByoUsage,
       billing: {
         billingAccountId,
         virtualKeyId,

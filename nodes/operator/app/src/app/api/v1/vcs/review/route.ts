@@ -12,12 +12,14 @@
  *   - REVIEW_IS_DEV_TRIGGERED (story.5102): this verb is the single review producer.
  *   - SAME_AUTH_AS_FLIGHT: `node.flight` on the named node via `resolveNodeAndAuthorize`; fails
  *     closed (503) without an authority.
- *   - ONE_ACTOR_ONE_ACCOUNT: the requesting developer is the run actor and pays from their own
- *     billing account (resolved in the facade).
+ *   - ONE_ACTOR_ONE_ACCOUNT: holds for the operator's own PRs: the requesting developer is the run actor
+ *     and pays from their own billing account (resolved in the facade). For a linked node the actor is the
+ *     developer, the payer is the system tenant and the model is free only (story.0038).
  *   - NO_REPO_FROM_AGENT: owner/repo come from `resolveNodeRepo`, never the body.
  *   - STABLE_REVIEW_ID: a review of the same head already running → 409 `review_running`.
- *   - V0_OPERATOR_ONLY (story.5102): code reads are authorized on the operator only, so a review of
- *     any other node is refused up front with 422 `review_node_unsupported`.
+ *   - LINKED_NODES (story.0038): a node other than the operator is reviewed only after its admin linked the
+ *     review service; before that, 409 `review_node_not_linked`. The developer needs `node.flight` on THAT
+ *     node (403 without it), and code reads authorize on that node too.
  *   - CONTRACTS_ARE_TRUTH: input/output parsed through `reviewOperation`.
  * Side-effects: IO (DB read, OpenFGA check, GitHub reads, Temporal start)
  * Links: packages/node-contracts/src/vcs.review.v1.contract.ts, story.5102,
@@ -32,7 +34,6 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
@@ -98,15 +99,8 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
 
-    // V0_OPERATOR_ONLY: the reviewer's code reads are authorized on this node only.
-    if (rbac.node.nodeId !== getNodeId()) {
-      return fail(
-        422,
-        "review_node_unsupported",
-        "v0 reviews operator PRs only",
-        { prNumber }
-      );
-    }
+    // LINKED_NODES (story.0038): a node other than this operator is reviewable only after its admin
+    // linked the review service (409 `review_node_not_linked` until then, decided in the facade).
 
     // NO_REPO_FROM_AGENT: one resolution path for every node (operator → parent monorepo).
     const env = serverEnv();

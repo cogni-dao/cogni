@@ -205,6 +205,7 @@ import {
   startGovernanceSyncOnBoot,
   startMetricsSyncOnBoot,
 } from "@/bootstrap/startup-reconcile";
+import { registeredNodeOrigin } from "@/features/node-service-links/node-origin";
 import {
   type AttributionProfileResolver,
   createAttributionProfileResolver,
@@ -214,6 +215,7 @@ import {
   createNodeDistributionConfigResolver,
   type NodeDistributionConfigResolver,
 } from "@/features/nodes/node-distribution-config";
+import { resolveNodeRef } from "@/features/nodes/node-lookup";
 import type {
   AccountService,
   AiTelemetryPort,
@@ -244,6 +246,7 @@ import type {
   ReliabilityStatusReaderPort,
   RunStreamPort,
   ServiceAccountService,
+  ServiceConnectionResolverPort,
   ThreadPersistencePort,
   TreasuryReadPort,
   TreasurySettlementPort,
@@ -407,6 +410,8 @@ export interface Container {
   treasurySettlement: TreasurySettlementPort | undefined;
   /** Connection broker — undefined when CONNECTIONS_ENCRYPTION_KEY not set */
   connectionBroker: ConnectionBrokerPort | undefined;
+  /** Narrow resolver of the operator's X-issued node keys (story.0038); never handed to providers. */
+  serviceConnectionResolver: ServiceConnectionResolverPort | undefined;
   /** Authorization port — undefined until OpenFGA env is configured */
   authorization: AuthorizationPort | undefined;
   /** Model catalog — aggregates all providers for model listing */
@@ -909,6 +914,17 @@ function createContainer(): Container {
     commitSha: env.APP_BUILD_SHA,
     appId: env.GH_REVIEW_APP_ID,
     privateKeyBase64: env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
+    // story.0038: a review subject may name a linked node; its origin comes from the node registry.
+    resolveSubjectOrigin: async (subjectNodeId) => {
+      const node = await resolveNodeRef(serviceDb, subjectNodeId);
+      return node
+        ? registeredNodeOrigin({
+            slug: node.slug,
+            deployEnvs: node.deployEnvs,
+            env,
+          })
+        : null;
+    },
     log,
   });
 
@@ -1268,7 +1284,7 @@ function createContainer(): Container {
 
   // Connection broker — BYO-AI credential resolution
   // Undefined when CONNECTIONS_ENCRYPTION_KEY not set
-  const connectionBroker: ConnectionBrokerPort | undefined = (() => {
+  const connectionAdapter: DrizzleConnectionBrokerAdapter | undefined = (() => {
     if (!env.CONNECTIONS_ENCRYPTION_KEY) return undefined;
     const keyBuf = Buffer.from(env.CONNECTIONS_ENCRYPTION_KEY, "hex");
     if (keyBuf.length !== 32) {
@@ -1422,7 +1438,8 @@ function createContainer(): Container {
     treasurySettlement: operatorWallet
       ? new SplitTreasurySettlementAdapter(operatorWallet, USDC_TOKEN_ADDRESS)
       : undefined,
-    connectionBroker,
+    connectionBroker: connectionAdapter,
+    serviceConnectionResolver: connectionAdapter,
     authorization,
     // Multi-provider model ports
     ...(() => {
@@ -1432,7 +1449,7 @@ function createContainer(): Container {
       const codexMcpConfig = mcpServersToCodexConfig(parseMcpConfigFromEnv());
       const codexProvider = new CodexModelProvider(codexMcpConfig);
       const openAiCompatibleProvider = new OpenAiCompatibleModelProvider(
-        connectionBroker,
+        connectionAdapter,
         resolveAppDb
       );
       const providers = [

@@ -30,6 +30,7 @@ const validFixture = {
   virtualKeyId: "vk_developer_default",
   requestId: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
   requestedBy: "5d6f6e6c-7e8f-4a9b-bcde-1234567890ab",
+  payerKind: "developer",
   codeSubject: {
     nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
     owner: "Cogni-DAO",
@@ -44,6 +45,25 @@ describe("PrReviewWorkflowInputSchema", () => {
     it("parses a canonical dispatch payload", () => {
       const parsed = PrReviewWorkflowInputSchema.parse(validFixture);
       expect(parsed).toEqual(validFixture);
+    });
+
+    it("defaults payerKind to developer and accepts system_free (story.0038)", () => {
+      const { payerKind: _p, ...withoutPayer } = validFixture;
+      expect(PrReviewWorkflowInputSchema.parse(withoutPayer).payerKind).toBe(
+        "developer"
+      );
+      expect(
+        PrReviewWorkflowInputSchema.parse({
+          ...validFixture,
+          payerKind: "system_free",
+        }).payerKind
+      ).toBe("system_free");
+      expect(
+        PrReviewWorkflowInputSchema.safeParse({
+          ...validFixture,
+          payerKind: "someone_else",
+        }).success
+      ).toBe(false);
     });
 
     it("rejects the retired system-tenant webhook shape (no requestId / codeSubject)", () => {

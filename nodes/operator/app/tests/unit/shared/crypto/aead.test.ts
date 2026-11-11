@@ -59,4 +59,35 @@ describe("AEAD encrypt/decrypt", () => {
       "AEAD ciphertext too short"
     );
   });
+
+  describe("audience binding (story.0038)", () => {
+    it("a null or absent audience is omitted, so a pre-audience ciphertext still decrypts", () => {
+      const legacy = aeadEncrypt("legacy", AAD, KEY);
+      expect(aeadDecrypt(legacy, { ...AAD, audience: null }, KEY)).toBe(
+        "legacy"
+      );
+      const nullBound = aeadEncrypt("null", { ...AAD, audience: null }, KEY);
+      expect(aeadDecrypt(nullBound, AAD, KEY)).toBe("null");
+    });
+
+    it("binds a set audience: the same row under another audience fails", () => {
+      const bound = {
+        ...AAD,
+        provider: "cogni-node",
+        audience: "https://x.example",
+      };
+      const ciphertext = aeadEncrypt("sealed", bound, KEY);
+      expect(aeadDecrypt(ciphertext, bound, KEY)).toBe("sealed");
+      expect(() =>
+        aeadDecrypt(
+          ciphertext,
+          { ...bound, audience: "https://y.example" },
+          KEY
+        )
+      ).toThrow();
+      expect(() =>
+        aeadDecrypt(ciphertext, { ...bound, audience: null }, KEY)
+      ).toThrow();
+    });
+  });
 });

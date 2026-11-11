@@ -16,9 +16,11 @@
  * @internal
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { TEST_NODE_ENTRIES, TEST_NODE_IDS } from "@cogni/repo-spec/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { stringify as stringifyYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 // Shared request log + handler map mutated per-test before invoking the adapter.
 const requests: Array<{ route: string; params: unknown }> = [];
@@ -41,7 +43,10 @@ vi.mock("@octokit/auth-app", () => ({
   createAppAuth: () => async () => ({ token: "app-jwt" }),
 }));
 
-import { createGithubReviewAdapter } from "@/adapters/server/review/github-review.adapter";
+import {
+  createGithubReviewAdapter,
+  DEFAULT_REVIEW_MODELREF,
+} from "@/adapters/server/review/github-review.adapter";
 
 const mockLogger = {
   info: vi.fn(),
@@ -297,6 +302,49 @@ describe("fetchPrContext — review on/off + model (repo-spec driven)", () => {
       providerKey: "platform",
       modelId: "claude-haiku-4-5",
     });
+  });
+
+  it("payerKind=system_free ignores a paid or ChatGPT review.model and uses the default free model (story.0038)", async () => {
+    for (const model of ["claude-haiku-4-5", "gpt-5"]) {
+      setFetchPrHandlers({
+        changedFiles: ["packages/repo-spec/src/x.ts"],
+        ruleAvailableAt: "nodes/operator/.cogni/rules/quality.rule.yaml",
+        repoSpecYaml: specWithReview({ enabled: true, model }),
+      });
+      const result = await makeAdapter().fetchPrContext({
+        owner: "org",
+        repo: "repo",
+        prNumber: 123,
+        installationId: 1,
+        payerKind: "system_free",
+      });
+      expect(result.reviewEnabled).toBe(true);
+      expect(result.modelRef).toEqual({
+        providerKey: "platform",
+        modelId: "deepseek-v4-flash",
+      });
+    }
+  });
+
+  it("the default review model is free in the served LiteLLM config (CI free-model assertion, story.0038)", () => {
+    const config = parseYaml(
+      readFileSync(
+        resolve(
+          __dirname,
+          "../../../../../../../../infra/compose/runtime/configs/litellm.config.yaml"
+        ),
+        "utf8"
+      )
+    ) as {
+      model_list: Array<{
+        model_name: string;
+        model_info?: { is_free?: boolean };
+      }>;
+    };
+    const entry = config.model_list.find(
+      (m) => m.model_name === DEFAULT_REVIEW_MODELREF.modelId
+    );
+    expect(entry?.model_info?.is_free).toBe(true);
   });
 });
 

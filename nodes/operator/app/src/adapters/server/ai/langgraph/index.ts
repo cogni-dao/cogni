@@ -29,6 +29,7 @@ export {
   type CompletionUnitAdapter,
   LANGGRAPH_PROVIDER_ID,
   LangGraphInProcProvider,
+  selectArchitectEntryId,
 } from "./inproc.provider";
 // Discovery-only provider (no execution deps)
 export {

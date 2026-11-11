@@ -132,6 +132,8 @@ export interface ReviewActivities {
     headSha?: string;
     /** Pinned base SHA; repo-spec and rules are read at this commit. */
     baseSha?: string;
+    /** `system_free` (story.0038): the operator uses its default free model and ignores `review.model`. */
+    payerKind?: "developer" | "system_free";
   }): Promise<InternalReviewPrContextOutput>;
 
   postReviewResultActivity(input: Record<string, unknown>): Promise<void>;

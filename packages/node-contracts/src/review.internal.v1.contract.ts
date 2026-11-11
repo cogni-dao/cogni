@@ -121,6 +121,12 @@ export const InternalReviewPrContextInputSchema = RepoTargetSchema.extend({
     .string()
     .regex(/^[0-9a-f]{40}$/)
     .optional(),
+  /**
+   * Who pays for the review's model calls (story.0038). `system_free`: the system tenant pays a $0
+   * receipt, so the operator uses its default free model ALWAYS and ignores the reviewed repo-spec's
+   * `review.model`. Absent or `developer`: the existing behavior (node-selected model).
+   */
+  payerKind: z.enum(["developer", "system_free"]).optional(),
 });
 
 const EvidenceBundleSchema = z.object({

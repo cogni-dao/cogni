@@ -16,6 +16,10 @@
  *     without an authz adapter, plus one `ai.tool_authz.decision` log per evaluated call; `authz` only when installed.
  *   - CATALOG_REPORT_SEAM: a catalog entry's `report` (not a graph name) decides whether the run's structured
  *     telemetry is logged as registered events and echoed onto the stream; graphs never touch the logger or ALS.
+ *   - LINKED_NODE_RUN_IS_CODE_TOOLS_ONLY (story.0038): when the run's host-validated `codeSubject` names a
+ *     node other than this one, the host reads that node's grounding through its X-issued key (never a
+ *     tool), the model's tool list is the two code tools only (knowledge and work-item tools would read
+ *     THIS node's hub, not X's), and the tool authz check runs on the reviewed node.
  * Side-effects: IO (executes graphs via package runner, MCP tool resolution via HTTP)
  * Notes: Discovery is in LangGraphInProcAgentCatalogProvider, not here.
  * Links: GRAPH_EXECUTION.md, LANGGRAPH_AI.md
@@ -28,7 +32,11 @@ import {
   createToolAllowlistPolicy,
   createToolRunner,
 } from "@cogni/ai-core";
-import type { CatalogBoundTool } from "@cogni/ai-tools";
+import {
+  type CatalogBoundTool,
+  NODE_CODE_LIST_NAME,
+  NODE_CODE_READ_NAME,
+} from "@cogni/ai-tools";
 import type { AuthorizationPort } from "@cogni/authorization-core";
 import {
   type CompletionFn,
@@ -52,6 +60,8 @@ import type {
   GraphFinal,
   GraphRunRequest,
   GraphRunResult,
+  LinkedNodeSource,
+  LinkedNodeSourceReader,
   LlmToolDefinition,
   Message,
 } from "@/ports";
@@ -60,6 +70,12 @@ import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 import type { CompletionUnitParams } from "../inproc-completion-unit.adapter";
 
 import type { LangGraphCatalog } from "./catalog";
+
+/** Tools a linked-node run keeps: the two code tools only (story.0038). */
+const LINKED_NODE_TOOL_IDS: ReadonlySet<string> = new Set([
+  NODE_CODE_LIST_NAME,
+  NODE_CODE_READ_NAME,
+]);
 
 /**
  * Provider ID for LangGraph in-process execution.
@@ -172,7 +188,9 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       }>
     >,
     /** Host-owned architect body reader; used only for catalog entries with `hostArchitect`. */
-    private readonly architectReader?: ArchitectBodyReader
+    private readonly architectReader?: ArchitectBodyReader,
+    /** Host-owned reader of a linked node's grounding (story.0038); absent → linked runs fail closed. */
+    private readonly linkedNodeSourceReader?: LinkedNodeSourceReader
   ) {
     this.log = makeLogger({
       component: "LangGraphInProcProvider",
@@ -221,15 +239,29 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     // Create completion function wrapping adapter
     const completionFn = this.createCompletionFn(req);
 
+    // LINKED_NODE_RUN_IS_CODE_TOOLS_ONLY: the reviewed node differs from this one.
+    const linkedSubject =
+      scope.codeSubject !== undefined &&
+      this.nodeId !== undefined &&
+      scope.codeSubject.nodeId !== this.nodeId
+        ? scope.codeSubject
+        : undefined;
+    const onlyCodeTools = (ids: readonly string[]): readonly string[] =>
+      linkedSubject ? ids.filter((id) => LINKED_NODE_TOOL_IDS.has(id)) : ids;
+
     // P0 Contract: undefined => catalog default, [] => deny-all, [...] => exact
     const catalogToolIds = entry.toolIds;
-    const toolIds: readonly string[] = req.toolIds ?? catalogToolIds;
+    const toolIds: readonly string[] = onlyCodeTools(
+      req.toolIds ?? catalogToolIds
+    );
     if (req.toolIds === undefined) {
       this.log.debug(
         { runId, graphName, catalogToolIds },
         "toolIds undefined; using catalog default per P0 contract"
       );
     }
+
+    const authzNodeId = scope.codeSubject?.nodeId ?? scope.nodeId;
 
     // Resolve BoundToolRuntime from injected toolSource (per TOOL_SOURCE_RETURNS_BOUND_TOOL)
     // Per CAPABILITY_INJECTION: toolSource contains real implementations with I/O
@@ -290,7 +322,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
 
       // Get catalog tools for contract extraction from the injected node bundle
       // (per NODE_BUNDLE_IS_CANONICAL — TOOL_CATALOG only has core tools post-bug.0319 ckpt 2)
-      const catalogTools = catalogToolIds
+      const catalogTools = onlyCodeTools(catalogToolIds)
         .map((id) => this.boundToolMap.get(id))
         .filter((bt): bt is NonNullable<typeof bt> => bt !== undefined);
 
@@ -313,7 +345,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           ...(actorId !== undefined ? { actorId } : {}),
           tenantId,
           graphId,
-          ...(scope.nodeId !== undefined ? { nodeId: scope.nodeId } : {}),
+          // authz runs on the REVIEWED node: a developer of X holds node.flight on X (story.0038).
+          ...(authzNodeId !== undefined ? { nodeId: authzNodeId } : {}),
           ...(scope.grantId !== undefined ? { grantId: scope.grantId } : {}),
           onAuthzDecision: (record) => {
             const fields = {
@@ -398,24 +431,36 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         },
       };
 
+      // LINKED_NODE_RUN: node X's grounding, read by the host through X's key. A failure rejects this
+      // async setup, so the run ends with an internal error and the review reports "could not evaluate".
+      let linked: LinkedNodeSource | undefined;
+      if (linkedSubject) {
+        if (!this.linkedNodeSourceReader) {
+          throw new Error("linked_node_source_unavailable");
+        }
+        linked = await this.linkedNodeSourceReader(linkedSubject);
+      }
+
       // Host-owned governing index, read per run (best-effort) so a reviewed hub change is
       // seen without a rebuild. Held in the agent's context; the agent reads bodies on demand.
-      const governingIndex = this.governingIndexReader
-        ? await this.governingIndexReader().catch((error) => {
-            this.log.warn(
-              { err: error },
-              "governing index read failed; proceeding without it"
-            );
-            return [];
-          })
-        : [];
+      const governingIndex = linked
+        ? linked.governingIndex
+        : this.governingIndexReader
+          ? await this.governingIndexReader().catch((error) => {
+              this.log.warn(
+                { err: error },
+                "governing index read failed; proceeding without it"
+              );
+              return [];
+            })
+          : [];
       // HOST_OWNED_ARCHITECT (task.5455): opt-in graphs get the node's architect body from the
       // host, so grounding does not depend on the model choosing to read it. Best-effort: any
       // failure omits it (one structured warn) and the review proceeds without.
       let architect:
         | { id: string; content: string; sourceRef: string }
         | undefined;
-      if (entry.hostArchitect === true && this.architectReader) {
+      if (!linked && entry.hostArchitect === true && this.architectReader) {
         const architectId = selectArchitectEntryId(
           governingIndex,
           this.architectReader.nodeSlug
@@ -456,17 +501,30 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       }
       const runner = createInProcGraphRunner({
         createGraph: entry.graphFactory,
-        ...(this.nodeId && this.nodeOrigin
+        ...(linked && linkedSubject
           ? {
               sourceContext: {
-                nodeId: this.nodeId,
-                origin: this.nodeOrigin,
-                ...(this.nodeMission ? { mission: this.nodeMission } : {}),
-                ...(governingIndex.length ? { governingIndex } : {}),
-                ...(architect ? { architect } : {}),
+                nodeId: linkedSubject.nodeId,
+                origin: linked.origin,
+                mission: linked.mission,
+                ...(linked.governingIndex.length
+                  ? { governingIndex: linked.governingIndex }
+                  : {}),
+                ...(linked.architect ? { architect: linked.architect } : {}),
+                ...(linked.rules.length ? { rules: linked.rules } : {}),
               },
             }
-          : {}),
+          : this.nodeId && this.nodeOrigin
+            ? {
+                sourceContext: {
+                  nodeId: this.nodeId,
+                  origin: this.nodeOrigin,
+                  ...(this.nodeMission ? { mission: this.nodeMission } : {}),
+                  ...(governingIndex.length ? { governingIndex } : {}),
+                  ...(architect ? { architect } : {}),
+                },
+              }
+            : {}),
         ...(entry.program !== undefined && { program: entry.program }),
         completionFn,
         createToolExecFn,
