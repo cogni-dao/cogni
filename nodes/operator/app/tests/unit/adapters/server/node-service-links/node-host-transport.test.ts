@@ -145,4 +145,20 @@ describe("node host transport", () => {
       "agent.node_call"
     );
   });
+
+  it("perCallEvents:false emits no per-call event (the caller logs one summary), even on failure", async () => {
+    const quiet = createNodeHostTransport({ log, perCallEvents: false });
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    fetchMock.mockRejectedValueOnce(new Error("boom"));
+    for (let i = 0; i < 2; i++) {
+      await quiet.get({
+        connection,
+        audience: AUDIENCE,
+        targetNodeId: "node-x",
+        path: "/api/v1/knowledge/index",
+      });
+    }
+    expect(log.info).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
 });

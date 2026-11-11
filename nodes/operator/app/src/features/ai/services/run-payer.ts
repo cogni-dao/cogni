@@ -17,6 +17,7 @@
  */
 
 import type { CommitUsageFactFn } from "@cogni/graph-execution-host";
+import { toUserId, type UserId } from "@cogni/ids";
 import type { Logger } from "pino";
 import type { AccountService, PreflightCreditCheckFn } from "@/ports";
 import { commitUsageFact } from "./billing";
@@ -88,6 +89,22 @@ export function decideRunPayer(input: {
     return { ok: false, status: 403, errorCode: "system_free_model_not_free" };
   }
   return { ok: true, systemFree: true };
+}
+
+/**
+ * The account service preflight and the usage commit read the payer through. A system-free run uses the SYSTEM
+ * principal's service (row-level security hides the system account from the developer's); every other run keeps the
+ * caller's service. This is the single place the choice is made, so a revert fails a test.
+ */
+export function selectPayerAccountService(input: {
+  readonly systemFree: boolean;
+  readonly actorAccountService: AccountService;
+  readonly accountsForUser: (userId: UserId) => AccountService;
+  readonly systemPrincipalUserId: string;
+}): AccountService {
+  return input.systemFree
+    ? input.accountsForUser(toUserId(input.systemPrincipalUserId))
+    : input.actorAccountService;
 }
 
 /** Preflight and BYO usage-commit closures that both read the payer through `payerAccountService`. */

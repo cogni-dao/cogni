@@ -46,15 +46,8 @@ export class JoseServiceKeyCrypto implements ServiceKeyCryptoPort {
       contentEncryptionAlgorithms: ["A256GCM"],
     });
     const text = new TextDecoder().decode(plaintext).trim();
-    // X may seal the bare key or a small JSON envelope carrying it.
-    let candidate = text;
-    if (text.startsWith("{")) {
-      const parsed = JSON.parse(text) as Record<string, unknown>;
-      const found = ["key", "apiKey", "api_key", "access_token", "token"]
-        .map((k) => parsed[k])
-        .find((v): v is string => typeof v === "string");
-      candidate = found ?? "";
-    }
+    // X seals the bare key (no envelope).
+    const candidate = text;
     if (!KEY_PATTERN.test(candidate)) throw new Error("sealed_key_unreadable");
     return candidate;
   }

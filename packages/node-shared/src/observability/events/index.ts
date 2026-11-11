@@ -112,6 +112,8 @@ export const EVENT_NAMES = {
   AGENT_NODE_KEY_EXPIRING: "agent.node_key.expiring",
   /** A linked-node review chose the system free payer (payerKind system_free on the pr-review graph). */
   AI_REVIEW_FREE_PAYER_SELECTED: "ai.review.free_payer_selected",
+  /** A graph run named a payer kind it may not use (system_free off the pr-review graph, wrong account or model). */
+  AI_REVIEW_PAYER_REFUSED: "ai.review.payer_refused",
 
   // Adapter Events
   ADAPTER_LITELLM_COMPLETION_RESULT: "adapter.litellm.completion_result",

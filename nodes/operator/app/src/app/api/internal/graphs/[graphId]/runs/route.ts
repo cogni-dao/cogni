@@ -63,6 +63,7 @@ import {
 import {
   createRunBillingHooks,
   decideRunPayer,
+  selectPayerAccountService,
 } from "@/features/ai/services/run-payer";
 import { isInsufficientCreditsPortError, ThreadConflictError } from "@/ports";
 import {
@@ -607,13 +608,14 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     if (!payerDecision.ok) {
       log.warn(
         {
+          event: EVENT_NAMES.AI_REVIEW_PAYER_REFUSED,
           graphId,
           runId,
           billingAccountId,
           errorCode: payerDecision.errorCode,
           status: payerDecision.status,
         },
-        "run payer refused"
+        EVENT_NAMES.AI_REVIEW_PAYER_REFUSED
       );
       return NextResponse.json(
         { error: payerDecision.errorCode, errorCode: payerDecision.errorCode },
@@ -671,9 +673,12 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // naming `system_free`, or a `system_free` run on another account, is refused before it starts.
     const accountService = container.accountsForUser(toUserId(actorUserId));
     // The system payer reads billing through the system principal (see PAYER_IS_SYSTEM_ONLY_FOR_FREE_REVIEW).
-    const payerAccountService = systemFreePayer
-      ? container.accountsForUser(toUserId(COGNI_SYSTEM_PRINCIPAL_USER_ID))
-      : accountService;
+    const payerAccountService = selectPayerAccountService({
+      systemFree: systemFreePayer,
+      actorAccountService: accountService,
+      accountsForUser: (id) => container.accountsForUser(id),
+      systemPrincipalUserId: COGNI_SYSTEM_PRINCIPAL_USER_ID,
+    });
     if (systemFreePayer) {
       log.info(
         {

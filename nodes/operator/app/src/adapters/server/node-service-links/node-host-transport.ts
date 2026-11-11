@@ -76,7 +76,15 @@ export interface NodeHostRequest {
   readonly path: string;
 }
 
-export function createNodeHostTransport(deps: { readonly log: NodeHostLog }) {
+export function createNodeHostTransport(deps: {
+  readonly log: NodeHostLog;
+  /**
+   * Emit one `agent.node_call` event per call (default). A caller that makes many calls per request (the linked-node
+   * reader) sets this false and logs ONE summary line with counts, keeping within the 3-logs-per-request budget.
+   */
+  readonly perCallEvents?: boolean;
+}) {
+  const perCall = deps.perCallEvents !== false;
   return {
     async get(request: NodeHostRequest): Promise<NodeHostResult> {
       const started = performance.now();
@@ -135,6 +143,7 @@ export function createNodeHostTransport(deps: { readonly log: NodeHostLog }) {
           credentialId: request.connection.connectionId,
           ...(errorCode ? { errorCode } : {}),
         };
+        if (!perCall) return;
         if (errorCode) deps.log.warn(fields, EVENT_NAMES.AGENT_NODE_CALL);
         else deps.log.info(fields, EVENT_NAMES.AGENT_NODE_CALL);
       };

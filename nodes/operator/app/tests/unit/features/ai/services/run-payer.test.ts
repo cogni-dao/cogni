@@ -9,12 +9,12 @@
  * @internal
  */
 
-import type { UsageFact } from "@cogni/node-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   createRunBillingHooks,
   decideRunPayer,
   SYSTEM_FREE_GRAPH_ID,
+  selectPayerAccountService,
 } from "@/features/ai/services/run-payer";
 import type { AccountService } from "@/ports";
 
@@ -99,33 +99,14 @@ describe("decideRunPayer", () => {
   });
 });
 
-describe("createRunBillingHooks: preflight and usage commit use the payer service", () => {
-  const fact = {
-    runId: "run-1",
-    attempt: 0,
-    billingAccountId: SYSTEM,
-    virtualKeyId: "vk-system",
-    source: "litellm",
-    usageUnitId: "call-1",
-    costUsd: 0,
-    model: "deepseek-v4-flash",
-    graphId: SYSTEM_FREE_GRAPH_ID,
-    executorType: "inproc",
-  } as unknown as UsageFact;
-
-  it("reads the balance and writes a $0 receipt on cogni_system through the SAME (system-principal) service", async () => {
+describe("createRunBillingHooks: preflight reads through the payer service", () => {
+  // The $0 receipt of a free LiteLLM review call is written by the billing ingest route, not by the BYO commit
+  // hook (see tests/contract/app/billing-ingest-system-free.contract.test.ts).
+  it("preflight reads the balance of the payer account through the service it was given", async () => {
     const system = {
       getBalance: vi.fn(async () => 0),
-      recordChargeReceipt: vi.fn(async () => undefined),
     } as unknown as AccountService;
-    const log = {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-    const { preflightCheckFn, commitByoUsage } = createRunBillingHooks(system);
-
+    const { preflightCheckFn } = createRunBillingHooks(system);
     // A free model estimates 0 credits, so a $0 balance passes preflight; the read went to the payer service.
     await expect(
       preflightCheckFn(SYSTEM, "deepseek-v4-flash", [
@@ -133,16 +114,35 @@ describe("createRunBillingHooks: preflight and usage commit use the payer servic
       ])
     ).resolves.toBeUndefined();
     expect(system.getBalance).toHaveBeenCalledWith(SYSTEM);
+  });
+});
 
-    await commitByoUsage(fact, log as never);
-    expect(system.recordChargeReceipt).toHaveBeenCalledTimes(1);
-    expect(system.recordChargeReceipt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        billingAccountId: SYSTEM,
-        virtualKeyId: "vk-system",
-        chargedCredits: 0n,
-        responseCostUsd: 0,
-      })
-    );
+describe("selectPayerAccountService", () => {
+  const actorService = { tag: "actor" } as unknown as AccountService;
+  const systemService = { tag: "system" } as unknown as AccountService;
+  const SYSTEM_PRINCIPAL = "00000000-0000-4000-a000-000000000001";
+
+  it("system_free: the SYSTEM principal's service, not the caller's", () => {
+    const accountsForUser = vi.fn(() => systemService);
+    const picked = selectPayerAccountService({
+      systemFree: true,
+      actorAccountService: actorService,
+      accountsForUser,
+      systemPrincipalUserId: SYSTEM_PRINCIPAL,
+    });
+    expect(picked).toBe(systemService);
+    expect(accountsForUser).toHaveBeenCalledWith(SYSTEM_PRINCIPAL);
+  });
+
+  it("otherwise: the caller's service and no system lookup", () => {
+    const accountsForUser = vi.fn(() => systemService);
+    const picked = selectPayerAccountService({
+      systemFree: false,
+      actorAccountService: actorService,
+      accountsForUser,
+      systemPrincipalUserId: SYSTEM_PRINCIPAL,
+    });
+    expect(picked).toBe(actorService);
+    expect(accountsForUser).not.toHaveBeenCalled();
   });
 });

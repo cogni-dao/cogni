@@ -11,7 +11,8 @@
  * Invariants:
  *   - TWO_PATHS_ONLY: `GET /api/v1/knowledge/index` and `GET /api/v1/knowledge/{id}`; the transport
  *     refuses everything else.
- *   - BOUNDED: at most 20 rule bodies and 96 KiB of rule text; one 1 MiB response cap per call.
+ *   - BOUNDED: at most 20 rule-body FETCHES (attempts, not successes) and 96 KiB of rule text; ONE `agent.node_call`
+ *     summary line per run with counts (the 3-logs-per-request budget), not one per fetch; one 1 MiB response cap per call.
  *   - FAIL_CLOSED: no link, a rejected key (401, which also marks the link `needs_reenroll`), an
  *     unreadable index or a missing mission throws `LinkedNodeSourceError`; the run ends and the review
  *     reports "could not evaluate". A single unreadable rule is skipped.
@@ -36,7 +37,7 @@ import {
   type LinkedNodeSourceReader,
 } from "@/ports";
 import { serverEnv } from "@/shared/env";
-import { makeLogger } from "@/shared/observability";
+import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 import { getContainer, resolveServiceDb } from "../container";
 import { getNodeServiceLinkService } from "../node-service-links";
 import { createReviewGithubPlane } from "./resolve-review-route";
@@ -105,7 +106,8 @@ function entryBody(body: string): string | null {
 /** The host-owned reader used by the in-process provider for linked-node review runs. */
 export function createLinkedNodeSourceReader(): LinkedNodeSourceReader {
   const log = makeLogger({ component: "linked-node-source" });
-  const transport = createNodeHostTransport({ log });
+  // One summary line per run (below), not one event per fetch: a run reads up to 22 entries.
+  const transport = createNodeHostTransport({ log, perCallEvents: false });
 
   return async (subject): Promise<LinkedNodeSource> => {
     const container = getContainer();
@@ -131,14 +133,37 @@ export function createLinkedNodeSourceReader(): LinkedNodeSourceReader {
       throw new LinkedNodeSourceError("node_not_linked");
     }
 
+    const stats = { calls: 0, ok: 0, notOk: 0, failed: 0 };
+    const startedAt = performance.now();
+    const summarize = (outcome: "success" | "error") =>
+      log.info(
+        {
+          event: EVENT_NAMES.AGENT_NODE_CALL,
+          targetNodeId: subject.nodeId,
+          audienceHost: new URL(origin).host,
+          method: "GET",
+          pathTemplate: "/api/v1/knowledge/*",
+          outcome,
+          ...stats,
+          durationMs: Math.round(performance.now() - startedAt),
+          credentialId: connection.connectionId,
+        },
+        EVENT_NAMES.AGENT_NODE_CALL
+      );
     const get = async (path: string): Promise<string> => {
+      stats.calls++;
       const result = await transport.get({
         connection,
         audience: origin,
         targetNodeId: subject.nodeId,
         path,
       });
-      if (!result.ok) throw new LinkedNodeSourceError("node_hub_unreadable");
+      if (!result.ok) {
+        stats.failed++;
+        throw new LinkedNodeSourceError("node_hub_unreadable");
+      }
+      if (result.status === 200) stats.ok++;
+      else stats.notOk++;
       if (result.status === 401) {
         await links.markKeyRejected(origin, SERVICE);
         throw new LinkedNodeSourceError("node_key_rejected");
@@ -149,81 +174,94 @@ export function createLinkedNodeSourceReader(): LinkedNodeSourceReader {
       return result.body;
     };
 
-    const rows = parseIndexRows(await get(INDEX_PATH));
+    const build = async (): Promise<LinkedNodeSource> => {
+      const rows = parseIndexRows(await get(INDEX_PATH));
 
-    let architect: LinkedNodeSource["architect"];
-    const architectId = selectArchitectEntryId(rows, node.slug);
-    if (architectId) {
-      try {
-        const content = entryBody(
-          await get(`/api/v1/knowledge/${architectId}`)
-        );
-        if (content) {
-          architect = {
-            id: architectId,
-            content,
-            sourceRef: `hub:${architectId}`,
-          };
+      let architect: LinkedNodeSource["architect"];
+      const architectId = selectArchitectEntryId(rows, node.slug);
+      if (architectId) {
+        try {
+          const content = entryBody(
+            await get(`/api/v1/knowledge/${architectId}`)
+          );
+          if (content) {
+            architect = {
+              id: architectId,
+              content,
+              sourceRef: `hub:${architectId}`,
+            };
+          }
+        } catch (error) {
+          if (
+            error instanceof LinkedNodeSourceError &&
+            error.code === "node_key_rejected"
+          ) {
+            throw error;
+          }
+          // Best effort, like the operator's own architect read: the review proceeds without it.
         }
-      } catch (error) {
-        if (
-          error instanceof LinkedNodeSourceError &&
-          error.code === "node_key_rejected"
-        ) {
-          throw error;
-        }
-        // Best effort, like the operator's own architect read: the review proceeds without it.
       }
-    }
 
-    const rules: Array<{ id: string; content: string }> = [];
-    let ruleBytes = 0;
-    for (const row of rows) {
-      if (row.entryType !== "rule") continue;
-      if (rules.length >= LINKED_MAX_RULE_ENTRIES) break;
-      let content: string | null = null;
-      try {
-        content = entryBody(await get(`/api/v1/knowledge/${row.id}`));
-      } catch (error) {
-        if (
-          error instanceof LinkedNodeSourceError &&
-          error.code === "node_key_rejected"
-        ) {
-          throw error;
+      const rules: Array<{ id: string; content: string }> = [];
+      let ruleBytes = 0;
+      let ruleFetches = 0;
+      for (const row of rows) {
+        if (row.entryType !== "rule") continue;
+        // The cap counts FETCH attempts, so unreadable rules cannot make the run fetch without bound.
+        if (ruleFetches >= LINKED_MAX_RULE_ENTRIES) break;
+        ruleFetches++;
+        let content: string | null = null;
+        try {
+          content = entryBody(await get(`/api/v1/knowledge/${row.id}`));
+        } catch (error) {
+          if (
+            error instanceof LinkedNodeSourceError &&
+            error.code === "node_key_rejected"
+          ) {
+            throw error;
+          }
+          continue; // one unreadable rule is skipped
         }
-        continue; // one unreadable rule is skipped
+        if (!content) continue;
+        const size = Buffer.byteLength(content, "utf8");
+        if (ruleBytes + size > LINKED_MAX_RULE_BYTES) continue;
+        ruleBytes += size;
+        rules.push({ id: row.id, content });
       }
-      if (!content) continue;
-      const size = Buffer.byteLength(content, "utf8");
-      if (ruleBytes + size > LINKED_MAX_RULE_BYTES) continue;
-      ruleBytes += size;
-      rules.push({ id: row.id, content });
-    }
 
-    const plane = createReviewGithubPlane(log);
-    if (!plane) throw new LinkedNodeSourceError("node_mission_unavailable");
-    let mission: string | null;
-    try {
-      mission = await plane.readNodeMission({
-        owner: subject.owner,
-        repo: subject.repo,
-        ref: subject.baseSha,
-      });
-    } catch {
-      throw new LinkedNodeSourceError("node_mission_unavailable");
-    }
-    if (!mission) throw new LinkedNodeSourceError("node_mission_unavailable");
+      const plane = createReviewGithubPlane(log);
+      if (!plane) throw new LinkedNodeSourceError("node_mission_unavailable");
+      let mission: string | null;
+      try {
+        mission = await plane.readNodeMission({
+          owner: subject.owner,
+          repo: subject.repo,
+          ref: subject.baseSha,
+        });
+      } catch {
+        throw new LinkedNodeSourceError("node_mission_unavailable");
+      }
+      if (!mission) throw new LinkedNodeSourceError("node_mission_unavailable");
 
-    return {
-      origin,
-      mission: {
-        content: mission,
-        sourceRef: `${subject.owner}/${subject.repo}@${subject.baseSha.slice(0, 8)}:.cogni/repo-spec.yaml#intent.mission`,
-        buildSha: null,
-      },
-      governingIndex: rows,
-      ...(architect ? { architect } : {}),
-      rules,
+      return {
+        origin,
+        mission: {
+          content: mission,
+          sourceRef: `${subject.owner}/${subject.repo}@${subject.baseSha.slice(0, 8)}:.cogni/repo-spec.yaml#intent.mission`,
+          buildSha: null,
+        },
+        governingIndex: rows,
+        ...(architect ? { architect } : {}),
+        rules,
+      };
     };
+    let outcome: "success" | "error" = "error";
+    try {
+      const source = await build();
+      outcome = "success";
+      return source;
+    } finally {
+      summarize(outcome);
+    }
   };
 }
