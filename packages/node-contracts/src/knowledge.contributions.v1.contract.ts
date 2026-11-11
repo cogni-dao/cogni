@@ -23,6 +23,7 @@ import {
   ContributionRecordSchema,
   KnowledgeContributionEditSchema,
 } from "@cogni/knowledge-store/contribution-schemas";
+import { ContributionCitationDiffEntrySchema } from "@cogni/shared-knowledge-store/contribution-schemas";
 import { z } from "zod";
 
 export const ContributionsCreateRequestSchema = z.object({
@@ -70,6 +71,9 @@ export type ContributionCommitRecord = z.infer<
 >;
 
 export type ContributionDiffEntry = z.infer<typeof ContributionDiffEntrySchema>;
+export type ContributionCitationDiffEntry = z.infer<
+  typeof ContributionCitationDiffEntrySchema
+>;
 
 export const ContributionsListResponseSchema = z.object({
   contributions: z.array(ContributionRecordSchema),
@@ -82,6 +86,8 @@ export const ContributionDiffResponseSchema = z.object({
   contributionId: z.string(),
   branch: z.string(),
   entries: z.array(ContributionDiffEntrySchema),
+  /** Each changed citation edge with its citing side's label and tone (bug.0011). */
+  citations: z.array(ContributionCitationDiffEntrySchema),
 });
 export type ContributionDiffResponse = z.infer<
   typeof ContributionDiffResponseSchema

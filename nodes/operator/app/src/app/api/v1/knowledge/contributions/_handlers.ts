@@ -62,6 +62,7 @@ import {
   nodeAdminFailureBody,
 } from "@/bootstrap/node-admin-gate";
 import { getNodeId } from "@/shared/config/repoSpec.server";
+import { citationEdgesFromDiff } from "./_citation-edges";
 
 function service() {
   const svc = getContainer().knowledgeContributionService;
@@ -351,6 +352,7 @@ export async function handleDiff(
     contributionId,
     branch: record.branch,
     entries,
+    citations: citationEdgesFromDiff(entries),
   });
 }
 

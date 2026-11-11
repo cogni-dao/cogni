@@ -4,61 +4,33 @@
 /**
  * Module: `@app/(app)/_components/EntityCitationLinks`
  * Purpose: Render depth-1 citation edges for a knowledge or work-item endpoint
- *   as compact clickable chips.
- * Scope: Node routing, transport, and chip presentation. No pagination or write policy.
+ *   as the package's arrow, relation and slug rows.
+ * Scope: Node routing and transport only; links open entries in the side sheet. Presentation and paging live in
+ *   `@cogni/knowledge-base-ui` `CitationLinks`.
  * Side-effects: IO (GET /api/v1/citations/:id via fetchCitationLinks)
  * @internal
  */
 
 "use client";
 
-import {
-  DirectRelationLinks,
-  formatCitationLabel,
-} from "@cogni/knowledge-base-ui";
-import Link from "next/link";
+import { CitationLinks } from "@cogni/knowledge-base-ui";
 import type { ReactElement } from "react";
 
-import { Badge } from "@/components";
-import {
-  type CitationLinkDto,
-  fetchCitationLinks,
-} from "../_api/fetchCitationLinks";
+import { fetchCitationLinks } from "../_api/fetchCitationLinks";
+import { PeekLink } from "./EntityPeek";
 
 interface EntityCitationLinksProps {
   readonly entityId: string;
-}
-
-function otherEndpoint(link: CitationLinkDto, entityId: string) {
-  return link.source.id === entityId ? link.target : link.source;
-}
-
-function chipLabel(link: CitationLinkDto, entityId: string): string {
-  const endpoint = otherEndpoint(link, entityId);
-  return formatCitationLabel(link.citationType, endpoint);
 }
 
 export function EntityCitationLinks({
   entityId,
 }: EntityCitationLinksProps): ReactElement | null {
   return (
-    <DirectRelationLinks
+    <CitationLinks
       entityId={entityId}
       loadPage={fetchCitationLinks}
-      className="flex flex-col gap-1"
-      headingClassName="font-medium text-muted-foreground text-xs uppercase tracking-wider"
-      linksClassName="flex flex-wrap gap-1.5"
-      moreButtonClassName="w-fit rounded border px-2 py-1 text-xs disabled:opacity-50"
-      renderLink={(link) => {
-        const endpoint = otherEndpoint(link, entityId);
-        return (
-          <Link href={endpoint.href} title={endpoint.title ?? endpoint.id}>
-            <Badge intent="outline" size="sm">
-              <span className="font-mono">{chipLabel(link, entityId)}</span>
-            </Badge>
-          </Link>
-        );
-      }}
+      LinkComponent={PeekLink}
     />
   );
 }

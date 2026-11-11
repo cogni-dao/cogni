@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
+// SPDX-FileCopyrightText: 2026 Cogni-DAO
+
+/**
+ * Module: `@app/api/v1/knowledge/contributions/_citation-edges`
+ * Purpose: Read the changed citation edges out of the operator's contribution diff
+ *   so the inbox lists every link with the citing side's label and tone (bug.0011).
+ * Scope: Pure adapter from the workspace store's `citation_added` / `citation_removed`
+ *   rows to the published `ContributionCitationDiffEntry` shape. Does no IO and holds
+ *   no relation wording; labels come from `describeCitation`.
+ * Invariants: EVERY_DIFF_EDGE_LISTED, CITATION_DIFF_FOR_REVIEW. The workspace diff
+ *   does not report edge context or a re-contexted edge, so `context` is null and
+ *   `modified` never appears until the operator reads `diffCitations` from the published store.
+ * Side-effects: none
+ * Links: docs/design/knowledge-contribution-api.md
+ * @internal
+ */
+
+import type {
+  ContributionCitationDiffEntry,
+  ContributionDiffEntry,
+} from "@cogni/node-contracts";
+import { describeCitation } from "@cogni/shared-knowledge-store";
+
+/** Edges from `citation_*` rows, ordered by citing entry, type, then cited entry. */
+export function citationEdgesFromDiff(
+  entries: readonly ContributionDiffEntry[]
+): ContributionCitationDiffEntry[] {
+  const edges: ContributionCitationDiffEntry[] = [];
+  for (const entry of entries) {
+    if (
+      entry.changeType !== "citation_added" &&
+      entry.changeType !== "citation_removed"
+    ) {
+      continue;
+    }
+    const edge = entry.after ?? entry.before;
+    const citingId = edge?.citingId;
+    const citedId = edge?.citedId;
+    const citationType = edge?.citationType;
+    if (
+      typeof citingId !== "string" ||
+      typeof citedId !== "string" ||
+      typeof citationType !== "string"
+    ) {
+      continue;
+    }
+    edges.push({
+      changeType: entry.changeType === "citation_added" ? "added" : "removed",
+      citingId,
+      citedId,
+      citationType,
+      context: null,
+      ...describeCitation(citationType, "out"),
+    });
+  }
+  return edges.sort(
+    (a, b) =>
+      a.citingId.localeCompare(b.citingId) ||
+      a.citationType.localeCompare(b.citationType) ||
+      a.citedId.localeCompare(b.citedId)
+  );
+}

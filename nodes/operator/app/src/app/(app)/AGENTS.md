@@ -35,7 +35,7 @@ Protected (authenticated) pages wrapped in `SidebarProvider` + `AppSidebar` + `A
 
 ## Responsibilities
 
-- This directory **does**: Render the sidebar layout shell (sidebar + top bar + content area) for routes protected by `src/proxy.ts`.
+- This directory **does**: Render the sidebar layout shell (sidebar + top bar + content area) for routes protected by `src/proxy.ts`. It also mounts the one entry side sheet (`EntityPeekProvider`) that linked knowledge entries open in (bug.0011).
 - This directory **does not**: Handle sign-in/sign-out flows, contain business logic, manage session persistence.
 
 ## Package mounts
