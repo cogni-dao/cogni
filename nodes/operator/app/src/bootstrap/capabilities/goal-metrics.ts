@@ -3,7 +3,7 @@
 
 /**
  * Module: `@bootstrap/capabilities/goal-metrics`
- * Purpose: Operator composition of the published @cogni-dao/metrics 0.6.0 goal-metric service.
+ * Purpose: Operator composition of the published @cogni-dao/metrics 0.9.0 goal-metric service.
  * Scope: Binds this node's id and registers the operator's node-local calculators: delivery
  *   (`deploy.serving-drift@1`, `deploy.release-success@1`, `deploy.first-try@1`, `deploy.lead-time@1`, task.5442, bug.5617) over the
  *   node-deploy release store, fleet uptime (`fleet.lanes-down@1`, `fleet.substrate-reach@1`,
@@ -13,6 +13,9 @@
  *   enforcement and the engine live in `@cogni-dao/metrics/knowledge`; nothing here re-implements them.
  * Invariants:
  *   - RELEASE_OWNS_BEHAVIOR: metric computation, assessment and goal progress come from the package.
+ *   - SERVES_FROM_PACKAGE (0.9.0, story.0033): a metric row's `serves` and `band` are parsed, joined under their KPI
+ *     (`served`) and reported (`orphans`, `servedTruncated`, `servedUnavailable`) by the package; no operator code
+ *     reads or writes them here.
  *   - NODE_SCOPED_OBSERVATIONS: observations are scoped to `getNodeId()` + the deploy environment.
  *   - NODE_CALCULATORS_READ_OWN_TABLES: the delivery calculators read only the operator's own release
  *     store and public HTTP probes (node-member metadata or public data), never Prometheus.

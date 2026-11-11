@@ -7,6 +7,7 @@
  * Scope: Port binding and response mapping only. Request parsing, contract validation, error mapping and no-store headers live in the package; the routes keep only authentication and logging.
  * Invariants:
  *   - ONE_GOAL_PROGRESS_READ: `loadGoalsProgress` and the goals handler share the container's single reader, so SSR and the route read one instance.
+ *   - SERVED_METRICS_PASS_THROUGH (story.0033): the goals read carries each KPI's `served` metrics, `orphans`, `servedTruncated` and `servedUnavailable` as the package returns them; this facade adds nothing.
  *   - TYPED_ERRORS: the package maps `MetricError` to its own status; anything else is a logged 503 (`reportUnexpected`).
  * Side-effects: IO (through the container's metric service and knowledge port)
  * Links: app/api/v1/metrics/**, bootstrap/capabilities/goal-metrics.ts
