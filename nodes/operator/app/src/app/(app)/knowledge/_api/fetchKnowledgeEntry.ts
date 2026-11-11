@@ -12,12 +12,16 @@
 
 import type { KnowledgeRow } from "@cogni/node-contracts";
 
-export async function fetchKnowledgeEntry(id: string): Promise<KnowledgeRow> {
+export async function fetchKnowledgeEntry(
+  id: string,
+  signal?: AbortSignal
+): Promise<KnowledgeRow> {
   const response = await fetch(`/api/v1/knowledge/${encodeURIComponent(id)}`, {
     method: "GET",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
     cache: "no-store",
+    ...(signal ? { signal } : {}),
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({

@@ -24,6 +24,8 @@ export interface CitationLinkDto {
   readonly source: CitationEndpointDto;
   readonly target: CitationEndpointDto;
   readonly context: string | null;
+  readonly label: string;
+  readonly tone: "positive" | "negative" | "warning" | "neutral" | "muted";
 }
 
 export interface CitationLinksResponse {

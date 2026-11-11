@@ -18,7 +18,11 @@ export type { Clock, RequestContext } from "./context";
 export { createRequestContext } from "./context";
 export type { EventBase, EventName } from "./events";
 // Event Registry (shared by client and server)
-export { EVENT_NAMES, WORK_ITEMS_LIST_ERROR_CODES } from "./events";
+export {
+  EVENT_NAMES,
+  KNOWLEDGE_CONTRIBUTION_DIFF_ERROR_CODES,
+  WORK_ITEMS_LIST_ERROR_CODES,
+} from "./events";
 // Domain event payload types
 export * from "./events/ai";
 export * from "./events/payments";

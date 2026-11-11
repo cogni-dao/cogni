@@ -10,8 +10,10 @@
  * @public
  */
 
+import { KNOWLEDGE_CONTRIBUTION_DIFF_ERROR_CODES } from "@cogni/node-shared";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { EVENT_NAMES, logEvent } from "@/shared/observability";
 import { handleDiff } from "../../_handlers";
 
 export const dynamic = "force-dynamic";
@@ -24,9 +26,31 @@ export const GET = wrapRouteHandlerWithLogging<{
     routeId: "knowledge.contributions.diff",
     auth: { mode: "required", getSessionUser },
   },
-  async (_ctx, _request, sessionUser, context) => {
-    if (!context) throw new Error("context required for dynamic routes");
-    const { id } = await context.params;
-    return handleDiff(id, sessionUser);
+  async (ctx, _request, sessionUser, context) => {
+    const startedAt = performance.now();
+    let status = 500;
+    try {
+      if (!context) throw new Error("context required for dynamic routes");
+      const { id } = await context.params;
+      const response = await handleDiff(id, sessionUser);
+      status = response.status;
+      return response;
+    } finally {
+      logEvent(ctx.log, EVENT_NAMES.KNOWLEDGE_CONTRIBUTION_DIFF_COMPLETE, {
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        status,
+        outcome: status < 400 ? "success" : "error",
+        errorCode:
+          status === 404
+            ? KNOWLEDGE_CONTRIBUTION_DIFF_ERROR_CODES.NOT_FOUND
+            : status === 503
+              ? KNOWLEDGE_CONTRIBUTION_DIFF_ERROR_CODES.BACKEND_UNAVAILABLE
+              : status >= 400
+                ? KNOWLEDGE_CONTRIBUTION_DIFF_ERROR_CODES.DIFF_FAILED
+                : undefined,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    }
   }
 );
