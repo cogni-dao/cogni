@@ -54,3 +54,59 @@ CREATE UNIQUE INDEX "agent_principals_user_id_unique" ON "agent_principals" USIN
 CREATE UNIQUE INDEX "agent_roles_live_unique" ON "agent_roles" USING btree ("principal_user_id","scope") WHERE "agent_roles"."revoked_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "agent_roles_principal_idx" ON "agent_roles" USING btree ("principal_user_id");--> statement-breakpoint
 CREATE POLICY "agent_principals_read" ON "agent_principals" AS PERMISSIVE FOR SELECT TO public USING (true);
+--> statement-breakpoint
+-- Hand-written below (parity with node-template 0036 + 0039 + 0040 final shape): FORCE RLS, functions and triggers are outside Drizzle's DDL
+-- scope. agent_credentials and agent_roles have NO policy: ENABLE + FORCE = deny-all for the app role; only the BYPASSRLS service role
+-- reads or writes them. agent_principals is readable by all roles (its select policy), writable only by the service role.
+ALTER TABLE "agent_principals" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "agent_roles" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "agent_credentials" FORCE ROW LEVEL SECURITY;--> statement-breakpoint
+-- AGENTS_HOLD_NO_WALLET (a payout guard: no user-centric payout reaches an AI), enforced in the database on every binding path: a user
+-- that has an agent_principals row can never bind a wallet. A kind-based payout guard, not an admin rule.
+CREATE OR REPLACE FUNCTION agent_principals_refuse_wallet_binding()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.provider = 'wallet'
+     AND EXISTS (SELECT 1 FROM agent_principals ap WHERE ap.user_id = NEW.user_id) THEN
+    RAISE EXCEPTION 'agent principal % cannot bind a wallet', NEW.user_id
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'agent_principals_no_wallet_binding';
+  END IF;
+  RETURN NEW;
+END
+$$;--> statement-breakpoint
+CREATE TRIGGER "agent_principals_no_wallet_binding"
+  BEFORE INSERT OR UPDATE OF user_id, provider ON "user_bindings"
+  FOR EACH ROW EXECUTE FUNCTION agent_principals_refuse_wallet_binding();--> statement-breakpoint
+-- STATE_IS_DERIVED: the one derivation of a credential's state from its timestamps, against the DATABASE clock. Never stored.
+CREATE OR REPLACE FUNCTION agent_credential_state(c agent_credentials)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT CASE
+    WHEN c.revoked_at IS NOT NULL THEN 'revoked'
+    WHEN c.confirmed_at IS NULL THEN CASE WHEN c.pending_expires_at > now() THEN 'pending' ELSE 'pending_expired' END
+    WHEN c.expires_at > now() THEN 'active'
+    WHEN c.renew_until > now() THEN 'renew_only'
+    ELSE 'expired'
+  END
+$$;--> statement-breakpoint
+-- CREDENTIALS_ONLY_ON_AGENT_PRINCIPALS: a credential may belong only to a user with an EXTERNAL agent_principals row. An internal
+-- principal (this node's AI) never holds a key, and a plain user has no agent row until `upgrade` writes one.
+CREATE OR REPLACE FUNCTION agent_credentials_require_external_principal()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM agent_principals ap WHERE ap.user_id = NEW.user_id AND ap.kind = 'external') THEN
+    RAISE EXCEPTION 'agent credential for % requires an external agent principal', NEW.user_id
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'agent_credentials_external_principal_only';
+  END IF;
+  RETURN NEW;
+END
+$$;--> statement-breakpoint
+CREATE TRIGGER "agent_credentials_external_principal_only"
+  BEFORE INSERT OR UPDATE OF user_id ON "agent_credentials"
+  FOR EACH ROW EXECUTE FUNCTION agent_credentials_require_external_principal();
