@@ -29,6 +29,12 @@ export interface DeliveryReleaseFacts {
   readonly nodeId: string;
   readonly env: string;
   readonly workload: string;
+  /** The full git sha the release deploys (task.5479 lane view). */
+  readonly sourceSha: string;
+  /** The principal that recorded the release (`user:<id>`; task.5479 lane view). */
+  readonly createdBy: string;
+  /** The write-once terminal admission refusal's reason, when the release was refused. */
+  readonly admissionRefusalReason: string | undefined;
   /** When the release was recorded (POST): the start of lead time. */
   readonly createdAt: Date;
   /** Earliest write-once `attempts.activated_at`; undefined for attempts before the column. */
