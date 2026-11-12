@@ -14,7 +14,11 @@ Invariants:
     only a proven master key may use local legacy routes or the missing-node default.
   CALLBACK_AUTHENTICATED: forwards BILLING_INGEST_TOKEN as Bearer header
   NODE_LOCAL_METERING_PRIMARY: routes to node-local endpoint
-Side-effects: IO (HTTP POST to node ingest endpoints)
+  GATEWAY_RECEIPT_PER_CALL: every success and failure prints one
+    `ai.gateway.receipt` JSON line to stdout, before and independent of billing
+    routing. The env VM collector labels it {env=<lane>, service=litellm}; the
+    operator trace reader verifies cross-lane generations against it (bug.5625).
+Side-effects: IO (HTTP POST to node ingest endpoints; one stdout line per call)
 """
 
 import hashlib
@@ -23,6 +27,8 @@ import json
 import logging
 import os
 import re
+import sys
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -80,6 +86,60 @@ def _get_billing_token() -> str:
     return os.environ.get("BILLING_INGEST_TOKEN", "")
 
 
+def _utc(value: Any) -> str | None:
+    """LiteLLM passes naive UTC datetimes; Langfuse records the same instants."""
+    if not isinstance(value, datetime):
+        return None
+    aware = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+    return aware.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _str(value: Any, limit: int = 512) -> str | None:
+    return value if isinstance(value, str) and 0 < len(value) <= limit else None
+
+
+def emit_gateway_receipt(
+    kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any, status: str
+) -> None:
+    """Print one structured receipt per call. Never raises.
+
+    Authority is the server-stamped key hash and alias; runId and spendNodeId are
+    request metadata the reader must also find on the same Langfuse row.
+
+    Keys avoid `nodeId`/`svcNode` so the collector adds no node label: the gateway,
+    not a node, writes this stream. No content, cost, key or key hash is logged:
+    LiteLLM accepts a stored key hash as a bearer token. The authenticated alias
+    names the node and lane.
+    """
+    try:
+        litellm_params = kwargs.get("litellm_params") or {}
+        metadata = litellm_params.get("metadata") if isinstance(litellm_params, dict) else None
+        metadata = metadata if isinstance(metadata, dict) else {}
+        spend = metadata.get("spend_logs_metadata")
+        spend = spend if isinstance(spend, dict) else {}
+        response_id = None
+        if status == "success" and response_obj is not None:
+            try:
+                response_id = response_obj.get("id")
+            except Exception:
+                response_id = getattr(response_obj, "id", None)
+        line = {
+            "event": "ai.gateway.receipt",
+            "status": status,
+            "callId": _str(kwargs.get("litellm_call_id")),
+            "responseId": _str(response_id),
+            "keyAlias": _str(metadata.get("user_api_key_alias"), 128),
+            "runId": _str(spend.get("run_id"), 256),
+            "spendNodeId": _str(spend.get("node_id"), 64),
+            "startTime": _utc(start_time),
+            "endTime": _utc(end_time),
+        }
+        sys.stdout.write(json.dumps(line, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+    except Exception:
+        logger.exception("Gateway receipt emission failed")
+
+
 class CogniNodeRouter(CustomLogger):
     """Routes LiteLLM success callbacks to per-node billing ingest endpoints.
 
@@ -130,6 +190,7 @@ class CogniNodeRouter(CustomLogger):
         self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
     ) -> None:
         """Called by LiteLLM after each successful completion. Routes to correct node."""
+        emit_gateway_receipt(kwargs, response_obj, start_time, end_time, "success")
         try:
             # These fields are stamped by the pinned LiteLLM authentication path.
             litellm_params = kwargs.get("litellm_params", {})
@@ -183,6 +244,12 @@ class CogniNodeRouter(CustomLogger):
                 "CogniNodeRouter.async_log_success_event failed — call_id=%s",
                 kwargs.get("litellm_call_id", "unknown"),
             )
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+    ) -> None:
+        """Failures bill nothing; they still leave the per-call gateway receipt."""
+        emit_gateway_receipt(kwargs, response_obj, start_time, end_time, "failure")
 
 
 # Module-level instance — LiteLLM `callbacks` config expects an instance, not a class.
