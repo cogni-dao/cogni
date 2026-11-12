@@ -17,16 +17,18 @@ production_branch: deploy/production-beacon
 # later catalog edit (drop an env here) once its envs are provisioned.
 # story.5016 production cutover: preview slot retired (preview has no funded Akash
 # account and gets no actuator; its lease on the shared account was closed).
-envs: [production]
+envs: [candidate-a, production]
 database:
   candidate-a: { tier: shared, budget_profile: shared-default-v1 }
   production: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
+  candidate-a: akash
   production: akash
 # story.5137 / task.5411 (CD4 ONE_WRITER_PER_NODE_LANE) — every environment of this node is
 # deployed ONLY by the node-deploy sequencer (POST /api/v1/deploy/workloads). The legacy
 # and crossplane authorities and their per-node AppSets were deleted (CD9).
 compute_api:
+  candidate-a: node-deploy
   production: node-deploy
 activity_env: production
 owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
