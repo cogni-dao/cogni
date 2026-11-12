@@ -35,8 +35,14 @@ export const POST = credentialBearerRoute({
   routeId: "agent.credentials.revoke",
   allow: ["active", "renew_only"],
   async handle({ ctx, request, caller }) {
-    const body = await request.json().catch(() => ({}));
-    const parsed = revokeAgentCredentialOperation.input.safeParse(body ?? {});
+    let body: unknown = {};
+    try {
+      const raw = await request.text();
+      if (raw.length > 0) body = JSON.parse(raw);
+    } catch {
+      return credentialResponse(credentialHttp({ op: "invalid_input" }));
+    }
+    const parsed = revokeAgentCredentialOperation.input.safeParse(body);
     if (!parsed.success)
       return credentialResponse(credentialHttp({ op: "invalid_input" }));
     const credentialId = parsed.data.credentialId ?? caller.credentialId;

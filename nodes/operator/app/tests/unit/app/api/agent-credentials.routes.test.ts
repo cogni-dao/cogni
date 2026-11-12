@@ -15,6 +15,7 @@
 import {
   type CredentialState,
   type CredentialStore,
+  credentialHttp,
   formatRevocableKey,
   REVOCABLE_KEY_PREFIX,
   verifyBearer,
@@ -29,6 +30,12 @@ const fake = vi.hoisted(() => ({
   admit: true,
   /** How many limiter tokens lookups that found no usable key have spent (SPEND_ON_MISS). */
   misses: 0,
+  cookie: null as null | {
+    id: string;
+    walletAddress: null;
+    displayName: string;
+    avatarColor: null;
+  },
   memory: undefined as unknown as {
     store: unknown;
     outage: { failing: boolean; failOn: string | null };
@@ -50,7 +57,7 @@ vi.mock("next/headers", () => ({
   }),
 }));
 vi.mock("@/lib/auth/server", () => ({
-  getServerSessionUser: async () => null,
+  getServerSessionUser: async () => fake.cookie,
 }));
 vi.mock("@/shared/env/server", () => ({
   serverEnv: () => ({
@@ -88,6 +95,7 @@ import { POST as confirm } from "@/app/api/v1/agent/credentials/confirm/route";
 import { POST as revoke } from "@/app/api/v1/agent/credentials/revoke/route";
 import { POST as rotate } from "@/app/api/v1/agent/credentials/rotate/route";
 import { POST as upgrade } from "@/app/api/v1/agent/credentials/upgrade/route";
+import { GET as agentMe } from "@/app/api/v1/agent/me/route";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 import {
   httpRequestDurationMs,
@@ -132,6 +140,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   fake.admit = true;
   fake.misses = 0;
+  fake.cookie = null;
   log.child.mockReturnValue(log);
   fake.memory = memoryCredentialStore({
     users: { [USER]: {}, [OTHER]: {} },
@@ -248,6 +257,27 @@ describe("rotate + confirm", () => {
 });
 
 describe("revoke (A7)", () => {
+  it("malformed sibling-revoke JSON mutates neither caller nor pending sibling", async () => {
+    const caller = await activeKey();
+    const sibling = await (await post(rotate as never, caller.apiKey)).json();
+    const response = await revoke(
+      new NextRequest("http://localhost/api/v1/agent/credentials/revoke", {
+        method: "POST",
+        headers: { authorization: `Bearer ${caller.apiKey}` },
+        body: `{"credentialId":"${sibling.credentialId}`,
+      })
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual(
+      credentialHttp({ op: "invalid_input" }).body
+    );
+    expect((await ping(caller.apiKey)).status).toBe(200);
+    expect(
+      await verifyBearer(fake.memory.store as CredentialStore, sibling.apiKey, [
+        "pending",
+      ])
+    ).toMatchObject({ ok: true });
+  });
   it("revoking one key 401s only it; another user's key stays 200; a foreign credential id is 404", async () => {
     const mine = await activeKey();
     const otherUp = await (
@@ -285,6 +315,52 @@ describe("revoke (A7)", () => {
     const next = await (await post(rotate as never, old.apiKey)).json();
     await post(revoke as never, old.apiKey);
     expect((await post(confirm as never, next.apiKey)).status).toBe(401);
+  });
+});
+
+describe("agent/me authentication method survives secondary expiry failures", () => {
+  const me = (key?: string) => {
+    fake.headers.clear();
+    if (key) fake.headers.set("authorization", `Bearer ${key}`);
+    return agentMe(
+      new NextRequest("http://localhost/api/v1/agent/me", {
+        headers: key ? { authorization: `Bearer ${key}` } : {},
+      })
+    );
+  };
+  it.each([
+    "outage",
+    "revoked",
+  ])("a verified bearer followed by %s never becomes a cookie session", async (failure) => {
+    const caller = await activeKey();
+    const healthy = await me(caller.apiKey);
+    expect(healthy.status).toBe(200);
+    expect(await healthy.json()).toMatchObject({ principal: "agent" });
+    const store = fake.memory.store as CredentialStore;
+    const lookup = store.lookup.bind(store);
+    const spy = vi.spyOn(store, "lookup").mockImplementationOnce(lookup);
+    if (failure === "outage")
+      spy.mockRejectedValueOnce(new Error("private fixture outage"));
+    else spy.mockResolvedValueOnce(null);
+    const response = await me(caller.apiKey);
+    expect(response.status).toBe(failure === "outage" ? 503 : 401);
+    expect(await response.json()).toMatchObject({
+      error: failure === "outage" ? "authz_unavailable" : "invalid_token",
+    });
+  });
+  it("a verified cookie remains a session without a bearer expiry", async () => {
+    fake.cookie = {
+      id: USER,
+      walletAddress: null,
+      displayName: "Cookie user",
+      avatarColor: null,
+    };
+    const response = await me();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      principal: "session",
+      expiresAt: null,
+    });
   });
 });
 

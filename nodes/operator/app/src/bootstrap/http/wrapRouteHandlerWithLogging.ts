@@ -350,6 +350,15 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           responseStatus = response.status;
           return response;
         } catch (error) {
+          const refusal = credentialErrorHttp(error);
+          if (refusal) {
+            logCredentialRefusal(ctx.log, error, options.routeId);
+            responseStatus = refusal.status;
+            return NextResponse.json(refusal.body, {
+              status: refusal.status,
+              headers: { ...refusal.headers },
+            });
+          }
           // Wrapper only catches unhandled errors - route should handle domain errors
           responseStatus = 500;
           logRequestError(ctx.log, error, "INTERNAL_SERVER_ERROR");

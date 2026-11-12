@@ -24,7 +24,7 @@
  */
 
 import { NextResponse } from "next/server";
-
+import { resolveRouteIdentity } from "@/app/_lib/auth/route-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { getContainer } from "@/bootstrap/container";
@@ -100,7 +100,16 @@ export async function GET(
     );
   };
 
-  const sessionUser = await getSessionUser();
+  const auth = await resolveRouteIdentity(getSessionUser);
+  if (!auth.ok) {
+    logComplete({
+      outcome: "error",
+      status: auth.status,
+      errorCode: auth.errorCode,
+    });
+    return auth.response;
+  }
+  const sessionUser = auth.user;
   if (!sessionUser) {
     logComplete({ outcome: "error", status: 401, errorCode: "unauthorized" });
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });

@@ -44,7 +44,7 @@ import { NextResponse } from "next/server";
 import { type Address, createPublicClient, getAddress, http } from "viem";
 import { base, sepolia } from "viem/chains";
 import { z } from "zod";
-
+import { resolveRouteIdentity } from "@/app/_lib/auth/route-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
@@ -145,7 +145,11 @@ async function handleActivateDistributions(
   routeArgs: RouteParams,
   ctx: ReturnType<typeof createRequestContext>
 ): Promise<NextResponse> {
-  const sessionUser = await getSessionUser();
+  const auth = await resolveRouteIdentity(getSessionUser);
+  if (!auth.ok) {
+    return auth.response;
+  }
+  const sessionUser = auth.user;
   if (!sessionUser) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }

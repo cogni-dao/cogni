@@ -24,7 +24,9 @@
 
 import { authzUserResource } from "@cogni/authorization-core";
 import { agentMeOperation } from "@cogni/node-contracts";
+import { credentialDenialHttp } from "@cogni-dao/agent-grants/credentials";
 import { NextResponse } from "next/server";
+import { credentialResponse } from "@/app/_lib/auth/agent-credential-route";
 import { getSessionUser, peekAgentKeyExpiry } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
@@ -34,7 +36,15 @@ const NODE_PREFIX = "node:";
 export const GET = wrapRouteHandlerWithLogging(
   { routeId: "agent.me.read", auth: { mode: "required", getSessionUser } },
   async (_ctx, _request, sessionUser) => {
+    // The wrapper already verified the bearer-exclusive resolver. Authentication
+    // method is independent of the secondary nullable expiry read.
+    const authorizationHeader = _request.headers.get("authorization");
+    const agent =
+      authorizationHeader?.toLowerCase().startsWith("bearer ") === true &&
+      authorizationHeader.slice(7).trimStart().length > 0;
     const exp = await peekAgentKeyExpiry();
+    if (agent && exp === null)
+      return credentialResponse(credentialDenialHttp("invalid"));
     const nowSeconds = Math.floor(Date.now() / 1000);
 
     // Grants are best-effort: the authz plane must NEVER break liveness. If the
@@ -67,7 +77,7 @@ export const GET = wrapRouteHandlerWithLogging(
     const result = agentMeOperation.output.parse({
       userId: sessionUser.id,
       displayName: sessionUser.displayName,
-      principal: exp !== null ? "agent" : "session",
+      principal: agent ? "agent" : "session",
       expiresAt: exp !== null ? new Date(exp * 1000).toISOString() : null,
       expiresInSeconds: exp !== null ? exp - nowSeconds : null,
       grantsAvailable,

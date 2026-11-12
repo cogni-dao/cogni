@@ -33,7 +33,7 @@
  */
 
 import { NextResponse } from "next/server";
-
+import { resolveRouteIdentity } from "@/app/_lib/auth/route-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
@@ -81,7 +81,12 @@ export async function POST(request: Request, routeArgs: RouteParams) {
       EVENT_NAMES.NODE_RECONCILE_ACTIONS_COMPLETE
     );
 
-  const sessionUser = await getSessionUser();
+  const auth = await resolveRouteIdentity(getSessionUser);
+  if (!auth.ok) {
+    complete("error", auth.status, { errorCode: auth.errorCode });
+    return auth.response;
+  }
+  const sessionUser = auth.user;
   if (!sessionUser) {
     complete("unauthorized", 401);
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });

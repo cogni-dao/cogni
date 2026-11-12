@@ -119,8 +119,9 @@ export function issueAgentApiKey(input: {
 
 /**
  * Returns the agent API key's expiry (unix seconds) for the current request,
- * or null when the caller is not authenticated by an agent key (e.g. a cookie
- * session). Verifies the token signature (reuses parseAgentToken), so callers
+ * or null for a cookie or a credential that is no longer live. Store outages
+ * throw; this nullable read never determines the authentication method. Verifies
+ * the token signature (reuses parseAgentToken), so callers
  * get an authentic expiry, not an unverified claim. Used by `GET /api/v1/agent/me`
  * to surface key liveness without re-decoding the bearer by hand.
  */
@@ -134,7 +135,7 @@ export async function peekAgentKeyExpiry(): Promise<number | null> {
   const bearer = extractBearerToken(h.get("authorization"));
   if (!bearer) return null;
   if (isRevocableKey(bearer)) {
-    // v2 expiry is a store fact, not a token claim. A broken store yields null (the /me route stays readable).
+    // Expiry is a store fact. An outage is unavailable, never a cookie identity.
     try {
       const [{ getAgentCredentialStore }, { hashAgentKey }] = await Promise.all(
         [
@@ -148,8 +149,8 @@ export async function peekAgentKeyExpiry(): Promise<number | null> {
       return row && (row.state === "active" || row.state === "renew_only")
         ? Math.floor(new Date(row.expiresAt).getTime() / 1000)
         : null;
-    } catch {
-      return null;
+    } catch (cause) {
+      throw new CredentialStoreUnavailableError(cause);
     }
   }
   const payload = parseAgentToken(bearer);
