@@ -121,7 +121,7 @@ describe("ImageCatalogNodes", () => {
     expect(production).not.toContain("operator");
     expect(
       [...(await catalog.nodeDeploySlugs("candidate-a", "cogni-dao"))].sort()
-    ).toEqual(["node-template", "poly", "red", "toks5"]);
+    ).toEqual(["levelup", "node-template", "poly", "red", "toks5"]);
     expect(
       [...(await catalog.nodeDeploySlugs("preview", "cogni-dao"))].sort()
     ).toEqual(["poly", "toks5"]);

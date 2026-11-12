@@ -13,7 +13,14 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -76,11 +83,19 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
   let temp: string;
   let pre63: string;
   let journal: { entries: Entry[]; version: string; dialect: string };
-  let nativeLog = "";
+  const nativeChunks: string[] = [];
+  let nativeBytes = 0;
+  const nativeLog = () => nativeChunks.join("");
   let service: Sql;
   let app: Sql;
-  const clients: Sql[] = [];
+  const clients = new Set<Sql>();
+  const sharedClients = new Set<Sql>();
   const children = new Set<ReturnType<typeof spawn>>();
+  const childCompletions = new Map<
+    ReturnType<typeof spawn>,
+    Promise<unknown>
+  >();
+  const childLabels = new Set<string>();
   const inspectors = new Set<WebSocket>();
   const users: string[] = [];
   let serial = 0;
@@ -108,10 +123,18 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       ])
       .start();
     (await container.logs()).on("data", (chunk: Buffer) => {
-      nativeLog = (nativeLog + chunk.toString()).slice(-8_000_000);
+      const text = chunk.toString();
+      nativeChunks.push(text);
+      nativeBytes += text.length;
+      while (nativeBytes > 8_000_000 && nativeChunks.length > 1)
+        nativeBytes -= nativeChunks.shift()?.length ?? 0;
     });
     baseUrl = container.getConnectionUri();
-    control = postgres(baseUrl, { max: 1 });
+    control = postgres(baseUrl, {
+      max: 1,
+      connect_timeout: 5,
+      connection: { statement_timeout: 5_000, lock_timeout: 2_000 },
+    });
     // Private fixture identities, never copied from an environment. Two admitted
     // migration sessions are necessary to test advisory serialization itself.
     await control.unsafe(
@@ -134,6 +157,8 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     );
     service = fresh.service;
     app = fresh.app;
+    sharedClients.add(service);
+    sharedClients.add(app);
     const receipt = parseMigrationReceipt(result.output);
     expect(receipt?.applied.filter((e) => e.appliedAtMs === WHEN)).toEqual([
       expect.objectContaining({
@@ -144,15 +169,51 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     ]);
   }, 90_000);
 
-  afterEach(() => {
-    for (const ws of inspectors) ws.close();
-    inspectors.clear();
-    for (const child of children) child.kill("SIGKILL");
-  });
+  afterEach(async () => {
+    await phase(
+      "cleanup/reap",
+      async () => {
+        await Promise.all(
+          [...inspectors].map(async (ws) => {
+            if (ws.readyState === WebSocket.CLOSED) return;
+            const closed = new Promise<void>((resolve) =>
+              ws.once("close", () => resolve())
+            );
+            ws.terminate();
+            await closed;
+          })
+        );
+        inspectors.clear();
+        for (const child of children) child.kill("SIGKILL");
+        await Promise.all(childCompletions.values());
+        childCompletions.clear();
+        await Promise.all(
+          [...clients]
+            .filter((c) => !sharedClients.has(c))
+            .map(async (c) => {
+              await c.end({ timeout: 1 });
+              clients.delete(c);
+            })
+        );
+        if (childLabels.size)
+          await until(
+            async () =>
+              control`SELECT pid FROM pg_stat_activity WHERE application_name=ANY(${[...childLabels]})`,
+            (rows) => rows.length === 0,
+            3_000
+          );
+        childLabels.clear();
+        nativeChunks.length = 0;
+        nativeBytes = 0;
+      },
+      7_000
+    );
+  }, 8_000);
 
   afterAll(async () => {
     for (const child of children) child.kill("SIGKILL");
-    await Promise.all(clients.map((c) => c.end({ timeout: 1 })));
+    await Promise.all(childCompletions.values());
+    await Promise.all([...clients].map((c) => c.end({ timeout: 1 })));
     await control?.end({ timeout: 1 });
     await container?.stop();
     if (temp) await rm(temp, { recursive: true, force: true });
@@ -170,19 +231,29 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
 
   async function fixture(): Promise<Fixture> {
     const name = `runner_${++serial}`;
-    await control.unsafe(`CREATE DATABASE "${name}" OWNER app_operator`);
+    await phase("fixture/create-database", () =>
+      control.unsafe(`CREATE DATABASE "${name}" OWNER app_operator`)
+    );
     const url = new URL(baseUrl);
     url.pathname = `/${name}`;
     const connect = (role: string, password: string) => {
       const u = new URL(url);
       u.username = role;
       u.password = password;
-      const c = postgres(u.toString(), { max: 1 });
-      clients.push(c);
+      const c = postgres(u.toString(), {
+        max: 1,
+        connect_timeout: 5,
+        connection: { statement_timeout: 5_000, lock_timeout: 2_000 },
+      });
+      clients.add(c);
       return c;
     };
-    const admin = postgres(url.toString(), { max: 1 });
-    clients.push(admin);
+    const admin = postgres(url.toString(), {
+      max: 1,
+      connect_timeout: 5,
+      connection: { statement_timeout: 5_000, lock_timeout: 2_000 },
+    });
+    clients.add(admin);
     const fixtureService = connect("service_operator", "fixture");
     const fixtureApp = connect("app_operator", "fixture");
     url.username = "migration_operator";
@@ -206,6 +277,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     } = {}
   ) {
     const label = `story5156_${randomUUID().replaceAll("-", "")}`;
+    childLabels.add(label);
     const url = new URL(f.url);
     url.searchParams.set("application_name", label);
     if (options.shadow)
@@ -248,6 +320,10 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
         });
       }
     );
+    childCompletions.set(
+      child,
+      done.catch(() => undefined)
+    );
     return { child, label, done, output: () => output };
   }
 
@@ -271,6 +347,51 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       await new Promise((r) => setTimeout(r, 25));
     }
     throw new Error("fixture observation deadline expired");
+  }
+
+  async function phase<T>(
+    name: string,
+    work: () => PromiseLike<T>,
+    timeout = 8_000
+  ): Promise<T> {
+    const started = performance.now();
+    const emit = (state: string, code?: string) =>
+      process.stdout.write(
+        `${JSON.stringify({ event: "migration.fixture.phase", case: expect.getState().currentTestName ?? "setup", phase: name, state, ms: Math.round(performance.now() - started), clients: clients.size, children: children.size, inspectors: inspectors.size, nativeBytes, ...(code ? { code } : {}) })}\n`
+      );
+    emit("started");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        Promise.resolve().then(work),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                Object.assign(new Error(`fixture phase deadline: ${name}`), {
+                  code: "fixture_phase_timeout",
+                })
+              ),
+            timeout
+          );
+        }),
+      ]);
+      emit("completed");
+      return result;
+    } catch (error) {
+      const code =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        typeof error.code === "string" &&
+        /^[a-zA-Z0-9_]{1,64}$/.test(error.code)
+          ? error.code
+          : "fixture_phase_failed";
+      emit("failed", code);
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async function retained(f: Fixture) {
@@ -599,7 +720,14 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     if (!url) throw new Error("inspector URL missing");
     const ws = new WebSocket(url);
     inspectors.add(ws);
-    await once(ws, "open");
+    ws.on("error", () => {
+      /* pending RPCs fail on close; open errors reject once() */
+    });
+    await phase(
+      "inspector/open",
+      () => once(ws, "open").then(() => undefined),
+      5_000
+    );
     let id = 0;
     type Reply = {
       id?: number;
@@ -616,6 +744,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       {
         resolve: (value: Record<string, unknown>) => void;
         reject: (error: Error) => void;
+        timer: ReturnType<typeof setTimeout>;
       }
     >();
     const events: Reply[] = [];
@@ -624,18 +753,26 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       if (msg.id !== undefined) {
         const request = pending.get(msg.id);
         pending.delete(msg.id);
+        if (request) clearTimeout(request.timer);
         if (msg.error) request?.reject(new Error(msg.error.message));
         else request?.resolve(msg.result ?? {});
       } else events.push(msg);
     });
     ws.on("close", () => {
-      for (const p of pending.values()) p.reject(new Error("inspector closed"));
+      for (const p of pending.values()) {
+        clearTimeout(p.timer);
+        p.reject(new Error("inspector closed"));
+      }
       pending.clear();
     });
     const send = (method: string, params: Record<string, unknown> = {}) =>
       new Promise<Record<string, unknown>>((resolveReply, reject) => {
         const n = ++id;
-        pending.set(n, { resolve: resolveReply, reject });
+        const timer = setTimeout(() => {
+          pending.delete(n);
+          reject(new Error(`fixture inspector deadline: ${method}`));
+        }, 3_000);
+        pending.set(n, { resolve: resolveReply, reject, timer });
         ws.send(JSON.stringify({ id: n, method, params }));
       });
     await send("Debugger.enable");
@@ -648,26 +785,32 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       lineNumber,
     });
     await send("Runtime.runIfWaitingForDebugger");
-    let callFrameId: string | undefined;
-    await until(async () => {
-      const event = events.find((e) => e.method === "Debugger.paused");
-      if (!event) return false;
-      events.splice(events.indexOf(event), 1);
-      if (
-        event.params?.hitBreakpoints?.includes(String(breakpoint.breakpointId))
-      ) {
-        callFrameId = event.params?.callFrames?.[0]?.callFrameId;
-        return true;
-      }
-      await send("Debugger.resume");
-      return false;
-    }, Boolean);
+    async function pausedAt(breakpointId: string): Promise<string> {
+      const frame = await until(
+        async () => {
+          const event = events.find((e) => e.method === "Debugger.paused");
+          if (!event) return null;
+          events.splice(events.indexOf(event), 1);
+          if (event.params?.hitBreakpoints?.includes(breakpointId)) {
+            const id = event.params.callFrames?.[0]?.callFrameId;
+            if (!id) throw new Error("fixture native call frame missing");
+            return id;
+          }
+          await send("Debugger.resume");
+          return null;
+        },
+        (value) => value !== null
+      );
+      if (!frame) throw new Error("fixture breakpoint not observed");
+      return frame;
+    }
+    const callFrameId = await pausedAt(String(breakpoint.breakpointId));
+    let closeBreakpoint: string | undefined;
     return {
       ...running,
       // Deliberately defeat the native close fence ONLY through this fixture's
       // debugger. The reconnecting control executes the very same runner bytes.
       disableCloseFence: async () => {
-        if (!callFrameId) throw new Error("fixture call frame missing");
         const reply = await send("Debugger.evaluateOnCallFrame", {
           callFrameId,
           expression: "protectedSession = false",
@@ -675,6 +818,65 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
         });
         if (reply.exceptionDetails)
           throw new Error("fixture fence control failed");
+      },
+      prepareNativeLoss: async () => {
+        // Native reserve is fixture synchronization ONLY. Drizzle still receives
+        // the original root client, not the reserved handle (which lacks begin).
+        // With max:1 and this idle connection reserved, its next root query must
+        // queue until actual onclose; it cannot race an old socket submission.
+        const reservation = await send("Debugger.evaluateOnCallFrame", {
+          callFrameId,
+          expression: "sql.reserve()",
+        });
+        const objectId = (
+          reservation.result as { objectId?: string } | undefined
+        )?.objectId;
+        if (reservation.exceptionDetails || !objectId)
+          throw new Error("fixture native reservation failed");
+        const properties = await send("Runtime.getProperties", { objectId });
+        const internals = properties.internalProperties as
+          | { name: string; value?: { value?: unknown } }[]
+          | undefined;
+        expect(
+          internals?.find((p) => p.name === "[[PromiseState]]")?.value?.value
+        ).toBe("fulfilled");
+        const nativeUrl = pathToFileURL(
+          await realpath(join(ROOT, "node_modules/postgres/src/index.js"))
+        ).href;
+        const nativeSource = await readFile(fileURLToPath(nativeUrl), "utf8");
+        const closeLine = nativeSource
+          .split("\n")
+          .findIndex((line) =>
+            line.includes("options.onclose && options.onclose(c.id)")
+          );
+        if (closeLine < 0) throw new Error("fixture native close seam changed");
+        const bp = await send("Debugger.setBreakpointByUrl", {
+          url: nativeUrl,
+          lineNumber: closeLine,
+        });
+        closeBreakpoint = String(bp.breakpointId);
+      },
+      resumeToNativeClose: async () => {
+        if (!closeBreakpoint)
+          throw new Error("fixture native close breakpoint missing");
+        await send("Debugger.resume");
+        const frame = await pausedAt(closeBreakpoint);
+        const observed = await send("Debugger.evaluateOnCallFrame", {
+          callFrameId: frame,
+          expression:
+            "({queued:queries.length,closed:closed.length,released:c.reserved===null})",
+          returnByValue: true,
+        });
+        if (observed.exceptionDetails)
+          throw new Error("fixture native close observation failed");
+        const state = (
+          observed.result as
+            | { value?: { queued: number; closed: number; released: boolean } }
+            | undefined
+        )?.value;
+        expect(state?.released).toBe(true);
+        expect(state?.closed).toBe(1);
+        expect(state?.queued).toBeGreaterThan(0);
       },
       resume: async () => {
         await send("Debugger.resume");
@@ -686,7 +888,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
 
   async function shadow(f: Fixture) {
     await f.admin.unsafe(
-      "CREATE SCHEMA shadow AUTHORIZATION app_operator; CREATE TABLE shadow.agent_credentials(id integer PRIMARY KEY, marker text); INSERT INTO shadow.agent_credentials VALUES(1,'must-survive'); CREATE TABLE shadow.related(id integer PRIMARY KEY, credential_id integer NOT NULL, payload text NOT NULL, CONSTRAINT shadow_related_credential_fk FOREIGN KEY(credential_id) REFERENCES shadow.agent_credentials(id)); INSERT INTO shadow.related VALUES(1,1,'retained-dependent-one'),(2,1,'retained-dependent-two'); CREATE TABLE shadow.calls(name text); GRANT ALL ON ALL TABLES IN SCHEMA shadow TO migration_operator"
+      "CREATE SCHEMA shadow AUTHORIZATION app_operator; CREATE TABLE shadow.agent_credentials(id integer PRIMARY KEY, marker text); INSERT INTO shadow.agent_credentials VALUES(1,'must-survive'); CREATE TABLE shadow.related(id integer PRIMARY KEY, credential_id integer NOT NULL, payload text NOT NULL, CONSTRAINT shadow_related_credential_fk FOREIGN KEY(credential_id) REFERENCES shadow.agent_credentials(id)); INSERT INTO shadow.related VALUES(1,1,'retained-dependent-one'),(2,1,'retained-dependent-two'); ALTER TABLE shadow.agent_credentials OWNER TO app_operator; ALTER TABLE shadow.related OWNER TO app_operator; CREATE TABLE shadow.calls(name text); GRANT ALL ON ALL TABLES IN SCHEMA shadow TO migration_operator"
     );
     await f.admin.unsafe(
       "CREATE FUNCTION shadow.pg_advisory_lock(bigint) RETURNS void LANGUAGE plpgsql AS $$ BEGIN INSERT INTO shadow.calls VALUES('lock'); END $$; CREATE FUNCTION shadow.pg_advisory_unlock(bigint) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN INSERT INTO shadow.calls VALUES('unlock'); RETURN true; END $$"
@@ -752,13 +954,24 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
   });
 
   function runnerRecords(label: string) {
-    return nativeLog.split("\n").flatMap((line) => {
+    const records: { pid: number; message: string }[] = [];
+    let current: (typeof records)[number] | undefined;
+    for (const line of nativeLog().split("\n")) {
       // Prefix fields ONLY: observer statements/bind values may contain label.
       const m = /^([^|]*)\|(\d+)\| (.*)$/.exec(line);
-      return m?.[1] === label
-        ? [{ pid: Number(m[2]), message: m[3] ?? "" }]
-        : [];
-    });
+      if (m) {
+        current =
+          m[1] === label
+            ? { pid: Number(m[2]), message: m[3] ?? "" }
+            : undefined;
+        if (current) records.push(current);
+      } else if (current && line.startsWith("\t")) {
+        // Native text logs indent multiline SQL continuations. They inherit
+        // only the preceding exact application-name header, never query text.
+        current.message += `\n${line}`;
+      } else current = undefined;
+    }
+    return records;
   }
 
   async function terminalRunnerRecords(label: string, firstPid: number) {
@@ -778,7 +991,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     // the collected stream includes preceding replacement/DDL records as well.
     const barrier = `story5156_log_barrier_${randomUUID().replaceAll("-", "")}`;
     await control.unsafe(`SELECT 1 /* ${barrier} */`);
-    await until(async () => nativeLog.includes(barrier), Boolean);
+    await until(async () => nativeLog().includes(barrier), Boolean);
     const records = runnerRecords(label);
     const pids = new Set(records.map((r) => r.pid));
     return until(
@@ -826,6 +1039,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     const shadowBefore = await retainedShadow(f);
     const child = await paused(f);
     try {
+      await phase("safe-loss/native-reservation", child.prepareNativeLoss);
       const rows =
         await control`SELECT pid,state FROM pg_stat_activity WHERE application_name=${child.label}`;
       expect(rows).toHaveLength(1);
@@ -836,6 +1050,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
           control`SELECT pid FROM pg_stat_activity WHERE application_name=${child.label}`,
         (r) => r.length === 0
       );
+      await phase("safe-loss/native-close", child.resumeToNativeClose);
       await child.resume();
       const result = await child.done;
       expect(result.code).not.toBe(0);
@@ -854,7 +1069,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       // Observer bind logging contains this label too, under a different
       // application field. It must not enter the runner's session evidence.
       expect(
-        nativeLog
+        nativeLog()
           .split("\n")
           .some(
             (line) =>
@@ -883,6 +1098,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     const child = await paused(f);
     try {
       await child.disableCloseFence();
+      await phase("unsafe-loss/native-reservation", child.prepareNativeLoss);
       const [row] =
         await control`SELECT pid,state FROM pg_stat_activity WHERE application_name=${child.label}`;
       expect(row?.state).toBe("idle");
@@ -893,6 +1109,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
           control`SELECT pid FROM pg_stat_activity WHERE application_name=${child.label}`,
         (r) => r.length === 0
       );
+      await phase("unsafe-loss/native-close", child.resumeToNativeClose);
       await child.resume();
       await child.done;
       const records = await terminalRunnerRecords(child.label, firstPid);
@@ -902,6 +1119,24 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
           (r) => r.pid !== firstPid && /execute|statement:/.test(r.message)
         )
       ).toBe(true);
+      // DROP must complete far enough for the following native CREATE to run;
+      // a replacement PID or failed ownership check alone is not this control.
+      const drop = records.findIndex(
+        (r) =>
+          r.pid !== firstPid &&
+          /(?:execute[^:]*:|statement:)[\s\S]*DROP TABLE IF EXISTS "agent_credentials"/.test(
+            r.message
+          )
+      );
+      const create = records.findIndex(
+        (r) =>
+          r.pid !== firstPid &&
+          /(?:execute[^:]*:|statement:)\s*CREATE TABLE "agent_credentials"/.test(
+            r.message
+          )
+      );
+      expect(drop).toBeGreaterThanOrEqual(0);
+      expect(create).toBeGreaterThan(drop);
       expect(() => qualifyLostSession(records, firstPid)).toThrow();
     } finally {
       child.detach();
@@ -1412,13 +1647,31 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       "trigger definitions",
     ],
   ])("normal schema qualifier rejects independent %s fault despite valid history", async (_fault, mutation, assertion) => {
-    const f = await fixture();
-    expect((await run(f)).code).toBe(0);
-    await qualifySchema(f.admin);
-    await f.admin.unsafe(mutation);
+    const f = await phase(`schema/${_fault}/fixture`, fixture);
+    expect(
+      (await phase(`schema/${_fault}/fresh-runner`, () => run(f))).code
+    ).toBe(0);
+    await phase(
+      `schema/${_fault}/healthy-qualifier`,
+      () => qualifySchema(f.admin),
+      5_000
+    );
+    await phase(
+      `schema/${_fault}/fault`,
+      () => f.admin.unsafe(mutation),
+      5_000
+    );
     // Ledger guard is deliberately narrow. Native qualification owns drift.
-    expect((await run(f)).code).toBe(0);
-    await expect(qualifySchema(f.admin)).rejects.toThrow(assertion);
+    expect(
+      (await phase(`schema/${_fault}/replay-runner`, () => run(f))).code
+    ).toBe(0);
+    await phase(
+      `schema/${_fault}/negative-qualifier`,
+      async () => {
+        await expect(qualifySchema(f.admin)).rejects.toThrow(assertion);
+      },
+      5_000
+    );
   });
 
   const makeUser = async () => {
