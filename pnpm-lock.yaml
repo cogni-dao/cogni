@@ -1984,7 +1984,7 @@ packages:
         optional: true
 
   '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz':
-    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz}
+    resolution: {integrity: sha512-cRnzkeY22GRM42pAuvLMWlLf0U0m0uaLp/gjBk3DyFvJhywRmhQbYKp6hN2xGCPUUWf3dcbgK5zzHd/7+jzHww==, tarball: https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz}
     version: 0.3.0
 
   '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.10.0/cogni-dao-work-items-0.10.0.tgz':
