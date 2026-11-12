@@ -15,7 +15,7 @@
  *   - ENV_AND_OUTPUT_FROM_ENUM: the PromQL `env` label comes only from a strict `^[a-z0-9-]{1,40}$` param and the
  *     metric name only from the output enum. No free text reaches a query.
  *   - WORST_HOST_WINS: a reading is the worst host of the env (max IO wait, max swap-in, min memory available, max
- *     kine bytes), never a mean that hides one starved VM. Per-host values go to the evidence refs.
+ *     kine bytes, min root-disk free, max CPU busy), never a mean that hides one starved VM. Per-host values go to the evidence refs.
  *   - ABSENCE_IS_FAILING: no series for the env (a dead exporter, an uninstalled compaction timer, a stopped
  *     scrape) is an incomplete sample, which the package assesses as failing. It is never 0 and never a pass.
  *     Missing kine carries `substrate:kine_exporter_absent`; the package reason enum has no distinct code.
@@ -54,6 +54,8 @@ export const SUBSTRATE_OUTPUTS = [
   "swap_in",
   "memory_available",
   "kine_bytes",
+  "disk_available",
+  "cpu_busy",
 ] as const;
 export type SubstrateOutput = (typeof SUBSTRATE_OUTPUTS)[number];
 
@@ -112,6 +114,24 @@ export const OUTPUTS: Readonly<Record<SubstrateOutput, OutputSpec>> = {
     query: (env) =>
       `max by (instance) (node_k3s_kine_state_db_bytes{env="${env}"})`,
     finish: Math.ceil,
+  },
+  // Root filesystem free space; Docker images, volumes, k3s and Postgres all live on `/` (bug.5608).
+  disk_available: {
+    unit: "%",
+    worst: "low",
+    series: "node_filesystem_avail_bytes",
+    query: (env) =>
+      `100 * min by (instance) (node_filesystem_avail_bytes{env="${env}",mountpoint="/",fstype!~"tmpfs|overlay"}) / min by (instance) (node_filesystem_size_bytes{env="${env}",mountpoint="/",fstype!~"tmpfs|overlay"})`,
+    finish: floor3,
+  },
+  // Non-idle CPU share across all cores; the hosts export no CPU PSI series.
+  cpu_busy: {
+    unit: "%",
+    worst: "high",
+    series: "node_cpu_seconds_total",
+    query: (env) =>
+      `100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{env="${env}",mode="idle"}[${RATE_WINDOW}])))`,
+    finish: ceil3,
   },
 };
 

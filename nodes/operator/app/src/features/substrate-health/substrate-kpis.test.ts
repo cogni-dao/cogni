@@ -82,6 +82,8 @@ describe("substrate.host-pressure@1", () => {
     expect(calc?.unitFor?.(p("swap_in"))).toBe("pages/s");
     expect(calc?.unitFor?.(p("memory_available"))).toBe("%");
     expect(calc?.unitFor?.(p("kine_bytes"))).toBe("bytes");
+    expect(calc?.unitFor?.(p("disk_available"))).toBe("%");
+    expect(calc?.unitFor?.(p("cpu_busy"))).toBe("%");
   });
 
   it("reads a healthy host", async () => {
@@ -159,7 +161,13 @@ describe("substrate.host-pressure@1", () => {
   });
 
   it("treats a missing host series as incomplete for the other outputs", async () => {
-    for (const output of ["io_pressure", "swap_in", "memory_available"]) {
+    for (const output of [
+      "io_pressure",
+      "swap_in",
+      "memory_available",
+      "disk_available",
+      "cpu_busy",
+    ]) {
       const s = await compute(reader(vec()).port, p(output));
       expect(s).toMatchObject({
         complete: false,
@@ -245,5 +253,28 @@ describe("substrate.host-pressure@1", () => {
     // head line plus 20 hosts.
     expect(s.evidenceRefs).toHaveLength(21);
     expect(s.evidenceRefs[1]).toBe("host:h29=0.29pages/s");
+  });
+});
+
+describe("substrate.host-pressure@1 disk and CPU (bug.5608)", () => {
+  it("takes the fullest root disk and the busiest CPU, rounding toward breach", async () => {
+    const disk = await compute(
+      reader(vec(["prod", "13.0479"], ["cand", "22.79"])).port,
+      p("disk_available", "production")
+    );
+    expect(disk).toMatchObject({ value: 13.047, unit: "%", complete: true });
+    const cpu = await compute(
+      reader(vec(["a", "18.3821"], ["b", "34.0041"])).port,
+      p("cpu_busy")
+    );
+    expect(cpu).toMatchObject({ value: 34.005, unit: "%", complete: true });
+  });
+  it("reads only the root filesystem and idle CPU of the validated env", () => {
+    const q = OUTPUTS.disk_available.query("candidate-a");
+    expect(q).toContain('env="candidate-a",mountpoint="/"');
+    expect(q).toContain('fstype!~"tmpfs|overlay"');
+    expect(OUTPUTS.cpu_busy.query("preview")).toContain(
+      'env="preview",mode="idle"'
+    );
   });
 });
