@@ -22,6 +22,7 @@ const run = (over: object = {}) => ({
   databaseId: 7,
   status: "COMPLETED",
   conclusion: "SUCCESS",
+  startedAt: "2026-11-06T09:56:00Z",
   completedAt: "2026-11-06T10:00:00Z",
   ...over,
 });
@@ -63,6 +64,7 @@ describe("mapPullRequestNode", () => {
           headSha: SHA,
           status: "completed",
           conclusion: "success",
+          startedAt: new Date("2026-11-06T09:56:00Z"),
           completedAt: new Date("2026-11-06T10:00:00Z"),
         },
       ],
@@ -144,7 +146,8 @@ describe("GitHubReviewKpiSource", () => {
   const selector = { kind: "updated" as const, since: new Date(0) };
   it("maps a page, passes the App id and check name, and returns the next cursor", async () => {
     const seen: Array<Record<string, unknown>> = [];
-    const graphql: GraphqlFn = async (_q, vars) => {
+    const graphql: GraphqlFn = async (query, vars) => {
+      expect(query).toContain("startedAt");
       seen.push(vars);
       return {
         search: {

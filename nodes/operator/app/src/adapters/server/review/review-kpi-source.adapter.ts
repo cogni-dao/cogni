@@ -57,7 +57,7 @@ const QUERY = `query($q: String!, $after: String, $pageSize: Int!, $appId: Int!,
                 nodes {
                   checkRuns(first: ${RUNS_PER_SUITE}, filterBy: { checkName: $check }) {
                     pageInfo { hasNextPage }
-                    nodes { databaseId status conclusion completedAt }
+                    nodes { databaseId status conclusion startedAt completedAt }
                   }
                 }
               }
@@ -73,6 +73,7 @@ interface CheckRunNode {
   databaseId: number | null;
   status: string | null;
   conclusion: string | null;
+  startedAt: string | null;
   completedAt: string | null;
 }
 
@@ -131,6 +132,7 @@ export function mapPullRequestNode(
           headSha: commit.oid,
           status: (run.status ?? "").toLowerCase(),
           conclusion: run.conclusion ? run.conclusion.toLowerCase() : undefined,
+          startedAt: run.startedAt ? new Date(run.startedAt) : undefined,
           completedAt: run.completedAt ? new Date(run.completedAt) : undefined,
         });
       }

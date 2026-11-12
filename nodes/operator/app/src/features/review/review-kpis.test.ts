@@ -26,6 +26,7 @@ import {
   classifyFailures,
   classifyMerge,
   createReviewCalculators,
+  DURATION_ID,
   FAIL_FIX_RATE_ID,
   MAX_REVIEW_PAGES,
   MERGE_COVERAGE_ID,
@@ -50,10 +51,153 @@ function check(over: Partial<ReviewCheckFacts>): ReviewCheckFacts {
     headSha: SHA_A,
     status: "completed",
     conclusion: "success",
+    startedAt: at(2 * DAY + 180_000),
     completedAt: at(2 * DAY),
     ...over,
   };
 }
+
+describe("review.duration@1", () => {
+  const timed = (minutes: number, id: number) =>
+    check({
+      id,
+      startedAt: at(HOUR + minutes * 60_000),
+      completedAt: at(HOUR),
+    });
+
+  it.each([
+    [50, 3.5],
+    [90, 10.3],
+    [95, 11.65],
+  ])("measures p%s from complete check-run wall times", async (quantile, expected) => {
+    const checks = [timed(1, 1), timed(3, 2), timed(4, 3), timed(13, 4)];
+    const src = source({
+      prs: [
+        pr({ number: 1, checks }),
+        pr({ number: 2, checks: [checks[0] as ReviewCheckFacts] }),
+      ],
+    });
+    const sample = await run(src, DURATION_ID, { days: 1, quantile });
+    expect(sample).toMatchObject({ complete: true, unit: "min" });
+    expect(sample.value).toBeCloseTo(expected, 6);
+    expect(sample.evidenceRefs).toContain(
+      "review:completed=4,in_progress=0,invalid_timing=0"
+    );
+    expect(src.selectors[0]).toEqual({ kind: "updated", since: at(DAY) });
+  });
+
+  it("counts reruns independently, includes neutral/errors and exposes pending work", async () => {
+    const sample = await run(
+      source({
+        prs: [
+          pr({
+            number: 1,
+            checks: [
+              timed(3, 1),
+              { ...timed(13, 2), conclusion: "neutral" },
+              check({
+                id: 3,
+                status: "in_progress",
+                conclusion: undefined,
+                startedAt: at(HOUR),
+                completedAt: undefined,
+              }),
+            ],
+          }),
+        ],
+      }),
+      DURATION_ID,
+      { days: 1, quantile: 50 }
+    );
+    expect(sample).toMatchObject({ complete: true, unit: "min", value: 8 });
+    expect(sample.evidenceRefs).toContain(
+      "review:completed=2,in_progress=1,invalid_timing=0"
+    );
+    expect(sample.evidenceRefs).toContain("review:conclusion:neutral=1");
+  });
+
+  it("uses completion time in a half-open window, retaining starts before the window", async () => {
+    const sample = await run(
+      source({
+        prs: [
+          pr({
+            number: 1,
+            checks: [
+              check({
+                id: 1,
+                startedAt: at(DAY + 60_000),
+                completedAt: at(DAY),
+              }),
+              check({ id: 2, startedAt: at(60_000), completedAt: at(0) }),
+              check({
+                id: 3,
+                startedAt: at(DAY + 120_000),
+                completedAt: at(DAY + 60_000),
+              }),
+            ],
+          }),
+        ],
+      }),
+      DURATION_ID,
+      { days: 1, quantile: 95 }
+    );
+    expect(sample).toMatchObject({ complete: true, unit: "min", value: 1 });
+  });
+
+  it.each([
+    { startedAt: undefined },
+    { startedAt: new Date(Number.NaN) },
+    { startedAt: at(HOUR - 1) },
+    { completedAt: undefined },
+    { completedAt: new Date(Number.NaN) },
+  ])("does not silently omit an invalid completed duration: %j", async (over) => {
+    const sample = await run(
+      source({
+        prs: [
+          pr({ number: 1, checks: [timed(3, 1), { ...timed(4, 2), ...over }] }),
+        ],
+      }),
+      DURATION_ID,
+      { days: 1, quantile: 50 }
+    );
+    expect(sample).toMatchObject({
+      complete: false,
+      unit: "min",
+      reason: "incomplete_or_invalid_source",
+    });
+  });
+
+  it("does not call an empty or incomplete source fast", async () => {
+    expect(
+      await run(source({ prs: [] }), DURATION_ID, { days: 1, quantile: 50 })
+    ).toMatchObject({
+      complete: false,
+      unit: "min",
+      reason: "zero_denominator",
+    });
+    expect(
+      await run(
+        source({
+          prs: [pr({ number: 1, incomplete: true, checks: [timed(3, 1)] })],
+        }),
+        DURATION_ID,
+        { days: 1, quantile: 50 }
+      )
+    ).toMatchObject({
+      complete: false,
+      unit: "min",
+      reason: "incomplete_or_invalid_source",
+    });
+    expect(
+      await run(
+        source({ prs: [] }),
+        DURATION_ID,
+        { days: 1, quantile: 50 },
+        null
+      )
+    ).toMatchObject({ complete: false, unit: "min", reason: "source_failed" });
+  });
+});
 
 function pr(over: Partial<ReviewPrFacts> & { number: number }): ReviewPrFacts {
   return {

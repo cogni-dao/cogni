@@ -34,6 +34,8 @@ export interface ReviewCheckFacts {
   readonly status: string;
   /** Lowercase GitHub conclusion (`success`, `failure`, `neutral`, ...); absent until completed. */
   readonly conclusion: string | undefined;
+  /** GitHub's actual check start; absent timestamps cannot establish a duration. */
+  readonly startedAt: Date | undefined;
   readonly completedAt: Date | undefined;
 }
 

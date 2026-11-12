@@ -6,6 +6,7 @@
  * Purpose: The operator's node-local goal-metric calculators for PR review (task.5450, story.5145):
  *   `review.merge-coverage@1` (share of merged PRs whose head had a passing review before it merged) and
  *   `review.fail-fix-rate@1` (share of failed reviews that a later review on a different head passed).
+ *   `review.duration@1` measures completed GitHub check wall time in minutes (p50/p90/p95).
  *   Registered through `@cogni-dao/metrics` 0.4 `createGoalMetrics({ nodeCalculators })`.
  * Scope: Pure classification and the calculator objects. Reads go through `ReviewKpiSourcePort`;
  *   this module does no IO itself. The repository comes from the operator's parent-repo env, never a literal.
@@ -25,6 +26,9 @@
  *   - UNKNOWN_IS_A_RESULT: no repository, a zero denominator, more PRs/commits/checks than the budget, or
  *     a failed source read yields an unavailable reading with a reason, never 0.
  *   - IDS_USE_DASHES: calculator ids match `MetricSpecSchema.calculatorId` (no underscores).
+ *   - DURATION_IS_A_CHECK: each check-run id counts once; reruns have distinct ids. All terminal
+ *     conclusions count, and pending/invalid timings remain explicit in evidence. Quantiles use
+ *     linear interpolation over actual startedAt/completedAt, never graph or LLM activity time.
  * Side-effects: none (calculators call the injected source)
  * Links: ports/review-kpi.port.ts, adapters/server/review/review-kpi-source.adapter.ts,
  *   bootstrap/capabilities/goal-metrics.ts, task.5450, story.5145
@@ -46,6 +50,7 @@ import type {
 
 export const MERGE_COVERAGE_ID = "review.merge-coverage@1";
 export const FAIL_FIX_RATE_ID = "review.fail-fix-rate@1";
+export const DURATION_ID = "review.duration@1";
 
 /** PRs per source read. */
 export const REVIEW_PAGE_SIZE = 20;
@@ -177,10 +182,11 @@ export function classifyFailures(
 const unknownSample = (
   reason: NonNullable<MetricSample["reason"]>,
   sourceWatermarks: MetricSample["sourceWatermarks"],
-  evidenceRefs: string[]
+  evidenceRefs: string[],
+  unit: MetricSample["unit"] = "ratio"
 ): MetricSample => ({
   value: 0,
-  unit: "ratio",
+  unit,
   complete: false,
   reason,
   sourceWatermarks,
@@ -381,5 +387,112 @@ export function createReviewCalculators(
     },
   };
 
-  return [mergeCoverage, failFixRate];
+  const durationParams = z.strictObject({
+    days: daysSchema,
+    quantile: z.union([z.literal(50), z.literal(90), z.literal(95)]),
+  });
+  const duration: MetricCalculator = {
+    id: DURATION_ID,
+    historicalWindows: true,
+    unit: "min",
+    display: "progress",
+    paramsSchema: durationParams,
+    windowSeconds: (p) => durationParams.parse(p).days * (DAY_MS / 1000),
+    budget: reviewBudget,
+    async compute(raw, ctx) {
+      const { quantile } = durationParams.parse(raw);
+      const repo = options.repo;
+      if (!repo)
+        return unknownSample(
+          "source_failed",
+          [],
+          ["review:not_configured:no_repo"],
+          "min"
+        );
+      const { from, to } = windowOf(ctx);
+      const read = await readPullRequests(ctx, source, repo, {
+        kind: "updated",
+        since: from,
+      });
+      const watermarks = [
+        { source: "github_pull_requests", asOf: read.asOf.toISOString() },
+      ];
+      const seen = new Set<number>();
+      const completed: Array<{ id: number; pr: number; minutes: number }> = [];
+      const conclusions = new Map<string, number>();
+      let pending = 0;
+      let invalid = 0;
+      for (const pr of read.prs) {
+        for (const check of pr.checks) {
+          if (seen.has(check.id)) continue;
+          seen.add(check.id);
+          if (check.status !== "completed") {
+            if (check.status === "in_progress" || check.status === "queued")
+              pending++;
+            continue;
+          }
+          const end = check.completedAt?.getTime();
+          if (end === undefined || !Number.isFinite(end)) {
+            invalid++;
+            continue;
+          }
+          if (!within(check.completedAt as Date, from, to)) continue;
+          const start = check.startedAt?.getTime();
+          if (start === undefined || !Number.isFinite(start) || start > end) {
+            invalid++;
+            continue;
+          }
+          completed.push({
+            id: check.id,
+            pr: pr.number,
+            minutes: (end - start) / 60_000,
+          });
+          const conclusion = check.conclusion ?? "unknown";
+          conclusions.set(conclusion, (conclusions.get(conclusion) ?? 0) + 1);
+        }
+      }
+      completed.sort((a, b) => a.minutes - b.minutes);
+      const evidence = [
+        repoRef(repo),
+        windowRef(from, to),
+        `review:completed=${completed.length},in_progress=${pending},invalid_timing=${invalid}`,
+        `review:quantile=p${quantile},method=linear-interpolation,unit=min`,
+        ...[...conclusions].map(
+          ([name, count]) => `review:conclusion:${name}=${count}`
+        ),
+        ...completed
+          .slice(-MAX_EVIDENCE)
+          .reverse()
+          .map(
+            (c) =>
+              `duration:pr=${c.pr},check=${c.id},minutes=${c.minutes.toFixed(6)}`
+          ),
+      ];
+      if (read.truncated || invalid > 0)
+        return unknownSample(
+          "incomplete_or_invalid_source",
+          watermarks,
+          evidence,
+          "min"
+        );
+      if (completed.length === 0)
+        return unknownSample("zero_denominator", watermarks, evidence, "min");
+      const index = (quantile / 100) * (completed.length - 1);
+      const lower = completed[Math.floor(index)] as (typeof completed)[number];
+      const upper = completed[Math.ceil(index)] as (typeof completed)[number];
+      return {
+        value:
+          Math.round(
+            (lower.minutes + (upper.minutes - lower.minutes) * (index % 1)) *
+              1_000_000
+          ) / 1_000_000,
+        unit: "min",
+        complete: true,
+        sourceWatermarks: watermarks,
+        evidenceRefs: evidence,
+      };
+    },
+  };
+
+  return [mergeCoverage, failFixRate, duration];
 }
