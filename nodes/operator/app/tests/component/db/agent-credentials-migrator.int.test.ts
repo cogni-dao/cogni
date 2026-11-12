@@ -274,6 +274,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       node?: string | null;
       inspect?: boolean;
       shadow?: boolean;
+      entrypoint?: string;
     } = {}
   ) {
     const label = `story5156_${randomUUID().replaceAll("-", "")}`;
@@ -285,11 +286,18 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
         "options",
         "-c search_path=shadow,pg_catalog,public"
       );
-    const args = [
-      ...(options.inspect ? ["--inspect-brk=127.0.0.1:0"] : []),
-      RUNNER,
-      options.folder ?? FOLDER,
-    ];
+    const pnpm = process.env.npm_execpath;
+    if (options.entrypoint && !pnpm)
+      throw new Error(
+        "supported-entrypoint fixture requires the pnpm launcher"
+      );
+    const args = options.entrypoint
+      ? [pnpm as string, "-w", "run", options.entrypoint]
+      : [
+          ...(options.inspect ? ["--inspect-brk=127.0.0.1:0"] : []),
+          RUNNER,
+          options.folder ?? FOLDER,
+        ];
     const child = spawn(process.execPath, args, {
       cwd: ROOT,
       env: {
@@ -478,6 +486,31 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       "CREATE TABLE agent_credentials(id integer PRIMARY KEY, secret_hash text); INSERT INTO agent_credentials VALUES (1,'fixture-retained'); CREATE TABLE related(id integer REFERENCES agent_credentials); INSERT INTO related VALUES(1)"
     );
     await refused(f, "migration_authority_collision");
+  });
+
+  it.each([
+    "db:migrate",
+    "db:migrate:dev",
+    "db:migrate:test",
+    "db:migrate:direct",
+    "db:migrate:container",
+    "db:migrate:operator:container",
+  ])("supported %s refuses a retained pending collision with its inbound FK", async (entrypoint) => {
+    const f = await fixture();
+    await readyBefore63(f);
+    await f.admin.unsafe(
+      "CREATE TABLE agent_credentials(id integer PRIMARY KEY, secret_hash text); INSERT INTO agent_credentials VALUES (1,'fixture-retained'); CREATE TABLE related(id integer REFERENCES agent_credentials); INSERT INTO related VALUES(1)"
+    );
+    const before = await retained(f);
+    // Run the actual package script and its dotenv/alias chain. The fixture DSN
+    // is inherited; dotenv's non-override behavior must not replace it.
+    const result = await start(f, { entrypoint }).done;
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("migration_authority_collision");
+    expect(result.output).not.toContain("✅");
+    privateOutput(result.output, ["fixture-retained"]);
+    // Includes complete public rows, inbound FK definitions and native ledger.
+    expect((await retained(f)) === before).toBe(true);
   });
 
   it("refuses canonical populated collisions before lifecycle mutation", async () => {

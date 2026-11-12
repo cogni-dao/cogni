@@ -1902,7 +1902,7 @@ packages:
     resolution: {integrity: sha512-JIpyaboYZeWYlyP0H+OoPPxd6nqueG/CmN6ixBiNFsIDHREevjIf0n0Ohh5gr5C8pEDknzgvz+pIJ8dMhzWIeg==}
 
   '@cogni-dao/agent-grants@https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.3.0/cogni-dao-agent-grants-0.3.0.tgz':
-    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.3.0/cogni-dao-agent-grants-0.3.0.tgz}
+    resolution: {integrity: sha512-kXhYzYnn532M9qemju70vXeH5yxjzD8jYHZyJ/qjg7EcAYhBO8+Ys85bhi0F8UD9luc2iXZa6MtJaWeH0W0I1Q==, tarball: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.3.0/cogni-dao-agent-grants-0.3.0.tgz}
     version: 0.3.0
 
   '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.4.10/cogni-dao-ai-tools-0.4.10.tgz':
