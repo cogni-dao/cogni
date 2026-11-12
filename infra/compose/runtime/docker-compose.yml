@@ -584,10 +584,11 @@ services:
   alloy:
     image: grafana/alloy:v1.14.0
     restart: unless-stopped
-    # bug.5608: uncapped, alloy grew to ~500 MiB on the 5.8 GiB candidate-a VM and
-    # starved the scheduler-worker restart (bug.5627); a restart fell to ~190 MiB.
-    # GOMEMLIMIT makes the Go GC hold the heap near 256 MiB; mem_limit is the backstop.
-    mem_limit: 448m
+    # bug.5608: uncapped alloy RSS ran 350-500 MiB (7-day max 573 MiB on candidate-a,
+    # 487 production) and helped starve the scheduler-worker restart (bug.5627).
+    # GOMEMLIMIT makes the Go GC hold the heap near 320 MiB; mem_limit only stops a
+    # runaway above the observed peak.
+    mem_limit: 640m
     # cAdvisor must see the host cgroup tree before it can discover Docker actors.
     cgroup: host
     networks:
@@ -626,7 +627,7 @@ services:
       - --server.http.listen-addr=0.0.0.0:12345
       - --storage.path=/var/lib/alloy
     environment:
-      - GOMEMLIMIT=256MiB
+      - GOMEMLIMIT=320MiB
       - DEPLOY_ENVIRONMENT=${DEPLOY_ENVIRONMENT}
       - LOKI_WRITE_URL=${LOKI_WRITE_URL}
       - LOKI_USERNAME=${LOKI_USERNAME}
