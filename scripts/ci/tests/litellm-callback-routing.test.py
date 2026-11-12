@@ -8,9 +8,12 @@ In the selected LiteLLM image: python3 <this-file> --upstream /app/cogni_callbac
 Both modes use dummy credentials and recording transport, never live receipts.
 """
 
+import contextlib
 import copy
+import datetime
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -207,6 +210,41 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         self.router._client.calls.clear()
         self.assertEqual(await self.route(await self.metadata(
             alias=CANDIDATE.replace("candidate-a", "candidate-other"))), [])
+
+    async def receipts(self, metadata, status="success", response=None):
+        start = datetime.datetime(2026, 11, 12, 20, 6, 17, 285000)
+        kwargs = {"litellm_params": {"metadata": metadata},
+                  "standard_logging_object": {"id": "x"}, "litellm_call_id": "proxy-call-fixture"}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            handler = (self.router.async_log_success_event if status == "success"
+                       else self.router.async_log_failure_event)
+            await handler(kwargs, response, start, start + datetime.timedelta(seconds=3))
+        return [json.loads(l) for l in out.getvalue().splitlines()
+                if l.startswith("{") and "ai.gateway.receipt" in l]
+
+    async def test_success_and_failure_each_print_one_identity_receipt(self):
+        metadata = await self.metadata()
+        metadata["spend_logs_metadata"]["run_id"] = "run-7"
+        [ok] = await self.receipts(metadata, response={"id": "gen-provider-1"})
+        self.assertEqual(ok, {
+            "event": "ai.gateway.receipt", "status": "success", "callId": "proxy-call-fixture",
+            "responseId": "gen-provider-1", "keyHash": VIRTUAL_HASH, "keyAlias": CANDIDATE,
+            "runId": "run-7", "spendNodeId": NODE,
+            "startTime": "2026-11-12T20:06:17.285Z", "endTime": "2026-11-12T20:06:20.285Z",
+        })
+        self.assertNotIn("nodeId", ok)
+        self.router._client.calls.clear()
+        [failed] = await self.receipts(metadata, status="failure", response=RuntimeError("402"))
+        self.assertEqual((failed["status"], failed["responseId"], failed["runId"]),
+                         ("failure", None, "run-7"))
+        self.assertEqual(self.router._client.calls, [])
+
+    async def test_receipt_precedes_billing_rejection(self):
+        # An unrouted alias bills nothing but still leaves its gateway receipt.
+        [receipt] = await self.receipts(await self.metadata(alias=CANDIDATE.replace(NODE, OPERATOR)))
+        self.assertEqual(receipt["keyAlias"], CANDIDATE.replace(NODE, OPERATOR))
+        self.assertEqual(self.router._client.calls, [])
 
     def test_conflicting_routes_and_bad_alias_fail_at_startup(self):
         for suffix in [f",{CANDIDATE}=https://other.invalid", ",cogni:bad=url"]:

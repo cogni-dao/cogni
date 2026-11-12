@@ -17,6 +17,7 @@
 import { createHash } from "node:crypto";
 import {
   createGrafanaMimirAdapter,
+  HttpLangfuseGatewayReceiptVerifier,
   HttpLangfuseOwnershipVerifier,
   HttpLangfuseReader,
   HttpLangfuseRootOwnershipVerifier,
@@ -97,6 +98,10 @@ export function createLangfuseReader(): LangfuseReaderPort | null {
     ...(env.GRAFANA_URL && env.GRAFANA_SERVICE_ACCOUNT_TOKEN
       ? {
           rootOwnership: new HttpLangfuseRootOwnershipVerifier({
+            grafanaUrl: env.GRAFANA_URL,
+            token: env.GRAFANA_SERVICE_ACCOUNT_TOKEN,
+          }),
+          laneReceipts: new HttpLangfuseGatewayReceiptVerifier({
             grafanaUrl: env.GRAFANA_URL,
             token: env.GRAFANA_SERVICE_ACCOUNT_TOKEN,
           }),

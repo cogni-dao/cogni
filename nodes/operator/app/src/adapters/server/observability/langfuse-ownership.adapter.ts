@@ -197,7 +197,9 @@ export class HttpLangfuseOwnershipVerifier implements LangfuseOwnershipPort {
   }
 }
 
-function objectValue(value: unknown): Record<string, unknown> | undefined {
+export function objectValue(
+  value: unknown
+): Record<string, unknown> | undefined {
   try {
     const parsed: unknown =
       typeof value === "string" ? JSON.parse(value) : value;
@@ -215,7 +217,7 @@ function spendDate(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 19).replace("T", " ");
 }
 
-function providerResponseId(
+export function providerResponseId(
   observation: Readonly<Record<string, unknown>>
 ): string | false | undefined {
   const native =
