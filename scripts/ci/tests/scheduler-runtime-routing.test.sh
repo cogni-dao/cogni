@@ -523,12 +523,12 @@ def run(name, samples, success, reason, budget="1073741824", expected_sleeps=Non
 # The observed failed sample was below the old 1Gi+384Mi profile.
 assert 1393980 < (1024 + 384) * 1024
 run("observed 1393980KiB now eligible", [sample(0, 1393980)], True, "requiredKiB=1310720", expected_sleeps=0)
-run("one KiB below calibrated budget times out", [sample(0, 1310719), sample(180, 1310719)], False, "timed out", expected_sleeps=1)
+run("one KiB below calibrated budget starts anyway at deadline", [sample(0, 1310719), sample(180, 1310719)], True, "below budget, starting anyway", expected_sleeps=1)
 run("below-budget then actual release", [sample("10.25", 800000), sample("12.25", 1310720)], True, "requiredKiB=1310720", expected_sleeps=1)
 run("already sufficient", [sample(0, 1310720)], True, "eligible", expected_sleeps=0)
-run("timeout wins even newly sufficient at boundary", [sample(0, 800000), sample(180, 1310720)], False, "timed out", expected_sleeps=1)
-run("below budget timeout", [sample(0, 800000), sample(181, 800000)], False, "timed out")
-run("larger main limit refuses old calibrated threshold", [sample(0, 1310720), sample(180, 1310720)], False, "timed out", budget="1610612736", expected_sleeps=1)
+run("deadline wins even newly sufficient at boundary", [sample(0, 800000), sample(180, 1310720)], True, "below budget, starting anyway", expected_sleeps=1)
+run("below budget never blocks start", [sample(0, 800000), sample(181, 800000)], True, "below budget, starting anyway")
+run("larger main limit raises the threshold it waits for", [sample(0, 1310720), sample(180, 1310720)], True, "requiredKiB=1835008", budget="1610612736", expected_sleeps=1)
 run("actual main limit change affects threshold", [sample(0, 1835008)], True, "requiredKiB=1835008", budget="1610612736")
 for budget in ("", "0", "-1", "1.5", "unknown", "99999999999999999999999"):
     run("invalid main budget " + repr(budget), [sample(0, 9999999)], False, "invalid main limit", budget=budget, expected_sleeps=0)

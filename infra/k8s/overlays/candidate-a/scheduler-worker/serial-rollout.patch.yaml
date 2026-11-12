@@ -28,7 +28,7 @@ spec:
             - /bin/sh
             - -ec
             - |
-              # Eligibility sample, not a memory reservation or readmission SLO.
+              # Eligibility wait, not a memory reservation or readmission SLO; it never blocks start.
               # Candidate profile: canonical eviction_hard_memory=200Mi in
               # infra/provision/cherry/base/variables.tf plus a 56Mi cushion.
               # Keep the full main limit; steady working set is not startup peak.
@@ -67,10 +67,13 @@ spec:
                   exit 1
                 fi
                 previous="$now"
-                # Deadline wins over newly sufficient memory at the boundary.
+                # Deadline wins over newly sufficient memory at the boundary. With
+                # maxSurge 0 the old worker is already gone, so refusing to start turns
+                # thin memory into zero workers (bug.5627). Start below budget instead;
+                # the main limit and kubelet hard eviction still bound the host.
                 if [ "$((now - started))" -ge 180 ]; then
-                  echo "startup-memory: timed out availableKiB=$available requiredKiB=$required_kib" >&2
-                  exit 1
+                  echo "startup-memory: below budget, starting anyway availableKiB=$available requiredKiB=$required_kib" >&2
+                  exit 0
                 fi
                 if [ "$available" -ge "$required_kib" ]; then
                   echo "startup-memory: eligible availableKiB=$available requiredKiB=$required_kib"
