@@ -17,6 +17,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { DrizzleQueryError } from "drizzle-orm/errors";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
@@ -56,6 +57,24 @@ const AUTHORITY_HASHES = new Set([
 
 function refuse(code) {
   throw Object.assign(new Error(code), { code });
+}
+
+function diagnosticCode(error) {
+  // Only known Drizzle wrappers may expose a native cause. Never traverse an
+  // arbitrary object graph or read SQL/message/detail from either error.
+  let cause = error;
+  for (let depth = 0; depth < 3 && cause instanceof DrizzleQueryError; depth++)
+    cause = cause.cause;
+  if (
+    cause instanceof postgres.PostgresError &&
+    typeof cause.code === "string" &&
+    /^[0-9A-Z]{5}$/.test(cause.code)
+  )
+    return cause.code;
+  // Our explicit refusals and direct connection codes keep their existing names.
+  return /^[a-zA-Z0-9_]{1,64}$/.test(error?.code ?? "")
+    ? error.code
+    : "migration_failed";
 }
 
 function authorityArtifact(folder) {
@@ -265,9 +284,7 @@ try {
   completed = true;
 } catch (err) {
   // Driver errors can carry SQL/parameters. Diagnostics carry only a code.
-  const code = /^[a-zA-Z0-9_]{1,64}$/.test(err?.code ?? "")
-    ? err.code
-    : "migration_failed";
+  const code = diagnosticCode(err);
   console.error(`FATAL(${NODE}): ${code}`);
   process.exitCode = 1;
 } finally {

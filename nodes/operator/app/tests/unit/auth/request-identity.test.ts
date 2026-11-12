@@ -46,11 +46,19 @@ vi.mock("@/bootstrap/agent-credentials", () => ({
     everConfirmed: (...args: unknown[]) => mockEverConfirmed(...args),
     lookup: (...args: unknown[]) => mockLookup(...args),
   }),
-  admitCredentialLookup: () => true,
-  recordCredentialMiss: () => {},
+  verifyAgentCredential: (
+    store: CredentialStore,
+    token: string,
+    allow: readonly CredentialState[]
+  ) => verifyBearer(store, token, allow),
 }));
 
-import { formatRevocableKey } from "@cogni-dao/agent-grants/credentials";
+import {
+  type CredentialState,
+  type CredentialStore,
+  formatRevocableKey,
+  verifyBearer,
+} from "@cogni-dao/agent-grants/credentials";
 import {
   issueAgentApiKey,
   peekAgentKeyExpiry,

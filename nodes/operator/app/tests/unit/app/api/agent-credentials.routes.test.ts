@@ -13,8 +13,11 @@
  */
 
 import {
+  type CredentialState,
+  type CredentialStore,
   formatRevocableKey,
   REVOCABLE_KEY_PREFIX,
+  verifyBearer,
 } from "@cogni-dao/agent-grants/credentials";
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,10 +66,17 @@ vi.mock("@/bootstrap/container", () => ({
 }));
 vi.mock("@/bootstrap/agent-credentials", () => ({
   getAgentCredentialStore: () => fake.memory.store,
-  admitCredentialLookup: () => fake.admit,
-  recordCredentialMiss: () => {
-    fake.misses += 1;
-  },
+  verifyAgentCredential: (
+    store: CredentialStore,
+    token: string,
+    allow: readonly CredentialState[]
+  ) =>
+    verifyBearer(store, token, allow, {
+      admit: () => fake.admit,
+      onInvalid: () => {
+        fake.misses += 1;
+      },
+    }),
 }));
 
 import {

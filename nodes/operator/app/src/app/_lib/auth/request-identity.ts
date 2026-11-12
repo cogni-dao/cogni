@@ -41,7 +41,6 @@ import {
   CredentialStoreUnavailableError,
   isRevocableKey,
   type VerifyResult,
-  verifyBearer,
 } from "@cogni-dao/agent-grants/credentials";
 import { headers } from "next/headers";
 import { getServerSessionUser } from "@/lib/auth/server";
@@ -165,16 +164,11 @@ export async function verifyRevocableKey(
   token: string,
   allow: readonly CredentialState[]
 ): Promise<VerifyResult> {
-  const {
-    getAgentCredentialStore,
-    admitCredentialLookup,
-    recordCredentialMiss,
-  } = await import("@/bootstrap/agent-credentials");
+  const { getAgentCredentialStore, verifyAgentCredential } = await import(
+    "@/bootstrap/agent-credentials"
+  );
   const h = await headers();
-  return verifyBearer(getAgentCredentialStore(), token, allow, {
-    admit: () => admitCredentialLookup(h),
-    onInvalid: () => recordCredentialMiss(h),
-  });
+  return verifyAgentCredential(getAgentCredentialStore(), token, allow, h);
 }
 
 /** The bearer token of the current request, if any (the credential routes read it to tell a signed key from a revocable one). */

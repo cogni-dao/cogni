@@ -502,6 +502,7 @@ services:
         "/app/nodes/${COGNI_MIGRATE_NODE:-operator}/app/migrations",
       ]
     environment:
+      - NODE_NAME=${COGNI_MIGRATE_NODE:-operator}
       - DATABASE_URL=${DATABASE_URL?DATABASE_URL is required}
     depends_on:
       postgres:

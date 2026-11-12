@@ -20,10 +20,12 @@ import { authzUserResource } from "@cogni/authorization-core";
 import {
   agentRolesHasRoles,
   type CredentialSql,
+  type CredentialState,
   type CredentialStore,
   CredentialStoreUnavailableError,
   createPostgresCredentialStore,
   type HasRoles,
+  verifyBearer,
 } from "@cogni-dao/agent-grants/credentials";
 
 import { resolveServiceDb } from "@/bootstrap/container";
@@ -68,18 +70,29 @@ export function getAgentCredentialStore(): CredentialStore {
 }
 
 /**
- * Per-client admission for credential lookups (ADMIT_BEFORE_STORE, SPEND_ON_MISS). `admitCredentialLookup` only CHECKS the client's bucket:
- * false = over the limit, the caller answers 429 and reads nothing. `recordCredentialMiss` spends one token, and the caller invokes it only
- * when the lookup found no usable key. The client key is the edge-written IP (`extractEdgeClientIp` documents the operator's evidence).
+ * Compose node admission with the package verifier. Reserve synchronously in its
+ * admit hook, charge only its invalid hook, and release on every terminal path.
+ * Package shape, checksum, state and outage semantics remain authoritative.
  */
-export function admitCredentialLookup(headers: {
-  get(name: string): string | null;
-}): boolean {
-  return credentialLookupLimiter.hasTokens(extractEdgeClientIp({ headers }));
-}
-
-export function recordCredentialMiss(headers: {
-  get(name: string): string | null;
-}): void {
-  credentialLookupLimiter.consume(extractEdgeClientIp({ headers }));
+export async function verifyAgentCredential(
+  credentialStore: CredentialStore,
+  token: string,
+  allow: readonly CredentialState[],
+  headers: { get(name: string): string | null }
+) {
+  const key = extractEdgeClientIp({ headers });
+  const admission: { release: (() => void) | null } = { release: null };
+  try {
+    return await verifyBearer(credentialStore, token, allow, {
+      admit: () => {
+        admission.release = credentialLookupLimiter.reserve(key);
+        return admission.release !== null;
+      },
+      onInvalid: () => {
+        credentialLookupLimiter.consume(key);
+      },
+    });
+  } finally {
+    admission.release?.();
+  }
 }

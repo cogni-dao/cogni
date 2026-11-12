@@ -200,7 +200,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     f: Fixture,
     options: {
       folder?: string;
-      node?: string;
+      node?: string | null;
       inspect?: boolean;
       shadow?: boolean;
     } = {}
@@ -222,7 +222,9 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       cwd: ROOT,
       env: {
         PATH: process.env.PATH,
-        NODE_NAME: options.node ?? "operator",
+        ...(options.node === null
+          ? {}
+          : { NODE_NAME: options.node ?? "operator" }),
         DATABASE_URL: url.toString(),
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -684,12 +686,70 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
 
   async function shadow(f: Fixture) {
     await f.admin.unsafe(
-      "CREATE SCHEMA shadow AUTHORIZATION app_operator; CREATE TABLE shadow.agent_credentials(id integer PRIMARY KEY, marker text); INSERT INTO shadow.agent_credentials VALUES(1,'must-survive'); CREATE TABLE shadow.calls(name text); GRANT ALL ON ALL TABLES IN SCHEMA shadow TO migration_operator"
+      "CREATE SCHEMA shadow AUTHORIZATION app_operator; CREATE TABLE shadow.agent_credentials(id integer PRIMARY KEY, marker text); INSERT INTO shadow.agent_credentials VALUES(1,'must-survive'); CREATE TABLE shadow.related(id integer PRIMARY KEY, credential_id integer NOT NULL, payload text NOT NULL, CONSTRAINT shadow_related_credential_fk FOREIGN KEY(credential_id) REFERENCES shadow.agent_credentials(id)); INSERT INTO shadow.related VALUES(1,1,'retained-dependent-one'),(2,1,'retained-dependent-two'); CREATE TABLE shadow.calls(name text); GRANT ALL ON ALL TABLES IN SCHEMA shadow TO migration_operator"
     );
     await f.admin.unsafe(
       "CREATE FUNCTION shadow.pg_advisory_lock(bigint) RETURNS void LANGUAGE plpgsql AS $$ BEGIN INSERT INTO shadow.calls VALUES('lock'); END $$; CREATE FUNCTION shadow.pg_advisory_unlock(bigint) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN INSERT INTO shadow.calls VALUES('unlock'); RETURN true; END $$"
     );
   }
+
+  async function retainedShadow(f: Fixture) {
+    const credentials =
+      await f.admin`SELECT to_jsonb(c) AS row FROM shadow.agent_credentials c ORDER BY id`;
+    const dependents =
+      await f.admin`SELECT to_jsonb(d) AS row FROM shadow.related d ORDER BY id`;
+    const definitions = await f.admin`
+      SELECT c.oid,c.conname,c.conrelid::regclass::text AS owner,c.confrelid::regclass::text AS target,
+        pg_catalog.pg_get_constraintdef(c.oid) AS definition,c.convalidated,c.confupdtype,c.confdeltype
+      FROM pg_catalog.pg_constraint c WHERE c.conrelid IN ('shadow.agent_credentials'::regclass,'shadow.related'::regclass)
+      ORDER BY c.conname`;
+    expect(
+      definitions.find((d) => d.conname === "shadow_related_credential_fk")
+    ).toMatchObject({
+      owner: "shadow.related",
+      target: "shadow.agent_credentials",
+      definition:
+        "FOREIGN KEY (credential_id) REFERENCES shadow.agent_credentials(id)",
+      convalidated: true,
+      confupdtype: "a",
+      confdeltype: "a",
+    });
+    return JSON.stringify({ credentials, dependents, definitions });
+  }
+
+  it.each([
+    null,
+    "foreign-node",
+  ])("refuses missing/wrong node identity %s before migrating operator history", async (node) => {
+    const f = await fixture();
+    await readyBefore63(f);
+    const before = await retained(f);
+    const result = await start(f, { node }).done;
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("migration_authority_artifact_invalid");
+    expect(result.output).not.toContain("✅");
+    expect((await retained(f)) === before).toBe(true);
+  });
+
+  it("refuses a populated public collision with shadow-first input and preserves BOTH namespaces", async () => {
+    const f = await fixture();
+    expect((await run(f)).code).toBe(0);
+    await seedRetained(f, "public-shadow-collision");
+    await f.admin`DELETE FROM drizzle.__drizzle_migrations WHERE created_at=${WHEN}`;
+    await shadow(f);
+    const beforePublic = await retained(f),
+      beforeShadow = await retainedShadow(f);
+    const result = await start(f, { shadow: true }).done;
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("migration_authority_collision");
+    expect(result.output).not.toContain("✅");
+    privateOutput(result.output);
+    expect((await retained(f)) === beforePublic).toBe(true);
+    expect((await retainedShadow(f)) === beforeShadow).toBe(true);
+    expect(await f.admin`SELECT count(*)::int AS n FROM shadow.calls`).toEqual([
+      { n: 0 },
+    ]);
+  });
 
   function runnerRecords(label: string) {
     return nativeLog.split("\n").flatMap((line) => {
@@ -763,6 +823,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     await readyBefore63(f);
     await shadow(f);
     const before = await retained(f);
+    const shadowBefore = await retainedShadow(f);
     const child = await paused(f);
     try {
       const rows =
@@ -781,6 +842,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       expect(result.output).toContain("migration_session_lost");
       expect(result.output).not.toContain("✅");
       expect((await retained(f)) === before).toBe(true);
+      expect((await retainedShadow(f)) === shadowBefore).toBe(true);
       expect(
         await f.admin`SELECT marker FROM shadow.agent_credentials`
       ).toEqual([{ marker: "must-survive" }]);
@@ -802,6 +864,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       qualifyLostSession(records, Number(rows[0]?.pid));
       const retry = await start(f, { shadow: true }).done;
       expect(retry.code, retry.output).toBe(0);
+      expect((await retainedShadow(f)) === shadowBefore).toBe(true);
       expect(
         await f.admin`SELECT count(*)::int AS n FROM shadow.calls`
       ).toEqual([{ n: 0 }]);

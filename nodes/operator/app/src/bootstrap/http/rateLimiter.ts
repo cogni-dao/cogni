@@ -30,6 +30,8 @@ interface RateLimiterConfig {
    * the map without bound and never makes unrelated clients share a bucket. Default: no cap.
    */
   maxKeys?: number;
+  /** Optional per-instance cap on outstanding reserved work, across all keys. */
+  maxConcurrent?: number;
 }
 
 /**
@@ -40,6 +42,8 @@ export class TokenBucketRateLimiter {
   private readonly buckets = new Map<string, BucketState>();
   private readonly config: RateLimiterConfig;
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly pending = new Map<string, number>();
+  private pendingCount = 0;
 
   constructor(config: RateLimiterConfig) {
     this.config = config;
@@ -95,15 +99,40 @@ export class TokenBucketRateLimiter {
   }
 
   /**
-   * CHECK-only: would this key pass right now? Spends nothing (ADMIT_BEFORE_STORE pairs it with an explicit spend on miss).
+   * CHECK-only: would this key pass right now, excluding outstanding reservations?
    */
   public hasTokens(key: string): boolean {
     const bucket = this.buckets.get(key);
-    if (!bucket) return true; // a client with no bucket always passes: only a miss creates one
-    const refilled =
-      bucket.tokens +
-      ((Date.now() - bucket.lastSeen) / 1000) * this.config.refillRate;
-    return refilled >= 1;
+    const capacity = this.config.maxTokens + this.config.burstSize;
+    const refilled = bucket
+      ? Math.min(
+          capacity,
+          bucket.tokens +
+            ((Date.now() - bucket.lastSeen) / 1000) * this.config.refillRate
+        )
+      : capacity;
+    return refilled - (this.pending.get(key) ?? 0) >= 1;
+  }
+
+  /** Reserve before any await; release is idempotent. Only a miss consumes a token. */
+  public reserve(key: string): (() => void) | null {
+    if (
+      this.pendingCount >=
+        (this.config.maxConcurrent ?? Number.POSITIVE_INFINITY) ||
+      !this.hasTokens(key)
+    )
+      return null;
+    this.pendingCount += 1;
+    this.pending.set(key, (this.pending.get(key) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.pendingCount -= 1;
+      const count = (this.pending.get(key) ?? 1) - 1;
+      if (count === 0) this.pending.delete(key);
+      else this.pending.set(key, count);
+    };
   }
 
   /**
@@ -203,7 +232,7 @@ export const publicApiLimiter = new TokenBucketRateLimiter({
  * own Caddy (`header_up X-Real-IP {remote_host}`, infra/compose/edge/configs/Caddyfile.tmpl), so `x-real-ip` is the trusted source here;
  * `cf-connecting-ip` is the fallback for Cloudflare-fronted lanes (candidate). Nothing else is trusted. A shape that does not parse is "unknown".
  * Residual risk is the same as node-template's: a client that reaches the origin without the edge picks its own bucket; `maxKeys` bounds only
- * memory, a valid key never spends a token, and `hasTokens` passes clients with no bucket, so legitimate agents cannot be throttled through this.
+ * memory. Valid keys spend no miss tokens, but still share bounded concurrent lookup capacity.
  */
 export function extractEdgeClientIp(request: {
   headers: { get(name: string): string | null };
@@ -243,14 +272,15 @@ function ipv6Prefix64(ip: string): string {
 /**
  * Per-IP limit on revocable-key lookups that find nothing (task.5474 / story.5156). Every shape-valid revocable bearer costs one query on the small
  * service pool, so an unauthenticated flood of well-formed random keys could starve the other service-pool users.
- * SPEND_ON_MISS: a request checks the bucket first (`hasTokens`, over the limit = 429, no store read) and spends a token only when the lookup finds
- * no usable key (`consume`). A valid key never spends, so a busy legitimate agent is never throttled by its own traffic. 300 misses/min sustained + 100
- * burst per client; keys that fail the shape or checksum never reach it. Per-instance state, same limitation as the public limiter. At most
- * 10 000 distinct clients are tracked (`maxKeys`, bounded LRU): the least-recently-seen bucket is evicted, never shared.
+ * SPEND_ON_MISS: synchronous reservation covers the async lookup; only a miss consumes a token. Success/outage refund the reservation.
+ * Two outstanding bearer verifications per instance leave capacity in the four-connection service pool; excess receives 429 before lookup.
+ * 300 misses/min + 100 burst per client; shape/checksum failures never reserve. Pending work also reserves miss budget, including for new keys.
+ * At most 10 000 miss buckets (bounded LRU) plus two pending keys; no shared bucket or unbounded admission queue.
  */
 export const credentialLookupLimiter = new TokenBucketRateLimiter({
   maxTokens: 300,
   refillRate: 300 / 60,
   burstSize: 100,
   maxKeys: 10_000,
+  maxConcurrent: 2,
 });
