@@ -12,8 +12,12 @@
  * @internal
  */
 
-import type { ContributionDiffEntry } from "@cogni/node-contracts";
+import type {
+  ContributionCitationDiffEntry,
+  ContributionDiffEntry,
+} from "@cogni/node-contracts";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ContributionDiff } from "@/app/(app)/knowledge/_components/ContributionDiff";
 
@@ -23,9 +27,23 @@ vi.mock("@/components", () => ({
 vi.mock("next-themes", () => ({
   useTheme: () => ({ resolvedTheme: "light" }),
 }));
+vi.mock("next/link", () => ({
+  default: ({
+    href,
+    children,
+    ...rest
+  }: { href: string; children: ReactNode } & Record<string, unknown>) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  ),
+}));
 
-function mount(entries: ContributionDiffEntry[]) {
-  const fetchMock = vi.fn(async () => Response.json({ entries }));
+function mount(
+  entries: ContributionDiffEntry[],
+  citations: ContributionCitationDiffEntry[] = []
+) {
+  const fetchMock = vi.fn(async () => Response.json({ entries, citations }));
   vi.stubGlobal("fetch", fetchMock);
   render(<ContributionDiff contributionId="contrib-existing" />);
   return fetchMock;
@@ -125,19 +143,32 @@ describe("inbox atom retrieval triggers", () => {
   });
 
   it("keeps citation rows as links without atom subtitles", async () => {
-    mount([
-      {
-        rowId: "edge",
-        changeType: "citation_added",
-        before: null,
-        after: {
+    mount(
+      [
+        {
+          rowId: "edge",
+          changeType: "citation_added",
+          before: null,
+          after: {
+            citingId: "source",
+            citedId: "target",
+            citationType: "supports",
+            useWhen: "not an atom",
+          },
+        },
+      ],
+      [
+        {
+          changeType: "added",
           citingId: "source",
           citedId: "target",
           citationType: "supports",
-          useWhen: "not an atom",
+          context: null,
+          label: "supports",
+          tone: "positive",
         },
-      },
-    ]);
+      ]
+    );
     expect(await screen.findByText("link +")).toBeTruthy();
     expect(screen.getByText("supports")).toBeTruthy();
     expect(screen.queryByText("Use when:")).toBeNull();

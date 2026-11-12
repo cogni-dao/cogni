@@ -23,6 +23,12 @@ export const WORK_ITEMS_LIST_ERROR_CODES = {
   INTERNAL_ERROR: "internal_error",
 } as const;
 
+export const KNOWLEDGE_CONTRIBUTION_DIFF_ERROR_CODES = {
+  NOT_FOUND: "contribution_not_found",
+  BACKEND_UNAVAILABLE: "backend_unavailable",
+  DIFF_FAILED: "diff_failed",
+} as const;
+
 export const EVENT_NAMES = {
   WORK_ITEMS_LIST_COMPLETE: "work.items.list_complete",
   // AI Domain - Server
@@ -133,6 +139,7 @@ export const EVENT_NAMES = {
   SCHEDULE_DETAIL_READ: "schedules.detail_read",
   SCHEDULE_HISTORY_READ: "schedules.history_read",
   KNOWLEDGE_MERGE_CHECK_COMPLETE: "knowledge.merge_check.complete",
+  KNOWLEDGE_CONTRIBUTION_DIFF_COMPLETE: "knowledge.contribution_diff.complete",
   AI_THREAD_READ: "ai.thread_read",
 
   // Governance Domain

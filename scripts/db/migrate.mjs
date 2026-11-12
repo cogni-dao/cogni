@@ -5,7 +5,7 @@
  * Module: `@scripts/db/migrate`
  * Purpose: Shared Postgres migrator runner invoked as the per-node Deployment initContainer. Wraps drizzle-orm/postgres-js/migrator in a blocking pg_advisory_lock so concurrent initContainers serialize cleanly, then reports what it applied.
  * Scope: Per-node Postgres migrations only. Does not migrate Doltgres (separate script for poly's knowledge plane). Does not run drizzle-kit (CLI is dev-only).
- * Invariants: Native lock and physical-session loss fence cover operator 0063 collision/history checks through unlock; immutable SQL/ledger are never repaired. Success follows postcheck and planned shutdown.
+ * Invariants: One physical session owns the lock and 0063 guards. SQL and ledger stay immutable. Success follows shutdown.
  * Side-effects: IO (Postgres connect, advisory lock, migrate, read drizzle ledger, unlock).
  * Notes: COPY'd into each runtime image at /app/nodes/<node>/app/migrate.mjs. LOCK_KEY shared safely — advisory locks are database-scoped.
  * Links: docs/spec/databases.md §2 Migration Strategy, nodes/operator/app/src/shared/migrations/migration-receipt.ts (the parser twin), work/items/task.0371.kill-presync-migration-hook-step-1.md
