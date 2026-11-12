@@ -7,14 +7,14 @@
  *   gateway's collector-labeled `ai.gateway.receipt` line in central Loki (bug.5625).
  * Scope: Fixed Grafana datasource GET; validates original stream labels; bounded parent deadline.
  * Invariants: Caller metadata only selects; one receipt under {env=<lane>,service=litellm} with the
- *   same key hash, exact lane alias and provider response (or failure run) decides. No credentials,
- *   receipt bodies or key fingerprints leave this adapter.
+ *   exact gateway-stamped lane alias and provider response (or failure run) decides. No credentials,
+ *   receipt bodies or key hashes leave this adapter. Receipts carry no key hash (LiteLLM accepts a
+ *   stored hash as a bearer token); the gateway-stamped alias is the receipt's identity.
  * Side-effects: bounded read-only HTTP
  * Links: infra/images/litellm/cogni_callbacks.py (writer), langfuse-ownership.adapter.ts (same-lane
  *   native receipts), langfuse-root-ownership.adapter.ts (same Loki trust level)
  * @public
  */
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { LangfuseOwnershipPort } from "@/ports";
 import { objectValue, providerResponseId } from "./langfuse-ownership.adapter";
@@ -34,9 +34,6 @@ const MAX_CALL_MS = 15 * 60_000;
 // The receipt and the Langfuse row carry the same LiteLLM start/end instants. Retries of one run
 // fail ~0.7s apart, so failure receipts bind by exact time, not by a loose window.
 const SAME_INSTANT_MS = 50;
-// LiteLLM accepts a stored key hash as a bearer token, so receipts carry only this digest of it.
-const receiptFingerprint = (keyHash: string) =>
-  createHash("sha256").update(`ai.gateway.receipt.v1:${keyHash}`).digest("hex");
 const Page = z.object({
   status: z.literal("success"),
   data: z.object({
@@ -126,7 +123,6 @@ export class HttpLangfuseGatewayReceiptVerifier
     if (!Number.isFinite(started) || (!responseId && !failure)) return false;
     if (failure && (!Number.isFinite(ended) || ended < started)) return false;
 
-    const fingerprint = receiptFingerprint(hash);
     const end = Math.min(
       (this.opts.now ?? Date.now)(),
       Number.isFinite(ended) && ended >= started
@@ -142,7 +138,7 @@ export class HttpLangfuseGatewayReceiptVerifier
     );
     url.searchParams.set(
       "query",
-      `{env="${environment}",service="litellm"} |= "ai.gateway.receipt" | json | event="ai.gateway.receipt" | keyFingerprint="${fingerprint}" ${selector}`
+      `{env="${environment}",service="litellm"} |= "ai.gateway.receipt" | json | event="ai.gateway.receipt" | keyAlias="${alias}" ${selector}`
     );
     url.searchParams.set("start", String(BigInt(started - 2000) * 1_000_000n));
     url.searchParams.set("end", String(BigInt(end + 1) * 1_000_000n));
@@ -189,11 +185,7 @@ export class HttpLangfuseGatewayReceiptVerifier
         for (const [, text] of stream.values) {
           lines++;
           const line = objectValue(text);
-          if (
-            line?.event !== "ai.gateway.receipt" ||
-            line.keyFingerprint !== fingerprint ||
-            line.keyAlias !== alias
-          )
+          if (line?.event !== "ai.gateway.receipt" || line.keyAlias !== alias)
             return false;
           const receiptStart = Date.parse(String(line.startTime));
           const receiptEnd = Date.parse(String(line.endTime));

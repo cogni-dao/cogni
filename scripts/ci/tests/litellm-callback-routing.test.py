@@ -230,7 +230,6 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ok, {
             "event": "ai.gateway.receipt", "status": "success", "callId": "proxy-call-fixture",
             "responseId": "gen-provider-1",
-            "keyFingerprint": hashlib.sha256(f"ai.gateway.receipt.v1:{VIRTUAL_HASH}".encode()).hexdigest(),
             "keyAlias": CANDIDATE,
             "runId": "run-7", "spendNodeId": NODE,
             "startTime": "2026-11-12T20:06:17.285Z", "endTime": "2026-11-12T20:06:20.285Z",
