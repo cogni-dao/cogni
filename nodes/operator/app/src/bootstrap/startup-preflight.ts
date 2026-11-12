@@ -11,7 +11,10 @@ export function runStartupPreflight(): void {
     localReadinessPreflight();
   } catch (error) {
     if (
-      !(error instanceof EnvValidationError || error instanceof RuntimeSecretError)
+      !(
+        error instanceof EnvValidationError ||
+        error instanceof RuntimeSecretError
+      )
     ) {
       throw error;
     }
