@@ -9,7 +9,7 @@
 
 ## Purpose
 
-Custom LiteLLM Docker image extending upstream with per-node billing callback routing. The `CogniNodeRouter` routes unchanged billing events using the authenticated virtual-key alias `cogni:<lane>:<node UUID>:app:v1`. Only a verified master key may use local legacy node routes. Every success and failure also prints one `ai.gateway.receipt` JSON line (identity and instants only, no content) before billing routing; the operator trace reader verifies cross-lane generations against it in Loki (bug.5625).
+Custom LiteLLM Docker image extending upstream with per-node billing callback routing. The `CogniNodeRouter` routes unchanged billing events using the authenticated virtual-key alias `cogni:<lane>:<node UUID>:app:v1`. Only a verified master key may use local legacy node routes.
 
 ## Pointers
 
