@@ -16,16 +16,18 @@ production_branch: deploy/production-levelup
 # and gets no actuator), and levelup's candidate-a proof slot was already closed —
 # its lease released (#2233, dseq 1789435347755) — so the stale candidate-a cells
 # are dropped with it. Production is this node's only slot.
-envs: [production]
+envs: [candidate-a, production]
 database:
   candidate-a: { tier: shared, budget_profile: shared-default-v1 }
   production: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
+  candidate-a: akash
   production: akash
 # story.5137 / task.5411 (CD4 ONE_WRITER_PER_NODE_LANE) — every environment of this node is
 # deployed ONLY by the node-deploy sequencer (POST /api/v1/deploy/workloads). The legacy
 # and crossplane authorities and their per-node AppSets were deleted (CD9).
 compute_api:
+  candidate-a: node-deploy
   production: node-deploy
 # bug.5079 — activity_env is the SINGLETON env allowed to ingest Git receipts. GitHub
 # App webhooks are delivered to production only (one App, one webhook URL), and the
