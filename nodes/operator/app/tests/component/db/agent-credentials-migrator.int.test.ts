@@ -22,8 +22,10 @@ import {
   agentRolesHasRoles,
   assertV1NotSuperseded,
   type CredentialSql,
+  CredentialStoreUnavailableError,
   confirmCredential,
   createPostgresCredentialStore,
+  hashAgentKey,
   upgradeSignedKey,
   verifyBearer,
 } from "@cogni-dao/agent-grants/credentials";
@@ -48,7 +50,10 @@ const FOLDER = join(
 const WHEN = 1794416513978;
 const OLD_HASH =
   "e73dfd033ae61dab25b0d319f25f134f27e1fc802728a9a7c77ac9e1881e4f8d";
+// Deliberately synthetic secrets. They are never included in assertion diffs.
+const TOKEN_CANARY = "cogni_fixture_secret_story5156_never_log";
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+const HASH_CANARY = sha(TOKEN_CANARY);
 type Entry = {
   idx: number;
   version: string;
@@ -275,6 +280,8 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       "agent_principals",
       "agent_roles",
       "related",
+      "user_bindings",
+      "users",
     ]) {
       const [found] =
         await f.admin`SELECT pg_catalog.to_regclass(${`public.${name}`}) AS relation`;
@@ -296,8 +303,49 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     expect(result.output).toContain(code);
     expect(result.output).not.toContain("✅");
     expect(result.output).not.toContain("fixture-retained");
+    privateOutput(result.output);
     // Boolean comparison avoids leaking private fixture rows in a diff.
     expect((await retained(f)) === before).toBe(true);
+  }
+
+  function privateOutput(output: string, secrets: string[] = []) {
+    // Keep actual credential material out of failed assertion diagnostics too.
+    expect(
+      [TOKEN_CANARY, HASH_CANARY, ...secrets].some((s) => output.includes(s))
+    ).toBe(false);
+    const receipt = JSON.stringify(parseMigrationReceipt(output));
+    expect(
+      [TOKEN_CANARY, HASH_CANARY, ...secrets].some((s) => receipt.includes(s))
+    ).toBe(false);
+  }
+
+  async function seedRetained(f: Fixture, user = "history-user") {
+    await f.admin`INSERT INTO users(id,name) VALUES (${user},'fixture'),('history-admin','fixture')`;
+    await f.admin`INSERT INTO agent_principals(user_id,kind) VALUES (${user},'external')`;
+    await f.admin`INSERT INTO user_bindings(id,user_id,provider,external_id) VALUES (${randomUUID()},${user},'github',${randomUUID()})`;
+    await f.admin`INSERT INTO agent_roles(principal_user_id,scope,approved_by,granted_at) VALUES (${user},'fixture:read','history-admin',now())`;
+    const active = randomUUID(),
+      pending = randomUUID(),
+      revoked = randomUUID();
+    await f.admin`INSERT INTO agent_credentials(id,user_id,token_hash,created_from,expires_at,renew_until,confirmed_at)
+      VALUES (${active},${user},${HASH_CANARY},'key_upgrade',now()+interval '1 day',now()+interval '2 days',now())`;
+    await f.admin`INSERT INTO agent_credentials(id,user_id,token_hash,created_from,predecessor_id,expires_at,renew_until,pending_expires_at)
+      VALUES (${pending},${user},${sha("pending-canary")},'rotation',${active},now()+interval '1 day',now()+interval '2 days',now()+interval '1 hour')`;
+    await f.admin`INSERT INTO agent_credentials(id,user_id,token_hash,created_from,expires_at,renew_until,confirmed_at,revoked_at,revoked_reason,revoked_by)
+      VALUES (${revoked},${user},${sha("revoked-canary")},'key_upgrade',now()+interval '1 day',now()+interval '2 days',now(),now(),${TOKEN_CANARY},'history-admin')`;
+    await f.admin.unsafe(
+      "CREATE TABLE related(id uuid PRIMARY KEY, credential_id uuid NOT NULL REFERENCES agent_credentials(id))"
+    );
+    for (const id of [active, pending, revoked])
+      await f.admin`INSERT INTO related VALUES (${randomUUID()},${id})`;
+    expect(
+      await f.admin`SELECT agent_credential_state(c) AS state FROM agent_credentials c ORDER BY state`
+    ).toEqual([
+      { state: "active" },
+      { state: "pending" },
+      { state: "revoked" },
+    ]);
+    return { active, pending, revoked };
   }
 
   it("refuses a populated draft plus inbound FK without touching data/history", async () => {
@@ -312,10 +360,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
   it("refuses canonical populated collisions before lifecycle mutation", async () => {
     const f = await fixture();
     expect((await run(f)).code).toBe(0);
-    await f.admin`INSERT INTO users(id,name) VALUES ('retained-user','fixture')`;
-    await f.admin`INSERT INTO agent_principals(user_id,kind) VALUES ('retained-user','external')`;
-    await f.admin`INSERT INTO agent_roles(principal_user_id,scope) VALUES ('retained-user','fixture:read')`;
-    await f.admin`INSERT INTO agent_credentials(user_id,token_hash,created_from,expires_at,renew_until,confirmed_at) VALUES ('retained-user',${"a".repeat(64)},'key_upgrade',now()+interval '1 day',now()+interval '2 days',now())`;
+    await seedRetained(f, "retained-user");
     await f.admin`DELETE FROM drizzle.__drizzle_migrations WHERE created_at=${WHEN}`;
     await refused(f, "migration_authority_collision");
   });
@@ -371,14 +416,12 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     expect((await run(f)).code).toBe(0);
     if (hash === OLD_HASH)
       await f.admin`UPDATE drizzle.__drizzle_migrations SET hash=${hash} WHERE created_at=${WHEN}`;
-    await f.admin`INSERT INTO users(id,name) VALUES ('history-user','fixture'),('history-admin','fixture')`;
-    await f.admin`INSERT INTO agent_principals(user_id,kind) VALUES ('history-user','external')`;
-    await f.admin`INSERT INTO user_bindings(id,user_id,provider,external_id) VALUES (${randomUUID()},'history-user','github',${randomUUID()})`;
-    await f.admin`INSERT INTO agent_roles(principal_user_id,scope,approved_by,granted_at) VALUES ('history-user','fixture:read','history-admin',now())`;
+    await seedRetained(f);
     const before = await retained(f);
     const result = await run(f);
     expect(result.code, result.output).toBe(0);
     expect((await retained(f)) === before).toBe(true);
+    privateOutput(result.output);
     await f.admin.unsafe(
       "GRANT ALL ON ALL TABLES IN SCHEMA public TO service_operator"
     );
@@ -386,12 +429,22 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       f.service as unknown as CredentialSql,
       { hasRoles: agentRolesHasRoles(f.service as unknown as CredentialSql) }
     );
-    const key = await upgradeSignedKey(live, { userId: "history-user" });
+    // Exercise a separate user after preserving all retained credentials/FKs.
+    await f.admin`INSERT INTO users(id,name) VALUES ('new-upgrade-user','fixture')`;
+    const key = await upgradeSignedKey(live, { userId: "new-upgrade-user" });
     if (!key.ok) throw new Error("historical fixture upgrade failed");
     expect(
       (await confirmCredential(live, { credentialId: key.credentialId })).ok
     ).toBe(true);
     expect(await verifyBearer(live, key.apiKey)).toMatchObject({ ok: true });
+    const afterUpgrade = await retained(f);
+    const subsequent = await run(f);
+    expect(subsequent.code).toBe(0);
+    expect((await retained(f)) === afterUpgrade).toBe(true);
+    privateOutput(subsequent.output, [
+      key.apiKey,
+      await hashAgentKey(key.apiKey),
+    ]);
     expect(
       await f.admin`SELECT principal_user_id,scope FROM agent_roles`
     ).toEqual([{ principal_user_id: "history-user", scope: "fixture:read" }]);
@@ -404,6 +457,26 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
         ? OLD_HASH
         : sha(await readFile(join(FOLDER, "0063_wet_midnight.sql"), "utf8"))
     );
+  });
+
+  it.each([
+    "active",
+    "pending",
+    "revoked",
+    "related",
+  ] as const)("retention comparison detects loss of seeded %s rows", async (kind) => {
+    const f = await fixture();
+    expect((await run(f)).code).toBe(0);
+    const ids = await seedRetained(f);
+    const before = await retained(f);
+    if (kind === "related") await f.admin`DELETE FROM related`;
+    else {
+      await f.admin`DELETE FROM related WHERE credential_id=${ids[kind]}`;
+      if (kind === "active")
+        await f.admin`UPDATE agent_credentials SET predecessor_id=NULL WHERE predecessor_id=${ids.active}`;
+      await f.admin`DELETE FROM agent_credentials WHERE id=${ids[kind]}`;
+    }
+    expect((await retained(f)) === before).toBe(false);
   });
 
   it("refuses a genuinely known later sentinel when the exact0063 row is absent", async () => {
@@ -432,6 +505,8 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     "unknown_time",
     "duplicate",
     "null_time",
+    "unsafe_time",
+    "negative_time",
   ])("refuses decisive malformed/unknown ledger: %s", async (kind) => {
     const f = await fixture();
     expect((await run(f)).code).toBe(0);
@@ -443,6 +518,12 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       await f.admin`INSERT INTO drizzle.__drizzle_migrations(hash,created_at) SELECT hash,created_at FROM drizzle.__drizzle_migrations WHERE created_at=${WHEN}`;
     if (kind === "null_time")
       await f.admin`INSERT INTO drizzle.__drizzle_migrations(hash,created_at) VALUES (${"0".repeat(64)},NULL)`;
+    if (kind === "unsafe_time")
+      await f.admin`INSERT INTO drizzle.__drizzle_migrations(hash,created_at) VALUES (${"0".repeat(64)},'9007199254740993')`;
+    if (kind === "negative_time")
+      await f.admin.unsafe(
+        "DELETE FROM drizzle.__drizzle_migrations; INSERT INTO drizzle.__drizzle_migrations(hash,created_at) VALUES (repeat('0',64),-1)"
+      );
     await refused(f, "migration_history_");
   });
 
@@ -454,6 +535,50 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       "REVOKE ALL ON drizzle.__drizzle_migrations FROM PUBLIC,app_operator,migration_operator"
     );
     await refused(f, "42501");
+  });
+
+  it("refuses unavailable public without treating retained history as fresh", async () => {
+    const f = await fixture();
+    await readyBefore63(f);
+    await f.admin`ALTER SCHEMA public OWNER TO ${f.admin(container.getUsername())}`;
+    await f.admin.unsafe(
+      "REVOKE ALL ON SCHEMA public FROM PUBLIC,app_operator,migration_operator,pg_database_owner"
+    );
+    await refused(f, "migration_namespace_invalid");
+  });
+
+  it("keeps credential token/hash canaries out of diagnostics, success and receipt", async () => {
+    const f = await fixture();
+    expect((await run(f)).code).toBe(0);
+    await seedRetained(f);
+    const success = await run(f);
+    expect(success.code).toBe(0);
+    expect(parseMigrationReceipt(success.output)).not.toBeNull();
+    privateOutput(success.output);
+    await f.admin`DELETE FROM drizzle.__drizzle_migrations WHERE created_at=${WHEN}`;
+    await refused(f, "migration_authority_collision");
+    // A failing query can contain secrets in its text and driver diagnostics.
+    const clean = await fixture();
+    await readyBefore63(clean);
+    const entry = {
+      idx: 64,
+      version: "7",
+      when: WHEN + 1,
+      tag: "0064_fixture_private_error",
+      breakpoints: true,
+    };
+    const folder = await copyFolder("private_error", [
+      ...journal.entries,
+      entry,
+    ]);
+    await writeFile(
+      join(folder, `${entry.tag}.sql`),
+      `DO $$ BEGIN RAISE EXCEPTION '${TOKEN_CANARY}:${HASH_CANARY}'; END $$;`
+    );
+    const failure = await run(clean, folder);
+    expect(failure.code).not.toBe(0);
+    expect(failure.output).toContain("P0001");
+    privateOutput(failure.output);
   });
 
   // The production file is not patched and has no fault flag. Inspector controls
@@ -479,7 +604,10 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       result?: Record<string, unknown>;
       error?: { message: string };
       method?: string;
-      params?: { hitBreakpoints?: string[] };
+      params?: {
+        hitBreakpoints?: string[];
+        callFrames?: { callFrameId: string }[];
+      };
     };
     const pending = new Map<
       number,
@@ -518,19 +646,34 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       lineNumber,
     });
     await send("Runtime.runIfWaitingForDebugger");
+    let callFrameId: string | undefined;
     await until(async () => {
       const event = events.find((e) => e.method === "Debugger.paused");
       if (!event) return false;
       events.splice(events.indexOf(event), 1);
       if (
         event.params?.hitBreakpoints?.includes(String(breakpoint.breakpointId))
-      )
+      ) {
+        callFrameId = event.params?.callFrames?.[0]?.callFrameId;
         return true;
+      }
       await send("Debugger.resume");
       return false;
     }, Boolean);
     return {
       ...running,
+      // Deliberately defeat the native close fence ONLY through this fixture's
+      // debugger. The reconnecting control executes the very same runner bytes.
+      disableCloseFence: async () => {
+        if (!callFrameId) throw new Error("fixture call frame missing");
+        const reply = await send("Debugger.evaluateOnCallFrame", {
+          callFrameId,
+          expression: "protectedSession = false",
+          returnByValue: true,
+        });
+        if (reply.exceptionDetails)
+          throw new Error("fixture fence control failed");
+      },
       resume: async () => {
         await send("Debugger.resume");
         ws.close();
@@ -546,6 +689,73 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     await f.admin.unsafe(
       "CREATE FUNCTION shadow.pg_advisory_lock(bigint) RETURNS void LANGUAGE plpgsql AS $$ BEGIN INSERT INTO shadow.calls VALUES('lock'); END $$; CREATE FUNCTION shadow.pg_advisory_unlock(bigint) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN INSERT INTO shadow.calls VALUES('unlock'); RETURN true; END $$"
     );
+  }
+
+  function runnerRecords(label: string) {
+    return nativeLog.split("\n").flatMap((line) => {
+      // Prefix fields ONLY: observer statements/bind values may contain label.
+      const m = /^([^|]*)\|(\d+)\| (.*)$/.exec(line);
+      return m?.[1] === label
+        ? [{ pid: Number(m[2]), message: m[3] ?? "" }]
+        : [];
+    });
+  }
+
+  async function terminalRunnerRecords(label: string, firstPid: number) {
+    await until(
+      async () => runnerRecords(label),
+      (records) =>
+        records.some(
+          (r) =>
+            r.pid === firstPid &&
+            /FATAL:.*terminating connection/.test(r.message)
+        ) &&
+        records.some(
+          (r) => r.pid === firstPid && /LOG:.*disconnection:/.test(r.message)
+        )
+    );
+    // This barrier is emitted after the child closes. Await its native log so
+    // the collected stream includes preceding replacement/DDL records as well.
+    const barrier = `story5156_log_barrier_${randomUUID().replaceAll("-", "")}`;
+    await control.unsafe(`SELECT 1 /* ${barrier} */`);
+    await until(async () => nativeLog.includes(barrier), Boolean);
+    const records = runnerRecords(label);
+    const pids = new Set(records.map((r) => r.pid));
+    return until(
+      async () => runnerRecords(label),
+      (complete) =>
+        [...pids].every((pid) =>
+          complete.some(
+            (r) => r.pid === pid && /LOG:.*disconnection:/.test(r.message)
+          )
+        )
+    );
+  }
+
+  function qualifyLostSession(
+    records: ReturnType<typeof runnerRecords>,
+    firstPid: number
+  ) {
+    expect(
+      records.some(
+        (r) =>
+          r.pid === firstPid &&
+          r.message.includes("pg_catalog.pg_advisory_lock")
+      )
+    ).toBe(true);
+    expect(
+      records.some(
+        (r) =>
+          r.pid === firstPid &&
+          r.message.includes("SET search_path TO public, pg_temp")
+      )
+    ).toBe(true);
+    expect([...new Set(records.map((r) => r.pid))]).toEqual([firstPid]);
+    expect(
+      records.some((r) =>
+        /DROP TABLE|CREATE SCHEMA IF NOT EXISTS/.test(r.message)
+      )
+    ).toBe(false);
   }
 
   it("fails closed on IDLE loss before migrate, never reconnects destructive work, then safely retries", async () => {
@@ -575,15 +785,21 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
         await f.admin`SELECT marker FROM shadow.agent_credentials`
       ).toEqual([{ marker: "must-survive" }]);
       // Durable native statement/connection stream, not a point-in-time PID check.
-      const lines = nativeLog
-        .split("\n")
-        .filter((line) => line.includes(child.label));
-      expect(new Set(lines.map((line) => line.split("|")[1])).size).toBe(1);
+      const records = await terminalRunnerRecords(
+        child.label,
+        Number(rows[0]?.pid)
+      );
+      // Observer bind logging contains this label too, under a different
+      // application field. It must not enter the runner's session evidence.
       expect(
-        lines.some((line) =>
-          /DROP TABLE|CREATE SCHEMA IF NOT EXISTS/.test(line)
-        )
-      ).toBe(false);
+        nativeLog
+          .split("\n")
+          .some(
+            (line) =>
+              line.includes(child.label) && !line.startsWith(`${child.label}|`)
+          )
+      ).toBe(true);
+      qualifyLostSession(records, Number(rows[0]?.pid));
       const retry = await start(f, { shadow: true }).done;
       expect(retry.code, retry.output).toBe(0);
       expect(
@@ -592,6 +808,38 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       expect(
         await f.admin`SELECT marker FROM shadow.agent_credentials`
       ).toEqual([{ marker: "must-survive" }]);
+    } finally {
+      child.detach();
+    }
+  }, 45_000);
+
+  it("rejects a reconnecting actual-runner control using the SAME native loss qualifier", async () => {
+    const f = await fixture();
+    await readyBefore63(f);
+    await shadow(f);
+    const child = await paused(f);
+    try {
+      await child.disableCloseFence();
+      const [row] =
+        await control`SELECT pid,state FROM pg_stat_activity WHERE application_name=${child.label}`;
+      expect(row?.state).toBe("idle");
+      const firstPid = Number(row?.pid);
+      await control`SELECT pg_terminate_backend(${firstPid})`;
+      await until(
+        async () =>
+          control`SELECT pid FROM pg_stat_activity WHERE application_name=${child.label}`,
+        (r) => r.length === 0
+      );
+      await child.resume();
+      await child.done;
+      const records = await terminalRunnerRecords(child.label, firstPid);
+      expect(new Set(records.map((r) => r.pid)).size).toBeGreaterThan(1);
+      expect(
+        records.some(
+          (r) => r.pid !== firstPid && /execute|statement:/.test(r.message)
+        )
+      ).toBe(true);
+      expect(() => qualifyLostSession(records, firstPid)).toThrow();
     } finally {
       child.detach();
     }
@@ -753,14 +1001,289 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     }
   }, 45_000);
 
-  it("known history still needs real schema/conformance qualification", async () => {
+  // Fixed obligations of exercised 0063, not a runtime schema compiler. Native
+  // definitions below are qualified on the ACTUAL-runner database and reused by
+  // independent one-fault controls. No counts stand in for identity/definition.
+  async function qualifySchema(db: Sql) {
+    const tables = ["agent_credentials", "agent_principals", "agent_roles"];
+    const normalize = (s: string | null) =>
+      s
+        ?.replaceAll('"', "")
+        .replaceAll("public.", "")
+        .replaceAll(/\s+/g, " ")
+        .trim() ?? null;
+    const rows = await db`
+      SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_catalog.pg_class
+      WHERE relnamespace='public'::regnamespace AND relname=ANY(${tables}) ORDER BY relname`;
+    expect(rows, "RLS obligations").toEqual(
+      tables.map((relname) => ({
+        relname,
+        relrowsecurity: true,
+        relforcerowsecurity: true,
+      }))
+    );
+
+    const indexes = await db`
+      SELECT pg_catalog.pg_get_indexdef(i.indexrelid) AS definition, i.indisvalid, i.indisready
+      FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class t ON t.oid=i.indrelid
+      WHERE t.relnamespace='public'::regnamespace AND t.relname=ANY(${tables})`;
+    const expectedIndexes = [
+      "CREATE UNIQUE INDEX agent_credentials_pkey ON agent_credentials USING btree (id)",
+      "CREATE UNIQUE INDEX agent_credentials_token_hash_unique ON agent_credentials USING btree (token_hash)",
+      "CREATE UNIQUE INDEX agent_credentials_one_pending_successor ON agent_credentials USING btree (predecessor_id) WHERE ((confirmed_at IS NULL) AND (revoked_at IS NULL))",
+      "CREATE INDEX agent_credentials_user_idx ON agent_credentials USING btree (user_id)",
+      "CREATE UNIQUE INDEX agent_principals_pkey ON agent_principals USING btree (id)",
+      "CREATE UNIQUE INDEX agent_principals_slug_unique ON agent_principals USING btree (slug)",
+      "CREATE UNIQUE INDEX agent_principals_user_id_unique ON agent_principals USING btree (user_id)",
+      "CREATE UNIQUE INDEX agent_roles_pkey ON agent_roles USING btree (id)",
+      "CREATE UNIQUE INDEX agent_roles_live_unique ON agent_roles USING btree (principal_user_id, scope) WHERE (revoked_at IS NULL)",
+      "CREATE INDEX agent_roles_principal_idx ON agent_roles USING btree (principal_user_id)",
+    ];
+    expect(
+      indexes
+        .map((r) => ({
+          definition: normalize(r.definition),
+          indisvalid: r.indisvalid,
+          indisready: r.indisready,
+        }))
+        .sort((a, b) =>
+          String(a.definition).localeCompare(String(b.definition))
+        ),
+      "index definitions"
+    ).toEqual(
+      expectedIndexes
+        .sort((a, b) => a.localeCompare(b))
+        .map((definition) => ({
+          definition,
+          indisvalid: true,
+          indisready: true,
+        }))
+    );
+
+    const constraints = await db`
+      SELECT t.relname AS table_name, c.conname AS name, pg_catalog.pg_get_constraintdef(c.oid) AS definition,
+        c.convalidated AS validated, c.condeferrable AS deferrable, c.condeferred AS deferred
+      FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_class t ON t.oid=c.conrelid
+      WHERE t.relnamespace='public'::regnamespace AND t.relname=ANY(${tables}) ORDER BY c.conname`;
+    const expectedConstraints = [
+      ["agent_credentials", "agent_credentials_pkey", "PRIMARY KEY (id)"],
+      [
+        "agent_credentials",
+        "agent_credentials_created_from_canonical",
+        "CHECK ((created_from = ANY (ARRAY['spawn_grant'::text, 'rotation'::text, 'key_upgrade'::text, 'binding_recovery'::text, 'recovery_grant'::text])))",
+      ],
+      [
+        "agent_credentials",
+        "agent_credentials_renew_after_expiry",
+        "CHECK ((renew_until > expires_at))",
+      ],
+      [
+        "agent_credentials",
+        "agent_credentials_user_id_users_id_fk",
+        "FOREIGN KEY (user_id) REFERENCES users(id)",
+      ],
+      [
+        "agent_credentials",
+        "agent_credentials_predecessor_id_fk",
+        "FOREIGN KEY (predecessor_id) REFERENCES agent_credentials(id)",
+      ],
+      ["agent_principals", "agent_principals_pkey", "PRIMARY KEY (id)"],
+      [
+        "agent_principals",
+        "agent_principals_kind_canonical",
+        "CHECK ((kind = ANY (ARRAY['internal'::text, 'external'::text])))",
+      ],
+      [
+        "agent_principals",
+        "agent_principals_internal_has_slug",
+        "CHECK (((kind <> 'internal'::text) OR (slug IS NOT NULL)))",
+      ],
+      [
+        "agent_principals",
+        "agent_principals_user_id_users_id_fk",
+        "FOREIGN KEY (user_id) REFERENCES users(id)",
+      ],
+      ["agent_roles", "agent_roles_pkey", "PRIMARY KEY (id)"],
+      [
+        "agent_roles",
+        "agent_roles_principal_user_id_users_id_fk",
+        "FOREIGN KEY (principal_user_id) REFERENCES users(id)",
+      ],
+      [
+        "agent_roles",
+        "agent_roles_approved_by_users_id_fk",
+        "FOREIGN KEY (approved_by) REFERENCES users(id)",
+      ],
+      [
+        "agent_roles",
+        "agent_roles_requested_by_users_id_fk",
+        "FOREIGN KEY (requested_by) REFERENCES users(id)",
+      ],
+    ];
+    expect(
+      constraints.map((r) => ({ ...r, definition: normalize(r.definition) })),
+      "constraint definitions"
+    ).toEqual(
+      expectedConstraints
+        .map(([table_name, name, definition]) => ({
+          table_name,
+          name,
+          definition,
+          validated: true,
+          deferrable: false,
+          deferred: false,
+        }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    );
+
+    const columns = await db`
+      SELECT t.relname AS table_name, a.attname AS name, pg_catalog.format_type(a.atttypid,a.atttypmod) AS type,
+        a.attnotnull AS required, pg_catalog.pg_get_expr(d.adbin,d.adrelid) AS value
+      FROM pg_catalog.pg_class t JOIN pg_catalog.pg_attribute a ON a.attrelid=t.oid
+      LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=t.oid AND d.adnum=a.attnum
+      WHERE t.relnamespace='public'::regnamespace AND t.relname=ANY(${tables}) AND a.attnum>0 AND NOT a.attisdropped
+      ORDER BY t.relname,a.attnum`;
+    const expectedColumns: Record<
+      string,
+      [string, string, boolean, string | null][]
+    > = {
+      agent_credentials: [
+        ["id", "uuid", true, "gen_random_uuid()"],
+        ["user_id", "text", true, null],
+        ["token_hash", "text", true, null],
+        ["created_from", "text", true, null],
+        ["predecessor_id", "uuid", false, null],
+        ["issued_at", "timestamp with time zone", true, "now()"],
+        ["expires_at", "timestamp with time zone", true, null],
+        ["renew_until", "timestamp with time zone", true, null],
+        ["pending_expires_at", "timestamp with time zone", false, null],
+        ["confirmed_at", "timestamp with time zone", false, null],
+        ["revoked_at", "timestamp with time zone", false, null],
+        ["revoked_reason", "text", false, null],
+        ["revoked_by", "text", false, null],
+      ],
+      agent_principals: [
+        ["id", "uuid", true, "gen_random_uuid()"],
+        ["kind", "text", true, null],
+        ["slug", "text", false, null],
+        ["user_id", "text", true, null],
+        ["created_at", "timestamp with time zone", true, "now()"],
+      ],
+      agent_roles: [
+        ["id", "uuid", true, "gen_random_uuid()"],
+        ["principal_user_id", "text", true, null],
+        ["scope", "text", true, null],
+        ["approved_by", "text", false, null],
+        ["granted_at", "timestamp with time zone", false, null],
+        ["requested_by", "text", false, null],
+        ["created_at", "timestamp with time zone", true, "now()"],
+        ["revoked_at", "timestamp with time zone", false, null],
+      ],
+    };
+    expect(
+      columns.map((r) => ({ ...r, value: normalize(r.value) })),
+      "column definitions"
+    ).toEqual(
+      Object.entries(expectedColumns).flatMap(([table_name, cols]) =>
+        cols.map(([name, type, required, value]) => ({
+          table_name,
+          name,
+          type,
+          required,
+          value,
+        }))
+      )
+    );
+
+    const policies = await db`
+      SELECT tablename,policyname,permissive,roles::text[],cmd,qual,with_check
+      FROM pg_catalog.pg_policies WHERE schemaname='public' AND tablename=ANY(${tables}) ORDER BY policyname`;
+    expect(policies, "policy definitions").toEqual([
+      {
+        tablename: "agent_principals",
+        policyname: "agent_principals_read",
+        permissive: "PERMISSIVE",
+        roles: ["public"],
+        cmd: "SELECT",
+        qual: "true",
+        with_check: null,
+      },
+    ]);
+
+    const triggers = await db`
+      SELECT pg_catalog.pg_get_triggerdef(t.oid) AS definition, t.tgenabled AS enabled
+      FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
+      WHERE c.relnamespace='public'::regnamespace AND NOT t.tgisinternal
+        AND (c.relname=ANY(${tables}) OR t.tgname='agent_principals_no_wallet_binding') ORDER BY t.tgname`;
+    expect(
+      triggers.map((r) => ({
+        definition: normalize(r.definition),
+        enabled: r.enabled,
+      })),
+      "trigger definitions"
+    ).toEqual([
+      {
+        definition:
+          "CREATE TRIGGER agent_credentials_external_principal_only BEFORE INSERT OR UPDATE OF user_id ON agent_credentials FOR EACH ROW EXECUTE FUNCTION agent_credentials_require_external_principal()",
+        enabled: "O",
+      },
+      {
+        definition:
+          "CREATE TRIGGER agent_principals_no_wallet_binding BEFORE INSERT OR UPDATE OF user_id, provider ON user_bindings FOR EACH ROW EXECUTE FUNCTION agent_principals_refuse_wallet_binding()",
+        enabled: "O",
+      },
+    ]);
+    const functions = await db`
+      SELECT p.proname AS name,l.lanname AS language,p.provolatile AS volatility,p.prosecdef AS security_definer,p.proconfig AS config,
+        pg_catalog.pg_get_function_identity_arguments(p.oid) AS args,p.prorettype::regtype::text AS returns,p.prosrc AS body
+      FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+      WHERE n.nspname='public' AND p.proname IN ('agent_credential_state','agent_principals_refuse_wallet_binding','agent_credentials_require_external_principal') ORDER BY p.proname`;
+    const sql = await readFile(join(FOLDER, "0063_wet_midnight.sql"), "utf8");
+    const expectedFunctions = [
+      {
+        name: "agent_credential_state",
+        language: "sql",
+        volatility: "s",
+        args: "c agent_credentials",
+        returns: "text",
+      },
+      {
+        name: "agent_credentials_require_external_principal",
+        language: "plpgsql",
+        volatility: "v",
+        args: "",
+        returns: "trigger",
+      },
+      {
+        name: "agent_principals_refuse_wallet_binding",
+        language: "plpgsql",
+        volatility: "v",
+        args: "",
+        returns: "trigger",
+      },
+    ].map((f) => {
+      const body = sql.match(
+        new RegExp(
+          `CREATE OR REPLACE FUNCTION ${f.name}\\([\\s\\S]*?AS \\$\\$([\\s\\S]*?)\\$\\$;`
+        )
+      )?.[1];
+      if (!body) throw new Error("fixed migration function body missing");
+      return { ...f, security_definer: false, config: null, body: body.trim() };
+    });
+    expect(
+      functions.map((r) => ({ ...r, body: r.body.trim() })),
+      "function definitions"
+    ).toEqual(expectedFunctions);
+  }
+
+  it("known history cannot substitute for missing-function qualification", async () => {
     const f = await fixture();
     expect((await run(f)).code).toBe(0);
     await f.admin.unsafe(
       "GRANT ALL ON ALL TABLES IN SCHEMA public TO service_operator"
     );
     await f.admin.unsafe(
-      "DROP FUNCTION agent_credential_state(agent_credentials); ALTER TABLE agent_credentials NO FORCE ROW LEVEL SECURITY"
+      "DROP FUNCTION agent_credential_state(agent_credentials)"
     );
     expect((await run(f)).code).toBe(0);
     const broken = createPostgresCredentialStore(
@@ -768,12 +1291,71 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       { hasRoles: async () => false }
     );
     await f.admin`INSERT INTO users(id,name) VALUES ('negative-control','fixture')`;
-    expect(
-      await upgradeSignedKey(broken, { userId: "negative-control" })
-    ).toMatchObject({ ok: false });
-    expect(
-      await f.admin`SELECT relforcerowsecurity FROM pg_class WHERE oid='public.agent_credentials'::regclass`
-    ).toEqual([{ relforcerowsecurity: false }]);
+    await expect(
+      upgradeSignedKey(broken, { userId: "negative-control" })
+    ).rejects.toBeInstanceOf(CredentialStoreUnavailableError);
+    await expect(
+      upgradeSignedKey(broken, { userId: "negative-control" })
+    ).rejects.toMatchObject({ code: "authz_unavailable" });
+    await expect(qualifySchema(f.admin)).rejects.toThrow(
+      "function definitions"
+    );
+  });
+
+  it.each([
+    [
+      "RLS",
+      "ALTER TABLE agent_credentials NO FORCE ROW LEVEL SECURITY",
+      "RLS obligations",
+    ],
+    [
+      "uniqueness",
+      "DROP INDEX agent_credentials_token_hash_unique; CREATE INDEX agent_credentials_token_hash_unique ON agent_credentials(token_hash)",
+      "index definitions",
+    ],
+    [
+      "predicate",
+      "DROP INDEX agent_credentials_one_pending_successor; CREATE UNIQUE INDEX agent_credentials_one_pending_successor ON agent_credentials(predecessor_id) WHERE confirmed_at IS NULL",
+      "index definitions",
+    ],
+    [
+      "index column",
+      "DROP INDEX agent_credentials_user_idx; CREATE INDEX agent_credentials_user_idx ON agent_credentials(revoked_by)",
+      "index definitions",
+    ],
+    [
+      "CHECK",
+      "ALTER TABLE agent_credentials DROP CONSTRAINT agent_credentials_renew_after_expiry; ALTER TABLE agent_credentials ADD CONSTRAINT agent_credentials_renew_after_expiry CHECK (true)",
+      "constraint definitions",
+    ],
+    [
+      "FK action",
+      "ALTER TABLE agent_credentials DROP CONSTRAINT agent_credentials_user_id_users_id_fk; ALTER TABLE agent_credentials ADD CONSTRAINT agent_credentials_user_id_users_id_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+      "constraint definitions",
+    ],
+    [
+      "column nullability",
+      "ALTER TABLE agent_credentials ALTER COLUMN token_hash DROP NOT NULL",
+      "column definitions",
+    ],
+    [
+      "policy",
+      "CREATE POLICY fixture_leak ON agent_credentials FOR SELECT USING (true)",
+      "policy definitions",
+    ],
+    [
+      "trigger attachment",
+      "DROP TRIGGER agent_principals_no_wallet_binding ON user_bindings; CREATE TRIGGER agent_principals_no_wallet_binding BEFORE INSERT OR UPDATE OF user_id ON agent_credentials FOR EACH ROW EXECUTE FUNCTION agent_principals_refuse_wallet_binding()",
+      "trigger definitions",
+    ],
+  ])("normal schema qualifier rejects independent %s fault despite valid history", async (_fault, mutation, assertion) => {
+    const f = await fixture();
+    expect((await run(f)).code).toBe(0);
+    await qualifySchema(f.admin);
+    await f.admin.unsafe(mutation);
+    // Ledger guard is deliberately narrow. Native qualification owns drift.
+    expect((await run(f)).code).toBe(0);
+    await expect(qualifySchema(f.admin)).rejects.toThrow(assertion);
   });
 
   const makeUser = async () => {
@@ -838,12 +1420,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
   });
 
   it("qualifies canonical RLS/triggers/indexes and rejects wrong-role credential reads", async () => {
-    const rows =
-      await service`SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class WHERE oid IN ('public.agent_credentials'::regclass,'public.agent_principals'::regclass,'public.agent_roles'::regclass)`;
-    expect(rows).toHaveLength(3);
-    expect(rows.every((r) => r.relrowsecurity && r.relforcerowsecurity)).toBe(
-      true
-    );
+    await qualifySchema(service);
     expect(await app`SELECT 1 FROM agent_credentials`).toHaveLength(0);
     const id = await makeUser();
     const key = await upgradeSignedKey(store(), { userId: id });
@@ -869,11 +1446,18 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     await expect(
       service`INSERT INTO agent_credentials(user_id,token_hash,created_from,expires_at,renew_until) VALUES (${ordinary},'fixture','rotation',now(),now()+interval '1 day')`
     ).rejects.toThrow();
-    expect(
-      await service`SELECT indexname FROM pg_indexes WHERE schemaname='public' AND tablename IN ('agent_credentials','agent_principals','agent_roles')`
-    ).toHaveLength(10);
-    const triggers =
-      await service`SELECT tgname FROM pg_trigger WHERE tgname IN ('agent_principals_no_wallet_binding','agent_credentials_external_principal_only')`;
-    expect(triggers).toHaveLength(2);
+    const hash = await hashAgentKey(key.apiKey);
+    await expect(
+      service`INSERT INTO agent_credentials(user_id,token_hash,created_from,expires_at,renew_until) VALUES (${id},${hash},'rotation',now(),now()+interval '1 day')`
+    ).rejects.toMatchObject({
+      code: "23505",
+      constraint_name: "agent_credentials_token_hash_unique",
+    });
+    await expect(
+      service`INSERT INTO agent_credentials(user_id,token_hash,created_from,expires_at,renew_until) VALUES (${id},${sha(randomUUID())},'rotation',now(),now())`
+    ).rejects.toMatchObject({
+      code: "23514",
+      constraint_name: "agent_credentials_renew_after_expiry",
+    });
   });
 });
