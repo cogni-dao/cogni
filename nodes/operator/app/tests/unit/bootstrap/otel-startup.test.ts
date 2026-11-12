@@ -20,6 +20,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.resetModules();
+  vi.doUnmock("pino");
+  vi.doUnmock("@/bootstrap/startup-preflight");
   mocks.start.mockReset();
   mocks.options.mockReset();
 });
@@ -105,6 +107,43 @@ describe("native telemetry startup", () => {
     await expect(register()).rejects.toBe(original);
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(JSON.stringify(lines)).not.toContain("PRIVATE_SDK_SENTINEL");
+  });
+
+  it.each([
+    "construction",
+    "emission",
+  ] as const)("preserves fatal startup when logger %s throws", async (phase) => {
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NODE_ENV", "production");
+    const original = new Error("startup failure");
+    const diagnostic = new Error("diagnostic failure");
+    mocks.start.mockImplementation(() => {
+      throw original;
+    });
+    const emit = vi.fn(() => {
+      throw diagnostic;
+    });
+    const construct = vi.fn(() => {
+      if (phase === "construction") throw diagnostic;
+      return { error: emit };
+    });
+    vi.doMock("@/bootstrap/startup-preflight", () => ({
+      runStartupPreflight: vi.fn(),
+    }));
+    vi.doMock("pino", () => ({
+      default: Object.assign(construct, {
+        stdTimeFunctions: { isoTime: () => "" },
+      }),
+    }));
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    const { register } = await import("@/instrumentation.node");
+
+    await expect(register()).rejects.toBe(original);
+    expect(construct).toHaveBeenCalledOnce();
+    expect(emit).toHaveBeenCalledTimes(phase === "emission" ? 1 : 0);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 
   it("suppresses the native Redis error fallback without opening a connection", async () => {

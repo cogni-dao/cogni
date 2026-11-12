@@ -224,28 +224,6 @@ describe("GET /readyz async substrate contract", () => {
     expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
   });
 
-  it("keeps the kubelet probe local-only even when every remote probe would stall", async () => {
-    const never = new Promise<never>(() => undefined);
-    mocks.checkEvmRpcConnectivity.mockReturnValue(never);
-    mocks.assertTemporalConnectivity.mockReturnValue(never);
-    mocks.assertSchedulerWorkerConnectivity.mockReturnValue(never);
-    mocks.getKnowledge.mockReturnValue(never);
-    mocks.streamLength.mockReturnValue(never);
-    mocks.verifySystemTenant.mockReturnValue(never);
-
-    const response = await GET(request());
-
-    expect(response.status).toBe(200);
-    expect(mocks.assertEvmRpcConfig).toHaveBeenCalledOnce();
-    expect(mocks.checkEvmRpcConnectivity).not.toHaveBeenCalled();
-    expect(mocks.assertTemporalConnectivity).not.toHaveBeenCalled();
-    expect(mocks.assertSchedulerWorkerConnectivity).not.toHaveBeenCalled();
-    expect(mocks.getKnowledge).not.toHaveBeenCalled();
-    expect(mocks.streamLength).not.toHaveBeenCalled();
-    expect(mocks.fetch).not.toHaveBeenCalled();
-    expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
-  });
-
   it.each([
     "healthy",
     "error",
@@ -374,6 +352,58 @@ describe("GET /readyz async substrate contract", () => {
       expect.objectContaining({ event: "substrate.deep.complete" }),
       "deep readiness: checks complete"
     );
+  });
+
+  it("starts all stalled probes together and keeps default readiness available", async () => {
+    vi.useFakeTimers();
+    const never = new Promise<never>(() => undefined);
+    const probes = [
+      mocks.checkEvmRpcConnectivity,
+      mocks.assertTemporalConnectivity,
+      mocks.assertSchedulerWorkerConnectivity,
+      mocks.verifySystemTenant,
+      mocks.streamLength,
+      mocks.fetch,
+      mocks.getKnowledge,
+    ];
+    for (const probe of probes) probe.mockReturnValue(never);
+    const names = [
+      "evm-rpc",
+      "temporal",
+      "scheduler-worker",
+      "postgres",
+      "redis",
+      "litellm-gateway",
+      "doltgres",
+    ];
+
+    let settled = false;
+    const pending = GET(request("/readyz?deep=1")).then((response) => {
+      settled = true;
+      return response;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    for (const probe of probes) expect(probe).toHaveBeenCalledOnce();
+    expect((await GET(request())).status).toBe(200);
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(settled).toBe(false);
+    expect((await GET(request())).status).toBe(200);
+    await vi.advanceTimersByTimeAsync(1);
+
+    const response = await pending;
+    const body = await response.json();
+    expect(response.status).toBe(503);
+    expect(body).toMatchObject({
+      status: "error",
+      reason: "INFRA_UNREACHABLE",
+      message: "evm-rpc check exceeded 3000ms budget",
+      unreachable: names,
+      buildSha: "readyz-contract-sha",
+    });
+    expect(Object.keys(body.checks)).toEqual(names);
+    for (const name of names) expect(body.checks[name].status).toBe("failed");
+    for (const probe of probes) expect(probe).toHaveBeenCalledOnce();
+    expect(mocks.getContainer).toHaveBeenCalledOnce();
   });
 
   it("skips the knowledge plane when DOLTGRES_URL is not declared", async () => {
@@ -682,5 +712,32 @@ describe("GET /readyz async substrate contract", () => {
     expect(
       JSON.stringify([...mocks.info.mock.calls, ...mocks.error.mock.calls])
     ).not.toContain("PRIVATE_BUILD_INFO");
+  });
+  it("keeps the kubelet probe local-only even when every remote probe would stall", async () => {
+    const never = new Promise<never>(() => undefined);
+    mocks.checkEvmRpcConnectivity.mockReturnValue(never);
+    mocks.assertTemporalConnectivity.mockReturnValue(never);
+    mocks.assertSchedulerWorkerConnectivity.mockReturnValue(never);
+    mocks.getKnowledge.mockReturnValue(never);
+    mocks.streamLength.mockReturnValue(never);
+    mocks.fetch.mockReturnValue(never);
+    mocks.verifySystemTenant.mockReturnValue(never);
+
+    // Reload the route before the first request so both cold and warm paths are covered.
+    vi.resetModules();
+    const { GET: freshGet } = await import("@/app/(infra)/readyz/route");
+    for (let call = 0; call < 2; call++) {
+      const response = await freshGet(request());
+      expect(response.status).toBe(200);
+      expect(mocks.getContainer).not.toHaveBeenCalled();
+      expect(mocks.checkEvmRpcConnectivity).not.toHaveBeenCalled();
+      expect(mocks.assertTemporalConnectivity).not.toHaveBeenCalled();
+      expect(mocks.assertSchedulerWorkerConnectivity).not.toHaveBeenCalled();
+      expect(mocks.getKnowledge).not.toHaveBeenCalled();
+      expect(mocks.streamLength).not.toHaveBeenCalled();
+      expect(mocks.fetch).not.toHaveBeenCalled();
+      expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
+    }
+    expect(mocks.assertEvmRpcConfig).toHaveBeenCalledTimes(2);
   });
 });
