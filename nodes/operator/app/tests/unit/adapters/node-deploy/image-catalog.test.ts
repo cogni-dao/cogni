@@ -33,13 +33,22 @@ function image(): string {
   writeFileSync(join(cat, "_schema.json"), "{}");
   writeFileSync(
     join(cat, "poly.yaml"),
-    `name: poly\nsource_repo: https://github.com/x/poly.git\nnode_id: ${POLY}\nrequired_placement_countries:\n  production: [FI, NL]\n`
+    `name: poly\nsource_repo: https://github.com/cogni-dao/poly.git\nnode_id: ${POLY}\nrequired_placement_countries:\n  production: [FI, NL]\ncompute_api:\n  candidate-a: node-deploy\n  production: node-deploy\n`
   );
   writeFileSync(join(cat, "operator.yaml"), "name: operator\ntype: node\n");
   mkdirSync(join(root, "nodes", "operator", ".cogni"), { recursive: true });
   writeFileSync(
     join(root, "nodes", "operator", ".cogni", "repo-spec.yaml"),
     `node_id: "${INREPO}"\n`
+  );
+  // Independent, stable fleet and environment combinations exercise the selector.
+  writeFileSync(
+    join(cat, "preview-only.yaml"),
+    "name: preview-only\nsource_repo: https://github.com/cogni-dao/preview-only.git\ncompute_api:\n  preview: node-deploy\n  production: legacy\n"
+  );
+  writeFileSync(
+    join(cat, "other-fleet.yaml"),
+    "name: other-fleet\nsource_repo: https://github.com/cogni-test-org/other-fleet.git\ncompute_api:\n  candidate-a: node-deploy\n"
   );
   // ignored: name does not match the file stem; submodule row without a projected id
   writeFileSync(join(cat, "liar.yaml"), `name: other\nnode_id: ${POLY}\n`);
@@ -105,30 +114,45 @@ describe("ImageCatalogNodes", () => {
     ).toEqual([]);
   });
 
-  it("nodeDeploySlugs lists exactly the fleet's nodes whose compute_api cell for that env is node-deploy (REAL catalog)", async () => {
+  it("filters the synthetic catalog by environment, deployment authority, and fleet", async () => {
+    const catalog = new ImageCatalogNodes({ root: image() });
+    expect(await catalog.nodeDeploySlugs("candidate-a", "cogni-dao")).toEqual([
+      "poly",
+    ]);
+    expect(await catalog.nodeDeploySlugs("preview", "COGNI-DAO")).toEqual([
+      "preview-only",
+    ]);
+    expect(await catalog.nodeDeploySlugs("production", "cogni-dao")).toEqual([
+      "poly",
+    ]);
+    expect(
+      await catalog.nodeDeploySlugs("candidate-a", "cogni-test-org")
+    ).toEqual(["other-fleet"]);
+    expect(await catalog.nodeDeploySlugs("candidate-a", undefined)).toEqual([]);
+    expect(
+      await catalog.nodeDeploySlugs("production", "cogni-test-org")
+    ).toEqual([]);
+  });
+
+  it("REAL catalog keeps fleet isolation and refuses operator hosts", async () => {
     const repoRoot = resolve(__dirname, "../../../../../../..");
     const catalog = new ImageCatalogNodes({ root: repoRoot });
     const production = await catalog.nodeDeploySlugs("production", "cogni-dao");
-    expect([...production].sort()).toEqual([
-      "beacon",
-      "levelup",
-      "node-template",
-      "poly",
-      "red",
-      "toks5",
-    ]);
-    // the operator is not a node-deploy node: it never contributes a host
+    expect(production).toContain("poly");
     expect(production).not.toContain("operator");
-    expect(
-      [...(await catalog.nodeDeploySlugs("candidate-a", "cogni-dao"))].sort()
-    ).toEqual(["node-template", "poly", "red", "toks5"]);
-    expect(
-      [...(await catalog.nodeDeploySlugs("preview", "cogni-dao"))].sort()
-    ).toEqual(["poly", "toks5"]);
-    expect(
-      await catalog.nodeDeploySlugs("candidate-a", "cogni-dao")
-    ).not.toContain("beacon");
-    // the guard built from it admits poly in production and refuses operator hosts
+    for (const env of ["candidate-a", "preview", "production"]) {
+      const canonical = await catalog.nodeDeploySlugs(env, "cogni-dao");
+      const otherFleet = await catalog.nodeDeploySlugs(env, "cogni-test-org");
+      expect(otherFleet).not.toContain("poly");
+      expect(otherFleet).not.toContain("toks5");
+      expect(await catalog.nodeDeploySlugs(env, undefined)).not.toContain(
+        "poly"
+      );
+      expect(
+        [...(await catalog.nodeDeploySlugs(env, "COGNI-DAO"))].sort()
+      ).toEqual([...canonical].sort());
+      expect(canonical).not.toContain("operator");
+    }
     const re = edgeHostRegexFor(
       production,
       resolveWorkloadZoneBinding({
@@ -137,24 +161,7 @@ describe("ImageCatalogNodes", () => {
       })
     );
     expect(re.test("poly.cognidao.org")).toBe(true);
-    expect(re.test("beacon.cognidao.org")).toBe(true);
-    expect(re.test("red.cognidao.org")).toBe(true);
     expect(re.test("cognidao.org")).toBe(false);
-  });
-
-  it("FLEET_FILTER: another fleet's operator never claims canonical nodes (the test operator never deploys canonical toks5), and an unset fleet claims none", async () => {
-    const repoRoot = resolve(__dirname, "../../../../../../..");
-    const catalog = new ImageCatalogNodes({ root: repoRoot });
-    for (const env of ["candidate-a", "preview", "production"]) {
-      // The test fleet's one lane (story.5137): cogni-test-org/spawny-boi on candidate-a only. Never a canonical node.
-      expect(await catalog.nodeDeploySlugs(env, "cogni-test-org")).toEqual(
-        env === "candidate-a" ? ["spawny-boi"] : []
-      );
-      expect(await catalog.nodeDeploySlugs(env, undefined)).toEqual([]);
-      expect((await catalog.nodeDeploySlugs(env, "COGNI-DAO")).length).toBe(
-        (await catalog.nodeDeploySlugs(env, "cogni-dao")).length
-      );
-    }
   });
 
   it("ImageCatalogNodeSource refuses an image repository that does not match the source repo", async () => {
