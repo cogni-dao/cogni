@@ -10,6 +10,7 @@
  * Links: bug.5625, infra/images/litellm/cogni_callbacks.py
  * @internal
  */
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpLangfuseGatewayReceiptVerifier } from "@/adapters/server/observability/langfuse-gateway-receipt.adapter";
 
@@ -18,7 +19,10 @@ const NODE = "b927a9dd-6132-4fc9-a51e-e3cee2568e3c",
   HASH = "b".repeat(64),
   RUN = "38e83ed8-0d0d-40b0-8aa8-56b457773019",
   TRACE = "b32299238d2d6ed155dba2d760e32b70",
-  ALIAS = `cogni:candidate-a:${NODE}:app:v1`;
+  ALIAS = `cogni:candidate-a:${NODE}:app:v1`,
+  FINGERPRINT = createHash("sha256")
+    .update(`ai.gateway.receipt.v1:${HASH}`)
+    .digest("hex");
 const START = Date.parse("2026-11-12T20:06:15.900Z");
 const iso = (t: number) => new Date(t).toISOString();
 
@@ -57,7 +61,7 @@ function receipt(
     status: "failure",
     callId: "call-1",
     responseId: null,
-    keyHash: HASH,
+    keyFingerprint: FINGERPRINT,
     keyAlias: ALIAS,
     runId: RUN,
     spendNodeId: NODE,
@@ -135,7 +139,8 @@ describe("cross-lane gateway receipts", () => {
     const [url, init] = fetcher.mock.calls[0] as unknown as [URL, RequestInit];
     const query = url.searchParams.get("query") ?? "";
     expect(query).toContain(`{env="candidate-a",service="litellm"}`);
-    expect(query).toContain(`keyHash="${HASH}"`);
+    expect(query).toContain(`keyFingerprint="${FINGERPRINT}"`);
+    expect(query).not.toContain(HASH);
     expect(query).toContain(`runId="${RUN}"`);
     expect(BigInt(url.searchParams.get("end") ?? "0")).toBeLessThanOrEqual(
       BigInt(START + 690 + 5001) * 1_000_000n
@@ -181,7 +186,10 @@ describe("cross-lane gateway receipts", () => {
       "a foreign alias line",
       [receipt({ keyAlias: `cogni:candidate-a:${OTHER}:app:v1` })],
     ],
-    ["a foreign key line", [receipt(), receipt({ keyHash: "c".repeat(64) })]],
+    [
+      "a foreign key line",
+      [receipt(), receipt({ keyFingerprint: "c".repeat(64) })],
+    ],
     ["a non-receipt line", [receipt(), { event: "other" }]],
   ])("fails closed on %s in the bucket", async (_name, lines) => {
     const { verifier } = setup(lines);

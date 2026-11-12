@@ -44,6 +44,7 @@ DEFAULT_NODE = os.environ.get("COGNI_DEFAULT_NODE_ID")
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _WORKLOAD_ALIAS = re.compile(rf"cogni:([a-z0-9]+(?:-[a-z0-9]+)*):({_UUID}):app:v1")
 _KEY_HASH = re.compile(r"[0-9a-f]{64}")
+RECEIPT_DOMAIN = "ai.gateway.receipt.v1"
 
 
 def _parse_node_endpoints() -> dict[str, str]:
@@ -101,10 +102,15 @@ def _str(value: Any, limit: int = 512) -> str | None:
 def emit_gateway_receipt(
     kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any, status: str
 ) -> None:
-    """Print one structured receipt from server-stamped identity. Never raises.
+    """Print one structured receipt per call. Never raises.
+
+    Authority is the server-stamped key hash and alias; runId and spendNodeId are
+    request metadata the reader must also find on the same Langfuse row.
 
     Keys avoid `nodeId`/`svcNode` so the collector adds no node label: the gateway,
-    not a node, writes this stream. No content, cost or credential is logged.
+    not a node, writes this stream. No content, cost or credential is logged. LiteLLM
+    accepts a stored key hash as a bearer token, so only a domain-separated digest
+    of it is printed; the reader derives the same digest from the Langfuse row.
     """
     try:
         litellm_params = kwargs.get("litellm_params") or {}
@@ -119,12 +125,17 @@ def emit_gateway_receipt(
             except Exception:
                 response_id = getattr(response_obj, "id", None)
         key_hash = metadata.get("user_api_key_hash")
+        fingerprint = (
+            hashlib.sha256(f"{RECEIPT_DOMAIN}:{key_hash}".encode()).hexdigest()
+            if isinstance(key_hash, str) and _KEY_HASH.fullmatch(key_hash)
+            else None
+        )
         line = {
             "event": "ai.gateway.receipt",
             "status": status,
             "callId": _str(kwargs.get("litellm_call_id")),
             "responseId": _str(response_id),
-            "keyHash": key_hash if isinstance(key_hash, str) and _KEY_HASH.fullmatch(key_hash) else None,
+            "keyFingerprint": fingerprint,
             "keyAlias": _str(metadata.get("user_api_key_alias"), 128),
             "runId": _str(spend.get("run_id"), 256),
             "spendNodeId": _str(spend.get("node_id"), 64),
