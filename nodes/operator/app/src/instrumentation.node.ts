@@ -19,6 +19,9 @@
 
 import { NodeSDK, tracing } from "@opentelemetry/sdk-node";
 import pino from "pino";
+import { RuntimeSecretError } from "@/shared/env/invariants";
+import { localReadinessPreflight } from "@/shared/env/local-readiness-preflight";
+import { EnvValidationError } from "@/shared/env/server-env";
 
 let sdk: NodeSDK | null = null;
 let sdkAttempt: Promise<void> | undefined;
@@ -133,6 +136,18 @@ export async function register(): Promise<void> {
 
   try {
     await initOtelSdk();
+    try {
+      localReadinessPreflight();
+    } catch (error) {
+      if (
+        !(
+          error instanceof EnvValidationError ||
+          error instanceof RuntimeSecretError
+        )
+      )
+        throw error;
+      // Keep diagnostic HTTP available; readiness repeats the same assertion.
+    }
     logAppStarted();
   } catch (error) {
     try {

@@ -273,6 +273,7 @@ import {
   getStewardWalletConfig,
 } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
+import { localReadinessPreflight } from "@/shared/env/local-readiness-preflight";
 import { serverEnv } from "@/shared/env/server-env";
 import { resolveNodeCatalogSource } from "@/shared/node-registry/catalog-source";
 import { envForApex } from "@/shared/node-registry/deploy-hosts";
@@ -638,7 +639,7 @@ function getWebhookRegistrations(): ReadonlyMap<
 }
 
 function createContainer(): Container {
-  const env = serverEnv();
+  const env = localReadinessPreflight();
   const nodeId = getNodeId();
   const db = getAppDb();
   const requestDependencies = getRequestLoggingDependencies();

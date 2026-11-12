@@ -82,6 +82,12 @@ vi.mock("@/shared/env", async (importOriginal) => {
   };
 });
 
+vi.mock("@/shared/env/server-env", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/shared/env/server-env")>();
+  return { ...actual, serverEnv: () => mocks.serverEnv() };
+});
+
 vi.mock("@/shared/env/invariants", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/shared/env/invariants")>();
@@ -253,6 +259,11 @@ describe("GET /readyz async substrate contract", () => {
       message: "EVM_RPC_URL is required",
     });
     expect(mocks.checkEvmRpcConnectivity).not.toHaveBeenCalled();
+    expect(mocks.getContainer).not.toHaveBeenCalled();
+    expect(mocks.info).toHaveBeenCalledWith(
+      expect.objectContaining({ durationMs: expect.any(Number) }),
+      "request complete"
+    );
   });
 
   it("forces a live RPC read and returns 503 when the deep probe cannot reach Base", async () => {

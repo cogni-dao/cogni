@@ -13,11 +13,10 @@ import { withRootSpan } from "@/bootstrap/otel";
 import { getNodeId } from "@/shared/config";
 import { EnvValidationError, serverEnv } from "@/shared/env";
 import {
-  assertEvmRpcConfig,
-  assertRuntimeSecrets,
   InfraConnectivityError,
   RuntimeSecretError,
 } from "@/shared/env/invariants";
+import { localReadinessPreflight } from "@/shared/env/local-readiness-preflight";
 import {
   createRequestContext,
   httpRequestDurationMs,
@@ -152,9 +151,7 @@ export async function GET(request: Request): Promise<NextResponse> {
             const result = await serveReadyz({
               deep: new URL(request.url).searchParams.get("deep") === "1",
               local: () => {
-                const env = serverEnv();
-                assertRuntimeSecrets(env);
-                assertEvmRpcConfig(env);
+                const env = localReadinessPreflight();
                 try {
                   setBuildInfo(
                     process.env.npm_package_version || "unknown",
