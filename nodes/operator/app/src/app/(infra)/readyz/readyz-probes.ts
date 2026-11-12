@@ -28,7 +28,6 @@ import {
   type ProbeDependency as PkgProbeDependency,
   type SubstrateDependency as PkgSubstrateDependency,
   findUnclassifiedSubstrateKeys as pkgFindUnclassifiedSubstrateKeys,
-  runDeepChecks as pkgRunDeepChecks,
   probeKnowledgePlane,
   probeLiteLlmGateway,
   probeRedisStream,
@@ -71,24 +70,16 @@ export type DeepDependency =
   | "litellm-gateway"
   | "doltgres";
 
-/** Run every declared check concurrently with the operator's logger, error type and budget. */
-export async function runDeepChecks(
-  ctx: RequestContext,
-  checks: ReadonlyArray<readonly [DeepDependency, () => Promise<unknown>]>
-): Promise<DeepChecks> {
-  return pkgRunDeepChecks(checks, {
-    log: (fields, message) => ctx.log.info(fields, message),
-    timeoutError: (dependency, budgetMs) =>
-      new InfraConnectivityError(
-        `${dependency} check exceeded ${budgetMs}ms budget`
-      ),
-    budgetMs: DEEP_CHECK_BUDGET_MS,
-  });
+/** Inject the operator's deadline and logging into shared readiness. */
+export function deepRuntime(ctx: RequestContext) {
+  return { log: (fields: Record<string, unknown>, message: string) => ctx.log.info(fields, message),
+    timeoutError: (dependency: string, budgetMs: number) => new InfraConnectivityError(`${dependency} check exceeded ${budgetMs}ms budget`),
+    budgetMs: DEEP_CHECK_BUDGET_MS };
 }
 
 /** Forced live EVM RPC read; fatal on failure. */
 async function checkEvmRpc(
-  ctx: RequestContext,
+  _ctx: RequestContext,
   container: Container,
   env: Env
 ): Promise<void> {
@@ -101,27 +92,8 @@ async function checkEvmRpc(
   );
   if (!result.ok) {
     const message = `EVM RPC connectivity check failed: ${result.errorMessage ?? "unknown"}`;
-    ctx.log.error(
-      {
-        event: "substrate.evm_rpc.unreachable",
-        severity: "critical",
-        reason: "INFRA_UNREACHABLE",
-        dependency: "evm-rpc",
-        source: result.source,
-        message,
-      },
-      "deep readiness: EVM RPC unreachable"
-    );
     throw new InfraConnectivityError(message);
   }
-  ctx.log.info(
-    {
-      event: "substrate.evm_rpc.reachable",
-      dependency: "evm-rpc",
-      source: result.source,
-    },
-    "deep readiness: EVM RPC reachable"
-  );
 }
 
 function checkDoltgres(container: Container, env: Env): Promise<void> {

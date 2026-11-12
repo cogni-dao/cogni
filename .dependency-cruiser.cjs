@@ -20,6 +20,7 @@ const srcLayers = {
   bootstrap: "^nodes/operator/app/src/bootstrap",
   lib: "^nodes/operator/app/src/lib",
   auth: "^nodes/operator/app/src/auth\\.ts$",
+  instrumentation: "^nodes/operator/app/src/instrumentation(?:\\.node)?\\.ts$",
   proxy: "^nodes/operator/app/src/proxy\\.ts$",
   components: "^nodes/operator/app/src/components",
   styles: "^nodes/operator/app/src/styles",
@@ -61,6 +62,12 @@ module.exports = {
   allowedSeverity: "error",
 
   allowed: [
+    // Next's Edge-safe entry loads its Node-only instrumentation module.
+    {
+      from: { path: layers.instrumentation },
+      to: { path: [layers.instrumentation] },
+    },
+
     // core → core, types
     {
       from: { path: layers.core },

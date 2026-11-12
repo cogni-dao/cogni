@@ -89,7 +89,7 @@ import {
   type WorkflowClient,
 } from "@temporalio/client";
 import { eq, inArray } from "drizzle-orm";
-import Redis from "ioredis";
+import { createStreamRedisClient } from "@/bootstrap/stream-redis-client";
 import type { Logger } from "pino";
 import { parse as parseYaml } from "yaml";
 import {
@@ -1303,10 +1303,7 @@ function createContainer(): Container {
 
   // Redis client for run event streaming (ephemeral stream plane)
   // Per REDIS_IS_STREAM_PLANE: only transient data, no durable state
-  const redisClient = new Redis(env.REDIS_URL, {
-    lazyConnect: true,
-    maxRetriesPerRequest: 3,
-  });
+  const redisClient = createStreamRedisClient(env.REDIS_URL);
   const runStream = new RedisRunStreamAdapter(redisClient);
   const nodeStream = new RedisNodeStreamAdapter(redisClient);
 
