@@ -207,7 +207,14 @@ export function mapPullRequestNode(
     for (const suite of commit.checkSuites.nodes) {
       if (suite.checkRuns.pageInfo.hasNextPage) incomplete = true;
       for (const run of suite.checkRuns.nodes) {
-        if (run.databaseId === null) continue;
+        if (
+          run.databaseId === null ||
+          !Number.isSafeInteger(run.databaseId) ||
+          run.databaseId <= 0
+        ) {
+          incomplete = true;
+          continue;
+        }
         checks.push({
           id: run.databaseId,
           headSha: commit.oid,

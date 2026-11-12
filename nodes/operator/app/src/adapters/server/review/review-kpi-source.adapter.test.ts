@@ -84,6 +84,19 @@ describe("mapPullRequestNode", () => {
       completedAt: undefined,
     });
   });
+  it("missing or invalid check identities make mixed reads incomplete", () => {
+    for (const databaseId of [
+      null,
+      Number.NaN,
+      0,
+      -1,
+      Number.MAX_SAFE_INTEGER + 1,
+    ]) {
+      const mapped = mapPullRequestNode(node({}, [run(), run({ databaseId })]));
+      expect(mapped).toMatchObject({ incomplete: true, checks: [{ id: 7 }] });
+      expect(mapped?.checks).toHaveLength(1);
+    }
+  });
   it("more commits, suites or check runs than were read make the PR incomplete", () => {
     const base = node();
     expect(

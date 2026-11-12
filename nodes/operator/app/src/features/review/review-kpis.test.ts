@@ -217,6 +217,21 @@ describe("review.duration@1", () => {
       await run(src, DURATION_ID, { days: 1, quantile: 50 })
     ).toMatchObject({ complete: true, value: 7 });
   });
+  it("does not publish fast samples when another check lacks its identity", async () => {
+    const src = source({ prs: [pr({ number: 1, checks: [timed(1, 1)] })] });
+    const read = src.readHeadChecks;
+    src.readHeadChecks = async (input) => ({
+      ...(await read(input)),
+      incomplete: true,
+    });
+    expect(
+      await run(src, DURATION_ID, { days: 1, quantile: 95 })
+    ).toMatchObject({
+      complete: false,
+      reason: "incomplete_or_invalid_source",
+      unit: "min",
+    });
+  });
 });
 
 function pr(over: Partial<ReviewPrFacts> & { number: number }): ReviewPrFacts {
