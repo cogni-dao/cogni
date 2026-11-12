@@ -28,6 +28,7 @@ function makeBootLogger() {
     {
       base: {
         app: "cogni-template",
+        // biome-ignore lint/style/noProcessEnv: fatal startup logger runs before config initialization
         service: process.env.SERVICE_NAME ?? "app",
       },
       messageKey: "msg",
@@ -103,8 +104,8 @@ export async function initOtelSdk(options?: {
     await sdkAttempt;
     return true;
   } catch (error) {
-    // biome-ignore lint/style/noProcessEnv: NODE_ENV is standard Next.js runtime env
     const shouldFail =
+      // biome-ignore lint/style/noProcessEnv: telemetry initialization precedes config initialization
       options?.failOnError ?? process.env.NODE_ENV !== "development";
     if (shouldFail) throw error;
     try {

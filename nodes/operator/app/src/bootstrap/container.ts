@@ -89,7 +89,6 @@ import {
   type WorkflowClient,
 } from "@temporalio/client";
 import { eq, inArray } from "drizzle-orm";
-import { createStreamRedisClient } from "@/bootstrap/stream-redis-client";
 import type { Logger } from "pino";
 import { parse as parseYaml } from "yaml";
 import {
@@ -205,6 +204,7 @@ import {
   startGovernanceSyncOnBoot,
   startMetricsSyncOnBoot,
 } from "@/bootstrap/startup-reconcile";
+import { createStreamRedisClient } from "@/bootstrap/stream-redis-client";
 import {
   type AttributionProfileResolver,
   createAttributionProfileResolver,
