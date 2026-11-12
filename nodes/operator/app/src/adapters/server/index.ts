@@ -205,6 +205,7 @@ export {
   resolveNodeLiveness,
 } from "./node-registry/prod-liveness";
 export { DrizzleNodeMigrationReportStore } from "./observability/drizzle-node-migration-report.adapter";
+export { HttpLangfuseGatewayReceiptVerifier } from "./observability/langfuse-gateway-receipt.adapter";
 export { HttpLangfuseOwnershipVerifier } from "./observability/langfuse-ownership.adapter";
 export { HttpLangfuseReader } from "./observability/langfuse-reader.adapter";
 export { HttpLangfuseRootOwnershipVerifier } from "./observability/langfuse-root-ownership.adapter";

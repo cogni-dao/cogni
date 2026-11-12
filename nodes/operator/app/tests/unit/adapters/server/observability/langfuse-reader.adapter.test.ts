@@ -733,7 +733,7 @@ describe("configured operator lane binding", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("retains production operator reads and production storage for sovereign candidate aliases", async () => {
+  it("reads sovereign candidate aliases from production history and the candidate gateway", async () => {
     const fetcher = mockFetch({
       data: [observation()],
       meta: { cursor: null },
@@ -755,9 +755,60 @@ describe("configured operator lane binding", () => {
           key: "user_api_key_alias",
           value: `cogni:candidate-a:${NODE_ID}:app:v1`,
         }),
-        expect.objectContaining({ column: "environment", value: "production" }),
+        expect.objectContaining({
+          type: "stringOptions",
+          column: "environment",
+          operator: "any of",
+          value: ["production", "candidate-a"],
+        }),
       ])
     );
+  });
+
+  it("verifies each sovereign row with the receipt of the gateway that recorded it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        data: [
+          { ...observation("mesh"), environment: "candidate-a" },
+          observation("history"),
+          { ...observation("other-lane"), environment: "preview" },
+        ],
+        meta: { cursor: null },
+      })
+    );
+    const native = vi.fn(async () => true);
+    const lane = vi.fn(async () => true);
+    const reader = (laneReceipts?: { verifyObservation: typeof lane }) =>
+      new HttpLangfuseReader({
+        baseUrl: "https://lf.example.com",
+        publicKey: "pk",
+        secretKey: "sk-secret",
+        operatorNodeId: "serving-operator",
+        operatorEnvironment: "production",
+        ownership: { verifyObservation: native },
+        ...(laneReceipts ? { laneReceipts } : {}),
+      });
+    const page = await reader({ verifyObservation: lane }).listObservations(
+      nativeQuery("&environment=candidate-a")
+    );
+    expect(page.data.map((r) => r.id)).toEqual(["mesh", "history"]);
+    expect(page.meta.cogni).toMatchObject({ attributionUnavailable: 1 });
+    expect(lane.mock.calls.map((c) => (c[2] as { id: string }).id)).toEqual([
+      "mesh",
+    ]);
+    expect(native.mock.calls.map((c) => (c[2] as { id: string }).id)).toEqual([
+      "history",
+    ]);
+    // Without the lane verifier a mesh row is an explicit gap, never native-receipt authority.
+    const unwired = await reader().listObservations(
+      nativeQuery("&environment=candidate-a")
+    );
+    expect(unwired.data.map((r) => r.id)).toEqual(["history"]);
+    expect(unwired.meta.cogni).toMatchObject({
+      partial: true,
+      attributionUnavailable: 2,
+    });
   });
 
   it("binds continuation to the configured operator identity and partition", async () => {
@@ -778,11 +829,7 @@ describe("configured operator lane binding", () => {
   });
 });
 
-it.each([
-  undefined,
-  "candidate-a",
-  "preview",
-])("rejects sovereign reads without production receipt custody: %s", async (operatorEnvironment) => {
+it("rejects sovereign reads from an operator with no configured lane", async () => {
   const fetcher = mockFetch({ data: [observation()], meta: { cursor: null } });
   vi.stubGlobal("fetch", fetcher);
   try {
@@ -791,13 +838,46 @@ it.each([
       publicKey: "pk",
       secretKey: "sk-secret",
       operatorNodeId: "serving-operator",
-      ...(operatorEnvironment ? { operatorEnvironment } : {}),
       ownership: { verifyObservation: vi.fn(async () => true) },
     });
     await expect(
       reader.listObservations(nativeQuery("&environment=candidate-a"))
     ).rejects.toMatchObject({ code: "attribution_unavailable", status: 503 });
     expect(fetcher).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("lets a candidate-a operator read its own lane's sovereign rows with native receipts", async () => {
+  const fetcher = mockFetch({
+    data: [{ ...observation("own-lane"), environment: "candidate-a" }],
+    meta: { cursor: null },
+  });
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    const native = vi.fn(async () => true);
+    const page = await new HttpLangfuseReader({
+      baseUrl: "https://lf.example.com",
+      publicKey: "pk",
+      secretKey: "sk-secret",
+      operatorNodeId: "serving-operator",
+      operatorEnvironment: "candidate-a",
+      ownership: { verifyObservation: native },
+    }).listObservations(nativeQuery("&environment=candidate-a"));
+    expect(page.data.map((r) => r.id)).toEqual(["own-lane"]);
+    expect(native).toHaveBeenCalledTimes(1);
+    const url = (fetcher as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as URL;
+    expect(JSON.parse(url.searchParams.get("filter") ?? "[]")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          column: "environment",
+          operator: "=",
+          value: "candidate-a",
+        }),
+      ])
+    );
   } finally {
     vi.unstubAllGlobals();
   }

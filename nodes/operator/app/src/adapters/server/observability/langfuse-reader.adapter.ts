@@ -38,6 +38,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
   private readonly cursorKey: Buffer;
   private readonly ownership: LangfuseOwnershipPort | undefined;
   private readonly rootOwnership: LangfuseOwnershipPort | undefined;
+  private readonly laneReceipts: LangfuseOwnershipPort | undefined;
   private readonly operatorNodeId: string | undefined;
   private readonly operatorEnvironment: string | undefined;
 
@@ -47,6 +48,8 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
     secretKey: string;
     ownership?: LangfuseOwnershipPort;
     rootOwnership?: LangfuseOwnershipPort;
+    /** Verifies sovereign generations another lane's gateway recorded (bug.5625). */
+    laneReceipts?: LangfuseOwnershipPort;
     operatorNodeId?: string;
     operatorEnvironment?: string;
   }) {
@@ -55,6 +58,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
       .digest();
     this.ownership = opts.ownership;
     this.rootOwnership = opts.rootOwnership;
+    this.laneReceipts = opts.laneReceipts;
     this.operatorNodeId = opts.operatorNodeId;
     this.operatorEnvironment = opts.operatorEnvironment;
     this.base = opts.baseUrl.replace(/\/+$/, "");
@@ -92,16 +96,21 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
       // A shared Langfuse project does not imply access to another lane's receipt service.
       throw new LangfuseReadError("attribution_unavailable", 503);
     }
-    if (!ownsLocalOperator && this.operatorEnvironment !== "production") {
-      // Sovereign aliases use the production-custodied gateway's independent spend receipts.
-      // A candidate/preview process cannot infer those receipts from its local LiteLLM instance.
+    if (!ownsLocalOperator && !this.operatorEnvironment) {
       throw new LangfuseReadError("attribution_unavailable", 503);
     }
-    const backendEnvironment = rootTraceId
-      ? "default"
+    // The gateway that served a call recorded its row and holds its receipt. A sovereign alias may
+    // be recorded by this operator's own gateway (production history; same-lane native receipts)
+    // or by the requested lane's gateway (mesh lanes; collector-labeled Loki receipts).
+    const recordedEnvironments: readonly string[] = rootTraceId
+      ? ["default"]
       : ownsLocalOperator
-        ? this.operatorEnvironment
-        : "production";
+        ? [this.operatorEnvironment as string]
+        : [...new Set([this.operatorEnvironment as string, query.environment])];
+    const verifierFor = (row: Readonly<Record<string, unknown>>) =>
+      rootTraceId || row.environment === this.operatorEnvironment
+        ? verifier
+        : this.laneReceipts;
     const { cursor, ...scopeQuery } = query;
     const scope = createHash("sha256")
       .update(
@@ -113,7 +122,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
           binding: {
             operatorNodeId: this.operatorNodeId ?? null,
             operatorEnvironment: this.operatorEnvironment ?? null,
-            backendEnvironment,
+            recordedEnvironments,
           },
           ...scopeQuery,
         })
@@ -171,12 +180,19 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
             { type: "string", column: "type", operator: "=", value: "SPAN" },
           ]
         : []),
-      {
-        type: "string",
-        column: "environment",
-        operator: "=",
-        value: backendEnvironment,
-      },
+      recordedEnvironments.length === 1
+        ? {
+            type: "string",
+            column: "environment",
+            operator: "=",
+            value: recordedEnvironments[0],
+          }
+        : {
+            type: "stringOptions",
+            column: "environment",
+            operator: "any of",
+            value: recordedEnvironments,
+          },
       { type: "datetime", column: "startTime", operator: ">=", value: from },
       { type: "datetime", column: "startTime", operator: "<", value: to },
       ...query.filters,
@@ -274,7 +290,8 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
         !Number.isFinite(time) ||
         time < Date.parse(from) ||
         time >= Date.parse(to) ||
-        row.environment !== backendEnvironment ||
+        typeof row.environment !== "string" ||
+        !recordedEnvironments.includes(row.environment) ||
         !matchesFilters(row, query.filters) ||
         (rootTraceId &&
           (row.id !== `t-${rootTraceId}` ||
@@ -283,7 +300,7 @@ export class HttpLangfuseReader implements LangfuseReaderPort {
             row.parentObservationId !== null ||
             row.isRootObservation !== true ||
             row.name !== "graph-execution")) ||
-        !(await verifier.verifyObservation(
+        !(await verifierFor(row)?.verifyObservation(
           query.nodeId,
           query.environment,
           row,
