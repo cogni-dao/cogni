@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -244,6 +245,38 @@ describe("GET /readyz async substrate contract", () => {
     expect(mocks.fetch).not.toHaveBeenCalled();
     expect(mocks.verifySystemTenant).not.toHaveBeenCalled();
   });
+
+  it.each(["healthy", "error"] as const)(
+    "includes context setup in completion timing for %s responses",
+    async (scenario) => {
+      const obs = await import("@/shared/observability");
+      const createContext = obs.createRequestContext;
+      let now = 100;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const contextSpy = vi
+        .spyOn(obs, "createRequestContext")
+        .mockImplementation((...args) => {
+          now += 37;
+          return createContext(...args);
+        });
+      if (scenario === "error")
+        mocks.assertEvmRpcConfig.mockImplementationOnce(() => {
+          throw new RuntimeSecretError("EVM_RPC_URL is required");
+        });
+
+      const response = await GET(request());
+
+      expect(response.status).toBe(scenario === "healthy" ? 200 : 503);
+      expect(contextSpy).toHaveBeenCalledOnce();
+      const completions = mocks.info.mock.calls.filter(
+        ([, message]) => message === "request complete"
+      );
+      expect(completions).toHaveLength(1);
+      expect(completions[0]?.[0]).toEqual(
+        expect.objectContaining({ status: response.status, durationMs: 37 })
+      );
+    }
+  );
 
   it("returns 503 when the mandatory RPC secret is missing", async () => {
     mocks.assertEvmRpcConfig.mockImplementation(() => {
