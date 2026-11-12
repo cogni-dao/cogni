@@ -29,6 +29,7 @@
  *   - DURATION_IS_A_CHECK: each check-run id counts once; reruns have distinct ids. All terminal
  *     conclusions count, and pending/invalid timings remain explicit in evidence. Quantiles use
  *     linear interpolation over actual startedAt/completedAt, never graph or LLM activity time.
+ *     Native workflow identities discover heads independently of PR updates and force-pushed history.
  * Side-effects: none (calculators call the injected source)
  * Links: ports/review-kpi.port.ts, adapters/server/review/review-kpi-source.adapter.ts,
  *   bootstrap/capabilities/goal-metrics.ts, task.5450, story.5145
@@ -42,6 +43,7 @@ import type {
 import { z } from "zod";
 import type {
   ReviewCheckFacts,
+  ReviewDurationSourcePort,
   ReviewKpiRepo,
   ReviewKpiSourcePort,
   ReviewPrFacts,
@@ -250,6 +252,7 @@ const ratio = (n: number, d: number) => Math.round((10_000 * n) / d) / 10_000;
 export interface ReviewCalculatorOptions {
   /** The operator's parent repo (`NODE_SUBMODULE_PARENT_OWNER/REPO`). Undefined = not configured. */
   readonly repo: ReviewKpiRepo | undefined;
+  readonly durationSource?: ReviewDurationSourcePort;
 }
 
 export function createReviewCalculators(
@@ -398,11 +401,12 @@ export function createReviewCalculators(
     display: "progress",
     paramsSchema: durationParams,
     windowSeconds: (p) => durationParams.parse(p).days * (DAY_MS / 1000),
-    budget: reviewBudget,
+    budget: { ...reviewBudget, maxSourceCalls: 64, maxRows: 500 },
     async compute(raw, ctx) {
       const { quantile } = durationParams.parse(raw);
       const repo = options.repo;
-      if (!repo)
+      const durationSource = options.durationSource;
+      if (!repo || !durationSource)
         return unknownSample(
           "source_failed",
           [],
@@ -410,20 +414,28 @@ export function createReviewCalculators(
           "min"
         );
       const { from, to } = windowOf(ctx);
-      const read = await readPullRequests(ctx, source, repo, {
-        kind: "updated",
-        since: from,
-      });
+      const heads = await ctx.read((signal) =>
+        durationSource.readReviewHeads({ repo, from, to, signal })
+      );
       const watermarks = [
-        { source: "github_pull_requests", asOf: read.asOf.toISOString() },
+        { source: "temporal_review_workflows", asOf: heads.asOf.toISOString() },
       ];
+      let incomplete = heads.incomplete || heads.heads.length > 50;
       const seen = new Set<number>();
       const completed: Array<{ id: number; pr: number; minutes: number }> = [];
       const conclusions = new Map<string, number>();
       let pending = 0;
       let invalid = 0;
-      for (const pr of read.prs) {
-        for (const check of pr.checks) {
+      for (const head of incomplete ? [] : heads.heads) {
+        const read = await ctx.read((signal) =>
+          durationSource.readHeadChecks({ repo, headSha: head.headSha, signal })
+        );
+        incomplete ||= read.incomplete;
+        watermarks.push({
+          source: `github_checks:${head.headSha}`,
+          asOf: read.asOf.toISOString(),
+        });
+        for (const check of read.checks) {
           if (seen.has(check.id)) continue;
           seen.add(check.id);
           if (check.status !== "completed") {
@@ -444,7 +456,7 @@ export function createReviewCalculators(
           }
           completed.push({
             id: check.id,
-            pr: pr.number,
+            pr: head.pr,
             minutes: (end - start) / 60_000,
           });
           const conclusion = check.conclusion ?? "unknown";
@@ -468,7 +480,7 @@ export function createReviewCalculators(
               `duration:pr=${c.pr},check=${c.id},minutes=${c.minutes.toFixed(6)}`
           ),
       ];
-      if (read.truncated || invalid > 0)
+      if (incomplete || invalid > 0)
         return unknownSample(
           "incomplete_or_invalid_source",
           watermarks,

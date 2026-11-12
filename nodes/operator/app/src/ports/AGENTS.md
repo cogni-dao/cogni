@@ -50,7 +50,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - LlmChargeDetail, ChatDeltaEvent, LlmError, LlmErrorKind, isLlmError
 - PaymentAttemptUserRepository, PaymentAttemptServiceRepository, OnChainVerifier
 - MetricsQueryPort, AiTelemetryPort, LangfusePort, Clock
-- ReviewKpiSourcePort / ReviewCheckFacts — App-owned GitHub checks with actual start and completion timestamps; missing timestamps remain unknown.
+- ReviewKpiSourcePort / ReviewDurationSourcePort / ReviewCheckFacts — App-owned GitHub checks with actual start/completion times; duration discovery uses retained immutable review workflow identities, independently of mutable PR history. Missing or truncated evidence remains unknown.
 - Port-level errors (InsufficientCreditsPortError, BillingAccountNotFoundPortError, etc.)
 - DatabaseCellAppliedRegistrationPort/EvidencePort — reference-only import of an audited manual cutover; measured provider/native/application/backup/recovery facts; missing trusted evidence supply fails closed
 - SandboxRunnerPort, SandboxRunSpec, SandboxRunResult, SandboxProgramContract

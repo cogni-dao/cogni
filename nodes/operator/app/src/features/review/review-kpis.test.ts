@@ -18,6 +18,7 @@ import type {
 import { describe, expect, it } from "vitest";
 import type {
   ReviewCheckFacts,
+  ReviewDurationSourcePort,
   ReviewKpiSourcePort,
   ReviewPrFacts,
   ReviewPrSelector,
@@ -83,7 +84,8 @@ describe("review.duration@1", () => {
     expect(sample.evidenceRefs).toContain(
       "review:completed=4,in_progress=0,invalid_timing=0"
     );
-    expect(src.selectors[0]).toEqual({ kind: "updated", since: at(DAY) });
+    expect(src.selectors).toEqual([]);
+    expect(src.headWindows).toEqual([{ from: at(DAY), to: at(0) }]);
   });
 
   it("counts reruns independently, includes neutral/errors and exposes pending work", async () => {
@@ -197,6 +199,24 @@ describe("review.duration@1", () => {
       )
     ).toMatchObject({ complete: false, unit: "min", reason: "source_failed" });
   });
+
+  it("keeps reviews on force-pushed heads without relying on PR updatedAt", async () => {
+    const src = source({
+      prs: [
+        pr({
+          number: 1,
+          headSha: SHA_A,
+          checks: [{ ...timed(13, 1), headSha: SHA_B }, timed(1, 2)],
+        }),
+      ],
+    });
+    src.pullRequestPage = async () => {
+      throw new Error("mutable PR search must not be used");
+    };
+    expect(
+      await run(src, DURATION_ID, { days: 1, quantile: 50 })
+    ).toMatchObject({ complete: true, value: 7 });
+  });
 });
 
 function pr(over: Partial<ReviewPrFacts> & { number: number }): ReviewPrFacts {
@@ -213,12 +233,47 @@ function source(input: {
   prs: ReviewPrFacts[];
   /** Pages of this size; default is one page holding everything. */
   pageSize?: number;
-}): ReviewKpiSourcePort & { selectors: ReviewPrSelector[]; reads: number } {
+}): ReviewKpiSourcePort &
+  ReviewDurationSourcePort & {
+    selectors: ReviewPrSelector[];
+    reads: number;
+    headWindows: Array<{ from: Date; to: Date }>;
+  } {
   const size = input.pageSize ?? Math.max(1, input.prs.length);
   const selectors: ReviewPrSelector[] = [];
+  const headWindows: Array<{ from: Date; to: Date }> = [];
   const self = {
     selectors,
+    headWindows,
     reads: 0,
+    async readReviewHeads({
+      from,
+      to,
+    }: Parameters<ReviewDurationSourcePort["readReviewHeads"]>[0]) {
+      headWindows.push({ from, to });
+      return {
+        heads: input.prs
+          .flatMap((p) =>
+            p.checks.map((c) => ({ headSha: c.headSha, pr: p.number }))
+          )
+          .filter(
+            (h, i, all) => all.findIndex((x) => x.headSha === h.headSha) === i
+          ),
+        incomplete: input.prs.some((p) => p.incomplete),
+        asOf: new Date(NOW),
+      };
+    },
+    async readHeadChecks({
+      headSha,
+    }: Parameters<ReviewDurationSourcePort["readHeadChecks"]>[0]) {
+      return {
+        checks: input.prs
+          .flatMap((p) => p.checks)
+          .filter((c) => c.headSha === headSha),
+        incomplete: false,
+        asOf: new Date(NOW),
+      };
+    },
     pullRequestPage: async ({
       selector,
       cursor,
@@ -249,6 +304,11 @@ async function run(
 ): Promise<MetricSample> {
   const calc = createReviewCalculators(src, {
     repo: repo ?? undefined,
+    ...("readReviewHeads" in src && "readHeadChecks" in src
+      ? {
+          durationSource: src as ReviewKpiSourcePort & ReviewDurationSourcePort,
+        }
+      : {}),
   }).find((c) => c.id === id) as MetricCalculator;
   const windowMs = (calc.windowSeconds?.(params) ?? 0) * 1000;
   const controller = new AbortController();
