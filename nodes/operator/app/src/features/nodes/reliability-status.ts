@@ -65,16 +65,15 @@ export const RELIABILITY_EVIDENCE_TTL_MS = RELIABILITY_POLICY_V1.evidenceTtlMs;
 /**
  * Postgres recovery is proven when the target's own deep readiness, at the target revision, reports
  * Postgres reached. An unrelated dependency failing the same probe (a 503 that still carries
- * `checks.postgres: ok`) does not block it (story.0029). A pre-0.2.0 body has no per-dependency checks:
- * only its aggregate healthy 200 proves Postgres, exactly as before, because every node probes Postgres.
+ * `checks.postgres: ok`) does not block it (story.0029). Missing or malformed
+ * per-dependency evidence cannot prove Postgres recovery.
  */
 export function databaseRecovered(
   reading: DeepReadiness,
   targetBuildSha: string
 ): boolean {
   if (reading.buildSha !== targetBuildSha) return false;
-  const postgres = reading.dependencyState("postgres");
-  return postgres === "reached" || (postgres === "unknown" && reading.healthy);
+  return reading.dependencyState("postgres") === "reached";
 }
 
 /**

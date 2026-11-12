@@ -37,6 +37,17 @@ describe("bootstrap container DI wiring", { timeout: 30_000 }, () => {
   }, 30_000);
 
   describe("getContainer adapter selection", () => {
+    it("refuses missing EVM configuration before constructing providers", async () => {
+      Object.assign(process.env, PRODUCTION_VALID_ENV);
+      delete process.env.EVM_RPC_URL;
+      const adapters = await import("@/adapters/server");
+      const db = vi.spyOn(adapters, "getAppDb");
+      const { getContainer } = await import("@/bootstrap/container");
+
+      expect(() => getContainer()).toThrow(/EVM_RPC_URL/);
+      expect(db).not.toHaveBeenCalled();
+      db.mockRestore();
+    });
     it("wires LiteLlmAdapter when APP_ENV=test", async () => {
       Object.assign(process.env, BASE_VALID_ENV);
 
@@ -159,5 +170,91 @@ describe("bootstrap container DI wiring", { timeout: 30_000 }, () => {
       expect(container).toHaveProperty("clock");
       expect(container.llmService.completionStream).toBeTypeOf("function");
     });
+  });
+});
+
+describe("native startup local preflight", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    process.env = {
+      ...ORIGINAL_ENV,
+      ...PRODUCTION_VALID_ENV,
+      NEXT_RUNTIME: "nodejs",
+    };
+    delete process.env.LITELLM_BASE_URL;
+    vi.doMock("@opentelemetry/sdk-node", () => ({
+      NodeSDK: class {
+        start() {}
+      },
+      tracing: { NoopSpanProcessor: class {} },
+    }));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock("@opentelemetry/sdk-node");
+    process.env = ORIGINAL_ENV;
+  });
+
+  it("invokes preflight and allows typed configuration refusal for diagnostics", async () => {
+    delete process.env.EVM_RPC_URL;
+    const preflight = await import("@/shared/env/local-readiness-preflight");
+    const assertion = vi.spyOn(preflight, "localReadinessPreflight");
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
+    const { register } = await import("@/instrumentation.node");
+    await expect(register()).resolves.toBeUndefined();
+    expect(assertion).toHaveBeenCalledOnce();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("treats a typed SDK failure as fatal, outside local preflight", async () => {
+    const { RuntimeSecretError } = await import("@/shared/env/invariants");
+    const failure = new RuntimeSecretError("SDK failure");
+    vi.doMock("@opentelemetry/sdk-node", () => ({
+      NodeSDK: class {
+        start() {
+          throw failure;
+        }
+      },
+      tracing: { NoopSpanProcessor: class {} },
+    }));
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
+    const { register } = await import("@/instrumentation.node");
+    await expect(register()).rejects.toBe(failure);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    "tls",
+    "path",
+  ] as const)("exits and retains the original %s invariant error", async (kind) => {
+    if (kind === "tls")
+      process.env.DATABASE_URL =
+        "postgresql://app_user:password@remote.example:5432/test_db";
+    else process.env.COGNI_REPO_PATH = "/nonexistent/readiness-preflight-test";
+    const preflight = await import("@/shared/env/local-readiness-preflight");
+    let original: unknown;
+    try {
+      preflight.localReadinessPreflight();
+    } catch (error) {
+      original = error;
+    }
+    expect(original).toBeInstanceOf(Error);
+    const assertion = vi
+      .spyOn(preflight, "localReadinessPreflight")
+      .mockImplementation(() => {
+        throw original;
+      });
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation(() => undefined as never);
+    const { register } = await import("@/instrumentation.node");
+    await expect(register()).rejects.toBe(original);
+    expect(assertion).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(1);
   });
 });

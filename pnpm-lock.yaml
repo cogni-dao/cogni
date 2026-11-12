@@ -452,8 +452,8 @@ importers:
         specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.17.0/cogni-dao-knowledge-store-0.17.0.tgz
         version: '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.17.0/cogni-dao-knowledge-store-0.17.0.tgz'
       '@cogni/substrate-health':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.2.0/cogni-dao-substrate-health-0.2.0.tgz
-        version: '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.2.0/cogni-dao-substrate-health-0.2.0.tgz'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz
+        version: '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz'
       '@cogni/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.10.0/cogni-dao-work-items-0.10.0.tgz
         version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.10.0/cogni-dao-work-items-0.10.0.tgz'
@@ -1983,9 +1983,9 @@ packages:
       postgres:
         optional: true
 
-  '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.2.0/cogni-dao-substrate-health-0.2.0.tgz':
-    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.2.0/cogni-dao-substrate-health-0.2.0.tgz}
-    version: 0.2.0
+  '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz':
+    resolution: {integrity: sha512-cRnzkeY22GRM42pAuvLMWlLf0U0m0uaLp/gjBk3DyFvJhywRmhQbYKp6hN2xGCPUUWf3dcbgK5zzHd/7+jzHww==, tarball: https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz}
+    version: 0.3.0
 
   '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.10.0/cogni-dao-work-items-0.10.0.tgz':
     resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.10.0/cogni-dao-work-items-0.10.0.tgz}
@@ -13628,7 +13628,7 @@ snapshots:
     optionalDependencies:
       postgres: 3.4.7
 
-  '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.2.0/cogni-dao-substrate-health-0.2.0.tgz': {}
+  '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz': {}
 
   '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.10.0/cogni-dao-work-items-0.10.0.tgz':
     dependencies:

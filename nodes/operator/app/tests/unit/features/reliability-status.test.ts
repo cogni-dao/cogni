@@ -1016,10 +1016,28 @@ describe("databaseRecovered (story.0029)", () => {
     ).toBe(false);
   });
 
-  it("keeps a pre-0.2.0 healthy aggregate 200 at the target revision as proof, as before", () => {
+  it.each([
+    ["missing checks", undefined],
+    ["malformed checks", "postgres"],
+    ["malformed postgres", { postgres: { status: "unknown" } }],
+    ["missing postgres", { redis: ok }],
+  ])("rejects a healthy 200 with %s", (_description, checks) => {
     expect(
       databaseRecovered(
-        readDeepReadiness(200, { status: "healthy", buildSha: sha }),
+        readDeepReadiness(200, { status: "healthy", checks, buildSha: sha }),
+        sha
+      )
+    ).toBe(false);
+  });
+
+  it("accepts explicit healthy Postgres at the target revision", () => {
+    expect(
+      databaseRecovered(
+        readDeepReadiness(200, {
+          status: "healthy",
+          checks: { postgres: ok },
+          buildSha: sha,
+        }),
         sha
       )
     ).toBe(true);

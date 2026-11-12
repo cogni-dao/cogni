@@ -89,7 +89,6 @@ import {
   type WorkflowClient,
 } from "@temporalio/client";
 import { eq, inArray } from "drizzle-orm";
-import Redis from "ioredis";
 import type { Logger } from "pino";
 import { parse as parseYaml } from "yaml";
 import {
@@ -205,6 +204,7 @@ import {
   startGovernanceSyncOnBoot,
   startMetricsSyncOnBoot,
 } from "@/bootstrap/startup-reconcile";
+import { createStreamRedisClient } from "@/bootstrap/stream-redis-client";
 import {
   type AttributionProfileResolver,
   createAttributionProfileResolver,
@@ -273,6 +273,7 @@ import {
   getStewardWalletConfig,
 } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
+import { localReadinessPreflight } from "@/shared/env/local-readiness-preflight";
 import { serverEnv } from "@/shared/env/server-env";
 import { resolveNodeCatalogSource } from "@/shared/node-registry/catalog-source";
 import { envForApex } from "@/shared/node-registry/deploy-hosts";
@@ -638,7 +639,7 @@ function getWebhookRegistrations(): ReadonlyMap<
 }
 
 function createContainer(): Container {
-  const env = serverEnv();
+  const env = localReadinessPreflight();
   const nodeId = getNodeId();
   const db = getAppDb();
   const requestDependencies = getRequestLoggingDependencies();
@@ -1303,10 +1304,7 @@ function createContainer(): Container {
 
   // Redis client for run event streaming (ephemeral stream plane)
   // Per REDIS_IS_STREAM_PLANE: only transient data, no durable state
-  const redisClient = new Redis(env.REDIS_URL, {
-    lazyConnect: true,
-    maxRetriesPerRequest: 3,
-  });
+  const redisClient = createStreamRedisClient(env.REDIS_URL);
   const runStream = new RedisRunStreamAdapter(redisClient);
   const nodeStream = new RedisNodeStreamAdapter(redisClient);
 
