@@ -169,33 +169,63 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     ]);
   }, 90_000);
 
-  afterEach(async () => {
-    await phase(
-      "cleanup/reap",
+  async function cleanupCase(injectedFailure?: () => Promise<void>) {
+    const errors: unknown[] = [];
+    const finalize = async (
+      name: string,
+      work: () => PromiseLike<unknown>,
+      timeout = 1_000
+    ) => {
+      try {
+        await phase(name, work, timeout);
+      } catch (error) {
+        errors.push(error);
+      }
+    };
+    if (injectedFailure) await finalize("cleanup/control", injectedFailure);
+    // Signal every owned group before awaiting any one launcher or its pipes.
+    for (const child of children) {
+      try {
+        killGroup(child);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    await finalize("cleanup/inspectors", async () => {
+      await Promise.all(
+        [...inspectors].map(async (ws) => {
+          if (ws.readyState === WebSocket.CLOSED) return;
+          const closed = new Promise<void>((resolve) =>
+            ws.once("close", () => resolve())
+          );
+          ws.terminate();
+          await closed;
+        })
+      );
+      inspectors.clear();
+    });
+    await finalize(
+      "cleanup/children",
       async () => {
-        await Promise.all(
-          [...inspectors].map(async (ws) => {
-            if (ws.readyState === WebSocket.CLOSED) return;
-            const closed = new Promise<void>((resolve) =>
-              ws.once("close", () => resolve())
-            );
-            ws.terminate();
-            await closed;
-          })
-        );
-        inspectors.clear();
-        for (const child of children) child.kill("SIGKILL");
         await Promise.all(childCompletions.values());
         childCompletions.clear();
-        await Promise.all(
-          [...clients]
-            .filter((c) => !sharedClients.has(c))
-            .map(async (c) => {
-              await c.end({ timeout: 1 });
-              clients.delete(c);
-            })
-        );
-        if (childLabels.size)
+      },
+      2_000
+    );
+    await finalize("cleanup/clients", async () => {
+      await Promise.all(
+        [...clients]
+          .filter((c) => !sharedClients.has(c))
+          .map(async (c) => {
+            await c.end({ timeout: 1 });
+            clients.delete(c);
+          })
+      );
+    });
+    await finalize(
+      "cleanup/backends",
+      async () => {
+        if (control && childLabels.size)
           await until(
             async () =>
               control`SELECT pid FROM pg_stat_activity WHERE application_name=ANY(${[...childLabels]})`,
@@ -203,21 +233,62 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
             3_000
           );
         childLabels.clear();
-        nativeChunks.length = 0;
-        nativeBytes = 0;
       },
-      7_000
+      3_500
     );
+    nativeChunks.length = 0;
+    nativeBytes = 0;
+    if (errors.length)
+      throw new AggregateError(errors, "fixture cleanup failed");
+  }
+
+  afterEach(async () => {
+    await cleanupCase();
   }, 8_000);
 
   afterAll(async () => {
-    for (const child of children) child.kill("SIGKILL");
-    await Promise.all(childCompletions.values());
-    await Promise.all([...clients].map((c) => c.end({ timeout: 1 })));
-    await control?.end({ timeout: 1 });
-    await container?.stop();
-    if (temp) await rm(temp, { recursive: true, force: true });
+    const errors: unknown[] = [];
+    const finalize = async (name: string, work: () => PromiseLike<unknown>) => {
+      try {
+        await phase(name, work, 5_000);
+      } catch (error) {
+        errors.push(error);
+      }
+    };
+    for (const child of children) {
+      try {
+        killGroup(child);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    await finalize("final/children", () =>
+      Promise.all(childCompletions.values())
+    );
+    await finalize("final/clients", () =>
+      Promise.all([...clients].map((c) => c.end({ timeout: 1 })))
+    );
+    await finalize("final/control", async () => {
+      await control?.end({ timeout: 1 });
+    });
+    await finalize("final/container", async () => {
+      await container?.stop();
+    });
+    await finalize("final/temp", async () => {
+      if (temp) await rm(temp, { recursive: true, force: true });
+    });
+    if (errors.length)
+      throw new AggregateError(errors, "fixture finalization failed");
   }, 30_000);
+
+  function killGroup(child: ReturnType<typeof spawn>) {
+    if (!child.pid) return;
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
+  }
 
   async function copyFolder(name: string, entries = journal.entries) {
     const folder = join(temp, name);
@@ -300,6 +371,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
         ];
     const child = spawn(process.execPath, args, {
       cwd: ROOT,
+      detached: true,
       env: {
         PATH: process.env.PATH,
         ...(options.node === null
@@ -317,7 +389,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     child.stderr?.on("data", (data: Buffer) => {
       output += data.toString();
     });
-    const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    const timer = setTimeout(() => killGroup(child), 30_000);
     const done = new Promise<{ code: number | null; output: string }>(
       (resolveDone, reject) => {
         child.once("error", reject);
@@ -511,6 +583,33 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     privateOutput(result.output, ["fixture-retained"]);
     // Includes complete public rows, inbound FK definitions and native ledger.
     expect((await retained(f)) === before).toBe(true);
+  });
+
+  it("reaps a cancelled supported alias and completes cleanup after a finalizer fails", async () => {
+    const f = await fixture();
+    await f.admin`SELECT pg_catalog.pg_advisory_lock(${0x436f676e6901n})`;
+    const running = start(f, { entrypoint: "db:migrate" });
+    await until(
+      () =>
+        control`SELECT pid, wait_event FROM pg_stat_activity WHERE application_name=${running.label}`,
+      (rows) => rows.length === 1 && rows[0]?.wait_event === "advisory"
+    );
+    expect(running.child.exitCode).toBeNull();
+    const started = performance.now();
+    await expect(
+      cleanupCase(async () => {
+        throw new Error("fixture finalizer control");
+      })
+    ).rejects.toThrow("fixture cleanup failed");
+    expect(performance.now() - started).toBeLessThan(7_000);
+    const result = await running.done;
+    expect(result.code).toBeNull();
+    expect(running.child.stdout?.closed).toBe(true);
+    expect(running.child.stderr?.closed).toBe(true);
+    expect(clients.has(f.admin)).toBe(false);
+    expect(
+      await control`SELECT pid FROM pg_stat_activity WHERE application_name=${running.label}`
+    ).toHaveLength(0);
   });
 
   it("refuses canonical populated collisions before lifecycle mutation", async () => {
