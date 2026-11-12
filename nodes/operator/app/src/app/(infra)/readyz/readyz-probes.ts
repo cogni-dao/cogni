@@ -72,9 +72,15 @@ export type DeepDependency =
 
 /** Inject the operator's deadline and logging into shared readiness. */
 export function deepRuntime(ctx: RequestContext) {
-  return { log: (fields: Record<string, unknown>, message: string) => ctx.log.info(fields, message),
-    timeoutError: (dependency: string, budgetMs: number) => new InfraConnectivityError(`${dependency} check exceeded ${budgetMs}ms budget`),
-    budgetMs: DEEP_CHECK_BUDGET_MS };
+  return {
+    log: (fields: Record<string, unknown>, message: string) =>
+      ctx.log.info(fields, message),
+    timeoutError: (dependency: string, budgetMs: number) =>
+      new InfraConnectivityError(
+        `${dependency} check exceeded ${budgetMs}ms budget`
+      ),
+    budgetMs: DEEP_CHECK_BUDGET_MS,
+  };
 }
 
 /** Forced live EVM RPC read; fatal on failure. */

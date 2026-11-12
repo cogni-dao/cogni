@@ -5,24 +5,49 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ start: vi.fn(), options: vi.fn() }));
 vi.mock("@opentelemetry/sdk-node", () => ({
   tracing: { NoopSpanProcessor: class NoopSpanProcessor {} },
-  NodeSDK: class { constructor(options: unknown) { mocks.options(options); } start() { return mocks.start(); } },
+  NodeSDK: class {
+    constructor(options: unknown) {
+      mocks.options(options);
+    }
+    start() {
+      return mocks.start();
+    }
+  },
 }));
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.resetModules(); mocks.start.mockReset(); mocks.options.mockReset(); });
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  vi.resetModules();
+  mocks.start.mockReset();
+  mocks.options.mockReset();
+});
 
 describe("native telemetry startup", () => {
   it("uses no-export processors while retaining the SDK provider", async () => {
     const { initOtelSdk } = await import("@/instrumentation.node");
     await expect(initOtelSdk({ failOnError: true })).resolves.toBe(true);
-    expect(mocks.options).toHaveBeenCalledWith(expect.objectContaining({
-      instrumentations: [], logRecordProcessors: [],
-      spanProcessors: [expect.objectContaining({ constructor: expect.objectContaining({ name: "NoopSpanProcessor" }) })],
-    }));
+    expect(mocks.options).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instrumentations: [],
+        logRecordProcessors: [],
+        spanProcessors: [
+          expect.objectContaining({
+            constructor: expect.objectContaining({ name: "NoopSpanProcessor" }),
+          }),
+        ],
+      })
+    );
   });
   it("retains a failed attempt for a later required caller", async () => {
     const original = new Error("private-sdk-detail");
-    mocks.start.mockImplementation(() => { throw original; });
-    vi.spyOn(process.stdout, "write").mockImplementation((() => true) as typeof process.stdout.write);
+    mocks.start.mockImplementation(() => {
+      throw original;
+    });
+    vi.spyOn(process.stdout, "write").mockImplementation(
+      (() => true) as typeof process.stdout.write
+    );
     const { initOtelSdk } = await import("@/instrumentation.node");
     await expect(initOtelSdk({ failOnError: false })).resolves.toBe(false);
     await expect(initOtelSdk({ failOnError: true })).rejects.toBe(original);
@@ -35,12 +60,22 @@ describe("native telemetry startup", () => {
     const httpRequest = vi.spyOn(http.default, "request");
     const httpsRequest = vi.spyOn(https.default, "request");
     const fetchFn = vi.spyOn(globalThis, "fetch");
-    const actual = await vi.importActual<typeof import("@opentelemetry/sdk-node")>("@opentelemetry/sdk-node");
-    const sdk = new actual.NodeSDK({ instrumentations: [], spanProcessors: [new actual.tracing.NoopSpanProcessor()], logRecordProcessors: [] });
+    const actual = await vi.importActual<
+      typeof import("@opentelemetry/sdk-node")
+    >("@opentelemetry/sdk-node");
+    const sdk = new actual.NodeSDK({
+      instrumentations: [],
+      spanProcessors: [new actual.tracing.NoopSpanProcessor()],
+      logRecordProcessors: [],
+    });
     sdk.start();
     const tracer = actual.api.trace.getTracer("readiness-test");
     let traceId = "";
-    for (let i = 0; i < 520; i++) { const span = tracer.startSpan("readyz"); traceId = span.spanContext().traceId; span.end(); }
+    for (let i = 0; i < 520; i++) {
+      const span = tracer.startSpan("readyz");
+      traceId = span.spanContext().traceId;
+      span.end();
+    }
     expect(traceId).not.toBe("00000000000000000000000000000000");
     await vi.advanceTimersByTimeAsync(6000);
     await sdk.shutdown();
@@ -55,10 +90,17 @@ describe("native telemetry startup", () => {
     vi.stubEnv("NEXT_RUNTIME", "nodejs");
     vi.stubEnv("NODE_ENV", "production");
     const original = new Error("PRIVATE_SDK_SENTINEL");
-    mocks.start.mockImplementation(() => { throw original; });
+    mocks.start.mockImplementation(() => {
+      throw original;
+    });
     const lines: string[] = [];
-    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => { lines.push(String(chunk)); return true; }) as typeof process.stdout.write);
-    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      lines.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    const exit = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
     const { register } = await import("@/instrumentation.node");
     await expect(register()).rejects.toBe(original);
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
@@ -66,12 +108,17 @@ describe("native telemetry startup", () => {
   });
 
   it("suppresses the native Redis error fallback without opening a connection", async () => {
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { createStreamRedisClient } = await import("@/bootstrap/stream-redis-client");
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const { createStreamRedisClient } = await import(
+      "@/bootstrap/stream-redis-client"
+    );
     const client = createStreamRedisClient("redis://127.0.0.1:1");
-    (client as unknown as { silentEmit(event: string, error: Error): void }).silentEmit("error", new Error("REDIS_PRIVATE_SENTINEL"));
+    (
+      client as unknown as { silentEmit(event: string, error: Error): void }
+    ).silentEmit("error", new Error("REDIS_PRIVATE_SENTINEL"));
     expect(consoleError).not.toHaveBeenCalled();
     client.disconnect();
   });
-
 });

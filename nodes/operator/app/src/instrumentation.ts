@@ -31,7 +31,7 @@ export async function register(): Promise<void> {
             JSON.stringify({
               errorCode: "STARTUP_FATAL",
               phase: "instrumentation_import",
-            }),
+            })
           );
         } catch {
           // Preserve fatality and the original import rejection.

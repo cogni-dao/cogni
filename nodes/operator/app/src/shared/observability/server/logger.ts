@@ -24,7 +24,11 @@ export function makeLogger(bindings?: Record<string, unknown>): Logger {
   const isVitest = process.env.VITEST === "true";
   const nodeEnv = process.env.NODE_ENV ?? "development";
   const configuredLevel = process.env.PINO_LOG_LEVEL ?? "info";
-  const pinoLogLevel = ["trace", "debug", "info", "warn", "error"].includes(configuredLevel) ? configuredLevel : "info";
+  const pinoLogLevel = ["trace", "debug", "info", "warn", "error"].includes(
+    configuredLevel
+  )
+    ? configuredLevel
+    : "info";
   const serviceName = process.env.SERVICE_NAME ?? "app";
 
   // Silence logs in test tooling (VITEST or NODE_ENV=test)

@@ -24,8 +24,17 @@ let sdk: NodeSDK | null = null;
 let sdkAttempt: Promise<void> | undefined;
 
 function makeBootLogger() {
-  return pino({ base: { app: "cogni-template", service: process.env.SERVICE_NAME ?? "app" },
-    messageKey: "msg", timestamp: pino.stdTimeFunctions.isoTime }, process.stdout);
+  return pino(
+    {
+      base: {
+        app: "cogni-template",
+        service: process.env.SERVICE_NAME ?? "app",
+      },
+      messageKey: "msg",
+      timestamp: pino.stdTimeFunctions.isoTime,
+    },
+    process.stdout
+  );
 }
 
 /**
@@ -101,7 +110,7 @@ export async function initOtelSdk(options?: {
     try {
       makeBootLogger().warn(
         { errorCode: "OTEL_INIT_FAILED", phase: "initialization" },
-        "telemetry initialization failed",
+        "telemetry initialization failed"
       );
     } catch {
       // Degraded callers do not let diagnostics replace the initialization result.
@@ -125,7 +134,12 @@ export async function register(): Promise<void> {
     await initOtelSdk();
     logAppStarted();
   } catch (error) {
-    try { makeBootLogger().error({ errorCode: "STARTUP_FATAL", phase: "initialization" }, "fatal startup failure"); } catch {}
+    try {
+      makeBootLogger().error(
+        { errorCode: "STARTUP_FATAL", phase: "initialization" },
+        "fatal startup failure"
+      );
+    } catch {}
     process.exit(1);
     throw error;
   }

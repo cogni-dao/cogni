@@ -14,7 +14,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 const mocks = vi.hoisted(() => ({
   getNodeId: vi.fn(),
@@ -54,12 +57,19 @@ vi.mock("@/bootstrap/healthchecks", () => ({
 }));
 
 vi.mock("@/shared/config", async (original) => ({
-  ...(await original<typeof import("@/shared/config")>()), getNodeId: () => mocks.getNodeId(),
+  ...(await original<typeof import("@/shared/config")>()),
+  getNodeId: () => mocks.getNodeId(),
 }));
 vi.mock("@/shared/observability", async (original) => {
   const actual = await original<typeof import("@/shared/observability")>();
   const child = vi.fn();
-  const log = { debug: vi.fn(), error: mocks.error, info: mocks.info, warn: mocks.warn, child };
+  const log = {
+    debug: vi.fn(),
+    error: mocks.error,
+    info: mocks.info,
+    warn: mocks.warn,
+    child,
+  };
   child.mockReturnValue(log);
   return { ...actual, makeLogger: () => log };
 });
@@ -265,14 +275,12 @@ describe("GET /readyz async substrate contract", () => {
       expect.objectContaining({ APP_ENV: "production" }),
       { forceLive: true }
     );
-
   });
 
   it("records successful deep RPC proof", async () => {
     const response = await GET(request("/readyz?deep=1"));
 
     expect(response.status).toBe(200);
-
   });
 
   it("does not consult missing async dependencies from shallow readiness", async () => {
@@ -404,96 +412,231 @@ describe("GET /readyz async substrate contract", () => {
     expect(body).not.toHaveProperty("unreachable");
     expect(body).not.toHaveProperty("checks");
   });
-  it.each(["healthy", "evm-failed", "multiple", "timeout", "unexpected"] as const)(
-    "keeps readiness diagnostics bounded and private: %s", async (scenario) => {
-      const sentinel = "READINESS_PRIVATE_SENTINEL";
-      if (scenario === "evm-failed" || scenario === "multiple")
-        mocks.checkEvmRpcConnectivity.mockResolvedValueOnce({ ok: false, source: "live", errorMessage: sentinel });
-      if (scenario === "multiple") mocks.assertTemporalConnectivity.mockRejectedValueOnce(new Error(sentinel));
-      if (scenario === "timeout") { vi.useFakeTimers(); mocks.assertTemporalConnectivity.mockReturnValueOnce(new Promise(() => {})); }
-      if (scenario === "unexpected") mocks.getNodeId.mockImplementationOnce(() => { throw new Error(sentinel); });
-      const pending = GET(request("/readyz?deep=1"));
-      if (scenario === "timeout") await vi.advanceTimersByTimeAsync(3001);
-      const response = await pending;
-      expect(response.status).toBe(scenario === "healthy" ? 200 : scenario === "unexpected" ? 500 : 503);
-      const body = await response.json();
-      if (scenario === "unexpected") expect(body).toEqual({ status: "error", reason: "INTERNAL_ERROR" });
-      else {
-        expect(body.checks).toBeDefined();
-        if (scenario === "evm-failed" || scenario === "multiple") expect(body.unreachable).toContain("evm-rpc");
-        if (scenario === "multiple" || scenario === "timeout") expect(body.unreachable).toContain("temporal");
-      }
-      const lines = [...mocks.info.mock.calls, ...mocks.error.mock.calls, ...mocks.warn.mock.calls];
-      expect(lines.length).toBeLessThanOrEqual(3);
-      expect(JSON.stringify(lines)).not.toContain(sentinel);
-      expect(lines.filter(([fields]) => fields?.event === "substrate.deep.complete")).toHaveLength(scenario === "unexpected" ? 0 : 1);
-      expect(lines.filter(([, message]) => message === "request complete")).toHaveLength(1);
-      vi.useRealTimers();
-    }
-  );
-
-  it.each(["local", "construction", "logger", "context", "span", "annotation", "response", "error", "summary", "build-info", "counter", "histogram", "completion", "span-finalizer"] as const)(
-    "contains boundary failures without changing resolved readiness: %s", async (phase) => {
-      const sentinel = "READINESS_BOUNDARY_PRIVATE_SENTINEL";
-      const fail = () => { throw new Error(sentinel); };
-      const obs = await import("@/shared/observability");
-      const otel = await import("@/bootstrap/otel");
-      if (phase === "local" || phase === "error") mocks.serverEnv.mockImplementationOnce(fail);
-      if (phase === "construction") mocks.getContainer.mockImplementationOnce(fail);
-      if (phase === "logger") vi.spyOn(obs, "makeLogger").mockImplementationOnce(fail);
-      if (phase === "context") vi.spyOn(obs, "createRequestContext").mockImplementationOnce(fail);
-      if (phase === "span") vi.spyOn(otel, "withRootSpan").mockImplementationOnce(fail);
-      if (phase === "response") vi.spyOn(NextResponse, "json").mockImplementationOnce(fail);
-      if (phase === "annotation") vi.spyOn(otel, "withRootSpan").mockImplementationOnce(async (_name, _attrs, callback) => callback({ traceId: "trace", span: { setAttribute: fail } } as never));
-      if (phase === "error") mocks.error.mockImplementationOnce(fail);
-      if (phase === "summary") mocks.info.mockImplementationOnce(fail);
-      if (phase === "build-info") mocks.setBuildInfo.mockImplementationOnce(fail);
-      if (phase === "counter") vi.spyOn(obs.httpRequestsTotal, "inc").mockImplementationOnce(fail);
-      if (phase === "histogram") vi.spyOn(obs.httpRequestDurationMs, "observe").mockImplementationOnce(fail);
-      if (phase === "completion") vi.spyOn(obs, "logRequestEnd").mockImplementationOnce(fail);
-      if (phase === "span-finalizer") vi.spyOn(otel, "withRootSpan").mockImplementationOnce(async (_name, _attrs, callback) => {
-        await callback({ traceId: "trace", span: { setAttribute: () => {} } } as never); throw new Error(sentinel);
+  it.each([
+    "healthy",
+    "evm-failed",
+    "multiple",
+    "timeout",
+    "unexpected",
+  ] as const)("keeps readiness diagnostics bounded and private: %s", async (scenario) => {
+    const sentinel = "READINESS_PRIVATE_SENTINEL";
+    if (scenario === "evm-failed" || scenario === "multiple")
+      mocks.checkEvmRpcConnectivity.mockResolvedValueOnce({
+        ok: false,
+        source: "live",
+        errorMessage: sentinel,
       });
-      const response = await GET(request(phase === "construction" || phase === "summary" ? "/readyz?deep=1" : "/readyz"));
-      expect(response.status).toBe(phase === "local" || phase === "construction" || phase === "error" ? 503 : phase === "logger" || phase === "context" || phase === "span" || phase === "annotation" || phase === "response" ? 500 : 200);
-      expect(JSON.stringify(await response.json())).not.toContain(sentinel);
-      expect(JSON.stringify([...mocks.info.mock.calls, ...mocks.error.mock.calls, ...mocks.warn.mock.calls])).not.toContain(sentinel);
+    if (scenario === "multiple")
+      mocks.assertTemporalConnectivity.mockRejectedValueOnce(
+        new Error(sentinel)
+      );
+    if (scenario === "timeout") {
+      vi.useFakeTimers();
+      mocks.assertTemporalConnectivity.mockReturnValueOnce(
+        new Promise(() => {})
+      );
     }
-  );
+    if (scenario === "unexpected")
+      mocks.getNodeId.mockImplementationOnce(() => {
+        throw new Error(sentinel);
+      });
+    const pending = GET(request("/readyz?deep=1"));
+    if (scenario === "timeout") await vi.advanceTimersByTimeAsync(3001);
+    const response = await pending;
+    expect(response.status).toBe(
+      scenario === "healthy" ? 200 : scenario === "unexpected" ? 500 : 503
+    );
+    const body = await response.json();
+    if (scenario === "unexpected")
+      expect(body).toEqual({ status: "error", reason: "INTERNAL_ERROR" });
+    else {
+      expect(body.checks).toBeDefined();
+      if (scenario === "evm-failed" || scenario === "multiple")
+        expect(body.unreachable).toContain("evm-rpc");
+      if (scenario === "multiple" || scenario === "timeout")
+        expect(body.unreachable).toContain("temporal");
+    }
+    const lines = [
+      ...mocks.info.mock.calls,
+      ...mocks.error.mock.calls,
+      ...mocks.warn.mock.calls,
+    ];
+    expect(lines.length).toBeLessThanOrEqual(3);
+    expect(JSON.stringify(lines)).not.toContain(sentinel);
+    expect(
+      lines.filter(([fields]) => fields?.event === "substrate.deep.complete")
+    ).toHaveLength(scenario === "unexpected" ? 0 : 1);
+    expect(
+      lines.filter(([, message]) => message === "request complete")
+    ).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
+  it.each([
+    "local",
+    "construction",
+    "logger",
+    "context",
+    "span",
+    "annotation",
+    "response",
+    "error",
+    "summary",
+    "build-info",
+    "counter",
+    "histogram",
+    "completion",
+    "span-finalizer",
+  ] as const)("contains boundary failures without changing resolved readiness: %s", async (phase) => {
+    const sentinel = "READINESS_BOUNDARY_PRIVATE_SENTINEL";
+    const fail = () => {
+      throw new Error(sentinel);
+    };
+    const obs = await import("@/shared/observability");
+    const otel = await import("@/bootstrap/otel");
+    if (phase === "local" || phase === "error")
+      mocks.serverEnv.mockImplementationOnce(fail);
+    if (phase === "construction")
+      mocks.getContainer.mockImplementationOnce(fail);
+    if (phase === "logger")
+      vi.spyOn(obs, "makeLogger").mockImplementationOnce(fail);
+    if (phase === "context")
+      vi.spyOn(obs, "createRequestContext").mockImplementationOnce(fail);
+    if (phase === "span")
+      vi.spyOn(otel, "withRootSpan").mockImplementationOnce(fail);
+    if (phase === "response")
+      vi.spyOn(NextResponse, "json").mockImplementationOnce(fail);
+    if (phase === "annotation")
+      vi.spyOn(otel, "withRootSpan").mockImplementationOnce(
+        async (_name, _attrs, callback) =>
+          callback({ traceId: "trace", span: { setAttribute: fail } } as never)
+      );
+    if (phase === "error") mocks.error.mockImplementationOnce(fail);
+    if (phase === "summary") mocks.info.mockImplementationOnce(fail);
+    if (phase === "build-info") mocks.setBuildInfo.mockImplementationOnce(fail);
+    if (phase === "counter")
+      vi.spyOn(obs.httpRequestsTotal, "inc").mockImplementationOnce(fail);
+    if (phase === "histogram")
+      vi.spyOn(obs.httpRequestDurationMs, "observe").mockImplementationOnce(
+        fail
+      );
+    if (phase === "completion")
+      vi.spyOn(obs, "logRequestEnd").mockImplementationOnce(fail);
+    if (phase === "span-finalizer")
+      vi.spyOn(otel, "withRootSpan").mockImplementationOnce(
+        async (_name, _attrs, callback) => {
+          await callback({
+            traceId: "trace",
+            span: { setAttribute: () => {} },
+          } as never);
+          throw new Error(sentinel);
+        }
+      );
+    const response = await GET(
+      request(
+        phase === "construction" || phase === "summary"
+          ? "/readyz?deep=1"
+          : "/readyz"
+      )
+    );
+    expect(response.status).toBe(
+      phase === "local" || phase === "construction" || phase === "error"
+        ? 503
+        : phase === "logger" ||
+            phase === "context" ||
+            phase === "span" ||
+            phase === "annotation" ||
+            phase === "response"
+          ? 500
+          : 200
+    );
+    expect(JSON.stringify(await response.json())).not.toContain(sentinel);
+    expect(
+      JSON.stringify([
+        ...mocks.info.mock.calls,
+        ...mocks.error.mock.calls,
+        ...mocks.warn.mock.calls,
+      ])
+    ).not.toContain(sentinel);
+  });
 
   it("preserves a resolved 503 when span cleanup fails", async () => {
     const otel = await import("@/bootstrap/otel");
-    mocks.serverEnv.mockImplementationOnce(() => { throw new Error("PRIVATE_PREFLIGHT"); });
-    vi.spyOn(otel, "withRootSpan").mockImplementationOnce(async (_name, _attrs, callback) => {
-      await callback({ traceId: "trace", span: { setAttribute: () => {} } } as never);
-      throw new Error("PRIVATE_SPAN_FINALIZER");
+    mocks.serverEnv.mockImplementationOnce(() => {
+      throw new Error("PRIVATE_PREFLIGHT");
     });
+    vi.spyOn(otel, "withRootSpan").mockImplementationOnce(
+      async (_name, _attrs, callback) => {
+        await callback({
+          traceId: "trace",
+          span: { setAttribute: () => {} },
+        } as never);
+        throw new Error("PRIVATE_SPAN_FINALIZER");
+      }
+    );
     const response = await GET(request());
     expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ status: "error", reason: "INTERNAL_ERROR" });
-    expect(JSON.stringify([...mocks.info.mock.calls, ...mocks.error.mock.calls])).not.toContain("PRIVATE_SPAN_FINALIZER");
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      reason: "INTERNAL_ERROR",
+    });
+    expect(
+      JSON.stringify([...mocks.info.mock.calls, ...mocks.error.mock.calls])
+    ).not.toContain("PRIVATE_SPAN_FINALIZER");
   });
 
   it("bounds logs when failed deep response construction throws", async () => {
     const sentinel = "RESPONSE_PRIVATE_SENTINEL";
-    mocks.checkEvmRpcConnectivity.mockResolvedValueOnce({ ok: false, source: "live", errorMessage: sentinel });
-    vi.spyOn(NextResponse, "json").mockImplementationOnce(() => { throw new Error(sentinel); });
+    mocks.checkEvmRpcConnectivity.mockResolvedValueOnce({
+      ok: false,
+      source: "live",
+      errorMessage: sentinel,
+    });
+    vi.spyOn(NextResponse, "json").mockImplementationOnce(() => {
+      throw new Error(sentinel);
+    });
     const response = await GET(request("/readyz?deep=1"));
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ status: "error", reason: "INTERNAL_ERROR" });
-    const lines = [...mocks.info.mock.calls, ...mocks.error.mock.calls, ...mocks.warn.mock.calls];
+    expect(await response.json()).toEqual({
+      status: "error",
+      reason: "INTERNAL_ERROR",
+    });
+    const lines = [
+      ...mocks.info.mock.calls,
+      ...mocks.error.mock.calls,
+      ...mocks.warn.mock.calls,
+    ];
     expect(lines.length).toBeLessThanOrEqual(3);
     expect(JSON.stringify(lines)).not.toContain(sentinel);
-    expect(lines.filter(([fields]) => fields?.event === "substrate.deep.complete")).toHaveLength(1);
-    expect(lines.filter(([fields]) => fields?.errorCode === "INTERNAL_SERVER_ERROR")).toHaveLength(1);
-    expect(lines.filter(([, message]) => message === "request complete")).toHaveLength(1);
+    expect(
+      lines.filter(([fields]) => fields?.event === "substrate.deep.complete")
+    ).toHaveLength(1);
+    expect(
+      lines.filter(([fields]) => fields?.errorCode === "INTERNAL_SERVER_ERROR")
+    ).toHaveLength(1);
+    expect(
+      lines.filter(([, message]) => message === "request complete")
+    ).toHaveLength(1);
   });
-  it.each(["healthy", "failed-deep"] as const)("ignores build-info failure for %s", async (scenario) => {
-    mocks.setBuildInfo.mockImplementationOnce(() => { throw new Error("PRIVATE_BUILD_INFO"); });
-    if (scenario === "failed-deep") mocks.checkEvmRpcConnectivity.mockResolvedValueOnce({ ok: false, source: "live", errorMessage: "rpc failed" });
-    const response = await GET(request(scenario === "failed-deep" ? "/readyz?deep=1" : "/readyz"));
+  it.each([
+    "healthy",
+    "failed-deep",
+  ] as const)("ignores build-info failure for %s", async (scenario) => {
+    mocks.setBuildInfo.mockImplementationOnce(() => {
+      throw new Error("PRIVATE_BUILD_INFO");
+    });
+    if (scenario === "failed-deep")
+      mocks.checkEvmRpcConnectivity.mockResolvedValueOnce({
+        ok: false,
+        source: "live",
+        errorMessage: "rpc failed",
+      });
+    const response = await GET(
+      request(scenario === "failed-deep" ? "/readyz?deep=1" : "/readyz")
+    );
     expect(response.status).toBe(scenario === "healthy" ? 200 : 503);
-    expect(JSON.stringify([...mocks.info.mock.calls, ...mocks.error.mock.calls])).not.toContain("PRIVATE_BUILD_INFO");
+    expect(
+      JSON.stringify([...mocks.info.mock.calls, ...mocks.error.mock.calls])
+    ).not.toContain("PRIVATE_BUILD_INFO");
   });
-
 });
