@@ -446,6 +446,7 @@ services:
         "/app/nodes/operator/app/migrations",
       ]
     environment:
+      - NODE_NAME=operator
       - DATABASE_URL=${DATABASE_URL?DATABASE_URL is required}
     depends_on:
       postgres:

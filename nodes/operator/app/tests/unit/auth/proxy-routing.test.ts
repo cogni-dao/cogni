@@ -39,6 +39,10 @@ vi.mock("@/shared/config", () => ({
 }));
 
 // Import after mocks
+import {
+  formatRevocableKey,
+  REVOCABLE_KEY_PREFIX,
+} from "@cogni-dao/agent-grants/credentials";
 import { proxy } from "@/proxy";
 
 // --- Helpers ---
@@ -387,5 +391,45 @@ describe("proxy — unmatched routes", () => {
     expect(res.status).toBe(200);
     // getToken should not be called for non-auth routes
     expect(mockGetToken).not.toHaveBeenCalled();
+  });
+});
+
+// story.5156 / task.5474 D1 + CHECKSUM_BEFORE_DB: the perimeter admits both key generations, but a revocable bearer
+// must pass shape AND checksum here, before any database read. The format has one definition, in the package.
+describe("proxy — revocable agent bearer", () => {
+  function bearerRequest(path: string, token: string): NextRequest {
+    return new NextRequest(new URL(path, "http://localhost:3000"), {
+      headers: { authorization: `Bearer ${token}` },
+    });
+  }
+
+  it("passes a well-formed revocable bearer through the agent lane without a session read", async () => {
+    const res = await proxy(
+      bearerRequest("/api/v1/agent/runs", formatRevocableKey("a".repeat(43)))
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockGetToken).not.toHaveBeenCalled();
+  });
+
+  it("rejects a revocable bearer with a bad checksum at the perimeter (401, no session read)", async () => {
+    const res = await proxy(
+      bearerRequest(
+        "/api/v1/agent/runs",
+        `${REVOCABLE_KEY_PREFIX}${"a".repeat(47)}`
+      )
+    );
+
+    expect(res.status).toBe(401);
+    expect(mockGetToken).not.toHaveBeenCalled();
+  });
+
+  it("still rejects a non-cogni bearer with no session on /api/v1/*", async () => {
+    mockGetToken.mockResolvedValue(null);
+    const res = await proxy(
+      bearerRequest("/api/v1/agent/runs", "not-a-cogni-key")
+    );
+
+    expect(res.status).toBe(401);
   });
 });

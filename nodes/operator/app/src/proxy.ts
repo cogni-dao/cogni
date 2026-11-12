@@ -16,6 +16,10 @@
 /* eslint-disable boundaries/no-unknown-files */
 
 import { randomUUID } from "node:crypto";
+import {
+  isWellFormedRevocableKey,
+  REVOCABLE_KEY_PREFIX,
+} from "@cogni-dao/agent-grants/credentials";
 import { type NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
@@ -50,7 +54,11 @@ function isAppRoute(pathname: string): boolean {
   );
 }
 
-const AGENT_BEARER_PREFIX = "Bearer cogni_ag_sk_v1_";
+// The signed-key prefix is wire format; the revocable-key prefix has ONE definition, in the package.
+const AGENT_BEARER_PREFIXES = [
+  "Bearer cogni_ag_sk_v1_",
+  `Bearer ${REVOCABLE_KEY_PREFIX}`,
+];
 const SIGN_IN_PARAM = "signIn";
 const CALLBACK_PARAM = "callbackUrl";
 
@@ -69,9 +77,22 @@ function isAgentApiRoute(pathname: string): boolean {
   return pathname.startsWith("/api/v1/");
 }
 
+/**
+ * A revocable-key bearer whose shape or checksum fails (CHECKSUM_BEFORE_DB). Refused at the perimeter, so it never reaches a route handler,
+ * the credential store or its pool. The format has ONE definition, in the package.
+ */
+function hasMalformedRevocableBearer(req: NextRequest): boolean {
+  const authorization = req.headers.get("authorization");
+  const bearerPrefix = `Bearer ${REVOCABLE_KEY_PREFIX}`;
+  if (!authorization?.startsWith(bearerPrefix)) return false;
+  return !isWellFormedRevocableKey(authorization.slice("Bearer ".length));
+}
+
 function hasAgentBearer(req: NextRequest): boolean {
-  return (
-    req.headers.get("authorization")?.startsWith(AGENT_BEARER_PREFIX) ?? false
+  const authorization = req.headers.get("authorization");
+  if (!authorization) return false;
+  return AGENT_BEARER_PREFIXES.some((prefix) =>
+    authorization.startsWith(prefix)
   );
 }
 
@@ -103,7 +124,7 @@ function perimeterLog(): ReturnType<typeof makeLogger> {
 }
 
 /** Why an unauthenticated /api/v1 request was rejected at the perimeter. */
-type PerimeterDenyReason = "no_session" | "no_auth_secret";
+type PerimeterDenyReason = "no_session" | "no_auth_secret" | "bad_key_format";
 
 function logPerimeterDenial(
   req: NextRequest,
@@ -138,6 +159,11 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
   // Allow public namespace without authentication
   if (isPublicApi) {
     return NextResponse.next();
+  }
+
+  if (isAgentApiRoute(pathname) && hasMalformedRevocableBearer(req)) {
+    logPerimeterDenial(req, "bad_key_format");
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   // Resolve token once — reused for both page and API checks.

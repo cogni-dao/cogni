@@ -17,7 +17,7 @@
  */
 
 import { NextResponse } from "next/server";
-
+import { resolveRouteIdentity } from "@/app/_lib/auth/route-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createNodeProber } from "@/bootstrap/node-flight.factory";
@@ -46,7 +46,11 @@ export async function GET(
   request: Request,
   ctx: RouteParams
 ): Promise<NextResponse> {
-  const sessionUser = await getSessionUser();
+  const auth = await resolveRouteIdentity(getSessionUser);
+  if (!auth.ok) {
+    return auth.response;
+  }
+  const sessionUser = auth.user;
   if (!sessionUser) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }

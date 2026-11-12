@@ -47,6 +47,17 @@ vi.mock("next/headers", () => ({
 }));
 
 const mockGetServerSessionUser = vi.fn();
+// task.5474 S0: the resolver's v1 path asks the credential store whether the user was upgraded (assertV1NotSuperseded).
+// This contract test covers never-upgraded users, so the store answers "no" without a database.
+vi.mock("@/bootstrap/agent-credentials", () => ({
+  getAgentCredentialStore: () => ({
+    everConfirmed: async () => false,
+    lookup: async () => null,
+  }),
+  admitCredentialLookup: () => true,
+  recordCredentialMiss: () => {},
+}));
+
 vi.mock("@/lib/auth/server", () => ({
   getServerSessionUser: (...args: unknown[]) =>
     mockGetServerSessionUser(...args),

@@ -37,6 +37,28 @@ vi.mock("@/shared/env/server", () => ({
   serverEnv: () => ({ AUTH_SECRET: "test-secret-for-unit-tests-only" }),
 }));
 
+// task.5474 S0: the resolver's v1 path asks the credential store whether the user was upgraded
+// (assertV1NotSuperseded), and the v2 path verifies by hash lookup.
+const mockEverConfirmed = vi.fn();
+const mockLookup = vi.fn();
+vi.mock("@/bootstrap/agent-credentials", () => ({
+  getAgentCredentialStore: () => ({
+    everConfirmed: (...args: unknown[]) => mockEverConfirmed(...args),
+    lookup: (...args: unknown[]) => mockLookup(...args),
+  }),
+  verifyAgentCredential: (
+    store: CredentialStore,
+    token: string,
+    allow: readonly CredentialState[]
+  ) => verifyBearer(store, token, allow),
+}));
+
+import {
+  type CredentialState,
+  type CredentialStore,
+  formatRevocableKey,
+  verifyBearer,
+} from "@cogni-dao/agent-grants/credentials";
 import {
   issueAgentApiKey,
   peekAgentKeyExpiry,
@@ -106,9 +128,104 @@ describe("resolveRequestIdentity — circular-recursion regression", () => {
   });
 });
 
+describe("resolveRequestIdentity — v2 hashed keys and v1 supersession (task.5474 S0)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockEverConfirmed.mockResolvedValue(false);
+    mockLookup.mockResolvedValue(null);
+  });
+
+  it("resolves an active v2 key from the store and never touches the session", async () => {
+    const token = formatRevocableKey("a".repeat(43));
+    mockHeaders.mockResolvedValue(
+      headersFromRecord({ authorization: `Bearer ${token}` })
+    );
+    mockLookup.mockResolvedValue({
+      credentialId: "cred-1",
+      userId: "agent-9",
+      name: "Agent 9",
+      state: "active",
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      renewUntil: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+    });
+
+    const user = await resolveRequestIdentity();
+
+    expect(user).toMatchObject({ id: "agent-9", displayName: "Agent 9" });
+    expect(mockGetServerSessionUser).not.toHaveBeenCalled();
+  });
+
+  it("returns null for a revoked/unknown v2 key (BEARER_CLAIMS_EXCLUSIVE: no cookie fallback)", async () => {
+    mockHeaders.mockResolvedValue(
+      headersFromRecord({
+        authorization: `Bearer ${formatRevocableKey("b".repeat(43))}`,
+      })
+    );
+
+    expect(await resolveRequestIdentity()).toBeNull();
+    expect(mockGetServerSessionUser).not.toHaveBeenCalled();
+  });
+
+  it("throws CredentialStoreUnavailableError on a v2 store outage (503, never a false 401)", async () => {
+    mockHeaders.mockResolvedValue(
+      headersFromRecord({
+        authorization: `Bearer ${formatRevocableKey("c".repeat(43))}`,
+      })
+    );
+    mockLookup.mockRejectedValue(new Error("db down"));
+
+    await expect(resolveRequestIdentity()).rejects.toMatchObject({
+      name: "CredentialStoreUnavailableError",
+    });
+  });
+
+  it("refuses a valid v1 key whose user holds a confirmed v2 key (V1_SUPERSEDED)", async () => {
+    const token = issueAgentApiKey({ userId: "user-up", displayName: "Up" });
+    mockHeaders.mockResolvedValue(
+      headersFromRecord({ authorization: `Bearer ${token}` })
+    );
+    mockEverConfirmed.mockResolvedValue(true);
+
+    await expect(resolveRequestIdentity()).rejects.toMatchObject({
+      name: "V1SupersededError",
+    });
+  });
+
+  it("still resolves a valid v1 key for a never-upgraded user (V1_PATH_UNCHANGED)", async () => {
+    const token = issueAgentApiKey({ userId: "user-v1", displayName: "V1" });
+    mockHeaders.mockResolvedValue(
+      headersFromRecord({ authorization: `Bearer ${token}` })
+    );
+
+    expect(await resolveRequestIdentity()).toMatchObject({ id: "user-v1" });
+    expect(mockGetServerSessionUser).not.toHaveBeenCalled();
+  });
+});
+
 describe("peekAgentKeyExpiry — agent-key liveness for /agent/me", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockEverConfirmed.mockResolvedValue(false);
+    mockLookup.mockResolvedValue(null);
+  });
+
+  it("returns the store expiry for an active v2 bearer", async () => {
+    mockHeaders.mockResolvedValue(
+      headersFromRecord({
+        authorization: `Bearer ${formatRevocableKey("d".repeat(43))}`,
+      })
+    );
+    const exp = new Date(Date.now() + 86_400_000);
+    mockLookup.mockResolvedValue({
+      credentialId: "cred-2",
+      userId: "agent-2",
+      name: null,
+      state: "active",
+      expiresAt: exp.toISOString(),
+      renewUntil: new Date(exp.getTime() + 86_400_000).toISOString(),
+    });
+
+    expect(await peekAgentKeyExpiry()).toBe(Math.floor(exp.getTime() / 1000));
   });
 
   it("returns the key's future expiry for a valid agent bearer", async () => {

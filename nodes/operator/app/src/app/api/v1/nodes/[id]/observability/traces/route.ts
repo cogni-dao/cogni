@@ -29,7 +29,7 @@
 
 import type { AuthzDecisionCode } from "@cogni/authorization-core";
 import { NextResponse } from "next/server";
-
+import { resolveRouteIdentity } from "@/app/_lib/auth/route-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
 import { createLangfuseReader } from "@/bootstrap/observability.factory";
@@ -104,7 +104,16 @@ export async function GET(
     );
   };
 
-  const sessionUser = await getSessionUser();
+  const auth = await resolveRouteIdentity(getSessionUser);
+  if (!auth.ok) {
+    logComplete({
+      outcome: "error",
+      status: auth.status,
+      errorCode: auth.errorCode,
+    });
+    return auth.response;
+  }
+  const sessionUser = auth.user;
   if (!sessionUser) {
     logComplete({ outcome: "error", status: 401, errorCode: "unauthorized" });
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
