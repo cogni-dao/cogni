@@ -47,6 +47,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
 ## Public Surface
 
 - **Exports:**
+  - `runStartupPreflight()` - Run shared local admission at startup, allowing only typed configuration refusals to reach diagnostic HTTP
   - `node-deploy-sequencer.ts` (own process entry, bundled to `node-deploy-sequencer.mjs`, no exports) - Composition root for the blue/green node-deploy sequencer (task.5400): ActuatorPayer + operator Postgres + Cloudflare edge + K8s state secrets, single instance by Postgres advisory lock; env `POD_NAMESPACE`, `DEPLOY_ENVIRONMENT`, `AKASH_TX_ACTUATOR_URL`, `AKASH_CHAIN_OWNER`, `NODE_DEPLOY_EDGE_HOST_REGEX`, `NODE_DEPLOY_RETAIN_MS`; credentials as files under `/var/run/secrets/node-deploy-sequencer/`
   - `verifySystemTenant(serviceAccountService)` - Startup healthcheck: fails fast if cogni_system billing account missing (per SYSTEM_TENANT_STARTUP_CHECK)
   - `runGovernanceSchedulesSyncJob()` - Job: advisory lock + governance schedule sync via container

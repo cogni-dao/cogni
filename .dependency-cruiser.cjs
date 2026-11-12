@@ -64,8 +64,18 @@ module.exports = {
   allowed: [
     // Next's Edge-safe entry loads its Node-only instrumentation module.
     {
-      from: { path: layers.instrumentation },
+      from: { path: "^nodes/operator/app/src/instrumentation\\.ts$" },
       to: { path: [layers.instrumentation] },
+    },
+    // Node startup may invoke only the local admission composition bridge.
+    {
+      from: { path: "^nodes/operator/app/src/instrumentation\\.node\\.ts$" },
+      to: {
+        path: [
+          layers.instrumentation,
+          "^nodes/operator/app/src/bootstrap/startup-preflight\\.ts$",
+        ],
+      },
     },
 
     // core → core, types

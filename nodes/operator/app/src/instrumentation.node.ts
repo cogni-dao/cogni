@@ -19,9 +19,7 @@
 
 import { NodeSDK, tracing } from "@opentelemetry/sdk-node";
 import pino from "pino";
-import { RuntimeSecretError } from "@/shared/env/invariants";
-import { localReadinessPreflight } from "@/shared/env/local-readiness-preflight";
-import { EnvValidationError } from "@/shared/env/server-env";
+import { runStartupPreflight } from "@/bootstrap/startup-preflight";
 
 let sdk: NodeSDK | null = null;
 let sdkAttempt: Promise<void> | undefined;
@@ -136,18 +134,7 @@ export async function register(): Promise<void> {
 
   try {
     await initOtelSdk();
-    try {
-      localReadinessPreflight();
-    } catch (error) {
-      if (
-        !(
-          error instanceof EnvValidationError ||
-          error instanceof RuntimeSecretError
-        )
-      )
-        throw error;
-      // Keep diagnostic HTTP available; readiness repeats the same assertion.
-    }
+    runStartupPreflight();
     logAppStarted();
   } catch (error) {
     try {
@@ -161,7 +148,7 @@ export async function register(): Promise<void> {
   }
 
   // Dev mode (not test): warn if LiteLLM has stale test config from a previous session.
-  // Inlined here (not in bootstrap/) because dep-cruiser forbids instrumentation→bootstrap imports.
+  // Inlined here because instrumentation only imports the startup-preflight bridge.
   // biome-ignore lint/style/noProcessEnv: startup check before config framework
   if (process.env.APP_ENV !== "test") {
     (async () => {
