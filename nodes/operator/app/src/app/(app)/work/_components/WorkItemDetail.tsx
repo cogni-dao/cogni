@@ -3,7 +3,13 @@
 
 "use client";
 
-import { StatusPill, TypeIcon } from "@cogni/knowledge-base-ui";
+import {
+  StatusPill,
+  TypeIcon,
+  WorkExpectations,
+  type WorkMetric,
+} from "@cogni/knowledge-base-ui";
+import { WorkMoveLinks } from "@cogni/knowledge-base-ui/goals";
 import type { WorkItemDto } from "@cogni/node-contracts";
 import type { ReactElement } from "react";
 import {
@@ -16,10 +22,13 @@ import {
 } from "@/components";
 
 import { EntityCitationLinks } from "../../_components/EntityCitationLinks";
+import { PeekLink } from "../../_components/EntityPeek";
+import { fetchWorkExpectations } from "../_api/fetchWorkExpectations";
 import { WorkItemFetchError } from "../_api/fetchWorkItems";
 import { hasScores, WorkItemScoresRadar } from "./WorkItemScoresRadar";
 
 type SubjectRef = WorkItemDto["assignees"][number];
+const NO_MOVES: WorkMetric[] = [];
 
 function assigneeLabel(a: SubjectRef): string {
   switch (a.kind) {
@@ -143,6 +152,18 @@ export function WorkItemDetail({
             </SheetHeader>
 
             <div className="mt-6 flex flex-col gap-5 px-1">
+              {/* Moves: the KPI chain (moves, serves, goal) as link rows plus the moved metric (task.0112) */}
+              <WorkMoveLinks
+                moves={item.moves ?? NO_MOVES}
+                labels={item.labels}
+                LinkComponent={PeekLink}
+              />
+              <WorkExpectations
+                itemId={item.id}
+                moves={item.moves ?? NO_MOVES}
+                load={fetchWorkExpectations}
+              />
+
               {/* Status + Priority row */}
               <div className="flex flex-wrap items-center gap-3">
                 <StatusPill status={item.status} />

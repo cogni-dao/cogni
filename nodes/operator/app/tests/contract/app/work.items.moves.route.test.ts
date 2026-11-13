@@ -8,7 +8,7 @@
  * Invariants:
  *   - SERVER_OWNS_BASELINE: a baseline in the request body never reaches the store.
  *   - READ_TIME_ENRICHMENT: a single-item read, a create response and a patch response carry `{ baseline, current, moved }` per move; `unknown` names a missing reading and is never zero.
- *   - READ_IS_BOUNDED: at most one baseline lookup and one latest lookup per move; an item with no moves costs no lookup.
+ *   - READ_IS_BOUNDED: one batched `workReadBatch` read for all of an item's moves (at most three); an item with no moves costs no lookup.
  *   - UNKNOWN_METRIC_IS_400: an unknown or deprecated metric id is HTTP 400 `cite_unresolved` at `set.moves` (patch) or `moves` (create); a cite failure stays at `cites`.
  *   - EACH_FAILURE_HAS_ITS_OWN_CODE: `moves_invalid` and `moves_unsupported` are 400; a baseline failure is 503 `metric_baseline_unavailable`; a resolver failure is 503 `cite_resolver_unavailable`.
  * Side-effects: none
@@ -21,7 +21,6 @@ import {
   MovesInvalidError,
   MovesUnsupportedError,
 } from "@cogni/work-items";
-import { MetricError } from "@cogni-dao/metrics/contracts";
 import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,14 +34,13 @@ const mocks = vi.hoisted(() => ({
   patch: vi.fn(),
   get: vi.fn(),
   create: vi.fn(),
-  read: vi.fn(),
-  observation: vi.fn(),
+  workReadBatch: vi.fn(),
 }));
 
 vi.mock("@/bootstrap/container", () => ({ getContainer: vi.fn() }));
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
 
-const { patch, get, create, read, observation } = mocks;
+const { patch, get, create, workReadBatch } = mocks;
 
 const OBS_BASE = "11111111-1111-4111-8111-111111111111";
 const OBS_B2 = "22222222-2222-4222-8222-222222222222";
@@ -61,7 +59,7 @@ function container(withMetrics = true) {
     clock: { now: vi.fn(() => new Date("2026-11-10T00:00:00Z")) },
     config: { unhandledErrorPolicy: "respond_500" },
     doltgresWorkItems: { patch, get, create },
-    ...(withMetrics ? { goalMetrics: { read, observation } } : {}),
+    ...(withMetrics ? { goalMetrics: { workReadBatch } } : {}),
   } as never;
 }
 
@@ -89,11 +87,32 @@ const stored = (...moves: [string, "up" | "down", string | null][]) => ({
     baselineObservationId,
   })),
 });
+/** A full authorized observation: the shape `workReadBatch` returns and `assessDirection` compares (one series). */
 const ok = (
   id: string,
   value: number,
   observedAt = "2026-11-10T00:00:00.000Z"
-) => ({ id, status: "ok", value, observedAt });
+) => ({
+  id,
+  metricId: "m-1",
+  status: "ok",
+  value,
+  observedAt,
+  definitionHash: "h",
+  calculatorVersion: "work.count@1",
+  paramsHash: "p",
+  node: "operator",
+  environment: "test",
+  dataScope: "node-members",
+  unit: "items",
+  window: {
+    start: new Date(Date.parse(observedAt) - 3_600_000).toISOString(),
+    end: observedAt,
+  },
+  sourceWatermarks: [{ source: "test", asOf: observedAt }],
+  viewState: "ok",
+  maxAgeSeconds: 7200,
+});
 
 /** A parsed JSON response; the body is read by path in each assertion. */
 type Reply = {
@@ -157,8 +176,9 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
   describe("PATCH", () => {
     it("forwards moves and never a client baseline, and returns the readings", async () => {
       patch.mockResolvedValue(stored(["convergence-ratio", "up", OBS_BASE]));
-      read.mockResolvedValue({ lastGood: ok(OBS_B2, 0.4) });
-      observation.mockResolvedValue({ observation: ok(OBS_BASE, 0.2) });
+      workReadBatch.mockResolvedValue([
+        { baseline: ok(OBS_BASE, 0.2), current: ok(OBS_B2, 0.4) },
+      ]);
       const res = await patchItem({
         reason: "this raises the ratio",
         set: {
@@ -178,7 +198,7 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
         reason: "this raises the ratio",
         set: { moves: [{ metricId: "convergence-ratio", direction: "up" }] },
       });
-      expect(res.body.moves).toEqual([
+      expect(res.body.moves).toMatchObject([
         {
           metricId: "convergence-ratio",
           direction: "up",
@@ -196,7 +216,7 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
       expect(res.status).toBe(200);
       expect(patch.mock.calls[0]?.[0].set).toEqual({ moves: [] });
       expect(res.body.moves).toEqual([]);
-      expect(read).not.toHaveBeenCalled();
+      expect(workReadBatch).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -325,8 +345,9 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
         ...stored(["convergence-ratio", "up", OBS_BASE]),
         id: "task.5002",
       });
-      read.mockResolvedValue({ lastGood: ok(OBS_B2, 0.5) });
-      observation.mockResolvedValue({ observation: ok(OBS_BASE, 0.25) });
+      workReadBatch.mockResolvedValue([
+        { baseline: ok(OBS_BASE, 0.25), current: ok(OBS_B2, 0.5) },
+      ]);
       const res = await createItem({
         ...filed,
         moves: [
@@ -414,20 +435,25 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
   });
 
   describe("GET (read-time enrichment)", () => {
-    const readings = (baseline: number | null, current: number | null) => {
-      observation.mockImplementation(async () => ({
-        observation:
-          baseline === null
-            ? null
-            : ok(OBS_BASE, baseline, "2026-11-01T00:00:00.000Z"),
-      }));
-      read.mockImplementation(async () => ({
-        lastGood:
-          current === null
-            ? null
-            : ok(OBS_B2, current, "2026-11-10T00:00:00.000Z"),
-      }));
-    };
+    // The service's one batched read answers every move: `workReadBatch` returns, per move, the
+    // pinned baseline reading (none without a pin), the latest reading and, when it cannot read, the reason.
+    const readings = (baseline: number | null, current: number | null) =>
+      workReadBatch.mockImplementation(
+        async (moves: { baselineObservationId: string | null }[]) =>
+          moves.map((move) => ({
+            baseline:
+              baseline === null || move.baselineObservationId === null
+                ? null
+                : ok(OBS_BASE, baseline, "2026-11-01T00:00:00.000Z"),
+            current:
+              current === null
+                ? null
+                : ok(OBS_B2, current, "2026-11-10T00:00:00.000Z"),
+            ...(baseline === null && { unknownReason: "baseline_unreadable" }),
+            ...(baseline !== null &&
+              current === null && { unknownReason: "no_current" }),
+          }))
+      );
     const moveOf = async () => (await getItem()).body.moves[0];
 
     it.each([
@@ -449,18 +475,16 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
       });
     });
 
-    it("a null baseline reads unknown (no_baseline) with no lookup, never zero", async () => {
+    it("a null baseline reads unknown (no_baseline) and still shows the current reading, never zero", async () => {
       get.mockResolvedValue(stored(["m-1", "up", null]));
       readings(1, 5);
       expect(await moveOf()).toMatchObject({
         baselineObservationId: null,
         baseline: null,
-        current: null,
+        current: { value: 5 },
         moved: "unknown",
         unknownReason: "no_baseline",
       });
-      expect(observation).not.toHaveBeenCalled();
-      expect(read).not.toHaveBeenCalled();
     });
 
     it("a pinned observation that cannot be read, or no current reading, reads unknown", async () => {
@@ -483,11 +507,10 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
       get.mockResolvedValue(
         stored(["old-metric", "up", OBS_BASE], ["live", "up", OBS_BASE])
       );
-      observation.mockImplementation(async (id: string) => {
-        if (id === "old-metric") throw new MetricError("metric_not_found", 404);
-        return { observation: ok(OBS_BASE, 1) };
-      });
-      read.mockResolvedValue({ lastGood: ok(OBS_B2, 2) });
+      workReadBatch.mockResolvedValue([
+        { baseline: null, current: null, unknownReason: "metric_deprecated" },
+        { baseline: ok(OBS_BASE, 1), current: ok(OBS_B2, 2) },
+      ]);
       const res = await getItem();
       expect(res.status).toBe(200);
       expect(res.body.moves[0]).toMatchObject({
@@ -499,21 +522,9 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
       expect(res.body.moves[1]).toMatchObject({ moved: "as_declared" });
     });
 
-    it("a missing observation is not a deprecated metric", async () => {
-      get.mockResolvedValue(stored(["m-1", "up", OBS_BASE]));
-      observation.mockRejectedValue(
-        new MetricError("observation_not_found", 404)
-      );
-      read.mockResolvedValue({ lastGood: ok(OBS_B2, 2) });
-      expect(await moveOf()).toMatchObject({
-        moved: "unknown",
-        unknownReason: "baseline_unreadable",
-      });
-    });
-
     it("a failing metrics service reads unknown and never fails the item read", async () => {
       get.mockResolvedValue(stored(["m-1", "up", OBS_BASE]));
-      observation.mockRejectedValue(new Error("db down"));
+      workReadBatch.mockRejectedValue(new Error("db down"));
       const res = await getItem();
       expect(res.status).toBe(200);
       expect(res.body.moves[0]).toMatchObject({ moved: "unknown" });
@@ -528,7 +539,7 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
       });
     });
 
-    it("looks up at most one baseline and one latest reading per move, three moves at most", async () => {
+    it("reads all of an item's moves in one batch, three moves at most", async () => {
       get.mockResolvedValue(
         stored(
           ["m-1", "up", OBS_BASE],
@@ -543,8 +554,8 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
         "against",
         "as_declared",
       ]);
-      expect(observation).toHaveBeenCalledTimes(3);
-      expect(read).toHaveBeenCalledTimes(3);
+      expect(workReadBatch).toHaveBeenCalledTimes(1);
+      expect(workReadBatch.mock.calls[0]?.[0]).toHaveLength(3);
     });
 
     it("an item that declares no moves costs no lookup, and [] stays []", async () => {
@@ -552,25 +563,7 @@ describe("work-item moves HTTP boundary (story.0033)", () => {
       expect((await getItem()).body).not.toHaveProperty("moves");
       get.mockResolvedValue({ ...base, moves: [] });
       expect((await getItem()).body.moves).toEqual([]);
-      expect(observation).not.toHaveBeenCalled();
-      expect(read).not.toHaveBeenCalled();
-    });
-
-    it("a failed observation never counts as a reading", async () => {
-      get.mockResolvedValue(stored(["m-1", "up", OBS_BASE]));
-      observation.mockResolvedValue({
-        observation: {
-          id: OBS_BASE,
-          status: "error",
-          value: 1,
-          observedAt: "x",
-        },
-      });
-      read.mockResolvedValue({ lastGood: ok(OBS_B2, 2) });
-      expect(await moveOf()).toMatchObject({
-        moved: "unknown",
-        unknownReason: "baseline_unreadable",
-      });
+      expect(workReadBatch).not.toHaveBeenCalled();
     });
   });
 });

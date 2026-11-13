@@ -79,6 +79,7 @@ import {
   KnowledgeWriteScopeRequiredError,
   type KnowledgeWriteSession,
   type NewDomain,
+  type WorkEdoPage,
 } from "../../port/knowledge-store.port.js";
 import type {
   DoltBranchSessionRunner,
@@ -871,6 +872,72 @@ export class DoltgresKnowledgeStoreAdapter implements KnowledgeStorePort {
     return {
       links,
       nextCursor: rows.length > 5 ? (links.at(-1)?.id ?? null) : null,
+    };
+  }
+
+  /**
+   * The hypotheses a work item tracks and their recorded outcomes: at most five hypotheses and five
+   * outcomes each, text clipped in SQL (title 200, content 2000, kpi bindings 8192 as JSON text). A
+   * clipped or over-limit read says so (`truncated`); nothing is invented. The caller's signal stops
+   * the read before its second query. (A literal port of node-template knowledge-store 0.18.0
+   * `readWorkEdo`, run on this adapter's own read connection.)
+   */
+  async readWorkEdo(
+    workItemId: string,
+    signal?: AbortSignal
+  ): Promise<WorkEdoPage> {
+    signal?.throwIfAborted();
+    const id = escapeValue(workItemId);
+    const yes = (value: unknown) =>
+      value === true || value === "t" || value === "true" || value === 1;
+    const rows = await this.readSql.unsafe(`WITH edges AS (
+      (SELECT c.id AS edge_id, c.cited_id AS hypothesis_id FROM citations c JOIN knowledge h ON h.id=c.cited_id AND h.entry_type='hypothesis' WHERE c.citing_id=${id} AND c.citation_type='tracks' ORDER BY c.id LIMIT 6)
+      UNION ALL
+      (SELECT c.id AS edge_id, c.citing_id AS hypothesis_id FROM citations c JOIN knowledge h ON h.id=c.citing_id AND h.entry_type='hypothesis' WHERE c.cited_id=${id} AND c.citation_type='tracks' ORDER BY c.id LIMIT 6)
+    ), picked AS (SELECT * FROM edges ORDER BY edge_id LIMIT 6)
+    SELECT h.id,substring(h.title,1,200) AS title,substring(h.content,1,2000) AS content,
+      CASE WHEN substring(CAST(h.kpi_bindings AS TEXT),8193,1) <> '' THEN NULL ELSE h.kpi_bindings END AS kpi_bindings,
+      (substring(h.title,201,1) <> '' OR substring(h.content,2001,1) <> '' OR substring(CAST(h.kpi_bindings AS TEXT),8193,1) <> '') AS content_truncated, p.edge_id
+    FROM picked p JOIN knowledge h ON h.id=p.hypothesis_id
+    ORDER BY p.edge_id`);
+    const picked = [
+      ...new Map(
+        rows.slice(0, 5).map((row) => [String(row.id), row] as const)
+      ).values(),
+    ];
+    if (!picked.length) return { items: [], truncated: rows.length > 5 };
+    signal?.throwIfAborted();
+    const ids = [...new Set(picked.map((row) => String(row.id)))];
+    const branches = ids.map(
+      (hypothesisId) =>
+        `(SELECT c.cited_id AS hypothesis_id, k.id AS outcome_id, substring(k.title,1,200) AS outcome_title, substring(k.content,1,2000) AS outcome_content, (substring(k.title,201,1) <> '' OR substring(k.content,2001,1) <> '') AS outcome_content_truncated FROM citations c JOIN knowledge k ON k.id=c.citing_id AND k.entry_type='outcome' WHERE c.cited_id=${escapeValue(hypothesisId)} AND c.citation_type IN ('validates','invalidates') ORDER BY c.id LIMIT 6)`
+    );
+    const outcomeRows = await this.readSql.unsafe(branches.join(" UNION ALL "));
+    return {
+      items: picked.map((row) => {
+        const outcomes = outcomeRows.filter(
+          (outcome) => outcome.hypothesis_id === row.id
+        );
+        return {
+          hypothesis: {
+            id: String(row.id),
+            title: String(row.title),
+            content: String(row.content),
+            kpiBindings:
+              (row.kpi_bindings as Record<string, unknown>[] | null) ?? null,
+          },
+          outcomes: outcomes.slice(0, 5).map((outcome) => ({
+            id: String(outcome.outcome_id),
+            title: String(outcome.outcome_title),
+            content: String(outcome.outcome_content),
+          })),
+          truncated:
+            yes(row.content_truncated) ||
+            outcomes.length > 5 ||
+            outcomes.some((outcome) => yes(outcome.outcome_content_truncated)),
+        };
+      }),
+      truncated: rows.length > 5,
     };
   }
 

@@ -91,6 +91,7 @@ import {
   fetchWorkItem,
   fetchWorkItems,
 } from "./_api/fetchWorkItems";
+import { WorkGoalsMount } from "./_components/WorkGoalsMount";
 import { WorkItemDetail } from "./_components/WorkItemDetail";
 import {
   closeWorkItemPermalink,
@@ -123,11 +124,25 @@ function WorkGoalLink({ href, className, label }: WorkBoardGoalLink) {
   );
 }
 
-export function WorkDashboardView({
+/**
+ * The work dashboard under the node's one Goals scope (task.0112): the table's Goal column, the board's goal
+ * pointer and the detail sheet's Moves block resolve goal titles from one cached goals read, never per row.
+ */
+export function WorkDashboardView(
+  props: { readonly selectedItemId?: string } = {}
+) {
+  return (
+    <WorkGoalsMount>
+      <WorkDashboard {...props} />
+    </WorkGoalsMount>
+  );
+}
+
+function WorkDashboard({
   selectedItemId,
 }: {
   readonly selectedItemId?: string;
-} = {}) {
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();

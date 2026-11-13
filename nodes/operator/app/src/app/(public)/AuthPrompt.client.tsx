@@ -33,6 +33,7 @@ const APP_CALLBACK_ROUTES = [
   "/dashboard",
   "/gov",
   "/knowledge",
+  "/metrics",
   "/nodes",
   "/profile",
   "/schedules",

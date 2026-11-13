@@ -13,7 +13,8 @@
  *     `WorkItemRevisionConflictError` into the ai-tools `WorkItemPatchConflictError`
  *   - NO_PRIORITY_GUARD (task.5306): a priority-0/1 patch writes through like any other priority;
  *     there is no bespoke node-admin gate on it
- *   - MOVES_READ_AT_READ_TIME (story.0033): a read that returns exactly one item (the `core__work_item_read` path) judges each move from observations; a page returns the stored moves and looks up nothing
+ *   - MOVES_READ_AT_READ_TIME (story.0033): a read that returns exactly one item judges each move from the service's batched read; a page returns the stored moves and looks up nothing
+ *   - ONE_ITEM_ENVELOPE (task.0118): `read` also resolves each move's metric, KPI and goal and, on request, the first page of citation links; `query` never does
  * Side-effects: none
  * Links: src/bootstrap/capabilities/work-item.ts
  * @internal
@@ -37,7 +38,6 @@ import type {
 } from "@cogni/work-items";
 import { toWorkItemDto, WorkItemDtoSchema } from "@cogni/work-items";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
-import { MetricError } from "@cogni-dao/metrics/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
@@ -564,17 +564,35 @@ describe("work-item moves at read time", () => {
   });
   const ok = (value: number) => ({
     id: OBS,
+    metricId: "m-1",
     status: "ok",
     value,
     observedAt: "2026-11-10T00:00:00.000Z",
+    definitionHash: "h",
+    calculatorVersion: "work.count@1",
+    paramsHash: "p",
+    node: "operator",
+    environment: "test",
+    dataScope: "node-members",
+    unit: "items",
+    window: {
+      start: "2026-11-09T23:00:00.000Z",
+      end: "2026-11-10T00:00:00.000Z",
+    },
+    sourceWatermarks: [{ source: "test", asOf: "2026-11-10T00:00:00.000Z" }],
+    viewState: "ok",
+    maxAgeSeconds: 7200,
   });
   const metrics = (baseline: number, current: number) => ({
-    observation: vi.fn().mockResolvedValue({ observation: ok(baseline) }),
-    read: vi.fn().mockResolvedValue({ lastGood: ok(current) }),
+    workReadBatch: vi
+      .fn()
+      .mockResolvedValue([{ baseline: ok(baseline), current: ok(current) }]),
   });
   const capability = (
     items: WorkItem[],
-    service: ReturnType<typeof metrics> | undefined
+    service: unknown,
+    extra: Partial<Parameters<typeof createWorkItemCapability>[0]> = {},
+    goals?: unknown
   ) =>
     createWorkItemCapability({
       workItemQuery: markdownPorts().query,
@@ -585,7 +603,11 @@ describe("work-item moves at read time", () => {
           pageInfo: { endCursor: null, hasMore: false },
         }),
       } as unknown as Pick<WorkItemQueryPort, "list">,
-      moveReadings: createMoveMetricPorts(() => service as never).readings,
+      moveReadings: createMoveMetricPorts(
+        () => service as never,
+        goals ? () => goals as never : undefined
+      ).readings,
+      ...extra,
     });
 
   it("a read that returns one item adds the baseline, current reading and verdict", async () => {
@@ -594,7 +616,7 @@ describe("work-item moves at read time", () => {
       ids: ["task.5282"],
       limit: 1,
     });
-    expect(read?.moves).toEqual([
+    expect(read?.moves).toMatchObject([
       {
         metricId: "m-1",
         direction: "up",
@@ -604,8 +626,11 @@ describe("work-item moves at read time", () => {
         moved: "as_declared",
       },
     ]);
-    expect(service.observation).toHaveBeenCalledTimes(1);
-    expect(service.read).toHaveBeenCalledTimes(1);
+    expect(service.workReadBatch).toHaveBeenCalledOnce();
+    expect(service.workReadBatch).toHaveBeenCalledWith(
+      [{ metricId: "m-1", baselineObservationId: OBS }],
+      expect.any(AbortSignal)
+    );
   });
 
   it("a page of items returns the stored moves and looks up nothing", async () => {
@@ -618,25 +643,27 @@ describe("work-item moves at read time", () => {
       [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
       [{ metricId: "m-1", direction: "up", baselineObservationId: OBS }],
     ]);
-    expect(service.observation).not.toHaveBeenCalled();
-    expect(service.read).not.toHaveBeenCalled();
+    expect(service.workReadBatch).not.toHaveBeenCalled();
   });
 
-  it("a deprecated metric (metric_not_found) reads unknown with metric_deprecated", async () => {
+  it("a deprecated metric reads unknown with metric_deprecated", async () => {
     const service = {
-      observation: vi
-        .fn()
-        .mockRejectedValue(new MetricError("metric_not_found", 404)),
-      read: vi.fn(),
+      workReadBatch: vi.fn().mockResolvedValue([
+        {
+          baseline: null,
+          current: null,
+          unknownReason: "metric_deprecated",
+        },
+      ]),
     };
-    const [read] = await capability([withMoves], service as never).query({
+    const [read] = await capability([withMoves], service).query({
       ids: ["task.5282"],
     });
     expect(read?.moves?.[0]).toMatchObject({
       moved: "unknown",
       unknownReason: "metric_deprecated",
     });
-    expect(service.read).not.toHaveBeenCalled();
+    expect(service.workReadBatch).toHaveBeenCalledOnce();
   });
 
   it("with no metrics service the move reads unknown", async () => {
@@ -661,6 +688,90 @@ describe("work-item moves at read time", () => {
       baseline: { value: 5 },
       current: { value: 2 },
       moved: "as_declared",
+    });
+  });
+
+  // task.0118: `read` is the single-item envelope; query and queryPage never resolve the chain.
+  describe("read (single-item envelope)", () => {
+    const goalsPort = {
+      listActiveGoals: vi.fn().mockResolvedValue([
+        {
+          id: "goal-1",
+          title: "Goal one",
+          evaluateAt: null,
+          kpiBindings: [
+            {
+              metricId: "m-1",
+              comparator: "gte",
+              target: { value: 5, unit: "items" },
+            },
+          ],
+        },
+      ]),
+    };
+    const chainService = (service: ReturnType<typeof metrics>) => ({
+      ...service,
+      describe: vi
+        .fn()
+        .mockResolvedValue([
+          { id: "m-1", title: "Metric one", unit: "items", display: "volume" },
+        ]),
+      kpi: vi.fn().mockResolvedValue({
+        viewState: "ok",
+        assessment: { status: "on_track" },
+      }),
+    });
+    const build = (
+      service: unknown,
+      readLinks?: (id: string) => Promise<never>
+    ) =>
+      capability(
+        [withMoves],
+        service,
+        readLinks ? { links: { firstPage: readLinks } } : {},
+        goalsPort
+      );
+
+    it("adds readings, the chain and (on request) links; query does not", async () => {
+      const service = chainService(metrics(1, 3));
+      const readLinks = vi
+        .fn()
+        .mockResolvedValue({ items: [], nextCursor: "n1" });
+      const cap = build(service, readLinks);
+      const read = await cap.read?.("task.5282", { includeLinks: true });
+      expect(read?.moves?.[0]).toMatchObject({
+        moved: "as_declared",
+        metric: { id: "m-1", title: "Metric one", unit: "items" },
+        kpi: { metricId: "m-1", comparator: "gte", status: "on_track" },
+        goal: { id: "goal-1", title: "Goal one" },
+      });
+      expect(read?.links).toEqual({ items: [], nextCursor: "n1" });
+      const [queried] = await cap.query({ ids: ["task.5282"], limit: 1 });
+      expect(queried?.moves?.[0]).not.toHaveProperty("kpi");
+      expect(queried).not.toHaveProperty("links");
+      expect(service.describe).toHaveBeenCalledOnce();
+    });
+
+    it("reads links as unavailable when no links reader is wired, and omits them unless asked", async () => {
+      const cap = build(chainService(metrics(1, 3)));
+      expect(
+        (await cap.read?.("task.5282", { includeLinks: true }))?.links
+      ).toEqual({ items: [], nextCursor: null, unavailable: true });
+      expect(await cap.read?.("task.5282")).not.toHaveProperty("links");
+      expect(await cap.read?.("task.9999")).toBeNull();
+    });
+
+    it("marks the chain unavailable, never absent-as-empty, when the metrics service cannot describe", async () => {
+      const service = {
+        ...metrics(1, 3),
+        describe: vi.fn().mockRejectedValue(new Error("definitions down")),
+      };
+      const read = await build(service).read?.("task.5282");
+      expect(read?.moves?.[0]).toMatchObject({
+        moved: "as_declared",
+        context: "unavailable",
+      });
+      expect(read?.moves?.[0]).not.toHaveProperty("kpi");
     });
   });
 });

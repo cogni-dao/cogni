@@ -75,6 +75,16 @@ export interface CitationLinkPage {
   nextCursor: string | null;
 }
 
+/** A bounded first page of tracked hypotheses and their recorded outcomes. */
+export interface WorkEdoPage {
+  items: Array<{
+    hypothesis: Pick<Knowledge, "id" | "title" | "content" | "kpiBindings">;
+    outcomes: Array<{ id: string; title: string; content: string }>;
+    truncated: boolean;
+  }>;
+  truncated: boolean;
+}
+
 /**
  * The knowledge write plane is saturated or recovering; the caller may retry.
  *
@@ -370,6 +380,8 @@ export interface KnowledgeStorePort {
     endpointId: string,
     after?: string
   ): Promise<CitationLinkPage>;
+  /** The hypotheses a work item tracks and their recorded outcomes (bounded first page; the work item's Expectations read). */
+  readWorkEdo?(workItemId: string, signal?: AbortSignal): Promise<WorkEdoPage>;
   /**
    * List every citation edge in a single query. Used to assemble the full
    * knowledge graph without an N+1 over entries — the caller filters to edges

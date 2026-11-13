@@ -8,6 +8,7 @@
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, PATCH_ALLOWLIST, DURABLE_IDENTITY_NEVER_REUSED, CODED_WRITE_ERRORS.
  * Reason + cites (task.0086): a missing or over-cap reason is HTTP 400 `invalid input` with an issue at `reason`; an unknown cite id or a closed inbox is HTTP 400 `cite_unresolved`; cites with no resolver wired is HTTP 400 `cites_unsupported`; a resolver failure is HTTP 503. Nothing is written in each case.
  * Moves (story.0033): `set.moves` with an unknown or deprecated metric id is HTTP 400 `cite_unresolved` with an issue at `set.moves`; a bad list is HTTP 400 `moves_invalid`; a non-empty list with no metric wiring is HTTP 400 `moves_unsupported`; a baseline failure is HTTP 503 `metric_baseline_unavailable`. The client never sets a baseline: the server pins it. The GET, PATCH response adds each move's baseline, current reading and verdict.
+ * Envelope (task.0118): GET returns each `moves` entry with its metric, KPI and goal; `?include=links` adds the first page of citation links (same read as /api/v1/citations/{id}); an unknown include is HTTP 400.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
@@ -41,11 +42,30 @@ export const GET = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
 }>(
   { routeId: "work.items.get", auth: { mode: "required", getSessionUser } },
-  async (ctx, _request, _sessionUser, context) => {
+  async (ctx, request, _sessionUser, context) => {
     if (!context) throw new Error("context required for dynamic routes");
     const { id } = await context.params;
 
-    const item = await getWorkItem(id);
+    // `?include=links` (comma list): optional envelope parts. Unknown parts are a 400, not ignored.
+    const requested = new URL(request.url).searchParams
+      .getAll("include")
+      .flatMap((value) => value.split(","))
+      .filter(Boolean);
+    const input = workItemsGetOperation.input.safeParse({
+      id,
+      ...(requested.length && { include: requested }),
+    });
+    if (!input.success) {
+      return NextResponse.json(
+        { error: "invalid input", issues: input.error.issues },
+        { status: 400 }
+      );
+    }
+
+    const item = await getWorkItem(id, {
+      signal: request.signal,
+      includeLinks: input.data.include?.includes("links") ?? false,
+    });
 
     if (!item) {
       return NextResponse.json(

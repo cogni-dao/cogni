@@ -89,6 +89,8 @@ export const EVENT_NAMES = {
   // Goal metrics (@cogni-dao/metrics, story.0021): one refresh tick and one goals read.
   METRIC_REFRESH_COMPLETE: "metric.refresh_complete",
   GOALS_PROGRESS_READ: "goals.progress_read",
+  // GET /api/v1/work/items/{id}/expectations: one terminal event per read (EDO hypotheses a work item tracks).
+  WORK_EXPECTATIONS_READ: "work.expectations.read",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

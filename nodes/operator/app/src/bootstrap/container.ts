@@ -171,6 +171,7 @@ import {
 import { OPERATOR_CORE_TOOL_BUNDLE } from "@/bootstrap/ai/evaluation-baseline";
 import { createToolBindings } from "@/bootstrap/ai/tool-bindings";
 import { createBoundToolSource } from "@/bootstrap/ai/tool-source.factory";
+import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
 import { createComputeCapability } from "@/bootstrap/capabilities/compute";
 import {
   createLeaseReadCapability,
@@ -1073,7 +1074,10 @@ function createContainer(): Container {
     log.warn("Knowledge store not configured (DOLTGRES_URL not set)");
   }
 
-  const moveMetrics = createMoveMetricPorts(() => goalMetrics);
+  const moveMetrics = createMoveMetricPorts(
+    () => goalMetrics,
+    () => knowledgeStorePort
+  );
   let doltgresWorkItems: WorkItemsContentPort;
   try {
     // story.0033: a `moves` entry pins the metric's latest good observation, read from
@@ -1110,6 +1114,8 @@ function createContainer(): Container {
     workItemQuery: workItemAdapter,
     workItemCommand: workItemAdapter,
     moveReadings: moveMetrics.readings,
+    links: createCitationLinksPort(() => knowledgeStorePort),
+    log: (event) => log.warn(event, "work.items.envelope_degraded"),
     backlogReader: doltgresWorkItems,
     backlogWriter: {
       store: doltgresWorkItems,
