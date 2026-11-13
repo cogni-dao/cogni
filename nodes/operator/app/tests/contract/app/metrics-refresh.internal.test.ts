@@ -4,9 +4,10 @@
 /**
  * Module: `@tests/contract/app/metrics-refresh.internal`
  * Purpose: Contract tests for the internal goal-metric refresh dispatch, including the idle fast path (story.0031).
- * Scope: Route behavior over stubbed container, env and refresh job. Does not run the metrics engine.
+ * Scope: Route behavior (through the package `handleRefreshTick`) over stubbed container, env and refresh job. Does not run the metrics engine.
  * Invariants:
  *   - AUTH_AND_VALIDATION_FIRST: bearer, dispatch key and body are checked before the idle answer.
+ *   - CONTAINER_AFTER_AUTH: the container is not touched for an unauthorized request.
  *   - IDLE_TICK_IS_FREE: an idle tick returns the in-memory answer and touches no dispatch receipt or refresh job.
  *   - BUSY_TICK_LOGS_COUNTS: a worked tick logs due, truncated, pruned and idle=false.
  * Side-effects: none
@@ -23,6 +24,7 @@ const KEY = `${NODE}/metrics:${NODE}:refresh/2026-11-13T00:00:00.000Z`;
 const GRANT = "11111111-1111-4111-8111-111111111111";
 
 const mocks = vi.hoisted(() => ({
+  getContainer: vi.fn(),
   idleTick: vi.fn(),
   runMetricsRefresh: vi.fn(),
   requests: {
@@ -38,10 +40,13 @@ vi.mock("@/shared/env", () => ({
 }));
 vi.mock("@/shared/config", () => ({ getNodeId: () => NODE }));
 vi.mock("@/bootstrap/container", () => ({
-  getContainer: () => ({
-    goalMetrics: { idleTick: mocks.idleTick },
-    executionRequestPort: mocks.requests,
-  }),
+  getContainer: () => {
+    mocks.getContainer();
+    return {
+      goalMetrics: { idleTick: mocks.idleTick },
+      executionRequestPort: mocks.requests,
+    };
+  },
 }));
 vi.mock("@/bootstrap/jobs/metrics-refresh.job", () => ({
   metricsRefreshScheduleId: (node: string) => `metrics:${node}:refresh`,
@@ -92,6 +97,7 @@ describe("POST /api/internal/metrics/refresh", () => {
   it("rejects a wrong bearer, a bad dispatch key and a bad body before the idle answer", async () => {
     mocks.idleTick.mockReturnValue({ scanned: 3, truncated: false });
     expect((await call({ auth: "Bearer nope" })).status).toBe(401);
+    expect(mocks.getContainer).not.toHaveBeenCalled();
     expect(
       (await call({ key: "elsewhere/x/2026-11-13T00:00:00.000Z" })).status
     ).toBe(400);
