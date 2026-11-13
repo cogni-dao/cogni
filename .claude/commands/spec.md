@@ -14,7 +14,7 @@ Read, in order, with your saved COGNI key before acting:
 
 1. **Read the code**: Read files, tests and data flow first. A contract describes reality (or declared intent), not aspiration. Mark intent apart from as-built behavior.
 2. **Recall**: Search the hub index for the owning entry (`GET /api/v1/knowledge/index?q=<situation>`) and read its full body. Refine the owner before you create a new entry. If a repo spec file still owns the contract, retire it through `GET https://cognidao.org/api/v1/knowledge/migrate-markdown-to-hub` — do not extend the file.
-3. **Contribute**: File one `reference` for the contract. File a separate `rule` only for an independently reusable invariant. Use one focused inbox for the work item and cite related entries. Cover scope and non-goals, vocabulary, interfaces and examples, error behavior, invariants, data/security boundaries and the schemas or tests that implement it.
+3. **Contribute**: File one `reference` for the contract. File a separate `rule` only for an independently reusable invariant. Use one focused inbox for the work item and cite related entries. Cover scope and non-goals, vocabulary, interfaces and examples, error behavior, invariants, data/security boundaries and the schemas or tests that implement it. Include a diagram where structure matters. Keep open questions explicit; the contract is complete only when none remain.
 4. **Hand off**: Give the human `https://<node>/knowledge/inbox/{id}`. Never merge your own contribution.
 
 If the hub is unavailable or an entry is missing, stop and record the failed gate on the work item. Do not write a fallback file.

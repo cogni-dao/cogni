@@ -26,7 +26,7 @@ Read, in order, with your saved COGNI key before starting:
 2. **Recall related incidents**: Search the hub index (`GET /api/v1/knowledge/index?q=<situation>`) and open work items for prior incidents in the same area. Cite them if relevant.
 
 3. **Record the incident on its work item**: Use the incident's `bug` item, or create one with `/bug`. Reconcile `summary` and `outcome` in place with ONE `PATCH` (`expectedRevision`, one-line `reason`):
-   - **Summary**: 3-5 sentences — what broke, how long, who was affected, how it was resolved. Lead with impact. Name the severity: SEV1 (total outage/data loss), SEV2 (major degradation), SEV3 (minor impact), SEV4 (near-miss).
+   - **Summary**: 3-5 sentences — what broke, how long, who was affected, how it was resolved. Lead with impact: affected services, duration and quantified customer, technical and business impact. Name the severity: SEV1 (total outage/data loss), SEV2 (major degradation), SEV3 (minor impact), SEV4 (near-miss).
    - **Outcome**: the current checklist of action items, each linked to its work item. Link the evidence (log queries, dashboards, commit SHAs). Keep a compact UTC timeline of first symptom, detection, mitigation and resolution only when it helps a cold reader.
 
 4. **Contribute the lesson**: Dig past the proximate cause with the 5 Whys. File one focused hub contribution — a `finding` (or a `rule` for an independently reusable invariant) with the root cause and contributing factors, what worked and what failed in detection and response, and where we got lucky. Refine an existing owner before you add one. Cite related entries. Hand the human `https://<node>/knowledge/inbox/{id}`. Never merge your own contribution.

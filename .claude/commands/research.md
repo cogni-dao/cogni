@@ -57,7 +57,7 @@ Put the layout in the spike item's `outcome` checklist, not in a file.
 
 ## Phase 5 — Close Out
 
-1. Update the spike item in place: link the inbox, tick its checklist and set `status`. Apply ONE `PATCH` with `expectedRevision` and a one-line `reason`.
+1. Update the spike item in place: link the inbox, tick its checklist and set `status: done`. Apply ONE `PATCH` with `expectedRevision` and a one-line `reason`.
 2. Create follow-up `task.*`, `bug.*`, or `spike.*` items as needed from findings. Set their status to `needs_triage` (or `needs_implement`/`needs_design` if routing is obvious from research).
 3. Report: what was learned, what is recommended, the inbox link and what follow-up items were created.
 

@@ -9,7 +9,7 @@ Then reconcile the item in place on the hub of the node you work on (`GET $BASE/
 
 - Read the current `revision`. Keep the approved Goal and Done when byte-for-byte.
 - `summary`: the goal, the observed gap and the expected effect, in domain terms.
-- `outcome`: one current checklist, proof links (PR, commits, hub atoms) and the next gate. State what the next developer owns now and the E2E validation signal. If deploy behavior is in scope, name the candidate-a proof: URL, `/version` `buildSha`, SHA match.
+- `outcome`: one current checklist, proof links (PR, commits, hub atoms) and the next gate. State what the next developer owns now and the E2E validation signal. If deploy behavior is in scope, name the candidate-a proof: URL, `/version` `buildSha`, SHA match. State what must not regress and which boundaries hold. Record the branch, open PRs and last commit.
 - Point the reader at the highest-signal links (hub atoms, PR, files, functions). Paste no logs, transcripts or long code.
 - Apply ONE `PATCH` with `expectedRevision`, `set` and a one-line `reason`. Read the item back.
 

@@ -21,7 +21,7 @@ tags: [work, meta]
 | Directory     | Purpose                                                                 |
 | ------------- | ----------------------------------------------------------------------- |
 | `charters/`   | Strategic themes (`chr.<slug>.md`)                                      |
-| `projects/`   | Phased roadmaps (`proj.<slug>.md`)                                      |
+| `projects/`   | Legacy phased roadmaps (frozen; new roadmaps are story work items)      |
 | `handoffs/`   | Legacy agent handoff packets (frozen; handoffs now live on the item)    |
 | `_templates/` | Charter template                                                        |
 | ~~`items/`~~  | Removed 2026-05-04 — work items now in prod Doltgres at `cognidao.org`. |
