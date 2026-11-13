@@ -30,6 +30,8 @@ const HTTP_STATUS_MAP: Record<AiExecutionErrorCode, number> = {
   // Operator-fault (provider down / unfunded) → 503, never 500. Client maps 503
   // to a "temporarily unavailable" retry message, never "add credits" (bug.5056).
   provider_unavailable: 503,
+  // Operator's provider account is out of credit: also operator-fault, also 503 (bug.5626).
+  provider_unfunded: 503,
 };
 
 const OPENAI_ERROR_MAP: Record<
@@ -73,6 +75,12 @@ const OPENAI_ERROR_MAP: Record<
     type: "server_error",
   },
   provider_unavailable: {
+    status: 503,
+    message:
+      "The upstream AI provider is temporarily unavailable. Please retry shortly.",
+    type: "service_unavailable",
+  },
+  provider_unfunded: {
     status: 503,
     message:
       "The upstream AI provider is temporarily unavailable. Please retry shortly.",

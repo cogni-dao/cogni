@@ -41,6 +41,8 @@ export interface GraphRunResult {
   runId: string;
   /** Structured output from graph (when responseFormat was provided). */
   structuredOutput?: unknown;
+  /** AiExecutionErrorCode of a failed run (e.g. `provider_unfunded`), so callers can tell why. */
+  errorCode?: string;
 }
 
 // Short timeout for metadata activities (grant validation, run record CRUD).
@@ -272,7 +274,11 @@ export async function GraphRunWorkflow(
         errorMessage: result.errorCode ?? "Graph execution failed",
         errorCode: result.errorCode,
       });
-      return { ok: false, runId };
+      return {
+        ok: false,
+        runId,
+        ...(result.errorCode !== undefined && { errorCode: result.errorCode }),
+      };
     }
   } catch (error) {
     // A non-retryable Activity failure is a definitive pre-execution rejection

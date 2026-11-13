@@ -15,7 +15,11 @@ import type { AiEvent } from "@cogni/ai-core";
 import { knowledgeReadContract, nodeCodeReadContract } from "@cogni/ai-tools";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createPrReviewGraph } from "../../src/graphs/pr-review/graph";
+import {
+  createPrReviewGraph,
+  PR_REVIEW_GATHER_MAX_TOKENS,
+  PR_REVIEW_VERDICT_MAX_TOKENS,
+} from "../../src/graphs/pr-review/graph";
 import { createInProcGraphRunner } from "../../src/inproc/runner";
 import type {
   CompletionFn,
@@ -262,6 +266,84 @@ describe("runner + pr-review graph with responseFormat", () => {
     const result = await final;
     expect(result.ok).toBe(true);
     expect(result.structuredOutput).toBeUndefined();
+  });
+
+  it("caps output tokens on the gather call and the verdict call (bug.5626)", async () => {
+    const capsSeen: Array<number | undefined> = [];
+    let call = 0;
+    const completionFn: CompletionFn = (params) => {
+      call++;
+      capsSeen.push(params.maxTokens);
+      return {
+        stream: (async function* (): AsyncIterable<AiEvent> {})(),
+        final: Promise.resolve({
+          ok: true as const,
+          content: call === 1 ? "done reading" : VALID_JSON_RESPONSE,
+          finishReason: "stop",
+        }),
+      };
+    };
+    const { stream, final } = createInProcGraphRunner({
+      createGraph: (opts) => createPrReviewGraph(opts),
+      sourceContext: SOURCE_CONTEXT,
+      completionFn,
+      createToolExecFn: (): ToolExecFn => async () => ({ ok: true, value: {} }),
+      toolContracts: [],
+      request: {
+        runId: "test-caps",
+        messages: [{ role: "user", content: "Evaluate this PR" }],
+        configurable: { model: "test-model" },
+      },
+      responseFormat: { schema: TestEvalSchema },
+    });
+    for await (const _event of stream) {
+      // drain
+    }
+    expect((await final).ok).toBe(true);
+    expect(capsSeen).toEqual([
+      PR_REVIEW_GATHER_MAX_TOKENS,
+      PR_REVIEW_VERDICT_MAX_TOKENS,
+    ]);
+    // Both caps sit well under the 32768 host default.
+    expect(PR_REVIEW_GATHER_MAX_TOKENS).toBeLessThan(32768);
+    expect(PR_REVIEW_VERDICT_MAX_TOKENS).toBeLessThanOrEqual(
+      PR_REVIEW_GATHER_MAX_TOKENS
+    );
+  });
+
+  it("a provider-unfunded refusal fails the run as provider_unfunded and is not re-asked (bug.5626)", async () => {
+    let calls = 0;
+    const completionFn: CompletionFn = () => {
+      calls++;
+      return {
+        stream: (async function* (): AsyncIterable<AiEvent> {})(),
+        final: Promise.resolve({
+          ok: false as const,
+          error: "provider_unfunded",
+        }),
+      };
+    };
+    const { stream, final } = createInProcGraphRunner({
+      createGraph: (opts) => createPrReviewGraph(opts),
+      sourceContext: SOURCE_CONTEXT,
+      completionFn,
+      createToolExecFn: (): ToolExecFn => async () => ({ ok: true, value: {} }),
+      toolContracts: [],
+      request: {
+        runId: "test-unfunded",
+        messages: [{ role: "user", content: "Evaluate this PR" }],
+        configurable: { model: "test-model" },
+      },
+      responseFormat: { schema: TestEvalSchema },
+    });
+    for await (const _event of stream) {
+      // drain
+    }
+    const result = await final;
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("provider_unfunded");
+    // The gather call is refused; the run stops there.
+    expect(calls).toBe(1);
   });
 
   it("runs tools in gather, then a tool-free structured verdict, and counts what was read (story.5102)", async () => {

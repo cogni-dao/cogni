@@ -266,7 +266,12 @@ const HUB_RULE = {
 } as unknown as import("@cogni/repo-spec").Rule;
 
 function reviewInput(
-  graphResult: { ok: boolean; runId: string; structuredOutput?: unknown },
+  graphResult: {
+    ok: boolean;
+    runId: string;
+    structuredOutput?: unknown;
+    errorCode?: string;
+  },
   failOnError = true
 ) {
   return {
@@ -339,6 +344,54 @@ describe("postReviewResultActivity — honest failure (story.5102)", () => {
       expect.objectContaining({ event: "review.could_not_evaluate", reason }),
       "review.could_not_evaluate"
     );
+  });
+
+  it("a provider-unfunded graph failure reports unfunded with its own title, still a failure (bug.5626)", async () => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity(
+      reviewInput({
+        ok: false,
+        runId: "r-unfunded",
+        errorCode: "provider_unfunded",
+      })
+    );
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+      title: string;
+      summary: string;
+    };
+    expect(call.conclusion).toBe("failure");
+    expect(call.title).toBe(
+      "PR Review: COULD NOT EVALUATE \u2014 provider out of credit"
+    );
+    expect(machineBlock(call.summary)).toMatchObject({
+      couldNotEvaluate: "unfunded",
+      conclusion: "failure",
+    });
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "review.could_not_evaluate",
+        reason: "unfunded",
+      }),
+      "review.could_not_evaluate"
+    );
+  });
+
+  it("any other graph failure code keeps graph_failed and the plain title (bug.5626)", async () => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity(
+      reviewInput({
+        ok: false,
+        runId: "r-down",
+        errorCode: "provider_unavailable",
+      })
+    );
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      title: string;
+      summary: string;
+    };
+    expect(call.title).toBe("PR Review: COULD NOT EVALUATE");
+    expect(machineBlock(call.summary).couldNotEvaluate).toBe("graph_failed");
   });
 
   it("maps a missing rule file to failure under fail_on_error", async () => {

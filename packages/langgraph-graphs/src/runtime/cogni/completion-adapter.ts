@@ -12,6 +12,12 @@
  *   - NO_AWAIT_IN_TOKEN_PATH: tokenSink.push() is synchronous
  *   - THROWS_AI_EXECUTION_ERROR: On completion failure, throws AiExecutionError with structured code
  *   - THROWS_FAST_IF_MISSING: Throws immediately if ALS context or model missing
+ *   - OUTPUT_CAP_IS_PER_BINDING (bug.5626): a graph that wants a smaller output budget than the
+ *     host default binds it with `withMaxTokens(n)`; the adapter forwards it on every call and
+ *     omits it otherwise, so other graphs keep the host default.
+ *   - STRUCTURED_PARSE_TOLERATES_PROSE (bug.5626): structured output first tries the cleaned text
+ *     as JSON; if that fails it takes the LAST balanced top-level JSON object in the text. Zod
+ *     validation always runs on the result, and nothing parseable still throws (fail closed).
  * Side-effects: none (effects via ALS-injected deps)
  * Links: LANGGRAPH_AI.md, ERROR_HANDLING_ARCHITECTURE.md, GRAPH_EXECUTION.md
  * @public
@@ -42,6 +48,64 @@ import type { InteropZodType } from "@langchain/core/utils/types";
 import { fromBaseMessage, type Message } from "../core/message-converters";
 import { getCogniExecContext } from "./exec-context";
 
+/** Most `{` starts tried while looking for a JSON object; bounds the scan on pathological prose. */
+const MAX_OBJECT_STARTS = 500;
+
+/**
+ * Find the LAST balanced top-level JSON object in free text (bug.5626).
+ * Models sometimes wrap the verdict in prose ("Let me read...") or quote PR JSON before it.
+ * Scans left to right: from each `{`, it matches braces (ignoring braces inside JSON strings);
+ * a balanced span that JSON.parse accepts as an object is a candidate, and the scan resumes after
+ * it, so nested objects never count. A span that does not parse (prose braces) is skipped and the
+ * scan resumes at the next `{`. Returns undefined when no object parses.
+ * @internal Exported for tests.
+ */
+export function extractLastJsonObject(
+  text: string
+): Record<string, unknown> | undefined {
+  let last: Record<string, unknown> | undefined;
+  let from = 0;
+  let starts = 0;
+  while (starts < MAX_OBJECT_STARTS) {
+    const start = text.indexOf("{", from);
+    if (start === -1) break;
+    starts++;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') inString = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) {
+        end = i;
+        break;
+      }
+    }
+    if (end === -1) {
+      from = start + 1;
+      continue;
+    }
+    try {
+      const v: unknown = JSON.parse(text.slice(start, end + 1));
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        last = v as Record<string, unknown>;
+        from = end + 1;
+        continue;
+      }
+    } catch {
+      // not JSON: prose braces; fall through to the next `{`
+    }
+    from = start + 1;
+  }
+  return last;
+}
+
 /** OpenAI tool format - matches LlmToolDefinition in ports */
 type OpenAIToolDef = ReturnType<typeof convertToOpenAITool>;
 
@@ -57,6 +121,8 @@ export type CompletionFn<TTool = unknown> = (params: {
   tools?: readonly TTool[];
   toolChoice?: CompletionToolChoice;
   abortSignal?: AbortSignal;
+  /** Output-token cap for this call; absent means the host default (OUTPUT_CAP_IS_PER_BINDING). */
+  maxTokens?: number;
 }) => {
   /** Stream of AiEvents (text_delta, usage_report) */
   stream: AsyncIterable<AiEvent>;
@@ -137,6 +203,7 @@ interface CogniCompletionAdapterConfig {
   readonly model?: string;
   readonly signal?: AbortSignal;
   readonly rejectEmpty?: boolean;
+  readonly maxTokens?: number;
 }
 
 /** A real SDK chat model; all provider work still uses the billed CompletionFn. */
@@ -166,6 +233,11 @@ export class CogniCompletionAdapter extends BaseChatModel {
       ...(signal ? { signal } : {}),
       rejectEmpty,
     });
+  }
+
+  /** Bind a per-call output-token cap (OUTPUT_CAP_IS_PER_BINDING). Keeps tools and model. */
+  withMaxTokens(maxTokens: number): CogniCompletionAdapter {
+    return new CogniCompletionAdapter({ ...this.binding, maxTokens });
   }
 
   override async invoke(
@@ -202,6 +274,9 @@ export class CogniCompletionAdapter extends BaseChatModel {
         : {}),
       ...(this.binding.toolChoice
         ? { toolChoice: this.binding.toolChoice }
+        : {}),
+      ...(this.binding.maxTokens !== undefined
+        ? { maxTokens: this.binding.maxTokens }
         : {}),
     });
     const guarded = final.catch(() => undefined);
@@ -348,13 +423,17 @@ export class CogniCompletionAdapter extends BaseChatModel {
           .replace(/\n?```$/, "")
           .trim();
 
+        // STRUCTURED_PARSE_TOLERATES_PROSE: exact JSON first, else the last balanced object.
         let parsed: RunOutput;
         try {
           parsed = JSON.parse(cleaned) as RunOutput;
         } catch {
-          throw new Error(
-            `[CogniCompletionAdapter.withStructuredOutput] LLM returned invalid JSON: ${cleaned.slice(0, 200)}`
-          );
+          const last = extractLastJsonObject(cleaned);
+          if (last === undefined)
+            throw new Error(
+              `[CogniCompletionAdapter.withStructuredOutput] LLM returned invalid JSON: ${cleaned.slice(0, 200)}`
+            );
+          parsed = last as RunOutput;
         }
 
         // Validate with Zod if schema has .parse()

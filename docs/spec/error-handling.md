@@ -41,7 +41,7 @@ Provide structured, type-safe error handling where each architectural layer has 
 
 5. **NO_RAW_THROW_PAST_COMPLETION** (AI errors): `completion.ts` catches all errors, normalizes, and returns structured `{ ok: false, error: AiExecutionErrorCode }` to all consumers.
 
-6. **FAULT_PARTY_BEFORE_BUCKET**: An error code must encode _who can fix it_ before it collapses to a generic bucket. Operator-fault upstream failures (provider down, or the operator's provider account unfunded — OpenRouter `402`/`5xx`) normalize to `provider_unavailable` → HTTP `503`, never `internal`/`500`, and never `insufficient_credits` (that is the _user's_ balance). `internal` is the alarm bucket, not the dump: a known condition reaching it is a taxonomy hole. Distinct codes get distinct `ai_llm_errors_total{code}` labels so credit depletion is alertable (bug.5056).
+6. **FAULT_PARTY_BEFORE_BUCKET**: An error code must encode _who can fix it_ before it collapses to a generic bucket. Operator-fault upstream failures normalize to `provider_unavailable` (provider down, `5xx`) or `provider_unfunded` (the operator's provider account is out of credit, OpenRouter `402`; bug.5626) → HTTP `503`, never `internal`/`500`, and never `insufficient_credits` (that is the _user's_ balance). `internal` is the alarm bucket, not the dump: a known condition reaching it is a taxonomy hole. Distinct codes get distinct `ai_llm_errors_total{code}` labels so credit depletion is alertable (bug.5056).
 
 ## Design
 
@@ -160,7 +160,7 @@ AI/LLM errors follow a specialized pattern with **single-point normalization** t
 
 - `LlmError` — Thrown by adapters; captures `kind` (timeout, rate_limited, provider_4xx, etc.) and optional HTTP `status`
 - `AiExecutionError` — Carries structured `code` field through call chains (thrown by CogniCompletionAdapter)
-- `AiExecutionErrorCode` — Stable contract: `invalid_request`, `not_found`, `timeout`, `aborted`, `rate_limit`, `internal`, `insufficient_credits`, `provider_unavailable`
+- `AiExecutionErrorCode` — Stable contract: `invalid_request`, `not_found`, `timeout`, `aborted`, `rate_limit`, `internal`, `insufficient_credits`, `provider_unavailable`, `provider_unfunded`
 
 **Error Flow:**
 

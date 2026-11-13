@@ -26,10 +26,12 @@ import { isLlmError } from "./llm-errors";
  * - rate_limit: Provider rate limit exceeded (HTTP 429)
  * - internal: Unexpected error during execution (server fault — our bug)
  * - insufficient_credits: The USER's billing account lacks sufficient credits (user-fixable)
- * - provider_unavailable: Upstream LLM provider is down or the OPERATOR's provider
- *   account is unfunded (e.g. OpenRouter 402 / 5xx). Operator-fault — the user
- *   cannot fix it. MUST stay distinct from insufficient_credits so the UI never
+ * - provider_unavailable: Upstream LLM provider is down (5xx / outage). Operator-fault —
+ *   the user cannot fix it. MUST stay distinct from insufficient_credits so the UI never
  *   tells the user to top up their balance for an operator billing problem (bug.5056).
+ * - provider_unfunded: The OPERATOR's provider account is out of credit (OpenRouter 402).
+ *   Operator-fault and money-fixable, so it is its own code: a starved run is not a
+ *   verdict and not an outage (bug.5626, starvation-not-a-verdict).
  */
 export const AI_EXECUTION_ERROR_CODES = [
   "invalid_request",
@@ -40,6 +42,7 @@ export const AI_EXECUTION_ERROR_CODES = [
   "internal",
   "insufficient_credits",
   "provider_unavailable",
+  "provider_unfunded",
 ] as const;
 
 export type AiExecutionErrorCode = (typeof AI_EXECUTION_ERROR_CODES)[number];
@@ -86,10 +89,10 @@ export function isAiExecutionError(error: unknown): error is AiExecutionError {
  * 3. LlmError (.status, .kind) → map to code
  * 4. Default → "internal"
  *
- * FAULT_PARTY_BEFORE_BUCKET: upstream provider failures the operator must fix
- * (402 unfunded provider account, 5xx provider outage) map to "provider_unavailable",
- * NOT "internal". Collapsing them to "internal" is what masked bug.5056 as a generic
- * "Something went wrong" 500. See docs/spec/error-handling.md.
+ * FAULT_PARTY_BEFORE_BUCKET: upstream provider failures the operator must fix map to a
+ * provider code, NOT "internal": a 402 (unfunded provider account) is "provider_unfunded",
+ * a 5xx provider outage is "provider_unavailable". Collapsing them to "internal" is what
+ * masked bug.5056 as a generic "Something went wrong" 500. See docs/spec/error-handling.md.
  */
 export function normalizeErrorToExecutionCode(
   error: unknown
@@ -112,8 +115,10 @@ export function normalizeErrorToExecutionCode(
     // Status-first (most reliable - HTTP status code)
     if (error.status === 429) return "rate_limit";
     if (error.status === 408) return "timeout";
-    // Upstream provider billing/availability — operator-fault, NOT "internal" (bug.5056).
-    if (error.status === 402) return "provider_unavailable";
+    // Upstream provider billing — operator-fault, money-fixable, NOT "internal" (bug.5056)
+    // and NOT an outage: a distinct code lets a starved run say so (bug.5626).
+    if (error.status === 402) return "provider_unfunded";
+    // Upstream provider availability — operator-fault, NOT "internal" (bug.5056).
     if (typeof error.status === "number" && error.status >= 500) {
       return "provider_unavailable";
     }
