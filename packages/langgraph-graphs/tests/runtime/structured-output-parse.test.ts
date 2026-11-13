@@ -5,7 +5,7 @@
  * Module: `@tests/langgraph-graphs/runtime/structured-output-parse`
  * Purpose: Prove withStructuredOutput takes the last balanced JSON object from prose-wrapped answers, still validates it, and fails closed.
  * Scope: CogniCompletionAdapter.withStructuredOutput + extractLastJsonObject with a fake completionFn. Does NOT make LLM calls.
- * Invariants: STRUCTURED_PARSE_TOLERATES_PROSE (bug.5626): exact JSON first, else the LAST balanced top-level object; Zod always validates; nothing parseable throws.
+ * Invariants: STRUCTURED_PARSE_TOLERATES_PROSE (bug.5626): last balanced object wins, Zod validates, no object throws.
  * Side-effects: none
  * Links: packages/langgraph-graphs/src/runtime/cogni/completion-adapter.ts
  * @internal
