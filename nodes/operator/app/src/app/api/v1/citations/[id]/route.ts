@@ -13,56 +13,19 @@
  * @public
  */
 
-import { isWorkItemEndpointId } from "@cogni/knowledge-store";
-import { describeCitation } from "@cogni/shared-knowledge-store";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSessionUser } from "@/app/_lib/auth/session";
+import { readCitationLinksPage } from "@/bootstrap/capabilities/citation-links";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const CitationEndpointSchema = z.object({
-  id: z.string(),
-  kind: z.enum(["knowledge", "work"]),
-  title: z.string().nullable(),
-  href: z.string(),
-});
-
-const CitationLinkSchema = z.object({
-  id: z.string(),
-  direction: z.enum(["out", "in"]),
-  citationType: z.string(),
-  source: CitationEndpointSchema,
-  target: CitationEndpointSchema,
-  context: z.string().nullable(),
-  /** This side's reading from CITATION_TYPE_DEFINITIONS ("supported by" on the cited side). */
-  label: z.string(),
-  tone: z.enum(["positive", "negative", "warning", "neutral", "muted"]),
-});
-
-const CitationLinksResponseSchema = z.object({
-  links: z.array(CitationLinkSchema).max(5),
-  nextCursor: z.string().nullable(),
-});
-
 const CitationLinksQuerySchema = z.object({
   cursor: z.string().min(1).max(2000).optional(),
 });
-
-type CitationEndpoint = z.infer<typeof CitationEndpointSchema>;
-
-function endpoint(id: string, title: string | null): CitationEndpoint {
-  const isWork = isWorkItemEndpointId(id);
-  return {
-    id,
-    kind: isWork ? "work" : "knowledge",
-    title,
-    href: `${isWork ? "/work/items" : "/knowledge"}/${encodeURIComponent(id)}`,
-  };
-}
 
 export const GET = wrapRouteHandlerWithLogging<{
   params: Promise<{ id: string }>;
@@ -92,25 +55,11 @@ export const GET = wrapRouteHandlerWithLogging<{
     if (!parsed.success) {
       return NextResponse.json({ error: "invalid cursor" }, { status: 400 });
     }
-    const page = await port.listCitationLinks(id, parsed.data.cursor);
-    const links = page.links.map((c) => {
-      const direction = c.citingId === id ? ("out" as const) : ("in" as const);
-      return {
-        id: c.id,
-        direction,
-        citationType: c.citationType,
-        source: endpoint(c.citingId, c.sourceTitle),
-        target: endpoint(c.citedId, c.targetTitle),
-        context: c.context,
-        ...describeCitation(c.citationType, direction),
-      };
-    });
+    const page = await readCitationLinksPage(port, id, parsed.data.cursor);
     ctx.log.info(
-      { id, count: links.length, hasMore: page.nextCursor !== null },
+      { id, count: page.links.length, hasMore: page.nextCursor !== null },
       "citations.links_success"
     );
-    return NextResponse.json(
-      CitationLinksResponseSchema.parse({ links, nextCursor: page.nextCursor })
-    );
+    return NextResponse.json(page);
   }
 );

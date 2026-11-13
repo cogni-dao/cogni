@@ -46,6 +46,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 - Domain registry: `getDomain`, `updateDomain`, `deleteDomain`; shared `DomainPatch` and `DomainNotEmptyError`. Private admitted mutations forward a per-call scope-checked SQL function to the published domain operations. Only shared missing-domain errors convert to the existing private constructor.
 
 - Types: `KnowledgeWriteSession`, `KnowledgeStorePort`, `Knowledge`, `NewKnowledge`, `DoltCommit`, `DoltDiffEntry`, `SourceType`
+- `WorkEdoPage` and the optional `KnowledgeStorePort.readWorkEdo` (story.0016): the hypotheses a work item tracks and their outcomes, a bounded first page for the work item's Expectations read. A literal port of the node-template knowledge-store 0.18.0 read, run on this adapter's read connection (extraction trigger: the published adapter becomes consumable here).
 - Governing index: `GOVERNING_ENTRY_TYPES`, `isGoverningEntryType`, `selectGoverningIndex`, `GoverningIndexRow` — the one definition of governing guidance, read through `KnowledgeStorePort.listGoverningIndex` (guidance-routing-design)
 - Schemas: `KnowledgeSchema`, `NewKnowledgeSchema`, `DoltCommitSchema`, `DoltDiffEntrySchema`, `SourceTypeSchema`
 

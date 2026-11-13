@@ -190,7 +190,14 @@ describe("GET /.well-known/agent.json", () => {
       minLength: 1,
       maxLength: 40,
     });
-    expect(moves.items.properties.direction.enum).toEqual(["up", "down"]);
+    expect(
+      moves.items.properties.direction.anyOf.find(
+        (variant: { enum?: unknown }) => variant.enum
+      )?.enum
+    ).toEqual(["up", "down"]);
+    expect(moves.items.properties.direction.anyOf).toContainEqual({
+      type: "null",
+    });
     expect(moves.items.properties).not.toHaveProperty("baselineObservationId");
 
     // A create names its metrics at filing time with the same schema.
@@ -208,12 +215,10 @@ describe("GET /.well-known/agent.json", () => {
     const read =
       body.actions.getWorkItem.outputSchema.properties.moves.items.properties;
     expect(read).toHaveProperty("baselineObservationId");
-    expect(read.moved.enum).toEqual([
-      "as_declared",
-      "against",
-      "flat",
-      "unknown",
-    ]);
+    expect(
+      read.moved.anyOf.find((variant: { enum?: unknown }) => variant.enum)?.enum
+    ).toEqual(["as_declared", "against", "flat", "unknown"]);
+    expect(read.moved.anyOf).toContainEqual({ type: "null" });
     expect(read.unknownReason.enum).toContain("metric_deprecated");
   });
 });

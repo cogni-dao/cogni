@@ -230,6 +230,7 @@ export {
   KnowledgeWriteScopeRequiredError,
   type KnowledgeWriteSession,
   type NewDomain,
+  type WorkEdoPage,
 } from "./port/knowledge-store.port.js";
 // KPI reader port (goal-loop — verifier-independent metric read)
 export {

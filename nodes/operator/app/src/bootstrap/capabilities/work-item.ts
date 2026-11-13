@@ -20,14 +20,16 @@
  *     non-creator may set only triage fields priority/rank/labels/scores). Without it, `patch`
  *     stays on the markdown ports, which have no compare-and-set for callers.
  *     Priority (including 0/1) carries no extra node-admin gate (task.5306).
- *   - PATCH_REASON_REQUIRED (task.0086): the caller's `reason` is forwarded to the Doltgres store, the one enforcer; a missing one is
- *     refused there before any write (the HTTP route sends `cites` through the facade; the released tool carries none).
- *     The markdown fallback (development only) has no history and ignores the reason.
+ *   - PATCH_REASON_AND_CITES (task.0086): the required `reason` and the optional `cites` are forwarded to the Doltgres store, the one enforcer;
+ *     the markdown fallback (development only) has no history and ignores both.
  *   - PATCH_CAS_PASSTHROUGH: a caller `expectedRevision` is forwarded as the store's
  *     compare-and-set; the store's `WorkItemRevisionConflictError` becomes the ai-tools
  *     `WorkItemPatchConflictError` (nothing written). Absent ⇒ unconditioned patch.
- *   - MOVES_READ_AT_READ_TIME (story.0033): a `query` that returns exactly one item (the `core__work_item_read` path) adds each move's
- *     baseline, current reading and verdict from `moveReadings`; a list or page read returns the stored moves only, so a page costs no metric lookup.
+ *   - MOVES_READ_AT_READ_TIME (story.0033): a `query` that returns exactly one item adds each move's baseline, current reading and verdict
+ *     from `moveReadings`; a list or page read returns the stored moves only, so a page costs no metric lookup.
+ *   - ONE_ITEM_ENVELOPE (task.0118): `read` (the `core__work_item_read` path) is the single-item envelope: it also adds each move's metric, KPI
+ *     and goal (`moveReadings.context`) and, on request, the first page of citation links (`links`), both through the package's
+ *     `composeItemEnvelope`, the same call the HTTP facade makes. `query` and `queryPage` never do.
  * Evaluation: returns package rankScore and forwards whole-score CAS patches without changing priority.
  * Side-effects: none (factory only)
  * Links: docs/spec/development-lifecycle.md
@@ -43,6 +45,8 @@ import {
 } from "@cogni/shared-ai-tools";
 import type {
   ActorKind,
+  EnvelopeDegradedEvent,
+  ItemLinksPort,
   MoveReadingPort,
   WorkItem,
   WorkItemCommandPort,
@@ -50,7 +54,13 @@ import type {
   WorkItemStatus,
   WorkItemType,
 } from "@cogni/work-items";
-import { judgeMoves, toWorkItemDto, toWorkItemId } from "@cogni/work-items";
+import {
+  composeItemEnvelope,
+  judgeMoveSummaries,
+  toWorkItemDto,
+  toWorkItemId,
+  toWorkItemsPatchInput,
+} from "@cogni/work-items";
 import {
   WorkItemRevisionConflictError,
   type WorkItemsDoltgresPort,
@@ -71,6 +81,10 @@ export interface WorkItemCapabilityDeps {
   readonly backlogReader?: Pick<WorkItemQueryPort, "list">;
   /** Reads the metrics a single item moves; absent means no metrics service (every move reads `unknown`). */
   readonly moveReadings?: MoveReadingPort | undefined;
+  /** First page of an item's citation links (`read` with `includeLinks`); absent reads `unavailable`. */
+  readonly links?: ItemLinksPort | undefined;
+  /** One event per degraded envelope part (chain or links). */
+  readonly log?: ((event: EnvelopeDegradedEvent) => void) | undefined;
   /**
    * Doltgres write path for `patch` (the store behind `PATCH /api/v1/work/items/{id}`).
    * When set, `patch` writes there as `principalId` instead of the markdown ports.
@@ -136,12 +150,31 @@ export function createWorkItemCapability(
   ): Promise<readonly WorkItemInfo[]> {
     const only = items.length === 1 ? items[0] : undefined;
     if (!only?.moves?.length) return items;
-    return [
-      { ...only, moves: await judgeMoves(only.moves, deps.moveReadings) },
-    ];
+    return judgeMoveSummaries([only], deps.moveReadings);
   }
 
+  /** The patch `set` without explicit-undefined keys (the route facade drops them the same way). */
+  const definedOnly = (set: object): object =>
+    Object.fromEntries(Object.entries(set).filter(([, v]) => v !== undefined));
+
   return {
+    /**
+     * THE single-item envelope (task.0118), the shape `GET /api/v1/work/items/{id}` serves: the item with each
+     * move's readings, verdict and metric, KPI and goal, and with `includeLinks` the first page of citation links.
+     */
+    async read(id, options): Promise<WorkItemInfo | null> {
+      const result = await listPage({ ids: [id], limit: 1 });
+      const item = result.items
+        .map(toWorkItemInfo)
+        .find((entry) => entry.id === id);
+      if (!item) return null;
+      return composeItemEnvelope(
+        item,
+        { readings: deps.moveReadings, links: deps.links, log: deps.log },
+        { includeLinks: options?.includeLinks === true }
+      );
+    },
+
     async queryPage(params) {
       const result = await listPage(params);
       return {
@@ -183,16 +216,13 @@ export function createWorkItemCapability(
       if (writer) {
         try {
           const updated = await writer.store.patch(
-            {
-              id: toWorkItemId(input.id),
-              ...(input.expectedRevision !== undefined && {
-                expectedRevision: input.expectedRevision,
-              }),
-              // The released tool types `reason` optional until ai-tools adopts the required reason;
-              // an absent one reaches the store, the one enforcer, which refuses it before any write.
-              reason: input.reason as string,
+            toWorkItemsPatchInput({
+              id: input.id,
+              expectedRevision: input.expectedRevision,
+              reason: input.reason,
+              cites: input.cites,
               set: input.set,
-            },
+            }),
             writer.principalId
           );
           return toWorkItemInfo(updated);
@@ -221,7 +251,9 @@ export function createWorkItemCapability(
       const updated = await workItemCommand.patch({
         id: toWorkItemId(input.id),
         expectedRevision: String(current.revision),
-        set: input.set,
+        set: definedOnly(input.set) as NonNullable<
+          Parameters<typeof workItemCommand.patch>[0]["set"]
+        >,
       });
 
       return toWorkItemInfo(updated);

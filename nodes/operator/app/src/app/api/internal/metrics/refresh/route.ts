@@ -8,6 +8,7 @@
  * Invariants:
  *   - DISPATCH_PRINCIPAL_AUTH: Bearer SCHEDULER_API_TOKEN, like `/api/internal/jobs/<id>`.
  *   - DISPATCH_KEY_BOUND: Idempotency-Key must be `<nodeId>/metrics:<nodeId>:refresh/<iso>`.
+ *   - IDLE_TICK_IS_FREE (story.0031): after bearer, dispatch-key and body validation, a tick with nothing due is answered from the in-memory refresh clock (`idleTick`) with no receipt, grant read or database work.
  *   - RECEIPTS_SEPARATE: dispatch receipts (execution_requests) are distinct from the
  *     append-only measurement attempts the metrics package writes.
  * Side-effects: IO (execution request rows, metric observations, logs)
@@ -65,6 +66,31 @@ export const POST = wrapRouteHandlerWithLogging(
       .safeParse(input);
     if (!body.success)
       return NextResponse.json({ error: "grant_required" }, { status: 400 });
+    // An idle tick does no work, so it needs no dispatch record or grant read:
+    // answer it from the in-memory refresh clock without touching a database.
+    const idle = getContainer().goalMetrics?.idleTick();
+    if (idle) {
+      // App-local event: ctx.log directly (logEvent types only the shared EventName).
+      ctx.log.info(
+        {
+          event: EVENT_NAMES.METRIC_REFRESH_COMPLETE,
+          reqId: ctx.reqId,
+          routeId: ctx.routeId,
+          scanned: idle.scanned,
+          dueCount: 0,
+          definitionsTruncated: idle.truncated,
+          prunedCount: 0,
+          pruneFailed: false,
+          measuredCount: 0,
+          errorCount: 0,
+          idle: true,
+          outcome: "success",
+          errorCode: null,
+        },
+        EVENT_NAMES.METRIC_REFRESH_COMPLETE
+      );
+      return NextResponse.json({ ok: true, ...idle });
+    }
     const requests = getContainer().executionRequestPort;
     const hash = createHash("sha256")
       .update(JSON.stringify(body.data))
@@ -106,6 +132,11 @@ export const POST = wrapRouteHandlerWithLogging(
           reqId: ctx.reqId,
           routeId: ctx.routeId,
           scanned: result.scanned,
+          dueCount: result.due,
+          definitionsTruncated: result.truncated,
+          prunedCount: result.pruned,
+          pruneFailed: result.pruneFailed,
+          idle: false,
           measuredCount: result.observations.length,
           errorCount: failed.length,
           outcome: failed.length ? "error" : "success",

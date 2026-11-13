@@ -8,7 +8,8 @@
  * Invariants: PORT_VIA_CONTAINER (no direct adapter imports), CONTRACTS_ARE_TRUTH, ID_RANGE_RESERVED.
  *   Priority (including 0/1) carries no extra node-admin gate (task.5306); the store's own
  *   author-scoped write authority applies unchanged.
- * Moves (story.0033): create and patch accept `moves` (new ids are resolved and baselined by the store). A single-item read, a create response and a patch response add each move's baseline, current reading and verdict from the goal-metric observations (at most 3 moves); list reads return the stored moves only. An unknown or deprecated metric id is `EntryUnresolvedError` (field `moves`); a non-empty write with no metric wiring is `MovesUnsupportedError`; a bad list is `MovesInvalidError`; a failed baseline read is `MetricBaselineUnavailableError`.
+ * Moves (story.0033): create and patch accept `moves` (new ids are resolved and baselined by the store). A single-item read, a create response and a patch response add each move's baseline, current reading and verdict from the goal-metric observations (at most 3 moves); list reads return the stored moves only.
+ * Envelope (task.0118): `getWorkItem` is the one single-item read; each move also carries its metric, KPI and goal (`composeItemEnvelope`, the call the agent tool's capability makes), and `includeLinks` adds the first page of citation links. List and summary reads stay summary-sized. An unknown or deprecated metric id is `EntryUnresolvedError` (field `moves`); a non-empty write with no metric wiring is `MovesUnsupportedError`; a bad list is `MovesInvalidError`; a failed baseline read is `MetricBaselineUnavailableError`.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port; goal-metric reads for moves)
  * Links: contracts/work.items.{list,get,create,patch}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
@@ -31,12 +32,14 @@ import type {
   WorkSummaryReadOptions,
 } from "@cogni/work-items";
 import {
-  judgeMoves,
+  composeItemEnvelope,
+  judgeMoveSummaries,
   toWorkItemDto,
   toWorkItemId,
   WorkItemSummarySchema,
 } from "@cogni/work-items";
 
+import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
 import { getContainer } from "@/bootstrap/container";
 
@@ -385,9 +388,48 @@ async function withMoveReadings(dto: WorkItemDto): Promise<WorkItemDto> {
   const container = getContainer();
   // No goal-metric service on this node: every move reads `unknown` (metrics_unavailable).
   const readings = container.goalMetrics
-    ? createMoveMetricPorts(() => container.goalMetrics).readings
+    ? createMoveMetricPorts(
+        () => container.goalMetrics,
+        () => container.knowledgeStorePort
+      ).readings
     : undefined;
-  return { ...dto, moves: await judgeMoves(dto.moves, readings) };
+  return (await judgeMoveSummaries([dto], readings))[0] ?? dto;
+}
+
+/** Single-item read options; `includeLinks` adds the first page of citation links (`?include=links`). */
+export interface WorkItemReadOptions {
+  readonly signal?: AbortSignal;
+  readonly includeLinks?: boolean;
+  /** Set false for a caller that needs only the stored move ids (the EDO expectations read). Default: resolve the chain. */
+  readonly chain?: boolean;
+}
+
+/**
+ * THE single-item envelope (task.0118): the stored item plus, for each move, its readings, verdict
+ * and the metric, KPI and goal chain, and optionally the first page of citation links. Never throws
+ * for either: an unresolved chain reads `context: "unavailable"` and unreadable links read `unavailable`.
+ */
+async function withItemEnvelope(
+  dto: WorkItemDto,
+  options?: WorkItemReadOptions
+): Promise<WorkItemDto> {
+  const container = getContainer();
+  const readings = container.goalMetrics
+    ? createMoveMetricPorts(
+        () => container.goalMetrics,
+        () => container.knowledgeStorePort
+      ).readings
+    : undefined;
+  // ONE_COMPOSITION: the same `composeItemEnvelope` the agent tool's capability calls.
+  return composeItemEnvelope(
+    dto,
+    {
+      readings,
+      links: createCitationLinksPort(() => container.knowledgeStorePort),
+      log: (event) => container.log.warn(event, "work.items.envelope_degraded"),
+    },
+    options
+  );
 }
 
 function authorTagFromSession(user: {
@@ -569,14 +611,17 @@ export async function listWorkBoardColumns(
   return { columns, queryCount: columns.length };
 }
 
-export async function getWorkItem(id: string): Promise<WorkItemDto | null> {
+export async function getWorkItem(
+  id: string,
+  options?: WorkItemReadOptions
+): Promise<WorkItemDto | null> {
   const container = getContainer();
   // Doltgres-first: legacy markdown IDs (e.g. bug.0002) can also live in Doltgres
   // after the markdown→Doltgres import (task.5002). Fall back to markdown only when
   // Doltgres returns null, so unimported legacy IDs still resolve during transition.
   try {
     const item = await container.doltgresWorkItems.get(toWorkItemId(id));
-    if (item) return await withMoveReadings(toDto(item));
+    if (item) return await withItemEnvelope(toDto(item), options);
   } catch (e) {
     if ((e as Error)?.name !== "DoltgresNotConfiguredError") throw e;
   }
