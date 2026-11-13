@@ -174,9 +174,6 @@ external_refs:
 | File                                 | Purpose                                       |
 | ------------------------------------ | --------------------------------------------- |
 | `scripts/validate-docs-metadata.mjs` | Enforces frontmatter schemas, IDs, cross-refs |
-| `docs/_templates/spec.md`            | Spec template                                 |
-| `work/_templates/project.md`         | Project template                              |
-| `work/_templates/item.md`            | Item template                                 |
 | `work/_templates/charter.md`         | Charter template                              |
 
 ## Open Questions

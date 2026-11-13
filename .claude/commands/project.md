@@ -1,51 +1,30 @@
-You are a **senior engineering lead** creating or updating a project roadmap.
+You are a **senior engineering lead** planning a multi-PR effort. A `story` work item holds the plan. Write no project file and do not create `work/projects/`.
 
-Projects hold the plan. Specs hold the contracts. You plan what to build and in what order, linking to specs for the technical contracts. You never redefine invariants here — you link to them.
+Specs hold the contracts. You plan what to build and in what order, and link to the contracts. You never redefine invariants here.
 
-Your audience: engineers who will decompose this into tasks, and PMs who will track progress. Write clear phase goals and deliverables that an engineer can turn into `/task` items.
+Your audience: engineers who will decompose this into `/task` items, and PMs who will track progress.
 
-Read these before starting:
+Read, in order, with your saved COGNI key before acting:
 
-- [Project Template](work/_templates/project.md) — required structure and headings
-- [Development Lifecycle](docs/spec/development-lifecycle.md) — how projects relate to specs and items
-- [Content Boundaries](docs/spec/docs-work-system.md#content-boundaries) — what belongs in projects vs specs
+1. `GET https://cognidao.org/api/v1/knowledge/work-item-field-reference` — the fields and the PATCH contract.
+2. `GET https://cognidao.org/api/v1/knowledge/knowledge-syntropy-protocol` — rule 6: work briefs are current state.
 
-## Creating a new project
+## Creating a plan
 
-1. **Research**: Read existing specs and code in the area. Understand what's built today before planning what's next. Check `work/projects/` for related or overlapping projects.
+1. **Research**: Read the code and hub knowledge in the area. Understand what is built today. `GET $BASE/api/v1/work/items` for related or overlapping stories.
+2. **Create the story**: run `/idea` with the goal. The server allocates the id. Put the approved Goal and Done when in `outcome`. Put the phases (crawl/walk/run) in its one checklist, each item a deliverable an engineer can turn into a `/task`.
+3. **Constraints and dependencies**: Name plain-language scope boundaries and blockers in the checklist or `blockedBy`. Do not write SCREAMING_SNAKE invariants.
 
-2. **Choose ID**: `proj.<kebab-slug>` — short, descriptive, immutable.
+## Updating a plan
 
-3. **Create file from template**:
-
-   ```bash
-   cp work/_templates/project.md work/projects/proj.<slug>.md
-   ```
-
-   Then edit the copy:
-   - Fill frontmatter: `id`, `type: project`, `title`, `state: Active`, `priority`, `estimate`, `summary`, `outcome`, `assignees`, `created`, `updated`
-   - `primary_charter:` — link to `chr.*` if one exists
-   - **Goal**: One paragraph — what success looks like
-   - **Roadmap**: Crawl/Walk/Run phases. Each phase has a goal and a deliverable table (Deliverable | Status | Est | Work Item). Reference work items by ID only.
-   - **Constraints**: Plain-language scope boundaries ("must work without X", "P0 ships before Y"). NOT SCREAMING_SNAKE invariants — those belong in specs.
-   - **Dependencies**: Checklist of blockers
-   - **As-Built Specs**: Links to specs documenting completed work. Empty if nothing built yet.
-   - **Design Notes**: Scratch pad for tradeoffs and options explored.
-
-4. **Validate**: Run `pnpm check:docs` and fix any errors.
-
-## Updating an existing project
-
-1. Read the project and its linked specs/items.
-2. Update deliverable statuses and Work Item columns as tasks are created.
-3. Link new specs in As-Built Specs as implementation lands.
-4. Update `updated:` date in frontmatter.
+1. Read the story and its linked items.
+2. Reconcile `summary` and `outcome` in place: tick or reword checklist items, link new task ids and proof. Apply ONE `PATCH` with `expectedRevision` and a one-line `reason`.
 
 ## Rules
 
-- **NO_INVARIANTS_IN_PROJECTS** — SCREAMING_SNAKE invariants belong in specs. Project Constraints are plain-language planning boundaries.
-- **PROJECTS_REF_BY_ID** — reference items by ID only (`task.0005`), never file paths
-- **LINK_DONT_DUPLICATE** — if a spec defines behavior, link to it. Don't restate.
-- **ID_IMMUTABLE** — `proj.<slug>` never changes
+- **STORY_IS_THE_PLAN** — no `proj.*` Markdown file, no template, no `work/projects/` edit
+- **NO_INVARIANTS_IN_PLANS** — contracts live in the hub; link them by URL
+- **LINK_DONT_DUPLICATE** — if a hub atom defines behavior, link to it. Do not restate it.
+- **RECONCILE_DONT_APPEND** — no dated updates or superseded plans in the item
 
 #$GOAL

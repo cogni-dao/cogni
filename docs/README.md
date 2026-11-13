@@ -23,7 +23,6 @@ tags:: documentation, meta
 | `guides/`      | Procedures (setup, howto, runbooks)   |
 | `postmortems/` | Incident reviews, root cause analysis |
 | `archive/`     | Deprecated docs                       |
-| `_templates/`  | Templates for each doc type           |
 
 ## Doc Types
 
@@ -71,10 +70,7 @@ Work items (`work/projects/`, `work/items/`) use a different field set — see `
 
 ## Creating Docs
 
-1. Copy template from `_templates/`
-2. Fill required properties
-3. Place in matching directory
-4. Ensure `type::` matches directory
+Do not add Markdown here. Contribute durable knowledge to the hub through [knowledge-contribution-flow](https://cognidao.org/knowledge/knowledge-contribution-flow). Contracts and invariants, procedures, research and incident lessons each have a hub entry type; [segment-markdown-knowledge](https://cognidao.org/knowledge/segment-markdown-knowledge) maps content to its destination.
 
 ## Hard Rules
 
