@@ -111,6 +111,11 @@ export interface CompletionUnitParams {
   abortSignal?: AbortSignal;
   tools?: readonly import("@/ports").LlmToolDefinition[];
   toolChoice?: import("@/ports").LlmToolChoice;
+  /**
+   * Output-token cap for this call. A graph that sets one (bug.5626: pr-review) overrides the
+   * AGENT_GRAPH_MAX_TOKENS default; absent keeps that default so other graphs are unchanged.
+   */
+  maxTokens?: number;
 }
 
 /**
@@ -160,8 +165,15 @@ export class InProcCompletionUnitAdapter {
    * Runners orchestrate; this method handles transformation + billing events.
    */
   executeCompletionUnit(params: CompletionUnitParams): CompletionUnitResult {
-    const { messages, model, runContext, abortSignal, tools, toolChoice } =
-      params;
+    const {
+      messages,
+      model,
+      runContext,
+      abortSignal,
+      tools,
+      toolChoice,
+      maxTokens,
+    } = params;
     const { runId, attempt, graphId } = runContext;
     const scope = getExecutionScope();
     const traceId =
@@ -205,7 +217,7 @@ export class InProcCompletionUnitAdapter {
         completionPromiseHolder.promise = this.completionStream({
           messages,
           model,
-          maxTokens: AGENT_GRAPH_MAX_TOKENS,
+          maxTokens: maxTokens ?? AGENT_GRAPH_MAX_TOKENS,
           llmService,
           accountService: this.deps.accountService,
           clock: this.deps.clock,

@@ -24,6 +24,10 @@
  *     run that did not evaluate (graph failed, no structured output, missing rule, missing
  *     metric, no code read, no hub entry read, uncited verdict, head moved) concludes `failure` titled `PR Review: COULD NOT EVALUATE` and logs
  *     `review.could_not_evaluate {reason}`. With `fail_on_error: false` it stays neutral.
+ *   - UNFUNDED_IS_NOT_A_VERDICT (bug.5626): a graph that failed with `provider_unfunded` (the
+ *     operator's provider account is out of credit) reports reason `unfunded`, not `graph_failed`,
+ *     and its check title is "PR Review: COULD NOT EVALUATE (em dash) provider out of credit". Other
+ *     graph failures keep `graph_failed`.
  *   - CHECK_IS_REQUEST_BOUND: a request-bound review's check summary ends with one machine block
  *     (requestId, operator buildSha, model, citations, evidence). The buildSha is the serving
  *     operator's (graph host field, else the pr-context build) — never this worker's.
@@ -46,8 +50,10 @@ import {
 import type { GraphRunResult } from "@cogni/temporal-workflows";
 import {
   aggregateGateStatuses,
+  COULD_NOT_EVALUATE_UNFUNDED,
   collectCitations,
   composeCheckSummary,
+  couldNotEvaluateTitle,
   type EvaluationOutput,
   type EvidenceBundle,
   evaluateCriteria,
@@ -329,7 +335,7 @@ export function createReviewActivities(deps: ReviewActivityDeps) {
           conclusion: mapConclusion(conclusion),
           title:
             couldNotEvaluate && failOnError
-              ? "PR Review: COULD NOT EVALUATE"
+              ? couldNotEvaluateTitle(couldNotEvaluate)
               : `PR Review: ${conclusion.toUpperCase()}`,
           summary: checkRunSummary,
         });
@@ -511,7 +517,9 @@ export function evaluateGraphResult(
       const reason = !rule
         ? "missing_rule"
         : !graphResult.ok
-          ? "graph_failed"
+          ? graphResult.errorCode === "provider_unfunded"
+            ? COULD_NOT_EVALUATE_UNFUNDED
+            : "graph_failed"
           : !structured
             ? "no_structured_output"
             : structured.noCodeRead === true

@@ -6,7 +6,7 @@
  * Purpose: Verify normalizeErrorToExecutionCode encodes fault-party before the generic bucket.
  * Scope: Package-local unit test. Does not call network services.
  * Invariants:
- *   - FAULT_PARTY_BEFORE_BUCKET: upstream provider failures (402/5xx) → provider_unavailable, never internal
+ *   - FAULT_PARTY_BEFORE_BUCKET: upstream provider failures never become internal: 402 → provider_unfunded, 5xx → provider_unavailable
  *   - insufficient_credits (user balance) stays distinct from provider_unavailable (operator/upstream)
  *   - internal is the alarm bucket — only genuinely-unknown errors land there
  * Side-effects: none
@@ -23,9 +23,9 @@ import {
 } from "../src/index";
 
 describe("normalizeErrorToExecutionCode — fault-party before bucket", () => {
-  it("maps upstream 402 (operator's provider account unfunded) to provider_unavailable, NOT internal (bug.5056)", () => {
+  it("maps upstream 402 (operator's provider account unfunded) to provider_unfunded, NOT internal or provider_unavailable (bug.5056, bug.5626)", () => {
     const err = new LlmError("LiteLLM API error: 402", "provider_4xx", 402);
-    expect(normalizeErrorToExecutionCode(err)).toBe("provider_unavailable");
+    expect(normalizeErrorToExecutionCode(err)).toBe("provider_unfunded");
   });
 
   it("never maps an upstream 402 to insufficient_credits (that is the USER's balance)", () => {

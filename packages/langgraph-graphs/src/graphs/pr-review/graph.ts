@@ -29,6 +29,11 @@
  *     are never part of the model's schema.
  *   - VERDICT_CITES_WHAT_IT_READ: a cited id counts only if it is in evidence.entries; a failing
  *     hub metric with no counted citation, or `insufficientEvidence`, sets `uncited: true`.
+ *   - REVIEW_CALLS_ARE_OUTPUT_CAPPED (bug.5626): every model call of this graph carries an
+ *     explicit output-token cap (gather PR_REVIEW_GATHER_MAX_TOKENS, verdict
+ *     PR_REVIEW_VERDICT_MAX_TOKENS), well under the host default of 32768. A provider
+ *     reserves credit per requested max_tokens, so an uncapped call is refused (402) on a low
+ *     balance even when the answer is small. Other graphs keep the host default.
  *   - TYPE_TRANSPARENT_RETURN: no explicit return type annotation.
  * Side-effects: IO (injected read-only tool calls)
  * Links: https://cognidao.org/knowledge/pr-review-grounded-gate, story.5102,
@@ -36,6 +41,7 @@
  * @public
  */
 
+import { normalizeErrorToExecutionCode } from "@cogni/ai-core";
 import {
   KNOWLEDGE_INDEX_NAME,
   KNOWLEDGE_READ_NAME,
@@ -60,6 +66,7 @@ import {
   StateGraph,
 } from "@langchain/langgraph";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { CogniCompletionAdapter } from "../../runtime/cogni/completion-adapter";
 import { buildHostPreamble } from "../host-preamble";
 import type { CreateReactAgentGraphOptions } from "../types";
 import {
@@ -87,6 +94,26 @@ export const HUB_RULE_THRESHOLD = 0.7;
 
 /** Verdict attempts: one call plus one bounded re-ask on an unparseable answer. */
 const MAX_VERDICT_ATTEMPTS = 2;
+
+/**
+ * Output cap for one gather turn (REVIEW_CALLS_ARE_OUTPUT_CAPPED). A gather turn emits tool calls
+ * plus reasoning, never a long answer; 16384 keeps reasoning headroom for the reasoning model
+ * (a 4096 budget starves it after a large gather) at half the host default.
+ */
+export const PR_REVIEW_GATHER_MAX_TOKENS = 16_384;
+
+/**
+ * Output cap for the verdict call. The verdict JSON is small (a few metrics, short observations
+ * and a summary, about 1-2K tokens); 8192 leaves reasoning headroom and is a quarter of the host
+ * default.
+ */
+export const PR_REVIEW_VERDICT_MAX_TOKENS = 8_192;
+
+/** Bind an output cap when the model is the Cogni adapter; any other model passes through. */
+const withOutputCap = <T>(llm: T, maxTokens: number): T =>
+  llm instanceof CogniCompletionAdapter
+    ? (llm.withMaxTokens(maxTokens) as unknown as T)
+    : llm;
 
 /** Model verdict (the `evaluation-output` schema). */
 export interface PrReviewVerdict {
@@ -250,7 +277,7 @@ export function createPrReviewGraph(opts: CreateReactAgentGraphOptions) {
     });
 
   const gather = createReactAgent({
-    llm: opts.llm,
+    llm: withOutputCap(opts.llm, PR_REVIEW_GATHER_MAX_TOKENS),
     tools,
     prompt: (state: typeof MessagesAnnotation.State) => [
       buildPreamble(),
@@ -267,9 +294,12 @@ export function createPrReviewGraph(opts: CreateReactAgentGraphOptions) {
   ): Promise<Partial<S>> => {
     const format = opts.responseFormat;
     if (!format) return {};
-    const model = (opts.llm as unknown as StructuredModel).withStructuredOutput(
-      format.schema
-    );
+    const model = (
+      withOutputCap(
+        opts.llm,
+        PR_REVIEW_VERDICT_MAX_TOKENS
+      ) as unknown as StructuredModel
+    ).withStructuredOutput(format.schema);
     const instruction = format.prompt
       ? `${PR_REVIEW_VERDICT_INSTRUCTION}\n\n${format.prompt}`
       : PR_REVIEW_VERDICT_INSTRUCTION;
@@ -282,6 +312,9 @@ export function createPrReviewGraph(opts: CreateReactAgentGraphOptions) {
         )) as PrReviewVerdict;
         return { modelVerdict: result };
       } catch (error) {
+        // A starved provider refuses the re-ask too; fail now with the unfunded code intact.
+        if (normalizeErrorToExecutionCode(error) === "provider_unfunded")
+          throw error;
         lastError = error;
       }
     }

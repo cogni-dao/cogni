@@ -574,6 +574,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       tools?: readonly LlmToolDefinition[];
       toolChoice?: import("@/ports").LlmToolChoice;
       abortSignal?: AbortSignal;
+      maxTokens?: number;
     }) => {
       const result = this.adapter.executeCompletionUnit({
         messages: params.messages as GraphRunRequest["messages"],
@@ -582,6 +583,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         ...(params.abortSignal && { abortSignal: params.abortSignal }),
         ...(params.tools?.length && { tools: [...params.tools] }),
         ...(params.toolChoice && { toolChoice: params.toolChoice }),
+        ...(params.maxTokens !== undefined && { maxTokens: params.maxTokens }),
       });
 
       return {

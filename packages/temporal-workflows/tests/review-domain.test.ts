@@ -16,8 +16,10 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateGateStatuses,
   CHECK_SUMMARY_MAX_CHARS,
+  COULD_NOT_EVALUATE_UNFUNDED,
   collectCitations,
   composeCheckSummary,
+  couldNotEvaluateTitle,
   evaluateCriteria,
   findRequirement,
   formatCheckRunSummary,
@@ -341,6 +343,31 @@ describe("review result block (CHECK_IS_REQUEST_BOUND, story.5102)", () => {
     });
     expect(summary).toContain("COULD NOT EVALUATE");
     expect(summary).toContain("graph_failed");
+  });
+});
+
+describe("unfunded runs say so (bug.5626)", () => {
+  it("titles an unfunded non-evaluation distinctly from other reasons", () => {
+    expect(couldNotEvaluateTitle("unfunded")).toBe(
+      "PR Review: COULD NOT EVALUATE \u2014 provider out of credit"
+    );
+    expect(couldNotEvaluateTitle("graph_failed")).toBe(
+      "PR Review: COULD NOT EVALUATE"
+    );
+    expect(couldNotEvaluateTitle(undefined)).toBe(
+      "PR Review: COULD NOT EVALUATE"
+    );
+  });
+
+  it("the unfunded check summary names the provider and is still a could-not-evaluate", () => {
+    const summary = formatCheckRunSummary({
+      conclusion: "fail",
+      gateResults: [],
+      couldNotEvaluate: COULD_NOT_EVALUATE_UNFUNDED,
+    });
+    expect(summary).toContain("COULD NOT EVALUATE");
+    expect(summary).toContain("unfunded");
+    expect(summary).toContain("out of credit");
   });
 });
 

@@ -9,6 +9,9 @@
  *   - Per WORKER_IS_DUMB: domain logic lives here, not in activities
  *   - All inputs/outputs are plain serializable objects
  *   - Formatting matches cogni-git-review markdown conventions
+ *   - UNFUNDED_IS_NOT_A_VERDICT (bug.5626): a run the provider refused for lack of credit reports
+ *     `couldNotEvaluate: "unfunded"` and the check title says so, distinct from a model failure
+ *     (`graph_failed`). It is still a non-evaluation, never a pass or a neutral verdict.
  *   - Routing-diagnostic wording mirrors docs/spec/node-ci-cd-contract.md
  *     § Single-Domain Scope > Diagnostic contract: name conflicting domains,
  *     name operator-territory paths, suggest the split, link the spec.
@@ -377,6 +380,16 @@ export function aggregateGateStatuses(
 // Markdown Formatting (pure string rendering)
 // ---------------------------------------------------------------------------
 
+/** couldNotEvaluate reason for a run the provider refused because its account is out of credit. */
+export const COULD_NOT_EVALUATE_UNFUNDED = "unfunded";
+
+/** Check-run title for a run that did not evaluate (UNFUNDED_IS_NOT_A_VERDICT). */
+export function couldNotEvaluateTitle(reason: string | undefined): string {
+  return reason === COULD_NOT_EVALUATE_UNFUNDED
+    ? "PR Review: COULD NOT EVALUATE \u2014 provider out of credit"
+    : "PR Review: COULD NOT EVALUATE";
+}
+
 function verdictLabel(status: GateStatus): string {
   switch (status) {
     case "pass":
@@ -447,8 +460,12 @@ export function formatCheckRunSummary(
   }
 
   if (result.couldNotEvaluate) {
+    const why =
+      result.couldNotEvaluate === COULD_NOT_EVALUATE_UNFUNDED
+        ? " The model provider is out of credit."
+        : "";
     lines.push(
-      `**COULD NOT EVALUATE** \u2014 \`${result.couldNotEvaluate}\`. The review did not judge this PR; re-run it with POST /api/v1/vcs/review.\n`
+      `**COULD NOT EVALUATE** \u2014 \`${result.couldNotEvaluate}\`.${why} The review did not judge this PR; re-run it with POST /api/v1/vcs/review.\n`
     );
   }
 
