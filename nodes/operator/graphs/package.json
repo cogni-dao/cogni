@@ -26,7 +26,7 @@
     "@cogni/ai-core": "workspace:*",
     "@cogni-dao/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.13.0/cogni-dao-work-items-0.13.0.tgz",
     "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.18.0/cogni-dao-knowledge-store-0.18.0.tgz",
-    "@cogni-dao/metrics": "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.14.1/cogni-dao-metrics-0.14.1.tgz",
+    "@cogni-dao/metrics": "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.14.2/cogni-dao-metrics-0.14.2.tgz",
     "@cogni/agent-grants": "https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.3.0/cogni-dao-agent-grants-0.3.0.tgz"
   },
   "devDependencies": {
