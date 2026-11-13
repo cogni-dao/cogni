@@ -68,6 +68,7 @@ describe("operator shared evaluation binding", () => {
       action: "patch",
       id: "task.5111",
       expectedRevision: 4,
+      reason: "score the six axes",
       scores,
     });
     expect(parsed).toMatchObject({ expectedRevision: 4, scores });

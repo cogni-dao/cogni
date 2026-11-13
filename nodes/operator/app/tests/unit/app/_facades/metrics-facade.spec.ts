@@ -58,6 +58,7 @@ describe("metrics facade", () => {
         asOf: "2026-11-02T10:00:00.000Z",
         environment: "local",
         goals: [],
+        historyMode: "full",
       },
     });
   });
