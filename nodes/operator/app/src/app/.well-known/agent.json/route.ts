@@ -237,7 +237,8 @@ export async function GET(request: Request) {
       },
     },
     process: {
-      contributionSpec: "https://node-template.cognidao.org/knowledge/work-item-status-machine",
+      contributionSpec:
+        "https://node-template.cognidao.org/knowledge/work-item-status-machine",
       validationGuide: "docs/guides/agent-api-validation.md",
       validationSkill: ".claude/skills/validate-candidate",
       requiredLoop: [
