@@ -49,12 +49,12 @@ Ephemeral hosts settle it independently: `preview-deployments.md` mints a new
 
 ## Alternatives rejected
 
-| option                                                                   | why not                                                                                                                                    |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Per-node or fleet-shared OAuth on each node                              | client secret on every node; see above                                                                                                     |
-| A single callback shared with NextAuth sign-in, discriminated by `state` | requires intercepting NextAuth's `[...nextauth]` handler, and re-couples the broker to the account model — the exact defect being fixed    |
-| Adopt a mature OSS IdP (Keycloak / Zitadel / Hydra / Dex)                | does not fix subject provenance — an IdP with a live SSO session commits the identical error — and adds a stateful service per environment |
-| DID / VC credential system                                               | superseded by the node-local-UUID + evidenced-bindings model already accepted in [user-identity-bindings](https://cognidao.org/knowledge/user-identity-bindings)                          |
+| option                                                                   | why not                                                                                                                                                          |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Per-node or fleet-shared OAuth on each node                              | client secret on every node; see above                                                                                                                           |
+| A single callback shared with NextAuth sign-in, discriminated by `state` | requires intercepting NextAuth's `[...nextauth]` handler, and re-couples the broker to the account model — the exact defect being fixed                          |
+| Adopt a mature OSS IdP (Keycloak / Zitadel / Hydra / Dex)                | does not fix subject provenance — an IdP with a live SSO session commits the identical error — and adds a stateful service per environment                       |
+| DID / VC credential system                                               | superseded by the node-local-UUID + evidenced-bindings model already accepted in [user-identity-bindings](https://cognidao.org/knowledge/user-identity-bindings) |
 
 ## Prior art: this conclusion was reached twice
 
