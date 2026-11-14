@@ -7,7 +7,7 @@
  * Scope: Pure codec only; does not touch Temporal or a DB.
  * Invariants: CODEC_ROUND_TRIPS, GOAL_REQUIRES_METRIC_STRATEGY
  * Side-effects: none
- * Links: src/domain/goal-codec.ts, docs/design/knowledge-goal-loop.md
+ * Links: src/domain/goal-codec.ts, https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design
  * @internal
  */
 

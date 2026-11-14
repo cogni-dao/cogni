@@ -426,7 +426,7 @@ fi
 #   existing tables stay owned by app_user → future ALTER-table migrations fail and
 #   DROP ROLE app_user can never complete. The declarative endgame (CloudNativePG /
 #   Terraform postgresql provider, task.5016) retires this bash. See
-#   docs/guides/vm-secrets-repair.md.
+#   https://cognidao.org/knowledge/converge-database-credentials.
 migrate_owned() {
   local db="$1" from="$2" to="$3" exists
   exists=$(run_sql_as_root "postgres" "SELECT 1 FROM pg_roles WHERE rolname = '$from'" | grep -c 1 || true)

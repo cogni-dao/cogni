@@ -7,7 +7,7 @@
  * Scope: Static contract generation only. Does not execute route handlers or touch a database.
  * Invariants: WORK_ITEM_WRITES_DISCOVERABLE, both create and patch appear with their real HTTP methods and request schemas.
  * Side-effects: none
- * Links: story.5060, docs/guides/agent-api-validation.md
+ * Links: story.5060, https://cognidao.org/knowledge/prove-node-agent-api
  * @internal
  */
 

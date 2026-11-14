@@ -142,7 +142,7 @@ For CI failures, use `env="ci"`:
 > is **not** yet multi-scope: querying _other_ nodes, shared services (`scheduler-worker`, …), or
 > env-wide is the **generic** route `GET /api/v1/observability/logs` + the `logs.query` RBAC action
 > (Phase 1, not yet built). When that lands, this guide will direct all node-dev agents to it
-> instead of the MCP. Identity + phasing: `docs/design/substrate-grafana-observability.md` §"Phase
+> instead of the MCP. Identity + phasing: `https://cognidao.org/knowledge/observability-access-design` §"Phase
 > 0"; node-scoped design: `https://cognidao.org/knowledge/node-log-proxy-contract` §"Node-dev log scope envelope".
 
 - `source` - `k8s` (in-cluster pod logs from cAdvisor) | `k8s-events`

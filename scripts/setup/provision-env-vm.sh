@@ -373,7 +373,7 @@ for node in "${NODE_TARGETS[@]}"; do
     log_error "Generate your fork's identity via the operator DAO setup wizard:"
     log_error "  https://cognidao.org/setup/dao"
     log_error "Then commit the generated .cogni/repo-spec.yaml to this fork's main + re-run."
-    log_error "(Runbook step: docs/runbooks/fork-quickstart.md §4.5)"
+    log_error "(Runbook step: https://cognidao.org/knowledge/fork-quickstart-guide §4.5)"
     exit 2
   fi
   # Upstream-inheritance check: a fork running with upstream's UUID is also
@@ -394,7 +394,7 @@ for node in "${NODE_TARGETS[@]}"; do
       log_error "Generate your fork's own identity via the operator DAO setup wizard:"
       log_error "  https://cognidao.org/setup/dao"
       log_error "Then commit the generated .cogni/repo-spec.yaml to this fork's main + re-run."
-      log_error "(Runbook step: docs/runbooks/fork-quickstart.md §4.5)"
+      log_error "(Runbook step: https://cognidao.org/knowledge/fork-quickstart-guide §4.5)"
       exit 2
     fi
   fi
@@ -2134,7 +2134,7 @@ log_info "All ApplicationSets applied — Argo syncing from deploy/* branches"
 # Gate 1 — honest allocatable: the kubelet system-reserved reservation must be in
 # effect on the fresh node (bootstrap.sh asserts it inline at first boot; re-assert
 # here from the provisioner so the gate is explicit, not only a bootstrap.ok
-# side-channel). See docs/design/operator-fleet-safety.md SLA#1.
+# side-channel). See https://cognidao.org/knowledge/fleet-capacity-design SLA#1.
 log_info "Gate 1: honest allocatable (system-reserved in effect)..."
 scp $SSH_OPTS "$REPO_ROOT/scripts/ci/assert-honest-allocatable.sh" root@"$VM_IP":/tmp/assert-honest-allocatable.sh
 if ! ssh $SSH_OPTS root@"$VM_IP" 'rc=0; bash /tmp/assert-honest-allocatable.sh || rc=$?; rm -f /tmp/assert-honest-allocatable.sh; exit $rc'; then

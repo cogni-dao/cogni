@@ -17,7 +17,7 @@
 # Pin: chart 0.28.2 / app v2.5.3 — last upstream release as of 2026-05.
 # Bumping is tied to ESO's vault provider compatibility (chart 2.5.0 / app
 # v2.5.0). Upgrade discipline: bump both pins together; re-run the live-VM
-# rotation drill (docs/guides/secrets-rotate.md §Upgrade discipline).
+# rotation drill (https://cognidao.org/knowledge/break-glass-secret-write §Upgrade discipline).
 #
 # Storage: integrated Raft. Single-node k3s = single replica; HA is a P2
 # concern when we add multi-node clusters (Crawl row 4+).

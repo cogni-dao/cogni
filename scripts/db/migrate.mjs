@@ -8,7 +8,7 @@
  * Invariants: One physical session owns the lock and 0063 guards. SQL and ledger stay immutable. Success follows shutdown.
  * Side-effects: IO (Postgres connect, advisory lock, migrate, read drizzle ledger, unlock).
  * Notes: COPY'd into each runtime image at /app/nodes/<node>/app/migrate.mjs. LOCK_KEY shared safely — advisory locks are database-scoped.
- * Links: https://node-template.cognidao.org/knowledge/database-migration-contract §2 Migration Strategy, nodes/operator/app/src/shared/migrations/migration-receipt.ts (the parser twin), work/items/task.0371.kill-presync-migration-hook-step-1.md
+ * Links: https://node-template.cognidao.org/knowledge/database-migration-contract §2 Migration Strategy, nodes/operator/app/src/shared/migrations/migration-receipt.ts (the parser twin)
  * @internal
  */
 

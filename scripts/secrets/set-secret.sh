@@ -26,7 +26,7 @@
 #                  short-lived token issuer). NEVER export the bootstrap root
 #                  token — that credential lives in the cluster only after
 #                  Phase 5b unseal, per spec Invariant NO_OPERATOR_ROOT_TOKEN_
-#                  ON_LAPTOP. See docs/guides/secrets-add-new.md.
+#                  ON_LAPTOP. See https://cognidao.org/knowledge/break-glass-secret-write.
 # Tests stub via $SET_SECRET_BAO (executable path) — see
 # scripts/ci/tests/set-secret.test.sh.
 
@@ -153,7 +153,7 @@ if [[ -z "${BAO_ADDR:-}" || -z "${BAO_TOKEN:-}" ]]; then
     export BAO_ADDR=http://127.0.0.1:8200
     bao login -method=kubernetes role=<your-role>   # or another short-lived issuer
     export BAO_TOKEN=\$(bao print token)
-See docs/guides/secrets-add-new.md."
+See https://cognidao.org/knowledge/break-glass-secret-write."
 fi
 
 command -v bao >/dev/null 2>&1 || die "bao CLI not found on PATH (https://openbao.org/docs/install/)."

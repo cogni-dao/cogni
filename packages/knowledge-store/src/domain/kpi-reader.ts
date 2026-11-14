@@ -20,7 +20,7 @@
  *     (smoke tests only). The `independent` flag is the gate; the registry
  *     enforces it so no real goal is ever gated on a self-grading reader.
  * Side-effects: none (sources passed in do the I/O)
- * Links: docs/design/knowledge-goal-loop.md § worker ≠ verifier
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design § worker ≠ verifier
  * @public
  */
 

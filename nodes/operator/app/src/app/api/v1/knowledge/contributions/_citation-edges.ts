@@ -13,7 +13,7 @@
  *   does not report edge context or a re-contexted edge, so `context` is null and
  *   `modified` never appears until the operator reads `diffCitations` from the published store.
  * Side-effects: none
- * Links: docs/design/knowledge-contribution-api.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-branch-design
  * @internal
  */
 

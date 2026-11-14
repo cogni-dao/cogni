@@ -8,7 +8,7 @@
  *   one workspace. State remains visible to everyone; only mutations are authority-gated.
  * Invariants: ACTIONS_GATED_NOT_STATE, REVIEW_AUTHORITY_IS_EPOCH_PINNED, LATEST_MANIFEST_ONLY.
  * Side-effects: IO (review/open/finalize/publish hooks)
- * Links: src/features/governance/types.ts, work/items/task.0119.epoch-signer-ui.md
+ * Links: src/features/governance/types.ts
  * @public
  */
 

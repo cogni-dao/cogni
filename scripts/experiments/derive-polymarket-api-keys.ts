@@ -7,7 +7,7 @@
  * Scope: Hits `POST /auth/api-key` (or `/auth/derive-api-key`) signed by the Privy HSM wallet via `@privy-io/node/viem` + `@polymarket/clob-client`. Does not place orders, move funds, accept ToS, or persist creds — caller copies output into .env.local.
  * Invariants: Polygon chainId 137 only; reuses the same Privy creds as sign-polymarket-order experiment. Not for production runtime use.
  * Side-effects: IO (reads .env.local; lists Privy wallets via HTTPS; one signed request to Polymarket CLOB auth endpoint).
- * Links: work/items/task.0315.poly-copy-trade-prototype.md "Prereq-B"
+ * Links: https://poly.cognidao.org/knowledge/poly-tenant-wallet-authorization
  * @internal — experiment code, not shipped to production
  */
 

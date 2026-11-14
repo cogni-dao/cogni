@@ -29,7 +29,7 @@
  * Links: packages/node-contracts/src/attribution.receipts.internal.v1.contract.ts,
  *   services/scheduler-worker/src/adapters/run-http.ts,
  *   nodes/operator/app/src/features/ingestion/services/webhook-receiver.ts,
- *   docs/design/attribution-operator-gateway.md, story.5023
+ *   https://node-template.cognidao.org/knowledge/attribution-operator-gateway, story.5023
  * @internal
  */
 

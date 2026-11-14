@@ -11,7 +11,7 @@
  *   re-resolves them through a potentially stale environment-local DB projection.
  * Side-effects: none
  * Links: adapters/server/ingestion/http-receipt-delivery.ts, /api/internal/attribution/receipts,
- *   docs/design/attribution-operator-gateway.md, task.0280
+ *   https://node-template.cognidao.org/knowledge/attribution-operator-gateway, task.0280
  * @public
  */
 

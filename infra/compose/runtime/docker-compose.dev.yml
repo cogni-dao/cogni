@@ -333,7 +333,7 @@ services:
       - cogni-edge
     environment:
       DOLTGRES_PASSWORD: ${DOLTGRES_PASSWORD:-doltgres}
-      # DoltHub mirror creds — see docs/runbooks/dolthub-remote-bootstrap.md.
+      # DoltHub mirror creds — see https://cognidao.org/knowledge/dolthub-mirror-bootstrap.
       # Optional; unset = local-only, dolt_push disabled.
       DOLT_CREDS_JWK: ${DOLT_CREDS_JWK:-}
       DOLT_CREDS_KEYID: ${DOLT_CREDS_KEYID:-}

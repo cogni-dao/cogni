@@ -11,7 +11,7 @@
  *   PRIVY_* credentials. Not for production use.
  * Side-effects: IO (reads .env.local; lists Privy wallets via HTTPS; submits one HSM sign
  *   request).
- * Links: work/items/task.0315.poly-copy-trade-prototype.md "CP2 revision 4"
+ * Links: https://poly.cognidao.org/knowledge/poly-copy-trade-pipeline
  * @internal — experiment code, not shipped to production
  */
 

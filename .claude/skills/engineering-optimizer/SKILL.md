@@ -2,8 +2,8 @@
 name: engineering-optimizer
 description: >
   Optimize how developer agents operate through this repo — close feedback loops,
-  surface drift, and regrade the Workflow Health Matrix in
-  `work/charters/ENGINEERING.md`. Use this skill whenever the user asks to
+  surface drift, and record a dated regrade of the Workflow Health Matrix described in
+  `https://cognidao.org/knowledge/eng-agent-workflow-stages` as a hub contribution. Use this skill whenever the user asks to
   "optimize engineering", "review workflow health", "close feedback loops",
   "what's slowing us down", "why is the dev loop broken", "regrade the workflow
   matrix", "are our agents operating cleanly", or anything about agent
@@ -27,7 +27,7 @@ Ground yourself in the house style:
 
 - **Karpathy** — think before coding, simplicity first, surgical changes, goal-driven execution. Convert vague "optimize X" into verifiable signals.
 - **Boris Cherny** — give the agent a way to verify its output, then it iterates to great. Your role is to _build that verification loop_ for the engineering process itself, the same way a `## Validation` block does for a feature.
-- **The repo's own principle** — "scale your learnings": when you find a mistake another agent will repeat, edit the guide/spec/command file itself. A 3-line fix beats a 30-minute rediscovery.
+- **The repo's own principle** — "scale your learnings": when you find a mistake another agent will repeat, contribute the correction to the owning hub atom or edit the command/skill shell. A 3-line fix beats a 30-minute rediscovery.
 
 ## Mental model — syntropy, not just velocity
 
@@ -45,7 +45,7 @@ Your five questions, in order:
 
 ### Step 1 — Read the matrix, then read reality
 
-Read [`work/charters/ENGINEERING.md`](../../../work/charters/ENGINEERING.md) — the **Workflow Health Matrix** is the dashboard you maintain. Note the current grades and which reds are marked critical-path.
+Read [`https://cognidao.org/knowledge/eng-agent-workflow-stages`](https://cognidao.org/knowledge/eng-agent-workflow-stages) — the **Workflow Health Matrix** is the dashboard you maintain. Note the current grades and which reds are marked critical-path.
 
 Then pull real signals. Don't trust the matrix; verify it.
 
@@ -78,19 +78,13 @@ gh run list --workflow=candidate-flight.yml --limit 20 --json status,conclusion,
 
 **Work-item activity**:
 
-```bash
-# Work items that shipped but never flipped deploy_verified — the Definition-of-Done leak
-rg -l "status: done" work/items/ | xargs rg -L "deploy_verified: true"
-
-# Work items missing ## Validation block — the VALIDATION_REQUIRED invariant violations
-rg -L "^## Validation" work/items/task.*.md work/items/bug.*.md
-```
+Work items live on the operator hub, not in files. Read them through `GET /api/v1/work/items` and look for items that shipped but never flipped `deploy_verified` (the Definition-of-Done leak) and items missing a `## Validation` block (the VALIDATION_REQUIRED violations).
 
 **Guide churn** (are learnings being scaled?):
 
 ```bash
-# Guides edited in the last 2 weeks — if none, learnings aren't scaling
-git log --since="2 weeks ago" --name-only --pretty=format: -- docs/guides/ docs/spec/ .claude/commands/ | sort -u
+# Command and skill shells edited in the last 2 weeks; also list hub atoms updated in that window
+git log --since="2 weeks ago" --name-only --pretty=format: -- .claude/ .agents/ | sort -u
 ```
 
 ### Step 2 — Regrade the matrix honestly
@@ -103,7 +97,7 @@ For each row:
 
 If you can't find a signal either way, say so explicitly: a row marked 🟢 with no evidence is worse than 🔴, because 🔴 at least invites action.
 
-Changes go in-place in `work/charters/ENGINEERING.md`. Update `updated:` in the frontmatter. Update the rollup counts and the rollup prose — critical-path reds vs cross-cut reds vs front-end command-rewrite reds.
+Do not edit a file. Record the regrade as a hub contribution, following [the knowledge contribution flow](https://node-template.cognidao.org/knowledge/knowledge-contribution-flow): insert one dated `finding` atom (for example `eng-workflow-health-<mon><yy>`) with the date, each regraded row (old to new, with the signal), and the rollup counts and prose — critical-path reds vs cross-cut reds vs front-end command-rewrite reds. Cite `eng-agent-workflow-stages` and the previous health finding (`eng-workflow-health-may26`). Update `eng-agent-workflow-stages` only when the stage definitions change; refetch the live atom first and resend every field.
 
 ### Step 3 — Propose the _next_ lever, not a plan
 
@@ -116,7 +110,7 @@ Propose it as a single work item — title, scope, `## Validation` block sketch.
 
 ### Step 4 — Scale the learning
 
-If in the course of evaluation you hit a repeatable mistake or missing guide, **edit the relevant guide/spec/command/AGENTS.md in the same session**. A 3-line pointer edit is the highest-leverage artifact you can produce — it lifts every future agent, not just this one's decision.
+If in the course of evaluation you hit a repeatable mistake or missing guide, **contribute the fix to the owning hub atom, or edit the relevant command/skill/AGENTS.md, in the same session**. A 3-line pointer edit is the highest-leverage artifact you can produce — it lifts every future agent, not just this one's decision.
 
 ## Anti-patterns (avoid these)
 
@@ -150,4 +144,4 @@ A short, structured report back to the user:
 - <file>: <3-line summary of what the next agent now has that they didn't>
 ```
 
-Then the in-place edit to `work/charters/ENGINEERING.md` is the durable artifact. The conversational report is ephemeral; the matrix and the guide edits are what lift the fleet.
+Then the hub finding is the durable artifact. The conversational report is ephemeral; the finding and the hub or shell corrections are what lift the fleet.

@@ -7,7 +7,7 @@
  * Scope: Runs authenticated reads (`getApiKeys`, `getBalanceAllowance`) to infer the account model that applies to this wallet. Does not submit orders, accept ToS, or move funds.
  * Invariants: Polygon chainId 137; reuses existing Privy creds + just-derived POLY_CLOB_API_* creds.
  * Side-effects: IO (reads .env.local; two authenticated HTTPS calls to Polymarket CLOB).
- * Links: docs/guides/polymarket-account-setup.md
+ * Links: https://poly.cognidao.org/knowledge/poly-wallet-trading-lessons
  * @internal — probe code, not shipped to production
  */
 

@@ -16,7 +16,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
 
 - [App AGENTS.md](../AGENTS.md)
 - [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
-- [Feature Development Guide](../../../../../docs/guides/feature-development.md)
+- [Feature Development Guide](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/guides/feature-development.md)
 
 ## Boundaries
 

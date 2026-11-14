@@ -11,7 +11,7 @@
  *   - Exactly one of graphId xor route is set (graph run xor node-task dispatch)
  *   - route is node-relative — starts with a slash, no scheme, no protocol-relative, no traversal
  * Side-effects: none
- * Links: /api/v1/schedules route, docs/design/node-temporal-tenant-interface.md
+ * Links: /api/v1/schedules route, https://node-template.cognidao.org/knowledge/node-task-principal-design
  * @internal
  */
 

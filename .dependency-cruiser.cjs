@@ -793,7 +793,6 @@ module.exports = {
       comment:
         "PURE_POLICY_NO_IO — policy modules must not import viem, " +
         "@polymarket/clob-client (any version), app/bootstrap, or any node/service code. " +
-        "See docs/design/poly-positions.md § Capability A. " +
         "Path is `nodes/<X>/(app|graphs)/` so within-package imports under " +
         "`nodes/poly/packages/market-provider/src/policy/` don't false-fire (task.0421).",
     },

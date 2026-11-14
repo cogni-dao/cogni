@@ -6,7 +6,7 @@
 #   1. registries: — how the controller authenticates to ghcr.io to scan tags
 #      and resolve digests. Credentials live in the `argocd-image-updater-ghcr`
 #      Opaque Secret (created imperatively — see
-#      docs/runbooks/image-updater-bootstrap.md §1).
+#      https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/runbooks/image-updater-bootstrap.md §1).
 #   2. git.user / git.email — commit authorship for the write-back. Match the
 #      canonical pattern used by every other automated commit in this repo:
 #      scripts/ci/promote-k8s-image.sh:114-115 (the very script whose logic
@@ -61,4 +61,4 @@ data:
     - {{ .Image }}: {{ .OldTag }} -> {{ .NewTag }}
     {{ end -}}
     Automated digest refresh by argocd-image-updater (bug.0344).
-    See docs/runbooks/image-updater-bootstrap.md for rollback.
+    See https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/runbooks/image-updater-bootstrap.md for rollback.

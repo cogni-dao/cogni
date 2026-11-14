@@ -68,7 +68,7 @@ The operator is the control plane. It stays on k3s through Argo, with its own de
 - Operator workflow entry points: `pr-build.yml` (build), `candidate-flight.yml` and `candidate-flight-infra.yml` (candidate-a app and infra levers), `flight-preview.yml` (preview on merge), `promote-and-deploy.yml` (preview and production). Verify claims against `.github/workflows/` and `scripts/ci/`. Logic lives in `scripts/ci/`, not in YAML.
 - The per-`(env, node)` branch head is current deploy ownership. Workflow concurrency serializes mutation. It is not a reviewer reservation. Re-check `/version.buildSha` at validation start.
 - Do not run `deploy-infra.sh` from an app flight. Infra levers provision substrate.
-- `type: infra` images (for example litellm) are built in CI, content-hash tagged and deployed by Compose. A new one is a one-file catalog drop. See [create-service.md](../../../docs/guides/create-service.md).
+- `type: infra` images (for example litellm) are built in CI, content-hash tagged and deployed by Compose. A new one is a one-file catalog drop. See [create-service.md](https://cognidao.org/knowledge/create-operator-service).
 - Provisioning artifacts and env root credentials are not in git. The durable copies are laptop-local under `.local/provision-creds/<env>/`. Custody and recovery: the [`provision-env`](../provision-env/SKILL.md) skill. Never quote a VM IP from a skill. Read it from that README or the kubeconfig `server:`.
 - `scripts/setup/provision-env-vm.sh` is the current env provisioner. Shared state (Postgres, Doltgres, Redis, Temporal, LiteLLM, OpenBao, scheduler-worker) runs on the Cherry VM and is not going away.
 

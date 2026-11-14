@@ -10,7 +10,7 @@
  * Invariants: Read-only relative to the repo — never writes files, never mutates the
  *   captured storageState.
  * Side-effects: IO (launches headless Chromium, makes one HTTPS request to the target).
- * Links: docs/guides/candidate-auth-bootstrap.md, scripts/dev/capture-authed-state.mjs
+ * Links: https://cognidao.org/knowledge/candidate-auth-bootstrap, scripts/dev/capture-authed-state.mjs
  * @internal
  */
 

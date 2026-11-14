@@ -103,7 +103,7 @@ jobs:
           # and reading it from local git is instant and not subject to the
           # commits/{sha}/pulls API's post-merge indexing lag — which silently
           # skipped every auto-flight in the 2026-04-18 incident window (see
-          # work/items/bug.0320.flight-preview-pr-lookup-race.md).
+          # bug.0320).
           SUBJECT=$(git log -1 --format=%s "$HEAD_SHA" 2>/dev/null || echo "")
           PR_NUMBER=$(printf '%s' "$SUBJECT" | sed -nE 's/.*\(#([0-9]+)\)[[:space:]]*$/\1/p')
 

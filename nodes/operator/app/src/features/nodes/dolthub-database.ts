@@ -6,7 +6,7 @@
  * Purpose: Create Cogni-owned DoltHub databases for node knowledge mirrors.
  * Scope: Thin REST client around DoltHub's database create endpoint.
  * Side-effects: network IO when ensureDatabase is called.
- * Links: docs/runbooks/dolthub-remote-bootstrap.md
+ * Links: https://cognidao.org/knowledge/dolthub-mirror-bootstrap
  * @internal
  */
 

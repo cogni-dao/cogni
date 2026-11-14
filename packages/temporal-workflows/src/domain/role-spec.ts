@@ -9,7 +9,7 @@
  *   - THREE_REGISTRIES: RoleSpec is operational config, NOT graph config (that's CatalogEntry)
  *   - Code-first constants for crawl. Walk phase may extract to config files.
  * Side-effects: none
- * Links: docs/spec/agent-roles.md
+ * Links: https://cognidao.org/knowledge/temporal-workflow-rules
  * @public
  */
 

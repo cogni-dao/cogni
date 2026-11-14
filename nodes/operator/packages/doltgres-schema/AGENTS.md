@@ -20,7 +20,6 @@ This package owns **operator-specific** table definitions only. None exist today
 - [Knowledge Data Plane Spec](https://node-template.cognidao.org/knowledge/knowledge-data-plane) — Doltgres-side architecture
 - [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules) — workspace package shape
 - [@cogni/poly-doltgres-schema](../../../poly/packages/doltgres-schema/AGENTS.md) — sibling package; reference structure
-- [task.0423](../../../../work/items/task.0423.doltgres-work-items-source-of-truth.md) — design + invariants
 
 ## Boundaries
 

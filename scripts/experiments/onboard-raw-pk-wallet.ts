@@ -7,7 +7,7 @@
  * Scope: Signs with viem `privateKeyToAccount`; idempotent (skips MaxUint256 allowances and already-set CTF approvals). Prints a paste-ready env block. Does not place orders or move USDC.e.
  * Invariants: Polygon chainId 137; EOA path only.
  * Side-effects: IO (reads .env.test; Polygon RPC reads + up to 5 approve txs ~0.04 POL gas; one signed HTTPS request to Polymarket CLOB auth endpoint).
- * Links: docs/guides/polymarket-account-setup.md (Privy variant)
+ * Links: https://poly.cognidao.org/knowledge/poly-wallet-trading-lessons (Privy variant)
  * @internal — experiment code, not shipped to production
  */
 

@@ -8,7 +8,7 @@
  * Scope: Reads legacy markdown work item files only; does not write files.
  * Invariants: NEXT_ID_SCANS_ITEMS — ID allocation does not depend on a generated index.
  * Side-effects: IO (filesystem reads)
- * Links: [Work README](../work/README.md)
+ * Links: [Work README](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/README.md)
  * @public
  */
 

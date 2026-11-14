@@ -7,7 +7,7 @@
  * Scope: Pure classification; does not touch a cron or Temporal.
  * Invariants: METRIC_ROUTES_TO_GOAL_LOOP, DISPATCH_IS_TOTAL
  * Side-effects: none
- * Links: src/domain/resolver-dispatch.ts, docs/design/knowledge-goal-loop.md
+ * Links: src/domain/resolver-dispatch.ts, https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design
  * @internal
  */
 

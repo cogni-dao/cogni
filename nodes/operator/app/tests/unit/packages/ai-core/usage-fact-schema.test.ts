@@ -9,7 +9,7 @@
  *   - USAGE_FACT_VALIDATED: Strict schema enforces usageUnitId for inproc/sandbox
  *   - GRAPHID_REQUIRED: graphId must be namespaced (providerId:graphName)
  * Side-effects: none
- * Links: packages/ai-core/src/usage/usage.ts, work/projects/proj.graph-execution.md
+ * Links: packages/ai-core/src/usage/usage.ts, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.graph-execution.md
  * @internal
  */
 

@@ -86,4 +86,3 @@ Revisit if drift becomes a recurring issue or if change frequency rises.
 - [`node-ci-sovereignty`](https://node-template.cognidao.org/knowledge/node-ci-sovereignty) — node sovereignty + merge-gate composition; this directory is referenced from the `## Repo Setup Fixture` section.
 - [`merge-queue-required-checks`](https://cognidao.org/knowledge/merge-queue-required-checks) — required-checks policy + the rejected "Rulesets for event-specific required-checks lists" path + empirical findings (the queue itself now uses a minimal `merge_queue` ruleset; the rejection was only about the checks list).
 - [`work-item-status-machine`](https://node-template.cognidao.org/knowledge/work-item-status-machine) — where merge queue fits in the contributor flow.
-- [work/items/task.0391.enable-merge-queue.md](../../work/items/task.0391.enable-merge-queue.md) — original adoption rationale.

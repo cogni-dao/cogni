@@ -977,7 +977,7 @@ export type OperatorWalletSpec = z.infer<typeof operatorWalletSpecSchema>;
  * Privy wallet funds this one pinned address via a single constrained transfer
  * (OperatorWalletPort.withdrawToSteward); a human then completes each vendor
  * checkout in USDC. Deliberately node-generic and NOT named "operator" to avoid
- * overloading the operator node / operator wallet. See docs/design/node-steward-wallet.md.
+ * overloading the operator node / operator wallet. See https://node-template.cognidao.org/knowledge/steward-wallet-design.
  */
 export const stewardWalletSpecSchema = z.object({
   /** Checksummed EVM address of the human-custodied steward wallet (USDC on Base). */

@@ -63,4 +63,4 @@ Evidence-backed. **CICD docs are out of scope and on HOLD until the pipeline is 
 
 **Narrower/adjacent:** `agent-discovery`, `agent-registry`, `ai-setup`, `sandboxed-agents`, `node-baas-architecture`.
 **Speculative (see DRY #2):** `claude-sdk-adapter`, `n8n-adapter`, `multi-provider-llm`, `completions-api`.
-**Authoring tier:** [`agent-development.md`](../../../docs/guides/agent-development.md) 🟡, [`agent-design.md`](../../../docs/guides/agent-design.md) → knowledge, [`tools-authoring.md`](../../../docs/guides/tools-authoring.md).
+**Authoring tier:** [`agent-development.md`](https://node-template.cognidao.org/knowledge/agent-development) 🟡, [`agent-design.md`](https://node-template.cognidao.org/knowledge/design-an-agent) → knowledge, [`tools-authoring.md`](https://node-template.cognidao.org/knowledge/add-an-ai-tool).

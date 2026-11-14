@@ -12,7 +12,7 @@
  *   (story.5148: catch-all + canary imports, 90s default proxy timeout, stdout access log);
  *   non-primary nodes stay in `sort`-order; primary (operator) block is never moved.
  * Side-effects: none — pure string transform, no IO, no env.
- * Links: scripts/ci/render-caddyfile.sh, docs/guides/node-formation-guide.md, task.5092
+ * Links: scripts/ci/render-caddyfile.sh, https://cognidao.org/knowledge/run-node-formation-wizard, task.5092
  * @public
  */
 

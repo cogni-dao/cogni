@@ -20,7 +20,7 @@
  *     verifier-independent `metric:judge` reader server-side.
  *   - 4xx → non-retryable ApplicationFailure; 5xx/network → bubble for Temporal retry.
  * Side-effects: IO (HTTP to operator goal-loop plane)
- * Links: docs/design/knowledge-goal-loop.md § Pareto MVP, packages/temporal-workflows/src/activity-types.ts
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design § Pareto MVP, packages/temporal-workflows/src/activity-types.ts
  * @internal
  */
 

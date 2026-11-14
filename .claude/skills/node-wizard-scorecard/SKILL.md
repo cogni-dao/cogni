@@ -46,18 +46,18 @@ scorecard.
 Return this matrix only after the child customization PR exists, or when
 reporting a terminal blocker that prevents opening one:
 
-| Gate                   | Evidence                                                                 | Status         | Next action                                                                               |
-| ---------------------- | ------------------------------------------------------------------------ | -------------- | ----------------------------------------------------------------------------------------- |
-| Launch pack facts      | node repo URL, parent PR, candidate URL                                  | `pass/blocked` | missing fact to recover                                                                   |
-| Branch protection      | node repo `main` requires the standard CI checks (and a PR) before merge | `pass/blocked` | enable branch protection on the spawned node repo — required checks = the standard CI set |
-| Child customization PR | PR URL in node repo                                                      | `pass/blocked` | create PR from node repo branch                                                           |
-| Child CI               | required checks green                                                    | `pass/blocked` | fix child PR                                                                              |
-| Child main image       | `ghcr.io/<owner>/<repo>:sha-<child-main-sha>` exists after merge         | `pass/blocked` | report missing image/tag                                                                  |
-| Parent birth PR        | merged or still open                                                     | `pass/blocked` | wait/ask human to merge parent PR                                                         |
-| Parent pin             | parent gitlink pins the image-producing child main SHA                   | `pass/blocked` | ask operator to update/publish parent pin                                                 |
-| Candidate flight       | requested through operator API                                           | `pass/blocked` | call operator flight API only when eligible                                               |
-| Candidate verification | candidate `/version` matches launched child SHA                          | `pass/blocked` | run agent-first validation                                                                |
-| Agent-first validation | candidate API exercised using `docs/guides/agent-api-validation.md`      | `pass/blocked` | present human scorecard                                                                   |
+| Gate                   | Evidence                                                                            | Status         | Next action                                                                               |
+| ---------------------- | ----------------------------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------- |
+| Launch pack facts      | node repo URL, parent PR, candidate URL                                             | `pass/blocked` | missing fact to recover                                                                   |
+| Branch protection      | node repo `main` requires the standard CI checks (and a PR) before merge            | `pass/blocked` | enable branch protection on the spawned node repo — required checks = the standard CI set |
+| Child customization PR | PR URL in node repo                                                                 | `pass/blocked` | create PR from node repo branch                                                           |
+| Child CI               | required checks green                                                               | `pass/blocked` | fix child PR                                                                              |
+| Child main image       | `ghcr.io/<owner>/<repo>:sha-<child-main-sha>` exists after merge                    | `pass/blocked` | report missing image/tag                                                                  |
+| Parent birth PR        | merged or still open                                                                | `pass/blocked` | wait/ask human to merge parent PR                                                         |
+| Parent pin             | parent gitlink pins the image-producing child main SHA                              | `pass/blocked` | ask operator to update/publish parent pin                                                 |
+| Candidate flight       | requested through operator API                                                      | `pass/blocked` | call operator flight API only when eligible                                               |
+| Candidate verification | candidate `/version` matches launched child SHA                                     | `pass/blocked` | run agent-first validation                                                                |
+| Agent-first validation | candidate API exercised using `https://cognidao.org/knowledge/prove-node-agent-api` | `pass/blocked` | present human scorecard                                                                   |
 
 ## Rules
 
@@ -105,7 +105,7 @@ links, child PR/check status, image tag and digest, parent pin status, flight
 status, candidate `/version`, and a short explanation of the child-build ->
 operator-pin -> deploy verb (`POST /api/v1/deploy/workloads`, env=candidate-a) CI/CD path. Use
 `https://node-template.cognidao.org/knowledge/node-ci-sovereignty` for the CI/CD facts and
-`docs/guides/agent-api-validation.md` for the post-flight API exercise.
+`https://cognidao.org/knowledge/prove-node-agent-api` for the post-flight API exercise.
 
 ## Fresh Boot Health
 

@@ -4,13 +4,13 @@
 /**
  * Module: `@shared/analytics/events`
  * Purpose: Product analytics event name registry — single source of truth for PostHog event names.
- * Scope: Defines namespaced event constants. Does not define payload schemas (see events.v0.md).
+ * Scope: Defines namespaced event constants. Does not define payload schemas (see https://node-template.cognidao.org/knowledge/analytics-event-payloads).
  * Invariants:
  *   - All event names use "cogni." namespace prefix
  *   - Names are dot-separated, lowercase, snake_case segments
  *   - Max 20 events for MVP (keep count tight)
  * Side-effects: none
- * Links: docs/analytics/events.v0.md
+ * Links: https://node-template.cognidao.org/knowledge/analytics-event-payloads
  * @public
  */
 

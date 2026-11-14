@@ -10,13 +10,13 @@
  * Scope: Pure encode/decode + the `Knowledge` row → `Goal` projection; does not do I/O.
  * Invariants:
  *   - GOAL_BUDGET_VIA_TAGS — target + budget live in `tags`, never new columns
- *     (docs/design/knowledge-goal-loop.md § Goal representation). LIKE-scannable,
+ *     (https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design § Goal representation). LIKE-scannable,
  *     never touches Doltgres's broken JSONB operators.
  *   - CODEC_ROUND_TRIPS — `decodeGoalTags(encodeGoalTags(t, b))` === `{t, b}`.
  *   - GOAL_REQUIRES_METRIC_STRATEGY — `goalFromRow` only projects a row whose
  *     `resolution_strategy` is `metric:<kpi-id>` (else returns null).
  * Side-effects: none
- * Links: docs/design/knowledge-goal-loop.md, https://node-template.cognidao.org/knowledge/knowledge-recall-path
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

@@ -5,7 +5,7 @@
  * Module: `@app/api/v1/agent/runs`
  * Purpose: Agent-first URL surface for listing graph runs.
  * Scope: Preserves the public `/api/v1/agent/runs` URL documented in
- *   docs/guides/agent-api-validation.md while delegating the handler logic
+ *   https://cognidao.org/knowledge/prove-node-agent-api while delegating the handler logic
  *   to the canonical `/api/v1/ai/runs` route. There is no behavioral
  *   difference — since PR 845 made every `getSessionUser` import
  *   bearer-capable (via @/app/_lib/auth/session → resolveRequestIdentity),

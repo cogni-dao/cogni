@@ -7,7 +7,7 @@
  * Scope: Presentational. Does not import from `@assistant-ui/react`, does not own runtime state, does not fetch data — stays usable from default fallback and per-tool renderers in any node.
  * Invariants: ZERO_ASSISTANT_UI_COUPLING — no `@assistant-ui/react` imports here.
  * Side-effects: none
- * Links: docs/guides/assistant-ui-tool-rendering.md
+ * Links: https://node-template.cognidao.org/knowledge/custom-tool-call-renderer
  * @public
  */
 

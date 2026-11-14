@@ -27,7 +27,7 @@ installation level down to the tool schema and CI scripts.
 
 **One App per environment** — each App has exactly one webhook URL, so prod/preview/candidate-a
 cannot share one. Create + wire per the canonical guide:
-[`docs/guides/github-app-webhook-setup.md`](../../../docs/guides/github-app-webhook-setup.md).
+[`https://cognidao.org/knowledge/github-app-per-environment`](https://cognidao.org/knowledge/github-app-per-environment).
 
 | App                        | ID      | Install ID | env              | webhooks → / installed on                                              |
 | -------------------------- | ------- | ---------- | ---------------- | ---------------------------------------------------------------------- |
@@ -190,7 +190,7 @@ curl -s -X POST $BASE/api/v1/chat/completions \
   -d '{"model":"gpt-4o-mini","graph_name":"pr-manager","messages":[{"role":"user","content":"..."}]}'
 ```
 
-Playbook lives at `docs/guides/pr-management-playbook.md` — the pr-manager reads it on every
+Playbook lives at `https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/guides/pr-management-playbook.md` — the pr-manager reads it on every
 run. Flight-specific debugging guidance (permission errors, slot states, known patterns) belongs
 there, not in agent-api-validation.md (that doc is a per-feature validation checklist).
 

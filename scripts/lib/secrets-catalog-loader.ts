@@ -6,7 +6,7 @@
  * Scope: Pure data loading and validation only. Does NOT shell out to gh, does NOT write any GitHub or filesystem state beyond reading catalog YAML files via readFileSync.
  * Invariants: every entry has a tier; per-node `service:` matches parent dir; names unique across catalogs.
  * Side-effects: IO (readFileSync of catalog YAML; one execSync to resolve git repo root)
- * Links: docs/design/secrets-catalog-per-node.md, https://node-template.cognidao.org/knowledge/secrets-routing-tiers
+ * Links: https://node-template.cognidao.org/knowledge/secrets-routing-tiers
  */
 
 import { execSync } from "node:child_process";

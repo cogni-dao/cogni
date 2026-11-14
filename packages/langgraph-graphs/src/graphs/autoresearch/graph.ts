@@ -9,7 +9,7 @@
  *   - Pure factory function — no side effects, no env reads
  *   - TYPE_TRANSPARENT_RETURN: No explicit return type annotation to preserve CompiledStateGraph for CLI schema extraction
  * Side-effects: none
- * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants, work/projects/proj.ai-evals-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.ai-evals-pipeline.md
  * @public
  */
 

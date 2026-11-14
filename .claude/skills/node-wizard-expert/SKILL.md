@@ -48,9 +48,9 @@ k3s. Treat that as the critical implementation gap, not the intended lifecycle.
 ## Ground Truth
 
 - `.claude/skills/node-wizard-scorecard/SKILL.md`
-- `docs/spec/node-baas-architecture.md` — node-as-a-service architecture + substrate model (read for the substrate-gaps work)
-- `docs/design/node-wizard-secret-setting.md`
-- `docs/guides/node-formation-guide.md`
+- https://cognidao.org/knowledge/node-baas-substrate-model — node-as-a-service architecture + substrate model (read for the substrate-gaps work)
+- `https://cognidao.org/knowledge/node-secret-materialize-phases`
+- `https://cognidao.org/knowledge/run-node-formation-wizard`
 - `https://node-template.cognidao.org/knowledge/node-ci-sovereignty`
 - `scripts/ci/reconcile-edge-caddy.remote.sh` · `scripts/ci/reconcile-node-substrate.sh` — the substrate lane (edge + per-node DB/secret reconcile)
 - `nodes/operator/app/src/features/nodes/launch-pack.ts`
@@ -77,7 +77,7 @@ pass without privileged manual bridge work. A child commit without a child
 
 ## Substrate E2E is NOT yet hands-off — gaps + heal recipes
 
-The first real **production** node launch (beacon, 2026-06-16) proved the **control plane** (formation, flight dispatch, RBAC) works, but the **substrate plane** (DB + edge + secrets + preview lease) has gaps that each needed manual intervention — _nothing self-healed_. Treat these as known failure modes until the linked work lands. Architecture spec: [`docs/spec/node-baas-architecture.md`](../../../docs/spec/node-baas-architecture.md) (§ Cognition Substrate + the substrate lane).
+The first real **production** node launch (beacon, 2026-06-16) proved the **control plane** (formation, flight dispatch, RBAC) works, but the **substrate plane** (DB + edge + secrets + preview lease) has gaps that each needed manual intervention — _nothing self-healed_. Treat these as known failure modes until the linked work lands. Architecture spec: [node BaaS substrate model](https://cognidao.org/knowledge/node-baas-substrate-model).
 
 | Gap                               | Symptom                                                                                            | Heal recipe (manual, until fixed)                                                                                                                                                            | Fix                                                                                  |
 | --------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |

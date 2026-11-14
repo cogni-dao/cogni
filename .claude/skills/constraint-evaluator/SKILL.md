@@ -2,8 +2,9 @@
 name: constraint-evaluator
 description: >
   Evaluate the project's biggest constraint to achieving its mission using Theory of
-  Constraints. Performs independent research, challenges assumptions, and updates the
-  living constraint dashboard (work/charters/CONSTRAINTS.md) in-place. Use this skill
+  Constraints. Performs independent research, challenges assumptions, and records a
+  dated finding against the constraint taxonomy
+  (https://cognidao.org/knowledge/constraint-toc-taxonomy) through a hub contribution. Use this skill
   whenever the user asks about constraints, bottlenecks, blockers, what to work on
   next, strategic priorities, or "what's holding us back." Also use it when the user
   wants a strategic health check, wants to understand where the project stands, or
@@ -15,13 +16,13 @@ description: >
 
 ## Your role
 
-You are a strategic analyst, not a charter summarizer. The charters describe what the
+You are a strategic analyst, not a summarizer of internal docs. The hub atoms describe what the
 team _thinks_ is going on. Your job is to figure out what's _actually_ going on — by
 combining internal project state with independent external research, then making your
 own critical judgment about what the real binding constraint is.
 
-If the charters say "our biggest problem is X" but your research and analysis says
-it's actually Y, **say Y and explain why the charters are wrong.** The value of this
+If the hub atoms say "our biggest problem is X" but your research and analysis says
+it's actually Y, **say Y and explain why the hub atoms are wrong.** The value of this
 skill is independent thinking, not echo-chambering internal docs.
 
 ## Theory of Constraints (TOC) — the mental model
@@ -41,18 +42,20 @@ Goldratt's five focusing steps:
 
 ### Step 1: Understand the goal and the project state
 
-Start with the goal. Read **`ROADMAP.md`** first — it defines the mission, the current
-phase, and the phase checklist. The constraint you're looking for is the one thing most
-blocking progress on the **current unchecked phase**. Not the mission in general — the
+Start with the goal. Read the hub atom **`https://node-template.cognidao.org/knowledge/mission-loop-roadmap`** first — it defines the mission and the current
+frontier. The constraint you're looking for is the one thing most
+blocking progress on the **current frontier**. Not the mission in general — the
 specific next milestone.
 
 Then read in parallel:
 
-- `work/charters/CONSTRAINTS.md` — current scores, evaluation history, taxonomy
-- `work/charters/CHARTER.md` — founding charter (strategic context, not the goal)
-- All charter files in `work/charters/` — SUSTAINABILITY, COMMUNITY, ENGINEERING, GOVERN
+- `https://cognidao.org/knowledge/constraint-toc-taxonomy` — severity scale, taxonomy and method
+- `https://cognidao.org/knowledge/constraint-eval-2026-04` — the dated April 2026 evaluation (previous scores and binding constraint)
+- `https://cognidao.org/knowledge/chr-founding-principles` — founding principles (strategic context, not the goal)
+- `https://cognidao.org/knowledge/eng-agent-workflow-stages` — engineering stages and workflow health
+- `https://node-template.cognidao.org/knowledge/dao-goals-design` — current goals
 
-Note what the charters claim the constraints are. But treat these as **hypotheses to
+Note what the hub atoms claim the constraints are. But treat these as **hypotheses to
 test**, not facts.
 
 ### Step 2: Research the real world (external)
@@ -65,17 +68,17 @@ Now go research. Use web search to test whether the internal picture is accurate
 
 **What to search for is YOUR call.** You've just read the project — you know what
 questions need answering. Maybe you need to understand why similar projects failed.
-Maybe a constraint scored low but something in the charters smells off and you want to
+Maybe a constraint scored low but something in the hub atoms smells off and you want to
 check if it's actually a bigger deal than the team thinks. Maybe there's a whole
 category of risk the taxonomy doesn't cover. Maybe the landscape shifted since the
 last evaluation and the old scores are stale.
 
 The point is: you read the project, you form questions, you go find answers. Don't
-just confirm what the charters already say — that's worthless. Look for what the
+just confirm what the hub atoms already say — that's worthless. Look for what the
 project might be wrong about, blind to, or underweighting.
 
 Do real research. Multiple searches. Read the results. Form your own opinion. If your
-research contradicts the charters, trust your research and explain why. If you find a
+research contradicts the hub atoms, trust your research and explain why. If you find a
 constraint category the taxonomy is missing, propose it with the source URL.
 
 ### Step 3: Score every constraint
@@ -92,12 +95,12 @@ For each of the 19 constraints (plus any you're proposing), assign severity 0-5:
 | 5     | Existential / total blocker |
 
 **Your scores must be YOUR judgment** informed by both internal evidence AND external
-research. If the charters say something is fine but your research says otherwise,
+research. If the hub atoms say something is fine but your research says otherwise,
 trust your research and explain why.
 
 For each score, write evidence that combines:
 
-- Internal: what the charters/codebase show
+- Internal: what the hub atoms and codebase show
 - External: what your research found about similar projects/situations
 
 For each constraint, also identify the most relevant **focus work item** on the operator hub
@@ -117,7 +120,7 @@ Defend it. If you disagree with the previous evaluation's choice, say so and say
 
 ### Step 5: Challenge the previous evaluation
 
-Read the evaluation history in the dashboard. For each previous finding:
+Read the previous evaluation findings in the hub. For each previous finding:
 
 - Did the recommended focus actually get worked on? Check the operator hub work items and git log.
 - Did the constraint scores move? If not, why not?
@@ -127,23 +130,23 @@ Read the evaluation history in the dashboard. For each previous finding:
 If the previous evaluation was wrong or stale, call it out explicitly. Continuity
 doesn't mean agreeing with the past — it means tracking whether past analysis held up.
 
-### Step 6: Update the dashboard
+### Step 6: Record the evaluation in the hub
 
-Edit `work/charters/CONSTRAINTS.md` in-place:
+Do not edit a file. Record the result as a hub contribution, following
+[the knowledge contribution flow](https://node-template.cognidao.org/knowledge/knowledge-contribution-flow):
 
-1. **Current Scores table** — re-sort all rows by severity descending. Update Sev,
-   Focus Project, and Evidence columns. Keep Rank sequential.
+1. **Dated finding atom** — insert one `finding` atom for this evaluation (for example
+   `constraint-eval-<YYYY-MM>`) holding the date, the re-sorted scores (severity, focus
+   work item, evidence), the binding constraint with its 2-3 sentence explanation and
+   "work on now" (1-2 work items), what changed since the previous evaluation, and the
+   external research sources. Cite `constraint-toc-taxonomy` and the previous evaluation
+   atom.
 
-2. **Binding Constraint section** — update ID, name, severity, explanation (2-3
-   sentences incorporating your research), "Work on now" (1-2 projects), date.
+2. **Taxonomy changes** — if your research surfaced missing constraint categories, propose
+   them in the same contribution as an update to `constraint-toc-taxonomy`, with the source
+   URL. Refetch the live atom first and resend every field.
 
-3. **Evaluation History** — append one row: date, binding constraint, severity,
-   runner-up, what changed. Include any external research findings that shifted scores.
-
-4. **Proposed Additions** — if your research surfaced missing constraint categories,
-   add them here with the source URL.
-
-5. **Frontmatter** — update `updated` and `last_evaluated` dates.
+3. **Never create or edit a Markdown file** for the evaluation.
 
 ### Step 7: Summarize to the user
 
@@ -157,7 +160,7 @@ Print:
 
 ## Principles
 
-- **Think independently.** You are not a charter summarizer. The charters are inputs,
+- **Think independently.** You are not a summarizer of internal docs. The hub atoms are inputs,
   not answers. Your research and judgment are what make this skill valuable.
 
 - **Research is mandatory.** Every evaluation must include web searches for current

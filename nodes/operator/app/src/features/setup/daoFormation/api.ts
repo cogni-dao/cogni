@@ -7,7 +7,7 @@
  * Scope: HTTP requests to /api/setup/verify; does not perform local validation or RPC reads.
  * Invariants: Returns typed Result; never throws.
  * Side-effects: IO (HTTP fetch)
- * Links: https://cognidao.org/knowledge/node-formation-contract, work/projects/proj.chain-deployment-refactor.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.chain-deployment-refactor.md
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Interface definition only. Cloudflare implements this; Namecheap does not.
  * Invariants: Implementations must handle concurrent access safely.
  * Side-effects: none
- * Links: packages/dns-ops/docs/cloudflare-dns-setup.md
+ * Links: https://cognidao.org/knowledge/node-dns-operations
  * @public
  */
 

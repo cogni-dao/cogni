@@ -6,7 +6,7 @@
  * Purpose: The "TRIGGER" rung of the manual provider top-up flow — an approver-gated
  *   POST that funds the human-custodied steward wallet from the operator wallet via a
  *   single pinned USDC transfer, so a human can then settle vendor invoices (OpenRouter,
- *   Cherry) through each vendor's hosted crypto checkout. See docs/design/node-steward-wallet.md.
+ *   Cherry) through each vendor's hosted crypto checkout. See https://node-template.cognidao.org/knowledge/steward-wallet-design.
  * Scope: Session + steward-self-authorized. Delegates to OperatorWalletPort.withdrawToSteward
  *   (destination is repo-spec-pinned, caller picks amount only). Does NOT complete the vendor
  *   checkout (human step) or read provider balances (separate surface).
@@ -18,7 +18,7 @@
  *     transfer the route answers 200 `{ txHash, receiptStatus }` (success, reverted, or pending) or 502
  *     "result unknown", so a client never re-enables a retry after a real broadcast.
  * Side-effects: IO (on-chain USDC transfer via Privy HSM; structured log event).
- * Links: docs/design/node-steward-wallet.md, OperatorWalletPort.withdrawToSteward
+ * Links: https://node-template.cognidao.org/knowledge/steward-wallet-design, OperatorWalletPort.withdrawToSteward
  * @public
  */
 

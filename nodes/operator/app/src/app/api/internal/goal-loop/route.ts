@@ -19,7 +19,7 @@
  *   - ACTIVITY_IDEMPOTENCY: `step` keys the atom on `${hypothesisId}/${iteration}`;
  *     `outcome` keys on `${hypothesisId}` — retries are no-ops.
  * Side-effects: IO (HTTP request/response, Doltgres read/write)
- * Links: docs/design/knowledge-goal-loop.md § Pareto MVP
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design § Pareto MVP
  * @internal
  */
 

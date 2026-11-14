@@ -7,7 +7,7 @@
  * Scope: Walks through GitHub-managed secrets (preview + production), auto-generates agent-rotatable values, prompts for human-provided ones with dashboard URLs; does not modify code or deploy.
  * Invariants: Secrets set per-env only. Agent secrets use openssl rand. Platform-service secrets remain solely owned by secret-materialize.
  * Side-effects: IO (sets GitHub Actions secrets via gh secret set)
- * Links: docs/runbooks/SECRET_ROTATION.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/runbooks/SECRET_ROTATION.md
  *
  * Usage:
  *   pnpm setup:secrets                        # walk through missing secrets (all envs)
@@ -32,7 +32,7 @@ import {
 } from "./lib/secrets-catalog-loader";
 
 // Types are imported from the loader. See https://node-template.cognidao.org/knowledge/secrets-routing-tiers
-// for tier definitions and docs/design/secrets-catalog-per-node.md for the
+// for tier definitions and https://node-template.cognidao.org/knowledge/secrets-routing-tiers for the
 // rationale on why catalog data lives in YAML rather than this file.
 
 // ── Catalog loader ──────────────────────────────────────────────────────────
@@ -42,7 +42,7 @@ import {
 // validates via Zod, asserts uniqueness, and emits the Secret[] + routing
 // shapes the rest of this file consumes. See:
 //   - https://node-template.cognidao.org/knowledge/secrets-routing-tiers (tier definitions + rules)
-//   - docs/design/secrets-catalog-per-node.md (file-layout rationale)
+//   - https://node-template.cognidao.org/knowledge/secrets-routing-tiers (file-layout rationale)
 //
 // REPO constant below is hardcoded to "Cogni-DAO/cogni" — this script today
 // targets the cogni-template org for secret writes regardless of which fork

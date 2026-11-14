@@ -56,7 +56,7 @@
  *   - OPERATOR_SELF_HOSTS_THE_VERB — the operator control plane cannot remove its own deployment from
  *     an env; fail closed (422).
  * Side-effects: none — pure string transforms.
- * Links: src/adapters/server/vcs/github-repo-write.ts (openNodeEnvPr), docs/design/operator-fleet-safety.md, story.5020
+ * Links: src/adapters/server/vcs/github-repo-write.ts (openNodeEnvPr), https://cognidao.org/knowledge/fleet-capacity-design, story.5020
  * @public
  */
 

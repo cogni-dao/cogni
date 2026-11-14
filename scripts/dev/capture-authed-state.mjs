@@ -9,7 +9,7 @@
  * Invariants: Reads only; never mutates the source Chrome profile. Write target is
  *   always under `.local-auth/` which is gitignored.
  * Side-effects: IO (connects to Chrome over CDP, writes one JSON file under .local-auth/).
- * Links: docs/guides/candidate-auth-bootstrap.md
+ * Links: https://cognidao.org/knowledge/candidate-auth-bootstrap
  * @internal
  */
 

@@ -7,7 +7,7 @@
  * Scope: HTTP parsing/auth/logging only. Delegates coordination to facade.
  * Invariants: AUTH_REQUIRED, CONTRACTS_ARE_TRUTH, DOLT_IS_SOURCE_OF_TRUTH.
  * Side-effects: IO (HTTP response, DB through facade).
- * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
+ * Links: https://cognidao.org/knowledge/validation-hold-design, task.5007
  * @public
  */
 

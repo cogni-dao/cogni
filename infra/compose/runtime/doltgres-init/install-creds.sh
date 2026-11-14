@@ -18,7 +18,7 @@ set -e
 #   - Never logs the JWK contents.
 # Side-effects: writes /root/.dolt/creds/${KEYID}.jwk and merges user.creds
 #   into /root/.dolt/config_global.json (preserves server_uuid).
-# Links: docs/runbooks/dolthub-remote-bootstrap.md, task.5069
+# Links: https://cognidao.org/knowledge/dolthub-mirror-bootstrap, task.5069
 
 if [ -n "${DOLT_CREDS_JWK:-}" ] && [ -n "${DOLT_CREDS_KEYID:-}" ]; then
   mkdir -p /root/.dolt/creds

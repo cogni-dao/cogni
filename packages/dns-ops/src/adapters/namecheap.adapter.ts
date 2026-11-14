@@ -7,7 +7,7 @@
  * Scope: HTTP calls to Namecheap API. XML parsing via fast-xml-parser. Does NOT access process.env.
  * Invariants: PURE_LIBRARY — credentials via constructor, no process.env access.
  * Side-effects: IO (HTTP to api.namecheap.com)
- * Links: packages/dns-ops/docs/cloudflare-dns-setup.md
+ * Links: https://cognidao.org/knowledge/node-dns-operations
  * @public
  */
 

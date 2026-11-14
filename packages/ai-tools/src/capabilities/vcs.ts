@@ -10,7 +10,7 @@
  *   - VCS_WRITE_CAPABLE: Supports both read and write operations (merge, branch creation)
  *   - ADAPTER_SWAPPABLE: Interface supports Octokit (v0) or gh CLI (future sandbox agents)
  * Side-effects: none (interface only)
- * Links: task.0242, task.0297, docs/guides/github-app-webhook-setup.md
+ * Links: task.0242, task.0297, https://cognidao.org/knowledge/github-app-per-environment
  * @public
  */
 

@@ -14,7 +14,7 @@
  *   ANNEX_NOT_CORE (story.0033): a metric row's `serves` and `band` sit beside the hashed spec;
  *   `validateMetricSpec` strips them before `registry.validate` (malformed 400, band unit mismatch 422).
  * Side-effects: IO (HTTP response, Doltgres read/write via container service)
- * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-branch-design, packages/knowledge-store
  * @internal
  */
 

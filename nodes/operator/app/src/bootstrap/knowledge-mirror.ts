@@ -21,7 +21,7 @@
  *     non-prod env into the prod DoltHub org (infra/secrets-catalog.yaml:
  *     "Do not point test/preview at cogni-dao").
  * Side-effects: none
- * Links: docs/runbooks/dolthub-remote-bootstrap.md,
+ * Links: https://cognidao.org/knowledge/dolthub-mirror-bootstrap
  *   @shared/node-app-scaffold/knowledge-remote (buildNodeKnowledgeRemote)
  * @internal
  */

@@ -19,7 +19,7 @@
  *     https://cognidao.org/knowledge/secrets-management Invariant 1 (PATH_CONVENTION_PER_SERVICE_PER_ENV) the
  *     blast-radius boundary is `<service>`; the env prefix is a lane label inside one
  *     vault, so widening the lane set does not widen that boundary.
- * Links: https://cognidao.org/knowledge/secrets-management, docs/design/node-self-serve-secrets.md,
+ * Links: https://cognidao.org/knowledge/secrets-management, https://cognidao.org/knowledge/node-secret-write-design
  *   scripts/setup/provision-env-vm.sh (§5b.4d), scripts/setup/reconcile-env-substrate.sh
  * @public
  */

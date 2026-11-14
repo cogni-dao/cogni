@@ -48,6 +48,6 @@ Every write is `(node_id, env)`-scoped, resolves the node via the registry, gate
 
 ## Canon (verify against these; don't restate)
 
-- [`node-baas-architecture.md`](../../../docs/spec/node-baas-architecture.md) · [`cicd-platform-boundary.md`](https://cognidao.org/knowledge/operator-plane-contract) (`OPERATOR_PLANE_CONTRACT`)
+- [`node-baas-substrate-model`](https://cognidao.org/knowledge/node-baas-substrate-model) · [`cicd-platform-boundary.md`](https://cognidao.org/knowledge/operator-plane-contract) (`OPERATOR_PLANE_CONTRACT`)
 - Doers: [`/promote`](../promote/SKILL.md) · [`node-wizard-expert`](../node-wizard-expert/SKILL.md) · [`deploy-node`](../deploy-node/SKILL.md) · RBAC: [`rbac-expert`](../rbac-expert/SKILL.md)
 - Also mirrored in the operator Dolt hub as `operator-node-catalog`.

@@ -26,7 +26,7 @@
  *   - SYSTEM_PRINCIPAL: writes are stamped `source_type='derived'`,
  *     `source_ref='goal-loop:<hypothesisId>'`.
  * Side-effects: IO (Doltgres read/write via container ports)
- * Links: docs/design/knowledge-goal-loop.md § Pareto MVP, packages/knowledge-store
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design § Pareto MVP, packages/knowledge-store
  * @public
  */
 

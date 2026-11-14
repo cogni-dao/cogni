@@ -8,7 +8,7 @@
  *   in Doltgres and is referenced by id, never FK'd across databases.
  * Invariants: DOLT_IS_SOURCE_OF_TRUTH, OPERATOR_COORDINATION_LOCAL.
  * Side-effects: none
- * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
+ * Links: https://cognidao.org/knowledge/validation-hold-design, task.5007
  * @public
  */
 

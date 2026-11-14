@@ -6,7 +6,7 @@
  * Purpose: Derive Cogni-owned DoltHub mirror identity for a newly birthed node.
  * Scope: Pure naming only. Credentials and repo creation stay out of repo-spec.
  * Side-effects: none
- * Links: docs/runbooks/dolthub-remote-bootstrap.md, packages/repo-spec/src/schema.ts
+ * Links: https://cognidao.org/knowledge/dolthub-mirror-bootstrap, packages/repo-spec/src/schema.ts
  * @public
  */
 

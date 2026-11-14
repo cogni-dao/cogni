@@ -16,7 +16,7 @@
  *   - PATCH_IS_NOT_EMPTY: a `patch` with no settable field is a typed
  *     validation error, never a silent no-op write.
  * Side-effects: none
- * Links: docs/design/knowledge-contribution-api.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-branch-design
  * @public
  */
 

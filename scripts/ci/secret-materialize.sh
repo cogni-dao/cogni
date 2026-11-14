@@ -6,7 +6,7 @@
 #
 # Runs before reconcile-substrate for one catalog node. Per
 # https://cognidao.org/knowledge/secrets-management Invariants 15/16 and
-# docs/design/node-wizard-secret-setting.md, AS BUILT today:
+# https://cognidao.org/knowledge/node-secret-materialize-phases, AS BUILT today:
 #   - input is the secrets catalog ONLY; it never reads the VM runtime .env;
 #   - read-once → diff → write-missing-mostly: one prefetch of the node + ancestor
 #     paths, a single batched write of just the absent keys, O(1) ssh per node.
@@ -241,7 +241,7 @@ _cat_field() {
 # single batched write of ONLY the keys that are missing. A re-flight of a
 # born node reads the cache, finds every key present, writes nothing, and exits.
 # (North star: move this into an in-cluster Job that talks to OpenBao over
-# ClusterIP and drop ssh entirely — docs/design/node-wizard-secret-setting.md.)
+# ClusterIP and drop ssh entirely — https://cognidao.org/knowledge/node-secret-materialize-phases.)
 # One batch dir PER OpenBao service path. The node path is the common case; a platform
 # service (see PLATFORM_SERVICES below) accumulates into its own dir so one flush can
 # never patch another service's bucket.

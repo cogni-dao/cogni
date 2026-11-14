@@ -9,7 +9,7 @@
  *   it parses the leading stream selector, forces `env`/`service`/`node` to the caller's node, lets
  *   any further label matcher only NARROW, and passes the LogQL pipeline through verbatim. 1:1 with
  *   the operator-scope log path for the caller's slice; the OpenFGA check (in the route) gates WHO,
- *   this gates REACH. See docs/design/substrate-grafana-observability.md §"Phase 0".
+ *   this gates REACH. See https://cognidao.org/knowledge/observability-access-design §"Phase 0".
  * Scope: Pure — no network, no auth, no env. The route does auth/RBAC; the adapter does IO.
  * Invariants:
  *   - ENV_FROM_CANONICAL: the env set is the shared `FLIGHT_ENVS` (the envs a node deploys to) — NOT a
@@ -43,7 +43,7 @@
  *     (400). For the stream-pinned scopes (app, lease) a filter could never widen the selector, so
  *     there this is hardening, not a fix.
  * Side-effects: none (pure)
- * Links: https://cognidao.org/knowledge/node-log-proxy-contract, docs/design/substrate-grafana-observability.md,
+ * Links: https://cognidao.org/knowledge/node-log-proxy-contract, https://cognidao.org/knowledge/observability-access-design
  *   ./flight-status (FLIGHT_ENVS), task.5025
  * @public
  */

@@ -7,10 +7,10 @@
  * Scope: One thin factory. Lazy-adds the remote on first push, then issues `SELECT dolt_push(...)`. Does not contain HTTP, cred management, retry/backoff, or logging — those belong to the caller (operator DI).
  * Invariants:
  *   - Push happens AFTER the merge transaction commits; never holds the merge connection open.
- *   - Auth lives in the doltgres process state (DOLT creds file, see docs/runbooks/dolthub-remote-bootstrap.md). The SQL surface here knows nothing about credentials.
+ *   - Auth lives in the doltgres process state (DOLT creds file, see https://cognidao.org/knowledge/dolthub-mirror-bootstrap). The SQL surface here knows nothing about credentials.
  *   - Errors propagate to the caller; the caller (operator container DI) wraps with `.catch(log)` to keep push best-effort.
  * Side-effects: IO (SQL against the knowledge DB; outbound GRPC to the remote)
- * Links: docs/runbooks/dolthub-remote-bootstrap.md, work/projects/proj.knowledge-syntropy.md
+ * Links: https://cognidao.org/knowledge/dolthub-mirror-bootstrap, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.knowledge-syntropy.md
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Tests in tests/external/dolthub/; no local DB or container runtime.
  * Invariants: Requires DOLTHUB_API_TOKEN + DOLTHUB_EXTERNAL_TEST_OWNER; skips without them.
  * Side-effects: process.env (.env.test injection), real HTTP to DoltHub.
- * Links: tests/external/AGENTS.md, docs/runbooks/dolthub-remote-bootstrap.md
+ * Links: tests/external/AGENTS.md, https://cognidao.org/knowledge/dolthub-mirror-bootstrap
  * @public
  */
 

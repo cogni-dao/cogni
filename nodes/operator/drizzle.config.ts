@@ -8,7 +8,7 @@
  * Invariants: Schema array MUST list every operator-owned table — the @cogni/db-schema core glob plus each node-local schema file (nodes, node_access_requests, work_item_sessions, akash_tx_allocations, node_migration_reports, node_workload_*, metric_observations/metric_refresh_cursors); omitting one makes `db:generate` emit a destructive DROP and trips `db:check:generate-clean`. Migrations dir is operator-owned. DATABASE_URL must be provided by caller (pnpm scripts set it from .env.local / container env).
  * Side-effects: IO (filesystem reads; drizzle-kit writes to ./nodes/operator/app/src/adapters/server/db/migrations).
  * Notes: No relative imports — drizzle-kit compiles configs to a temp dir, breaking `./app/...`-style paths. All paths are repo-root-relative (drizzle-kit runs with CWD=repo root).
- * Links: work/items/task.0324.per-node-db-schema-independence.md
+ * Links: https://cognidao.org/knowledge/node-database-contract
  * @internal
  */
 

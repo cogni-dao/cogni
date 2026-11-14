@@ -8,7 +8,7 @@
  * Invariants: PORTS_DEFINE_NEEDS — adapters implement persistence, features
  *   derive next-action policy, routes own HTTP translation.
  * Side-effects: none
- * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
+ * Links: https://cognidao.org/knowledge/validation-hold-design, task.5007
  * @public
  */
 

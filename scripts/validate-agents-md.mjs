@@ -9,7 +9,7 @@
  * Invariants: All AGENTS.md files must have required headings; stay under 150 lines; valid metadata format.
  * Side-effects: IO
  * Notes: Enumerates ALL errors before exiting; supports CI/CD pipeline integration.
- * Links: docs/templates/agents_subdir_template.md
+ * Links: https://cognidao.org/knowledge/agents-md-subdir-standard
  * @public
  */
 

@@ -20,7 +20,7 @@
  * Side-effects: none
  * Links: /api/internal/attribution/receipts route,
  *   nodes/operator/app/src/features/ingestion/services/webhook-receiver.ts,
- *   docs/design/attribution-operator-gateway.md, task.0280, story.5023
+ *   https://node-template.cognidao.org/knowledge/attribution-operator-gateway, task.0280, story.5023
  * @internal
  */
 

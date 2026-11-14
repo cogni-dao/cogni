@@ -7,7 +7,7 @@
  * Scope: Connects wagmi hooks to pure reducer; does not contain business logic.
  * Invariants: Reducer is single source of truth; effects only for receipt transitions.
  * Side-effects: IO (wagmi, server API); React state
- * Links: https://cognidao.org/knowledge/node-formation-contract, work/projects/proj.chain-deployment-refactor.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.chain-deployment-refactor.md
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Zod boundary only; does not touch ports or I/O.
  * Invariants: goal hypotheses file with `resolution_strategy = metric:<kpi-id>`.
  * Side-effects: none
- * Links: src/tools/edo-hypothesize.ts, docs/design/knowledge-goal-loop.md
+ * Links: src/tools/edo-hypothesize.ts, https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design
  * @internal
  */
 

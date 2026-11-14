@@ -26,7 +26,7 @@
  *     The package schema owns the cite rules.
  *   - MOVES_SERVER_PINS_BASELINE (story.0033): `set.moves` is `[{ metricId, direction }]`, at most 3, or `[]`; the shared schema drops any other key on an entry and the store pins the baseline.
  * Side-effects: none
- * Links: /api/v1/work/items/[id] route, https://node-template.cognidao.org/knowledge/work-items-port-contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
+ * Links: /api/v1/work/items/[id] route, https://node-template.cognidao.org/knowledge/work-items-port-contract
  * @internal
  */
 

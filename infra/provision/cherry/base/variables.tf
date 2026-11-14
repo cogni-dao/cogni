@@ -85,7 +85,7 @@ variable "sops_age_private_key" {
   sensitive   = true
 }
 
-# HONEST_ALLOCATABLE (docs/research/2026-06-10-node-app-scaling-architecture.md,
+# HONEST_ALLOCATABLE (https://cognidao.org/knowledge/node-app-scaling-path,
 # Step 1): co-resident VMs run k3s + the ~2.8GB Compose stack on one box; k3s
 # can't see Compose's RAM, so it over-commits node-app pods → OOM. system-reserved
 # subtracts the Compose+OS footprint from allocatable so the scheduler stops

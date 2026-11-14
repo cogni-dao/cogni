@@ -7,7 +7,7 @@
  * Scope: Exports ports, domain types, adapters, and helpers. Does NOT contain runtime logic.
  * Invariants: NO_SRC_IMPORTS, NO_SERVICE_IMPORTS, PURE_LIBRARY.
  * Side-effects: none
- * Links: packages/dns-ops/docs/cloudflare-dns-setup.md
+ * Links: https://cognidao.org/knowledge/node-dns-operations
  * @public
  */
 

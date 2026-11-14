@@ -8,7 +8,7 @@
  *   route auth, derive next actions, or call GitHub.
  * Invariants: ONE_ACTIVE_CLAIM_DB_ENFORCED, SERVICE_DB_SHARED_COORDINATION.
  * Side-effects: IO (Postgres via injected Drizzle database).
- * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
+ * Links: https://cognidao.org/knowledge/validation-hold-design, task.5007
  * @internal
  */
 

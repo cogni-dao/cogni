@@ -9,7 +9,7 @@
  * Side-effects: IO (HTTP requests, docker logs inspection)
  * Notes: Requires real adapters (APP_ENV !== 'test') and LiteLLM debug logging enabled.
  *        Run with: docker compose -f ... -f tests/stack/_infra/docker-compose.zdr-debug.yml up -d
- * Links: platform/infra/services/runtime/configs/litellm.config.yaml, docs/TESTING.md
+ * Links: platform/infra/services/runtime/configs/litellm.config.yaml, https://node-template.cognidao.org/knowledge/node-test-contract
  * @public
  */
 

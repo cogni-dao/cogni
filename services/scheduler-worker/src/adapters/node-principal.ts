@@ -10,7 +10,7 @@
  *   - PER_NODE_IS_HARDENING (task.5033 + secrets-on-spawn): the per-node credential is the hardening for BOTH paths (graph + task), not a NodeTask-only gate. The fail-closed resolver below is the seam it fills; it is built but NOT wired.
  *   - FAIL_CLOSED_WHEN_WIRED: once a per-node credential store exists, swapping to createFailClosedNodePrincipalResolver throws NodePrincipalUnprovisionedError for unprovisioned nodes (non-retryable).
  * Side-effects: none.
- * Links: docs/design/node-temporal-tenant-interface.md (story.5008, task.5033/5034), services/scheduler-worker/src/adapters/run-http.ts (shared-token graph dispatch), ports/index.ts NodePrincipalResolver
+ * Links: https://node-template.cognidao.org/knowledge/node-task-principal-design (story.5008, task.5033/5034), services/scheduler-worker/src/adapters/run-http.ts (shared-token graph dispatch), ports/index.ts NodePrincipalResolver
  * @internal
  */
 

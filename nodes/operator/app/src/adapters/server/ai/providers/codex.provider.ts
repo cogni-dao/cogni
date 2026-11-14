@@ -10,7 +10,7 @@
  *   - requiresPlatformCredits always false (user-funded)
  *   - requiresConnection always true (needs OAuth credentials)
  * Side-effects: none (adapter creation is lazy)
- * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing, docs/research/openai-oauth-byo-ai.md
+ * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing, https://node-template.cognidao.org/knowledge/codex-device-auth-byo
  * @internal
  */
 

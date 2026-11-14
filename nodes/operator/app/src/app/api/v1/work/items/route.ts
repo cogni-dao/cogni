@@ -8,7 +8,7 @@
  * Invariants: VALIDATE_IO, CONTRACTS_ARE_TRUTH, AUTH_VIA_GETSESSIONUSER, ID_RANGE_RESERVED, CODED_WRITE_ERRORS.
  * Moves (story.0033): POST accepts `moves`; an unknown or deprecated new metric id is HTTP 400 `cite_unresolved` at `moves`; a baseline failure is HTTP 503 `metric_baseline_unavailable`.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write)
- * Links: contracts/work.items.{list,create}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
+ * Links: contracts/work.items.{list, create}.v1.contract
  * @public
  */
 

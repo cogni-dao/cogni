@@ -77,7 +77,7 @@ describe("Brain repo SHA override (production path)", () => {
         timeoutMs: 5_000,
       });
 
-      const result = await rgAdapter.open({ path: "ROADMAP.md" });
+      const result = await rgAdapter.open({ path: "README.md" });
       expect(result.sha).toBe(SYNTHETIC_SHA7);
       expect(result.content.length).toBeGreaterThan(0);
     });

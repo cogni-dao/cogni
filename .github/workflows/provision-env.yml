@@ -91,7 +91,7 @@ jobs:
       # GitHub reserves the GITHUB_* secret-name prefix (HTTP 422 on set). The
       # operator-facing secret names are GH_ADMIN_*; we re-export here as the
       # GITHUB_ADMIN_* env vars bootstrap.sh consumes internally. See
-      # docs/runbooks/fork-quickstart.md §6.2.
+      # https://cognidao.org/knowledge/fork-quickstart-guide §6.2.
       GITHUB_ADMIN_PAT: ${{ secrets.GH_ADMIN_PAT }}
       GITHUB_ADMIN_USERNAME: ${{ secrets.GH_ADMIN_USERNAME }}
       # Optional observability auto-mint — ONE Cloud admin token in, derives
@@ -226,7 +226,7 @@ jobs:
             exit 0
           fi
           if [[ -z "${GRAFANA_CLOUD_ADMIN_TOKEN}" || -z "${GRAFANA_URL}" ]]; then
-            echo "::error::Set BOTH GH_GRAFANA_CLOUD_ADMIN_TOKEN and GH_GRAFANA_URL, or neither. See Step 6.2 of docs/runbooks/fork-quickstart.md."
+            echo "::error::Set BOTH GH_GRAFANA_CLOUD_ADMIN_TOKEN and GH_GRAFANA_URL, or neither. See Step 6.2 of https://cognidao.org/knowledge/fork-quickstart-guide."
             exit 2
           fi
           # Auto-derive org slug from URL host when GH_GRAFANA_ORG_SLUG unset.
@@ -241,7 +241,7 @@ jobs:
           fi
           MINT_URL="https://grafana.com/orgs/${GRAFANA_CLOUD_ORG_SLUG}/access-policies"
           SCOPES="stacks:read, stack-service-accounts:write, accesspolicies:read, accesspolicies:write (use 'Add scope' dropdown — these are NOT the default data-plane checkboxes)"
-          WALKTHROUGH="Full walkthrough: docs/runbooks/fork-quickstart.md §6.2 rows 8-10."
+          WALKTHROUGH="Full walkthrough: https://cognidao.org/knowledge/fork-quickstart-guide §6.2 rows 8-10."
           case "$GRAFANA_CLOUD_ADMIN_TOKEN" in
             glsa_*)
               echo "::error::GH_GRAFANA_CLOUD_ADMIN_TOKEN is a glsa_* stack service-account token."

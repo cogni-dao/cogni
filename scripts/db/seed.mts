@@ -21,7 +21,7 @@
  * - UNCLAIMED_IDENTITIES_VISIBLE: some GitHub contributors stay unresolved and
  *   never get a local user row
  * Side-effects: IO (database writes, console output)
- * Links: work/items/task.0106.ledger-dev-seed.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

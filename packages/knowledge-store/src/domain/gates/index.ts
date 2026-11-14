@@ -8,7 +8,7 @@
  * Invariants:
  *   - V0_DETERMINISTIC_GATES is the canonical baseline; per-node forks may extend but should not regress.
  * Side-effects: none
- * Links: work/projects/proj.knowledge-syntropy.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.knowledge-syntropy.md
  * @public
  */
 

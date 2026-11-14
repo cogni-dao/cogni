@@ -48,9 +48,7 @@ pnpm tsx scripts/experiments/full-chain.ts
 
 After running all 3 experiments, update:
 
-- `work/items/spike.0090.validate-operator-wallet-payment-chain.md` — mark complete
-- `work/items/task.0084.operator-wallet-generation-wiring.md` — unblock with findings
+- spike.0090 (validate operator wallet payment chain) — mark complete
+- task.0084 (operator wallet generation wiring) — unblock with findings
 
 ## Links
-
-- [Spike: spike.0090](../../work/items/spike.0090.validate-operator-wallet-payment-chain.md)

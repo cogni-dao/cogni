@@ -57,7 +57,7 @@ tags: [scheduler, temporal]
 
 **Required (specs):** `id`, `type`, `title`, `status`, `spec_state`, `trust`, `summary`, `read_when`, `owner`, `created`, `verified`, `tags`
 
-Work items (`work/projects/`, `work/items/`) use a different field set — see `work/README.md`.
+Work items (`work/projects/`, `work/items/`) use a different field set — see `https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/README.md`.
 
 ## Trust Levels
 
@@ -82,5 +82,5 @@ Do not add Markdown here. Contribute durable knowledge to the hub through [knowl
 
 ## Related
 
-- [Work Management](../work/README.md)
+- [Work Management](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/README.md)
 - [Organization Plan](./DOCS_ORGANIZATION_PLAN.md)

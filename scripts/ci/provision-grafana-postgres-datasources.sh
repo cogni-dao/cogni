@@ -89,7 +89,7 @@ derive_pdc_defaults_from_token
 # GRAFANA_PDC_NETWORK_UUID is the *internal* Grafana network identifier that
 # binds a datasource to a PDC network. The legacy GRAFANA_PDC_NETWORK_ID
 # (derived from the signing-token payload) is the human network NAME and is
-# *not* what Grafana Cloud routes by — see docs/runbooks/grafana-postgres-readonly.md.
+# *not* what Grafana Cloud routes by — see https://cognidao.org/knowledge/grafana-postgres-readonly.
 #
 # The UUID is stable per Grafana org. Discover it once via:
 #   curl -H "Authorization: Bearer $GRAFANA_SERVICE_ACCOUNT_TOKEN" \

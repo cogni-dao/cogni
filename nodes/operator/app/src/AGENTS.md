@@ -20,7 +20,7 @@ Next.js application source implementing hexagonal architecture for a fully web3-
 - [Accounts design (billing + identity)](https://node-template.cognidao.org/knowledge/billing-account-tenancy)
 - [Operator identity model](https://cognidao.org/knowledge/operator-identity-model)
 - [Database architecture](https://node-template.cognidao.org/knowledge/database-migration-contract)
-- [Environment modes](../../../docs/spec/environments.md)
+- [Environment modes](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/environments.md)
 - [DB schema](./shared/db/schema.ts) - Users, billing accounts, ledger, virtual keys
 - [Auth implementation](auth.ts) - NextAuth.js with SIWE provider
 

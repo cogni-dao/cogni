@@ -104,19 +104,19 @@ case "$GH_GRAFANA_CLOUD_ADMIN_TOKEN" in
     log_error "Mint a glc_ token at: https://grafana.com/orgs/<your-org-slug>/access-policies"
     log_error "Add these 4 scopes via the 'Add scope' dropdown near the bottom (NOT the default checkboxes — those are data-plane write):"
     log_error "  stacks:read, stack-service-accounts:write, accesspolicies:read, accesspolicies:write"
-    log_error "Full walkthrough: docs/runbooks/fork-quickstart.md §6.2 row 9."
+    log_error "Full walkthrough: https://cognidao.org/knowledge/fork-quickstart-guide §6.2 row 9."
     exit 1
     ;;
   glb_*)
     log_error "GH_GRAFANA_CLOUD_ADMIN_TOKEN is a Grafana Cloud bearer token (glb_*) — not supported."
-    log_error "Use a glc_ access-policy token. Walkthrough: docs/runbooks/fork-quickstart.md §6.2 row 9."
+    log_error "Use a glc_ access-policy token. Walkthrough: https://cognidao.org/knowledge/fork-quickstart-guide §6.2 row 9."
     exit 1
     ;;
   *)
     log_error "GH_GRAFANA_CLOUD_ADMIN_TOKEN does not start with glc_ — refusing."
     log_error "Mint at: https://grafana.com/orgs/<your-org-slug>/access-policies (use 'Add scope' dropdown)."
     log_error "Required scopes: stacks:read, stack-service-accounts:write, accesspolicies:read, accesspolicies:write"
-    log_error "Full walkthrough: docs/runbooks/fork-quickstart.md §6.2 row 9."
+    log_error "Full walkthrough: https://cognidao.org/knowledge/fork-quickstart-guide §6.2 row 9."
     exit 1
     ;;
 esac

@@ -8,7 +8,7 @@
  * Invariants: Schema glob targets ONLY the per-node Doltgres package (nodes/operator/packages/doltgres-schema) — NOT globbed by the Postgres drizzle config, preserving dialect separation. Migrations dir is operator-owned and checked in. DATABASE_URL must be provided by the caller.
  * Side-effects: IO (drizzle-kit writes to ./nodes/operator/app/src/adapters/server/db/doltgres-migrations when generating; writes to the Doltgres server when migrating).
  * Notes: No relative TS imports — drizzle-kit compiles configs to a temp dir, breaking `./app/...`-style paths. All paths are repo-root-relative. DATABASE_URL here points at a Doltgres DSN (knowledge_operator), not a Postgres DSN.
- * Links: nodes/operator/packages/doltgres-schema/AGENTS.md, https://node-template.cognidao.org/knowledge/knowledge-data-plane, work/items/task.0423.doltgres-work-items-source-of-truth.md
+ * Links: nodes/operator/packages/doltgres-schema/AGENTS.md, https://node-template.cognidao.org/knowledge/knowledge-data-plane
  * @internal
  */
 

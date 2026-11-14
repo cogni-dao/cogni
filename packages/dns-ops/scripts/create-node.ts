@@ -7,7 +7,7 @@
  * Scope: Prototype CLI for multi-node formation. Does NOT provision DB or containers (v1).
  * Invariants: Only creates *.nodes subdomains. Protected names blocked by helpers.
  * Side-effects: IO (Cloudflare DNS API, stdout)
- * Links: packages/dns-ops/docs/cloudflare-dns-setup.md
+ * Links: https://cognidao.org/knowledge/node-dns-operations
  * @internal
  */
 

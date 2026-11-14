@@ -7,7 +7,7 @@
  * Scope: Uses fake postgres.js clients; does not connect to Doltgres.
  * Invariants: CONTRIBUTION_DIFF_ANCHORED_TO_BASE, CONTRIBUTION_METADATA_BEFORE_BRANCH_DELETE.
  * Side-effects: none
- * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-branch-design, packages/knowledge-store/src/adapters/doltgres/contribution-adapter.ts
  * @internal
  */
 

@@ -13,7 +13,7 @@ Future Akash Network deployment configurations for decentralized cloud infrastru
 
 ## Pointers
 
-- [FUTURE_AKASH_INTEGRATION.md](FUTURE_AKASH_INTEGRATION.md): Integration planning document
+- [FUTURE_AKASH_INTEGRATION.md](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/infra/provision/akash/FUTURE_AKASH_INTEGRATION.md): Integration planning document
 
 ## Boundaries
 

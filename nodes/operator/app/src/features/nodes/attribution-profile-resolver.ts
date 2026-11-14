@@ -16,7 +16,7 @@
  *   - SHORT_LIVED_SINGLE_FLIGHT: a bounded cache prevents GitHub API fan-out per webhook while a
  *     newly merged spawn becomes discoverable without redeploying the operator.
  * Side-effects: none directly (injected dependencies perform GitHub App reads and logging).
- * Links: packages/repo-spec/src/repo-index.ts, docs/design/attribution-operator-gateway.md,
+ * Links: packages/repo-spec/src/repo-index.ts, https://node-template.cognidao.org/knowledge/attribution-operator-gateway
  *   src/app/api/internal/webhooks/[source]/route.ts, bug.5052
  * @internal
  */

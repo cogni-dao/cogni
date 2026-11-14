@@ -63,7 +63,7 @@ Read the nearest `AGENTS.md` before editing a directory. Then read only the surf
 
 | Surface                           | File                                                                                  |
 | --------------------------------- | ------------------------------------------------------------------------------------- |
-| Payment setup guide               | `docs/guides/payments-setup.md`                                                       |
+| Payment setup guide               | `https://node-template.cognidao.org/knowledge/set-up-usdc-topups`                     |
 | Operator wallet + Split spec      | `https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary`       |
 | x402 direction (hub atom)         | `node-service-usdc-northstar`                                                         |
 | Node formation payment invariants | `https://cognidao.org/knowledge/node-formation-contract`                              |

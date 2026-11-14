@@ -14,7 +14,7 @@ Capability factories bridging ai-tools interfaces to adapters. Creates environme
 ## Pointers
 
 - [Tool Use Spec](https://node-template.cognidao.org/knowledge/tool-use-contract)
-- [Tools Authoring](../../../../../docs/guides/tools-authoring.md)
+- [Tools Authoring](https://node-template.cognidao.org/knowledge/add-an-ai-tool)
 
 ## Boundaries
 

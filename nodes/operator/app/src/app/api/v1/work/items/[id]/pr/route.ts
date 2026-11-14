@@ -7,7 +7,7 @@
  * Scope: HTTP parsing/auth/logging only. Delegates durable work-item patching to facade.
  * Invariants: AUTH_REQUIRED, CONTRACTS_ARE_TRUTH, DURABLE_PR_LINK_ON_WORK_ITEM.
  * Side-effects: IO (HTTP response, DB/Doltgres through facade).
- * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
+ * Links: https://cognidao.org/knowledge/validation-hold-design, task.5007
  * @public
  */
 

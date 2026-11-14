@@ -15,7 +15,7 @@
  *     mirroring the metrics/observability capabilities.
  * Side-effects: none (factory only)
  * Links: src/adapters/server/deploy/probe-deploy.adapter.ts, src/bootstrap/node-flight.factory.ts,
- *   src/features/nodes/flight-status.ts (rootDomain), docs/design/operator-managed-deployments.md § SEE
+ *   src/features/nodes/flight-status.ts (rootDomain), https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/design/operator-managed-deployments.md § SEE
  * @internal
  */
 

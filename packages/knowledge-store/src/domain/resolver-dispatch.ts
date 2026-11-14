@@ -11,7 +11,7 @@
  *     `agent`; null/manual ⇒ `manual` (cron skips); anything else ⇒ `unknown`.
  *   - DISPATCH_IS_TOTAL — every input maps to exactly one target.
  * Side-effects: none
- * Links: docs/design/knowledge-goal-loop.md § resolver dispatch
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design § resolver dispatch
  * @public
  */
 

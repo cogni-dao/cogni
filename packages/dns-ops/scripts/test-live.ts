@@ -7,7 +7,7 @@
  * Scope: Manual testing only. Does NOT run in CI.
  * Invariants: Only touches *.preview subdomains. Protected names (@, www) are blocked by helpers.
  * Side-effects: IO (creates/deletes DNS records on Cloudflare)
- * Links: packages/dns-ops/docs/cloudflare-dns-setup.md
+ * Links: https://cognidao.org/knowledge/node-dns-operations
  * @internal
  */
 

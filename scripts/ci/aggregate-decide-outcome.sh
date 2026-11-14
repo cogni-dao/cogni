@@ -41,7 +41,7 @@
 #   GITHUB_OUTPUT           when set, outcome= is appended.
 #
 # Links:
-#   work/items/bug.0443.merge-queue-preview-promote-silent-skip.md
+#   bug.0443
 
 set -euo pipefail
 

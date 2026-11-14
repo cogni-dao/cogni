@@ -17,7 +17,7 @@
  *   - THUMBNAIL_RESOLVED_TO_HOST: the node publishes a host-relative thumbnail PATH; this adapter joins it
  *     against `https://<host>` so the image loads from the node's OWN env host (no cross-env / CDN leak).
  * Side-effects: network I/O
- * Links: src/features/nodes/flight-status.ts, docs/guides/agent-api-validation.md,
+ * Links: src/features/nodes/flight-status.ts, https://cognidao.org/knowledge/prove-node-agent-api
  *   src/app/.well-known/agent.json/route.ts (the projection this reads)
  * @public
  */

@@ -13,7 +13,7 @@ Setup automation for contributor, fork, and deployment bootstrap paths.
 
 ## Pointers
 
-- [SETUP_DESIGN.md](./SETUP_DESIGN.md): Future architecture and implementation plan
+- [SETUP_DESIGN.md](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/scripts/setup/SETUP_DESIGN.md): Future architecture and implementation plan
 - [README.md](../../README.md): Current manual setup instructions
 
 ## Boundaries

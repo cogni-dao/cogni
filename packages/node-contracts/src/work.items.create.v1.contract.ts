@@ -13,7 +13,7 @@
  *   - node defaults to "shared"
  *   - MOVES_SERVER_PINS_BASELINE (story.0033): `moves` is `[{ metricId, direction }]`, at most 3; the store pins each new entry's baseline, so a create never carries one.
  * Side-effects: none
- * Links: /api/v1/work/items route, https://node-template.cognidao.org/knowledge/work-items-port-contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
+ * Links: /api/v1/work/items route, https://node-template.cognidao.org/knowledge/work-items-port-contract
  * @internal
  */
 

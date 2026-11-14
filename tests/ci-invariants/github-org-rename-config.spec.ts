@@ -4,10 +4,10 @@
 /**
  * Module: `@tests/ci-invariants/github-org-rename-config`
  * Purpose: Pins cutover-critical GitHub owner references for the Cogni org rename.
- * Scope: Static config/doc checks only. Does NOT call GitHub or inspect runtime secrets.
- * Invariants: CANONICAL_GITHUB_OWNER, CUTOVER_SECRETS_CALLED_OUT.
- * Side-effects: IO (reads repo config and runbook files)
- * Links: docs/runbooks/github-org-rename-cutover.md
+ * Scope: Static config checks only. Does NOT call GitHub or inspect runtime secrets.
+ * Invariants: CANONICAL_GITHUB_OWNER.
+ * Side-effects: IO (reads repo config files)
+ * Links: https://cognidao.org/knowledge/eso-secret-sync-gate
  * @public
  */
 
@@ -49,18 +49,5 @@ describe("GitHub org rename cutover config", () => {
     const body = withoutSpdxMetadata(readRepoFile(file));
     expect(body).toContain(NEW_OWNER);
     expect(body).not.toContain(OLD_OWNER);
-  });
-
-  it("documents GitHub variable and secret updates required at cutover", () => {
-    const body = readRepoFile("docs/runbooks/github-org-rename-cutover.md");
-    for (const key of [
-      "GH_REPOS",
-      "NODE_MINT_OWNER",
-      "NODE_TEMPLATE_OWNER",
-      "NODE_SUBMODULE_PARENT_OWNER",
-      "COGNI_REPO_URL",
-    ]) {
-      expect(body).toContain(key);
-    }
   });
 });

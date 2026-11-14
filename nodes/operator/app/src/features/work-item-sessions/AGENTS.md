@@ -15,7 +15,7 @@ Pure policy for operator work-item execution sessions: deadline math, DTO mappin
 
 - [Root AGENTS.md](../../../../../../../AGENTS.md)
 - [Development Lifecycle spec](https://node-template.cognidao.org/knowledge/work-item-status-machine) (`nextActionForWorkItem` is the operator's pushback channel referenced by the spec)
-- [Operator Dev Lifecycle Coordinator design](../../../../../../../docs/design/operator-dev-lifecycle-coordinator.md)
+- [Operator Dev Lifecycle Coordinator design](https://cognidao.org/knowledge/validation-hold-design)
 - [Sessions Zod contract](../../contracts/work-item-sessions.v1.contract.ts)
 - [App-layer facade](../../app/_facades/work/coordination.server.ts) (binds session user + container, calls policy)
 - [HTTP routes](../../app/api/v1/work/items/%5Bid%5D/) — `claims`, `heartbeat`, `pr`, `coordination`

@@ -7,7 +7,7 @@
  * Scope: Derives addresses from tx receipts and verifies on-chain state; does not modify blockchain state.
  * Invariants: NEVER trusts client-provided addresses; all addresses derived from receipts.
  * Side-effects: IO (RPC reads via viem)
- * Links: https://cognidao.org/knowledge/node-formation-contract, work/projects/proj.chain-deployment-refactor.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.chain-deployment-refactor.md
  * @public
  */
 
