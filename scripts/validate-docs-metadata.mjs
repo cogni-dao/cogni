@@ -459,10 +459,7 @@ async function main() {
 
   if (hasErrors) process.exit(1);
 
-  const total =
-    docFiles.length +
-    charterFiles.length +
-    itemFiles.length;
+  const total = docFiles.length + charterFiles.length + itemFiles.length;
   console.log(
     `docs/work metadata OK (${total} files, ${allIds.size} unique ids)`
   );
