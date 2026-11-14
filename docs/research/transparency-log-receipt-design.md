@@ -546,7 +546,7 @@ The following designs were explored during spike.0082 but deferred from V0 to ke
 
 - P1: `subject_id` accepts both wallet address and `did:pkh` format
 - P2: Receipts shaped as JWT VCs with `credentialSubject.id = did:pkh:eip155:1:{address}`
-- See [DID-first identity research](did-first-identity-refactor.md) for full design
+- See [DID-first identity research](https://cognidao.org/knowledge/did-pkh-identity-fit) for full design
 
 ### Valuation Model Evolution
 
