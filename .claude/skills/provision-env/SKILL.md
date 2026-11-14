@@ -59,7 +59,7 @@ A full provision is the default. The narrow, idempotent **day-2 heal** mode reco
 > 1. **Alloy `nodeId`→`node` Loki-label config.** Re-pushed + checksum-restarted by the substrate-readiness lane (`scripts/ci/reconcile-node-substrate.sh` → `reconcile-alloy-config.remote.sh`), which runs on **every** candidate-flight + promote — so even an app-only promote (`skip_infra: true`) lands it current. Idempotent; an unchanged config is a no-op.
 > 2. **Operator Grafana read creds** at `cogni/<env>/operator/{GRAFANA_URL,GRAFANA_SERVICE_ACCOUNT_TOKEN}`. The catalog row (`infra/secrets-catalog.yaml`, `service: operator`) + the operator ExternalSecret + provision **Phase 5e** (mints the `glsa_` read token from the one-time `GH_GRAFANA_CLOUD_ADMIN_TOKEN` and seeds **both** `_shared` AND `operator`) own this. A fresh provision wires it at birth.
 >
-> **If an OLD env (provisioned before Phase 5e seeded the operator path) lacks the creds:** re-run the standard provision, or seed `cogni/<env>/operator/GRAFANA_*` through the normal secret path (`secret-materialize.sh` / the substrate lane) — one Grafana stack serves every env (env is just a Loki label), so the same `glsa_` read token + URL is correct everywhere. Spec: `docs/spec/grafana-observability-access.md` §"Born observable".
+> **If an OLD env (provisioned before Phase 5e seeded the operator path) lacks the creds:** re-run the standard provision, or seed `cogni/<env>/operator/GRAFANA_*` through the normal secret path (`secret-materialize.sh` / the substrate lane) — one Grafana stack serves every env (env is just a Loki label), so the same `glsa_` read token + URL is correct everywhere. Spec: `https://cognidao.org/knowledge/node-log-proxy-contract` §"Born observable".
 
 ## Phase map (where things die)
 

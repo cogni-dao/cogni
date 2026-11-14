@@ -8,7 +8,7 @@
  * Invariants: Billing account derived from session only; amount bounds validated at contract level.
  * Side-effects: IO (creates payment_attempts record and payment_events log via PaymentAttemptRepository port).
  * Notes: Returns on-chain transfer params (chainId, token, to, amountRaw) for client to execute USDC transfer.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

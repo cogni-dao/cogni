@@ -7,7 +7,7 @@
  * Scope: Re-exports only; does not contain implementation logic.
  * Invariants: All public APIs exported from this barrel file.
  * Side-effects: none
- * Links: docs/spec/node-formation.md, docs/spec/packages-architecture.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract, https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @public
  */
 

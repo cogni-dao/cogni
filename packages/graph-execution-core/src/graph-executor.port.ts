@@ -12,7 +12,7 @@
  *   - NO_BILLING_LEAKAGE: No billing types on request or context
  *   - NO_TRACING_LEAKAGE: No traceId — flows via OTel context propagation
  * Side-effects: none (interface only)
- * Links: docs/spec/unified-graph-launch.md, docs/spec/graph-execution.md
+ * Links: https://node-template.cognidao.org/knowledge/graph-run-launch-contract, https://node-template.cognidao.org/knowledge/graph-execution-invariants
  * @public
  */
 

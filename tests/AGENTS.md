@@ -14,7 +14,7 @@ Provide fast, reliable verification per layer. Enforce port contracts so any ada
 ## Pointers
 
 - [Root AGENTS.md](../AGENTS.md)
-- [Architecture](../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 
 ## Boundaries
 

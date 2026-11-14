@@ -9,7 +9,7 @@
  *   - REDACT_SECRETS_BEFORE_PERSIST: applied before saveThread()
  *   - Best-effort only — stored content must still be treated as sensitive data via RLS + retention
  * Side-effects: none
- * Links: docs/spec/thread-persistence.md
+ * Links: https://node-template.cognidao.org/knowledge/thread-persistence-contract
  * @public
  */
 

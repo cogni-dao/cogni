@@ -8,7 +8,7 @@
  * Invariants: Uses next-themes hook; className overrides limited to layout; forwards ref; shows current theme in trigger with icon + label.
  * Side-effects: global (theme state changes via setTheme; localStorage updates via next-themes)
  * Notes: Uses CVA factory from `@/styles/ui` for trigger styling; dropdown items show Light/Dark/System with active indicators.
- * Links: docs/spec/ui-implementation.md, next-themes documentation
+ * Links: https://node-template.cognidao.org/knowledge/frontend-development, next-themes documentation
  * @public
  */
 

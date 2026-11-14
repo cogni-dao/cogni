@@ -10,7 +10,7 @@
  * - SELECTION_POLICY_PURE: policies receive context and return inclusion decisions — no store writes.
  * - SELECTION_POLICY_PLUGGABLE: adding a new selection policy requires zero changes to the framework.
  * Side-effects: none
- * Links: docs/spec/plugin-attribution-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @public
  */
 

@@ -13,7 +13,7 @@ Shared AI utilities for prompt hashing, model catalog, and tool execution. Pure 
 
 ## Pointers
 
-- [AI Setup Spec](../../../../../docs/spec/ai-setup.md)
+- [AI Setup Spec](https://node-template.cognidao.org/knowledge/ai-correlation-contract)
 
 ## Boundaries
 

@@ -73,7 +73,7 @@ import type { AkashTxLogger } from "./akash-tx-actuator";
  *
  * TWINS, kept byte-identical on purpose: `cogniNodeAppMigrationPhases()` in the frozen
  * the retired `compute-workload-reconciler`, and this. That controller is DELETED (task.5098),
- * docs/spec/cicd-platform-boundary.md), so the policy is restated here rather than moved out
+ * https://cognidao.org/knowledge/operator-plane-contract), so the policy is restated here rather than moved out
  * of it; the test pins the exact strings so a change to either is a deliberate, reviewed diff.
  */
 export function cogniNodeAppMigrationPhases(input: {

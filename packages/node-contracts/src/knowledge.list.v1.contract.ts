@@ -10,7 +10,7 @@
  *   - KNOWLEDGE_READ_REQUIRES_PRINCIPAL (any authenticated principal — session human or bearer agent).
  *   - Response shape mirrors `Knowledge` domain type from `@cogni/knowledge-store`.
  * Side-effects: none
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @internal
  */
 

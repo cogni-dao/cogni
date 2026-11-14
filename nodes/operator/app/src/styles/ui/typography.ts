@@ -8,7 +8,7 @@
  * Invariants: All variants use design tokens; factories return valid Tailwind class strings; maintains typographic hierarchy.
  * Side-effects: none
  * Notes: Typography scale follows design system hierarchy with responsive sizing.
- * Links: docs/spec/ui-implementation.md
+ * Links: https://node-template.cognidao.org/knowledge/frontend-development
  * @public
  */
 

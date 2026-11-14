@@ -16,7 +16,7 @@
  *     in-pod addresses. Always derive origin from forwarded headers first.
  *   - MOVES_SCHEMA_IS_THE_CONTRACT (story.0033): the create and PATCH `moves` schemas come from the shared work-items schema (at most 3 of { metricId, direction }) and offer no baseline; the GET output schema carries the pinned baseline and the read-time fields.
  * Side-effects: none
- * Links: docs/spec/development-lifecycle.md, docs/guides/agent-api-validation.md
+ * Links: https://node-template.cognidao.org/knowledge/work-item-status-machine, docs/guides/agent-api-validation.md
  * @public
  */
 
@@ -237,7 +237,7 @@ export async function GET(request: Request) {
       },
     },
     process: {
-      contributionSpec: "docs/spec/development-lifecycle.md",
+      contributionSpec: "https://node-template.cognidao.org/knowledge/work-item-status-machine",
       validationGuide: "docs/guides/agent-api-validation.md",
       validationSkill: ".claude/skills/validate-candidate",
       requiredLoop: [

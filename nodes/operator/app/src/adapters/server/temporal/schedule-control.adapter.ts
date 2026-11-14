@@ -14,7 +14,7 @@
  *   - WORKFLOWTYPE_ROUTING (task.5029): workflowType selects the args envelope — NodeTaskWorkflow gets a NodeTaskInput ({route,payload} unwrapped from input, no migration); all others get GraphRunWorkflowInput. buildWorkflowArgs is the single builder.
  *   - describeSchedule extracts input + dbScheduleId from action.args[0]; cron returns null (compiled to calendars by Temporal)
  * Side-effects: IO (Temporal RPC calls)
- * Links: docs/spec/scheduler.md, docs/spec/temporal-patterns.md, ScheduleControlPort
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, https://cognidao.org/knowledge/temporal-workflow-rules, ScheduleControlPort
  * @public
  */
 

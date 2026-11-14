@@ -8,7 +8,7 @@
  * Invariants: Returns client-visible status (PENDING_VERIFICATION | CONFIRMED | FAILED); verification throttled server-side.
  * Side-effects: none
  * Notes: Status enum imported from /types (canonical source).
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

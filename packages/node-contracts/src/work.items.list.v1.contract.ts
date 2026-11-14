@@ -9,7 +9,7 @@
  *   - Contract remains stable; breaking changes require new version
  *   - All consumers use z.infer types
  * Side-effects: none
- * Links: /api/v1/work/items route, docs/spec/work-items-port.md
+ * Links: /api/v1/work/items route, https://node-template.cognidao.org/knowledge/work-items-port-contract
  * @internal
  */
 

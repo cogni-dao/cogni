@@ -32,7 +32,7 @@
  * Side-effects: none directly (IO via injected seams)
  * Links: @ports/akash-tx.port (AkashTxLeaseLogSources), ./tail-merge,
  *   adapters/server/observability/loki-push.adapter, bootstrap/lease-log-pump, bug.5240,
- *   bug.5516, task.5144, docs/spec/grafana-observability-access.md
+ *   bug.5516, task.5144, https://cognidao.org/knowledge/node-log-proxy-contract
  * @internal
  */
 

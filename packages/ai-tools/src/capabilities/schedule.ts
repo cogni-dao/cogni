@@ -9,7 +9,7 @@
  *   - GENERIC_CRUD: No day-plan, planner, or UI concepts — pure schedule operations
  *   - CAPABILITY_INJECTION: Implementation injected at bootstrap, not imported
  * Side-effects: none (interface only)
- * Links: docs/spec/scheduler.md
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @public
  */
 

@@ -7,12 +7,12 @@
  * Scope: Browser-session owners approve/reject a registered agent for one node by writing/removing the
  *   requested OpenFGA role tuple — `developer` (→can_flight) or `production_promoter` (→can_promote_production).
  *   `role` defaults to `developer`. A `developer` decision ALSO provisions/de-provisions GitHub
- *   branch-push on the node repo via the operator App (rbac.md §6a) — best-effort, never reversing the
- *   authoritative tuple write. Without a grant path the role relations are inert (rbac.md §6).
+ *   branch-push on the node repo via the operator App (https://cognidao.org/knowledge/authz-port-contract §6a) — best-effort, never reversing the
+ *   authoritative tuple write. Without a grant path the role relations are inert (https://cognidao.org/knowledge/authz-port-contract §6).
  * Invariants: OWNER_GATING, OPENFGA_IS_AUTHORITY, NO_LOCAL_ROLE_TABLE, ROLE_FROM_NODE_ACCESS_ROLES,
  *   TRUST_BOUNDARY_IS_MERGE_NOT_PUSH, PUSH_LOGIN_FROM_REQUEST (no githubLogin param — from the request row).
  * Side-effects: IO (Postgres read, OpenFGA tuple write/delete, GitHub repo collaborator add/remove via App)
- * Links: docs/spec/rbac.md (§6, §6a), docs/spec/identity-model.md
+ * Links: https://cognidao.org/knowledge/authz-port-contract (§6, §6a), https://cognidao.org/knowledge/identity-keys-no-overload
  * @public
  */
 
@@ -53,7 +53,7 @@ const DeveloperDecisionInput = z.object({
   agentUserId: z.string().uuid(),
   decision: z.enum(["approve", "reject"]),
   role: z.enum(NODE_ACCESS_ROLES).default("developer"),
-  // NO githubLogin here by design (rbac.md §6a): the human approving never supplies a GitHub login.
+  // NO githubLogin here by design (https://cognidao.org/knowledge/authz-port-contract §6a): the human approving never supplies a GitHub login.
   // The agent declared its own login on the access REQUEST; approve resolves it from there.
 });
 
@@ -261,7 +261,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       );
     }
 
-    // rbac.md §6a — provision/de-provision GitHub branch-push as a side-effect of the developer
+    // https://cognidao.org/knowledge/authz-port-contract §6a — provision/de-provision GitHub branch-push as a side-effect of the developer
     // grant (the OpenFGA tuple above is the flight authority; branch-push is the contributor golden
     // path). Best-effort: branch-push failure never reverses the authoritative tuple write — the agent
     // still holds `can_flight` and the fork-PR fallback. Resolve the login from the agent's `github`
@@ -272,7 +272,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         : "skipped:not_developer_role";
     if (parsed.data.role === "developer") {
       // Resolve the agent's GitHub login: the login it declared on its own access REQUEST (primary,
-      // rbac.md §6a — the human supplies nothing), else its linked `github` user_binding (fallback).
+      // https://cognidao.org/knowledge/authz-port-contract §6a — the human supplies nothing), else its linked `github` user_binding (fallback).
       const requestedLogin = await getRequestedGithubLogin(serviceDb, {
         nodeId: nodeRowId,
         agentUserId: parsed.data.agentUserId,
@@ -292,7 +292,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
       if (!login && parsed.data.decision === "reject") {
         // De-provisioning needs a login. An owner-attested grant (no `github` binding) can't be
         // auto-revoked here unless the reject re-supplies `githubLogin` — surface it loudly so push
-        // access is never SILENTLY orphaned (V0 limitation, rbac.md §6a; the durable fix is
+        // access is never SILENTLY orphaned (V0 limitation, https://cognidao.org/knowledge/authz-port-contract §6a; the durable fix is
         // binding-based, where the login is always resolvable on revoke).
         ctx.log.warn(
           {

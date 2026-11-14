@@ -14,7 +14,7 @@ Public pages wrapped in `AppHeader` + `AppFooter` shell. `/` redirects signed-in
 ## Pointers
 
 - [App AGENTS.md](../AGENTS.md)
-- [Architecture](../../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 
 ## Boundaries
 

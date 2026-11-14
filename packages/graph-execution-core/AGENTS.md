@@ -13,9 +13,9 @@ Run lifecycle and orchestration contracts shared between the Next.js app, Tempor
 
 ## Pointers
 
-- [Unified Graph Launch Spec](../../docs/spec/unified-graph-launch.md): Core invariants and schema
-- [Graph Execution Spec](../../docs/spec/graph-execution.md): Execution ports, billing, streaming
-- [Packages Architecture](../../docs/spec/packages-architecture.md): Package boundaries
+- [Unified Graph Launch Spec](https://node-template.cognidao.org/knowledge/graph-run-launch-contract): Core invariants and schema
+- [Graph Execution Spec](https://node-template.cognidao.org/knowledge/graph-execution-invariants): Execution ports, billing, streaming
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules): Package boundaries
 
 ## Boundaries
 
@@ -81,7 +81,7 @@ pnpm --filter @cogni/graph-execution-core build
 ## Change Protocol
 
 - Update this file when port interfaces or context types change
-- Coordinate with unified-graph-launch.md invariants
+- Coordinate with https://node-template.cognidao.org/knowledge/graph-run-launch-contract invariants
 
 ## Notes
 

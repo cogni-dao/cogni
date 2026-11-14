@@ -7,7 +7,7 @@
  * Scope: Test tooling only. Does not contain runtime or production code.
  * Invariants: Tests run in node environment with globals enabled.
  * Side-effects: IO
- * Links: docs/spec/packages-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @internal
  */
 

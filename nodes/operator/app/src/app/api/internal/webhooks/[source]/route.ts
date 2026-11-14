@@ -12,7 +12,7 @@
  * - FRESH_NODE_FORCE_REFRESH: verified unresolved GitHub routes bypass the cache exactly once.
  * - ARCHITECTURE_ALIGNMENT: Route → feature service → port
  * Side-effects: IO (database writes via feature service)
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @internal
  */
 

@@ -8,7 +8,7 @@
  *   Fire-and-forget workflow start — errors logged, never thrown.
  * Invariants: Fire-and-forget — errors logged, never block webhook response.
  * Side-effects: IO (async signal execution)
- * Links: docs/spec/governance-signal-execution.md
+ * Links: https://node-template.cognidao.org/knowledge/dao-merge-signal-loop
  * @public
  */
 

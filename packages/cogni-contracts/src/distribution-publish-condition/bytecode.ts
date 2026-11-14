@@ -10,7 +10,7 @@
  *   `src/distribution-publish-condition/DistributionPublishCondition.sol` at the pinned
  *   compiler settings (see provenance below).
  * Side-effects: none
- * Links: docs/spec/tokenomics-distribution.md
+ * Links: https://node-template.cognidao.org/knowledge/distribution-lifecycle
  * @public
  */
 

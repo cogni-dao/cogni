@@ -9,7 +9,7 @@
  * - ENRICHER_ORDER_EXPLICIT: profile enricher ordering validated at construction.
  * - FRAMEWORK_STABLE_PLUGINS_CHURN: plugins package owns registry construction; framework stays stable.
  * Side-effects: none
- * Links: docs/spec/plugin-attribution-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @public
  */
 

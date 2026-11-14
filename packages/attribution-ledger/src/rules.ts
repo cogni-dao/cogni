@@ -10,7 +10,7 @@
  * - Sum of statement item amounts === poolTotalCredits (STATEMENT_DETERMINISTIC).
  * - Largest-remainder method distributes rounding residual.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md#statement-item-computation
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

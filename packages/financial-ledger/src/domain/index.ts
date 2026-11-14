@@ -7,7 +7,7 @@
  * Scope: Re-exports only. Does not contain implementations.
  * Invariants: All domain exports available from this barrel.
  * Side-effects: none
- * Links: docs/spec/financial-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/financial-ledger-tigerbeetle
  * @public
  */
 

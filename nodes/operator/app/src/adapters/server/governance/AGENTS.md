@@ -14,7 +14,7 @@ Drizzle implementation of GovernanceStatusPort for system tenant governance visi
 ## Pointers
 
 - [GovernanceStatusPort](../../../ports/governance-status.port.ts)
-- [Governance Status API spec](../../../../../../docs/spec/governance-status-api.md)
+- [Governance Status API spec](https://node-template.cognidao.org/knowledge/governance-status-api)
 
 ## Boundaries
 

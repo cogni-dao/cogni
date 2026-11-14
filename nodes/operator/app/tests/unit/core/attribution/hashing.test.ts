@@ -7,7 +7,7 @@
  * Scope: Pure function testing. Does not test external dependencies or I/O.
  * Invariants: STATEMENT_DETERMINISTIC — same inputs → identical hash.
  * Side-effects: none
- * Links: packages/attribution-ledger/src/hashing.ts, docs/spec/attribution-ledger.md
+ * Links: packages/attribution-ledger/src/hashing.ts, https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

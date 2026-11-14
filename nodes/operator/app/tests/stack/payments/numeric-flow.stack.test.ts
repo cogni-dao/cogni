@@ -8,7 +8,7 @@
  * Invariants: UI cents → backend cents → raw USDC → credits all match; no float math; uses usdCentsToCredits().
  * Side-effects: IO (database writes, facade calls)
  * Notes: Validates conversion formulas: 1 cent = 10,000 raw USDC units; 1 cent = 10 credits.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Test double only. Enforces the same adapter-layer invariants as DoltgresKnowledgeStoreAdapter (HYPOTHESIS_HAS_EVALUATE_AT, CITATION_TARGET_EXISTS_AT_WRITE, EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE, DOMAIN_FK_ENFORCED_AT_WRITE). NOT used in production.
  * Invariants: parity with DoltgresKnowledgeStoreAdapter on all enforcement gates.
  * Side-effects: none (in-memory maps only)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

@@ -10,7 +10,7 @@
  *   - All consumers use z.infer types
  *   - All fields optional (partial update)
  * Side-effects: none
- * Links: /api/v1/schedules/[scheduleId] route, docs/spec/scheduler.md
+ * Links: /api/v1/schedules/[scheduleId] route, https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @internal
  */
 

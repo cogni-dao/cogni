@@ -6,7 +6,7 @@
  * Scope: Validates stdin and emits private JSON to the sole materializer; does not allocate or publish secrets.
  * Invariants: No provider allocation, public projection, secret writer, or readiness/cutover authority.
  * Side-effects: IO (stdin/stdout; bounded openssl generation in an erased private temporary directory).
- * Links: docs/spec/secrets-management.md, nodes/operator/app/src/shared/secrets/database-cell-binding.data.ts
+ * Links: https://cognidao.org/knowledge/secrets-management, nodes/operator/app/src/shared/secrets/database-cell-binding.data.ts
  * @internal
  */
 

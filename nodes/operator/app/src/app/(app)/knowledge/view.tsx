@@ -14,7 +14,7 @@
  *   - URL_DRIVEN_STATE (mode + filters persist in URL).
  *   - Cookie-session merges only — no Bearer header is ever sent from this page.
  * Side-effects: IO (GET /knowledge, GET /knowledge/contributions, GET /metrics/goals, POST .../merge, POST .../close).
- * Links: docs/spec/knowledge-syntropy.md, [/work view](../work/view.tsx)
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path, [/work view](../work/view.tsx)
  * @public
  */
 

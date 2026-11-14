@@ -13,8 +13,8 @@ Pure parsing and typed extraction for `.cogni/repo-spec.yaml` — the governance
 
 ## Pointers
 
-- [Node vs Operator Contract](../../docs/spec/node-operator-contract.md)
-- [Packages Architecture](../../docs/spec/packages-architecture.md)
+- [Node vs Operator Contract](https://node-template.cognidao.org/knowledge/node-sovereignty-contract)
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules)
 
 ## Boundaries
 
@@ -99,7 +99,7 @@ pnpm --filter @cogni/repo-spec build
 ## Change Protocol
 
 - Update this file when public exports change
-- Coordinate with node-operator-contract.md spec invariants
+- Coordinate with https://node-template.cognidao.org/knowledge/node-sovereignty-contract spec invariants
 
 ## Notes
 

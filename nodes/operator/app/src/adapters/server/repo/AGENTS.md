@@ -14,8 +14,8 @@ Repository access adapters implementing RepoCapability. RipgrepAdapter provides 
 ## Pointers
 
 - [RepoCapability interface](../../../../../../packages/ai-tools/src/capabilities/repo.ts)
-- [COGNI_BRAIN_SPEC](../../../../../../docs/spec/cogni-brain.md)
-- [Tool Use Spec](../../../../../../docs/spec/tool-use.md)
+- [COGNI_BRAIN_SPEC](https://node-template.cognidao.org/knowledge/repo-read-tools-contract)
+- [Tool Use Spec](https://node-template.cognidao.org/knowledge/tool-use-contract)
 
 ## Boundaries
 

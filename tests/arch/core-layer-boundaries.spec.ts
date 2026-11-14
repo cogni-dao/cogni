@@ -8,7 +8,7 @@
  * Invariants: Core may only import from core; any import from features/ports/adapters/app must fail.
  * Side-effects: IO (spawns depcruise subprocess)
  * Notes: Uses arch probes in src/core/__arch_probes__/ to test boundary enforcement.
- * Links: .dependency-cruiser.cjs (core-only-core rule), docs/spec/architecture.md
+ * Links: .dependency-cruiser.cjs (core-only-core rule), https://node-template.cognidao.org/knowledge/hexagonal-layering-contract
  * @public
  */
 

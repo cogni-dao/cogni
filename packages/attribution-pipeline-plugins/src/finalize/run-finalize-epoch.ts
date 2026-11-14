@@ -13,7 +13,7 @@
  *   - bug.5020 execute-guard: a non-production runtime refuses to build a distribution against the production Cogni DAO; fail-closed on a null emissions holder (baked-fallback path).
  *   - FOLD_NEVER_UNDOES_FINALIZE: the cumulative fold runs AFTER the atomic off-chain finalize commits, in try/catch — a fold failure leaves the signed statement intact.
  * Side-effects: IO (AttributionStore DB, viem EIP-712 verification, optional HTTP/in-process config resolver).
- * Links: docs/spec/attribution-ledger.md, packages/aragon-osx/src/epoch-distribution-service.ts
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, packages/aragon-osx/src/epoch-distribution-service.ts
  * @public
  */
 
@@ -61,7 +61,7 @@ const PROD_COGNI_DAO_ADDRESS =
  * Codes for CLIENT/REQUEST-STATE finalize failures — the caller can fix these (wrong
  * epoch state, unknown signer, invalid signature). The finalize route maps them to HTTP
  * 422, keeping them OUT of the 500 "internal" alarm bucket (FAULT_PARTY_BEFORE_BUCKET,
- * error-handling.md). Genuine server faults (data-integrity mismatch, DB failure) throw
+ * https://node-template.cognidao.org/knowledge/layered-error-translation). Genuine server faults (data-integrity mismatch, DB failure) throw
  * a plain Error → 500, so `internal` stays the alarm, not the dump.
  */
 export type FinalizeEpochErrorCode =

@@ -9,7 +9,7 @@ skills:
   - ../../.claude/skills/devops-expert/SKILL.md
 spec_refs:
   - node-baas-substrate-model
-  - ../spec/node-formation.md
+  - https://cognidao.org/knowledge/node-formation-contract
 related:
   - ./openfga-substrate-unification.md
   - ../../work/handoffs/manual-edits-ledger.node-wizard-2026-06-10.md

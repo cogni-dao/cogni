@@ -10,7 +10,7 @@
  *   - assertDomainRegistered MUST run on the same client/branch as the subsequent INSERT,
  *     so per-PR contribution branches check against the branch's own `domains` table.
  * Side-effects: IO (single SELECT inside assertDomainRegistered)
- * Links: docs/spec/knowledge-domain-registry.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-domain-management
  * @internal
  */
 

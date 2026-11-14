@@ -11,7 +11,7 @@
  *   - Per READINESS_GATES_LOCALLY: ready=false stops work intake immediately
  *   - Both workers must start before ready=true
  * Side-effects: IO (Temporal connection, process signals)
- * Links: docs/spec/scheduler.md, docs/spec/services-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, https://cognidao.org/knowledge/service-isolation-contract
  * @public
  */
 

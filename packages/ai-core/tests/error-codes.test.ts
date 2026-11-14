@@ -10,7 +10,7 @@
  *   - insufficient_credits (user balance) stays distinct from provider_unavailable (operator/upstream)
  *   - internal is the alarm bucket — only genuinely-unknown errors land there
  * Side-effects: none
- * Links: docs/spec/error-handling.md (FAULT_PARTY_BEFORE_BUCKET), bug.5056
+ * Links: https://node-template.cognidao.org/knowledge/layered-error-translation (FAULT_PARTY_BEFORE_BUCKET), bug.5056
  * @internal
  */
 

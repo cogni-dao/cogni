@@ -8,7 +8,7 @@
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, PRINCIPAL_DERIVES_SOURCE,
  *   OUTCOME_CITES_HYPOTHESIS, RESOLVER_IDEMPOTENT (double-fire returns existing state).
  * Side-effects: IO (HTTP response, Doltgres write via container.edoCapability)
- * Links: docs/spec/knowledge-syntropy.md § The Hypothesis Loop
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path § The Hypothesis Loop
  * @public
  */
 

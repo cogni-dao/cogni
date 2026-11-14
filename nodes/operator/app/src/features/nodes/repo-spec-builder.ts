@@ -8,7 +8,7 @@
  *   setup.verify returns and the publish step commits. No IO, no env.
  * Invariants: FORMATION_IS_GOVERNANCE_ONLY — payments remain pending_activation.
  * Side-effects: none
- * Links: docs/spec/node-formation.md, packages/repo-spec, task.5083
+ * Links: https://cognidao.org/knowledge/node-formation-contract, packages/repo-spec, task.5083
  * @public
  */
 

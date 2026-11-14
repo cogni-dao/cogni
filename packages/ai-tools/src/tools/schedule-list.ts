@@ -9,7 +9,7 @@
  *   - TOOL_ID_NAMESPACED: ID is `core__schedule_list`
  *   - EFFECT_TYPED: effect is `read_only`
  * Side-effects: IO (reads schedules via capability)
- * Links: docs/spec/scheduler.md
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @public
  */
 

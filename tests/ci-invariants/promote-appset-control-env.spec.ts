@@ -14,7 +14,7 @@
  *   - LANE_APPSET_IS_APPLIED: the lane cluster receives and refreshes the
  *     lane-named AppSet instead of returning a green no-op.
  * Side-effects: IO (reads the workflow file)
- * Links: task.5141, docs/spec/node-ci-cd-contract.md § Lane vs control env
+ * Links: task.5141, https://node-template.cognidao.org/knowledge/node-ci-sovereignty § Lane vs control env
  * @public
  */
 

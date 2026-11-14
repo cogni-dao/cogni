@@ -8,7 +8,7 @@
  *   does not access GitHub.
  * Invariants: NODE_TEMPLATE_ANCESTRY — wizard-minted nodes are named forks of node-template.
  * Side-effects: none
- * Links: src/adapters/server/vcs/github-repo-write.ts, docs/spec/node-formation.md
+ * Links: src/adapters/server/vcs/github-repo-write.ts, https://cognidao.org/knowledge/node-formation-contract
  * @internal
  */
 

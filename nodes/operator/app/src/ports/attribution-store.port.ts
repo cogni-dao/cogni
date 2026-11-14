@@ -7,7 +7,7 @@
  * Scope: Type re-exports only. Does not contain implementations.
  * Invariants: Named exports only, no runtime coupling.
  * Side-effects: none
- * Links: packages/attribution-ledger/src/store.ts, docs/spec/attribution-ledger.md
+ * Links: packages/attribution-ledger/src/store.ts, https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

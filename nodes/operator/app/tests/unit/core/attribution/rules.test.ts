@@ -7,7 +7,7 @@
  * Scope: Pure business logic testing. Does not test external dependencies or I/O.
  * Invariants: ALL_MATH_BIGINT, STATEMENT_DETERMINISTIC — sum of statement items === poolTotalCredits.
  * Side-effects: none
- * Links: src/core/attribution/rules.ts, docs/spec/attribution-ledger.md#statement-item-computation
+ * Links: src/core/attribution/rules.ts, https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

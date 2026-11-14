@@ -9,7 +9,7 @@
  * Invariants:
  *   - SELECTION_ONLY: This adapter lists models. Runtime dispatch is separate (ProviderResolver).
  * Side-effects: IO (delegates to providers which may fetch from external APIs)
- * Links: docs/spec/multi-provider-llm.md
+ * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @internal
  */
 

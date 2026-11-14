@@ -7,7 +7,7 @@
  * Scope: React component unit test with next-themes mocked. No network or auth.
  * Invariants: HTML_RENDERER_THEME_MATCHES_PARENT, SANDBOX_IS_THE_BOUNDARY.
  * Side-effects: none
- * Links: src/app/(app)/knowledge/_components/HtmlRenderer.tsx, docs/spec/knowledge-html-style.md
+ * Links: src/app/(app)/knowledge/_components/HtmlRenderer.tsx, https://node-template.cognidao.org/knowledge/knowledge-human-visuals
  * @vitest-environment jsdom
  * @internal
  */

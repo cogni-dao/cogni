@@ -12,7 +12,7 @@
  *   - OPTIMISTIC_APPEND: saveThread rejects on expectedMessageCount mismatch
  *   - MAX_THREAD_MESSAGES: saveThread rejects when exceeding 200 messages
  * Side-effects: IO (database writes, HTTP requests via route handler)
- * Links: docs/spec/thread-persistence.md, src/app/api/v1/ai/chat/route.ts
+ * Links: https://node-template.cognidao.org/knowledge/thread-persistence-contract, src/app/api/v1/ai/chat/route.ts
  * @public
  */
 

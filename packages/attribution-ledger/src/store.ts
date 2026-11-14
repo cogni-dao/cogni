@@ -19,7 +19,7 @@
  * - CLAIMANT_RESOLUTION_REQUIRED: upsertDraftClaimants, lockClaimantsForEpoch, loadLockedClaimants manage the epoch_receipt_claimants lifecycle.
  * - SELECTION_POLICY_AUTHORITY: getSelectionCandidates excludes receipts already selected in prior same-scope epochs but has no time-window filter — the selection policy decides epoch membership within remaining candidates.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

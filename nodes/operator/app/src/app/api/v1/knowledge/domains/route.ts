@@ -8,7 +8,7 @@
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, DOMAIN_HTTP_COOKIE_ONLY,
  *   DOMAIN_REGISTRY_VIA_UI, DOMAIN_REGISTER_AUTOCOMMITS.
  * Side-effects: IO (HTTP response, Doltgres read/write via container port)
- * Links: docs/spec/knowledge-domain-registry.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-domain-management
  * @public
  */
 

@@ -17,7 +17,7 @@
  *   MISSING_MAY_BE_FATAL: the mirror declares `on_missing: fail`.
  *   NO_HUB_SECRETS_IN_THE_MIRROR: hub production/staging secret material is declared hub-only.
  * Side-effects: IO (reads .cogni/sync-manifest.yaml)
- * Links: docs/spec/repo-sync-contract.md, scripts/ci/lib/sync-policy.mjs,
+ * Links: https://cognidao.org/knowledge/sync-manifest-contract, scripts/ci/lib/sync-policy.mjs,
  *        scripts/ci/sync-test-parent.mjs, .cogni/sync-manifest.yaml
  * @public
  */

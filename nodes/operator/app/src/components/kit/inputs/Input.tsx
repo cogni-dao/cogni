@@ -8,7 +8,7 @@
  * Invariants: Forwards ref; accepts standard input props.
  * Side-effects: none
  * Notes: Uses CVA for styling - no literal classes allowed.
- * Links: docs/spec/ui-implementation.md
+ * Links: https://node-template.cognidao.org/knowledge/frontend-development
  * @public
  */
 

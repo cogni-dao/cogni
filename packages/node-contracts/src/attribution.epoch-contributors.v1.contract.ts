@@ -12,7 +12,7 @@
  *   - Contract remains stable; breaking changes require new version
  *   - All consumers use z.infer types
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md, contracts/attribution.epoch-activity.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, contracts/attribution.epoch-activity.v1.contract
  * @public
  */
 

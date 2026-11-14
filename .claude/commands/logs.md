@@ -134,7 +134,7 @@ For CI failures, use `env="ci"`:
 > selector needs that env's Alloy to promote the `node` label. A node's registry row and its `node`
 > label can split across envs (e.g. beacon: row in prod, label only on candidate-a). Per-env substrate
 > gaps tracked: **bug.5041** (prod Alloy `node` label stale), **bug.5040** (prod Reloader). Full
-> born-observable contract: `docs/spec/grafana-observability-access.md` §"Born observable".
+> born-observable contract: `https://cognidao.org/knowledge/node-log-proxy-contract` §"Born observable".
 >
 > **Parity / scope:** for the caller's node slice this is **1:1** with this guide's MCP /
 > `loki-query.sh` path — same selector syntax, same `| json | …` pipeline, same JSON output — the
@@ -143,7 +143,7 @@ For CI failures, use `env="ci"`:
 > env-wide is the **generic** route `GET /api/v1/observability/logs` + the `logs.query` RBAC action
 > (Phase 1, not yet built). When that lands, this guide will direct all node-dev agents to it
 > instead of the MCP. Identity + phasing: `docs/design/substrate-grafana-observability.md` §"Phase
-> 0"; node-scoped design: `docs/spec/grafana-observability-access.md` §"Node-dev log scope envelope".
+> 0"; node-scoped design: `https://cognidao.org/knowledge/node-log-proxy-contract` §"Node-dev log scope envelope".
 
 - `source` - `k8s` (in-cluster pod logs from cAdvisor) | `k8s-events`
   (kubernetes Events stream — pod OOMKilled, probe failures, evictions,

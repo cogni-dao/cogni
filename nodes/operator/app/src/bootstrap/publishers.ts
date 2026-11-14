@@ -5,11 +5,11 @@
  * Module: `@bootstrap/publishers`
  * Purpose: Node-local process metrics publisher (heap, RSS, event loop delay).
  * Scope: Bootstrap-only exception for node-internal data. Does not poll external sources.
- *   External source monitoring uses ingestion-core + Temporal. See data-streams.md.
+ *   External source monitoring uses ingestion-core + Temporal. See https://node-template.cognidao.org/knowledge/node-streams-transport.
  * Invariants:
  *   - PROCESS_HEALTH_ONLY: No external source polling from bootstrap
  * Side-effects: IO (Redis publish via NodeStreamPort)
- * Links: docs/spec/data-streams.md, @cogni/node-streams
+ * Links: https://node-template.cognidao.org/knowledge/node-streams-transport, @cogni/node-streams
  * @internal
  */
 

@@ -10,7 +10,7 @@
  *   - PUMP_TO_COMPLETION_VIA_REDIS: Publisher pumps all events regardless of subscriber count
  *   - SSE_FROM_REDIS_NOT_MEMORY: Subscribers read from Redis Streams, not in-process memory
  * Side-effects: Redis I/O
- * Links: docs/spec/unified-graph-launch.md §7-10
+ * Links: https://node-template.cognidao.org/knowledge/graph-run-launch-contract §7-10
  * @public
  */
 

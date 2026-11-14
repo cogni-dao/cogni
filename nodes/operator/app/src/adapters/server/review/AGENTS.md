@@ -17,7 +17,7 @@ evidence + repo-spec/owning-node context, and GitHub App installation tokens.
 
 ## Pointers
 
-- [VCS Integration Spec](../../../../../../docs/spec/vcs-integration.md)
+- [VCS Integration Spec](https://cognidao.org/knowledge/pr-review-grounded-gate)
 - [Internal review routes](../../../app/api/internal/review/) (thin routes that call this adapter)
 - [Worker review delegation](../../../../../../services/scheduler-worker/src/adapters/review-http.ts) + [activities](../../../../../../services/scheduler-worker/src/activities/review.ts)
 - [GitHub App Webhook Setup](../../../../../../docs/guides/github-app-webhook-setup.md)

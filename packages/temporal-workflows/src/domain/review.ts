@@ -12,11 +12,11 @@
  *   - UNFUNDED_IS_NOT_A_VERDICT (bug.5626): a run the provider refused for lack of credit reports
  *     `couldNotEvaluate: "unfunded"` and the check title says so, distinct from a model failure
  *     (`graph_failed`). It is still a non-evaluation, never a pass or a neutral verdict.
- *   - Routing-diagnostic wording mirrors docs/spec/node-ci-cd-contract.md
+ *   - Routing-diagnostic wording mirrors https://node-template.cognidao.org/knowledge/node-ci-sovereignty
  *     § Single-Domain Scope > Diagnostic contract: name conflicting domains,
  *     name operator-territory paths, suggest the split, link the spec.
  * Side-effects: none
- * Links: task.0191, task.0410, docs/spec/temporal-patterns.md, docs/spec/node-ci-cd-contract.md
+ * Links: task.0191, task.0410, https://cognidao.org/knowledge/temporal-workflow-rules, https://node-template.cognidao.org/knowledge/node-ci-sovereignty
  * @internal
  */
 
@@ -28,7 +28,7 @@ import type {
 
 // Relative path so each fork's PR comments link to its own spec copy.
 // GitHub renders relative links in PR comments against the comment's own repo.
-const SPEC_LINK = "docs/spec/node-ci-cd-contract.md#single-domain-scope";
+const SPEC_LINK = "https://cognidao.org/knowledge/single-domain-scope";
 
 // ---------------------------------------------------------------------------
 // Types (serializable — used by workflow and activities)
@@ -526,7 +526,7 @@ export function formatPrComment(
 
 // ---------------------------------------------------------------------------
 // Routing diagnostics — formatters for cross-domain refusal + miss neutral.
-// Wording mirrors docs/spec/node-ci-cd-contract.md § Single-Domain Scope >
+// Wording mirrors https://node-template.cognidao.org/knowledge/node-ci-sovereignty § Single-Domain Scope >
 // Diagnostic contract: name conflicting domains, name operator-territory
 // paths, suggest the split, link the spec.
 // ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@
  *   `?mode=goals` deep-link (parsed with the published GoalsProgressSchema, so a
  *   malformed read degrades to the client fetch); otherwise both stay deferred.
  * Side-effects: IO (Doltgres reads via container port)
- * Links: [KnowledgeDashboardView](./view.tsx), ./_server/loaders.ts, docs/spec/knowledge-syntropy.md
+ * Links: [KnowledgeDashboardView](./view.tsx), ./_server/loaders.ts, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Define valid worker event names as const registry. Does not define full payload schemas.
  * Invariants: All event names registered here; logWorkerEvent() enforces `event` field presence.
  * Side-effects: none
- * Links: docs/spec/observability.md, src/shared/observability/events/index.ts (main app pattern)
+ * Links: https://node-template.cognidao.org/knowledge/observability-logging-contract, src/shared/observability/events/index.ts (main app pattern)
  * @public
  */
 

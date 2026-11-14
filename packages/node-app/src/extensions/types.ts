@@ -7,7 +7,7 @@
  * Scope: Pure type definitions. Does not contain runtime code, React components, or env access.
  * Invariants: All fields readonly; NodeAppConfig is the single customization surface for nodes.
  * Side-effects: none
- * Links: docs/spec/node-app-shell.md
+ * Links: https://node-template.cognidao.org/knowledge/node-app-shell-contract
  * @public
  */
 

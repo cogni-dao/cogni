@@ -75,7 +75,7 @@ ensure_sa() {
 # it up front with a diagnosis. See .claude/skills/devops-expert 'VM migration orphans deploy pointers'.
 if ! ssh $SSH_OPTS -o BatchMode=yes -o ConnectTimeout=15 "root@${VM_IP}" true 2>/tmp/_vmprobe; then
   # Classify into a stable reason; NEVER echo the host/IP or raw ssh stderr
-  # (privacy: docs/spec/observability.md §5 — stable fields only, no secrets).
+  # (privacy: https://node-template.cognidao.org/knowledge/observability-logging-contract §5 — stable fields only, no secrets).
   reason=unreachable
   grep -qi 'permission denied' /tmp/_vmprobe && reason=auth_denied
   rm -f /tmp/_vmprobe
@@ -216,7 +216,7 @@ bao_exec "write auth/kubernetes/role/${DEPLOY_ENV}-db-reader \
 #   candidate-a -> candidate-a only
 # Up-trust is refused forever: no pre-prod env gains a production path here. OpenBao is
 # per-CLUSTER, so a lane prefix is a LABEL inside this env's own vault, never a reach into
-# another cluster's vault. Per secrets-management.md Invariant 1 the blast-radius boundary
+# another cluster's vault. Per https://cognidao.org/knowledge/secrets-management Invariant 1 the blast-radius boundary
 # is <service>; widening the lane set does not widen that boundary.
 # The two _system/_shared denies are carried onto EVERY lane gained, data AND metadata —
 # a per-node grant must never reach a shared path in ANY lane.

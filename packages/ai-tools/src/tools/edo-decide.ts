@@ -12,7 +12,7 @@
  *   - EDGE_TYPE_MATCHES_CITED_ENTRY_TYPE: cited row must be a hypothesis or a DAO goal.
  *   - EDO_TOOLS_ATOMIC: write + edge + commit happen in one call.
  * Side-effects: IO (database write + dolt_commit)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

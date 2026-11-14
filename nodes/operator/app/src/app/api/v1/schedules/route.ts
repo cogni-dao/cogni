@@ -10,7 +10,7 @@
  *   - SCHEDULE_CREATION_REJECTS_IF_CURRENTLY_UNPAYABLE: paid model + balance <= 0 → 402
  *   - createSchedule is atomic (grant + schedule + job enqueue)
  * Side-effects: IO (HTTP request/response, database, job queue)
- * Links: docs/spec/scheduler.md, schedules.*.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, schedules.*.v1.contract
  * @public
  */
 

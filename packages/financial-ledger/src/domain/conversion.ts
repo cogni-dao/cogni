@@ -9,7 +9,7 @@
  *   - ALL_MATH_BIGINT: All monetary calculations use bigint
  *   - Integer math only: credits = micro_usdc * 10 (no floats)
  * Side-effects: none
- * Links: docs/spec/financial-ledger.md (Cross-Ledger Transfers)
+ * Links: https://node-template.cognidao.org/knowledge/financial-ledger-tigerbeetle (Cross-Ledger Transfers)
  * @public
  */
 

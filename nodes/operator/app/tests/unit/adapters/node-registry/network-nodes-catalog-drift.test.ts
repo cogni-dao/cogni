@@ -20,7 +20,7 @@
  *   assertion otherwise. No network.
  * Side-effects: fs reads under the repo's infra/catalog + nodes/<slug>/.cogni.
  * Links: src/adapters/server/node-registry/network-nodes.data.ts, infra/catalog/*.yaml,
- *   infra/catalog/_schema.json (REPO_SPEC_IS_IDENTITY_SSOT), docs/spec/ci-cd.md (task.5078),
+ *   infra/catalog/_schema.json (REPO_SPEC_IS_IDENTITY_SSOT), https://cognidao.org/knowledge/operator-pipeline-contract (task.5078),
  *   src/shared/node-app-scaffold/gens/network-nodes.ts (the publish splice this guards)
  */
 

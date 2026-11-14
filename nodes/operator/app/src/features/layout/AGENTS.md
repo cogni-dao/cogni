@@ -15,8 +15,8 @@ App-shell layout components: header, footer, sidebar, and top bar. Composes kit/
 ## Pointers
 
 - [Root AGENTS.md](../../../../../AGENTS.md)
-- [Architecture](../../../../../docs/spec/architecture.md)
-- [UI Implementation Guide](../../../../../docs/spec/ui-implementation.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
+- [UI Implementation Guide](https://node-template.cognidao.org/knowledge/frontend-development)
 
 ## Boundaries
 

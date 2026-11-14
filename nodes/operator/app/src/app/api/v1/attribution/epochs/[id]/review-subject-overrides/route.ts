@@ -7,7 +7,7 @@
  * Scope: Auth-protected GET/PATCH/DELETE endpoints. Requires wallet in activity_ledger.approvers for writes. Does not perform finalization or statement generation.
  * Invariants: NODE_SCOPED, WRITE_ROUTES_APPROVER_GATED, VALIDATE_IO.
  * Side-effects: IO (HTTP response, database write)
- * Links: docs/spec/attribution-ledger.md, contracts/attribution.review-subject-overrides.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, contracts/attribution.review-subject-overrides.v1.contract
  * @public
  */
 

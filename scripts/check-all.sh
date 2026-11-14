@@ -17,7 +17,7 @@
 #   - set -o pipefail: Catches failures in piped commands
 #   - set -u: Treats unbound variables as errors
 # Side-effects: None in default mode; --fix mode modifies files via ESLint and Prettier
-# Links: docs/spec/style.md, AGENTS.md, package.json:41-42, vitest.config.mts
+# Links: https://node-template.cognidao.org/knowledge/code-style-standard, AGENTS.md, package.json:41-42, vitest.config.mts
 
 set +e
 set -o pipefail

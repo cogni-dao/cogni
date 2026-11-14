@@ -9,7 +9,7 @@
  *   - SINGLE_SOURCE_OF_TRUTH: This is THE list of tools autoresearch variants can use
  *   - CAPABILITY_NOT_POLICY: These are capabilities, not authorization
  * Side-effects: none
- * Links: docs/spec/tool-use.md, docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/tool-use-contract, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

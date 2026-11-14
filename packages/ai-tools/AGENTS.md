@@ -13,8 +13,8 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
 
 ## Pointers
 
-- [LangGraph AI Guide](../../docs/spec/langgraph-patterns.md)
-- [Tool Use Spec](../../docs/spec/tool-use.md)
+- [LangGraph AI Guide](https://node-template.cognidao.org/knowledge/graph-execution-invariants)
+- [Tool Use Spec](https://node-template.cognidao.org/knowledge/tool-use-contract)
 
 ## Boundaries
 

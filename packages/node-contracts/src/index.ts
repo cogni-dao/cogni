@@ -9,7 +9,7 @@
  *   - PURE_LIBRARY: No process lifecycle, no env vars, no framework deps
  *   - NO_SRC_IMPORTS: Never imports @/ or src/ paths
  * Side-effects: none
- * Links: docs/spec/architecture.md, docs/spec/packages-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/hexagonal-layering-contract, https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @public
  */
 

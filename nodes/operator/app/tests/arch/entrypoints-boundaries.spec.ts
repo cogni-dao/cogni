@@ -8,7 +8,7 @@
  * Invariants: Only index.ts/public.ts/services/components can be imported; internal files blocked.
  * Side-effects: IO (spawns depcruise subprocess)
  * Notes: Uses arch probes in src/*__arch_probes__/ to test entry point enforcement.
- * Links: .dependency-cruiser.cjs (entry point rules), docs/spec/architecture.md
+ * Links: .dependency-cruiser.cjs (entry point rules), https://node-template.cognidao.org/knowledge/hexagonal-layering-contract
  * @public
  */
 

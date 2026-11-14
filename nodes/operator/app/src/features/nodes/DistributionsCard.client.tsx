@@ -32,7 +32,7 @@
  *   src/features/nodes/distribution-setup-state.ts, src/features/nodes/useDeployDistributor.ts,
  *   src/features/governance/hooks/useAuthorizePublishing.ts,
  *   src/features/governance/hooks/useExecuteDistribution.ts (useHasExecutePermission),
- *   docs/spec/tokenomics-distribution.md ("Activation — one guided flow, git-authoritative")
+ *   https://node-template.cognidao.org/knowledge/distribution-lifecycle ("Activation — one guided flow, git-authoritative")
  * @public
  */
 

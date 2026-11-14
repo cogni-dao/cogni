@@ -17,7 +17,7 @@ import type { NodeProber } from "@/ports";
 /**
  * Real-fetch prober for the liveness gate — exercises a node's PUBLIC surface only (serving +
  * run-carries). The operator holds NO Grafana token; observability querying is a dev-direct RBAC
- * concern (docs/spec/grafana-observability-access.md), not an operator-API proxy.
+ * concern (https://cognidao.org/knowledge/node-log-proxy-contract), not an operator-API proxy.
  */
 export function createNodeProber(): NodeProber {
   return new HttpNodeProber();

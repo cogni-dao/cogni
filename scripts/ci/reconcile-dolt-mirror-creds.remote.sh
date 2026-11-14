@@ -11,9 +11,9 @@
 #   install-creds.sh at container start. deploy-infra used to be the only writer of
 #   those .env keys, but an app-only promote runs skip_infra and skips deploy-infra,
 #   so the mirror never came up on the normal flow. reconcile-node-substrate.sh
-#   (the ALWAYS-run lane, ci-cd.md Axiom 22) invokes this helper on every flight/
+#   (the ALWAYS-run lane, https://cognidao.org/knowledge/operator-pipeline-contract Axiom 22) invokes this helper on every flight/
 #   promote — the same shape bug.5041 used to fold the Alloy config re-push into the
-#   always-on lane. See docs/spec/secrets-management.md (Sequencing wrinkle) +
+#   always-on lane. See https://cognidao.org/knowledge/secrets-management (Sequencing wrinkle) +
 #   docs/runbooks/dolthub-remote-bootstrap.md.
 #
 # SECURITY / INVARIANTS:

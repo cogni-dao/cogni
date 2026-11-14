@@ -7,7 +7,7 @@
  * Scope: Build tooling only; does not contain runtime code.
  * Invariants: Output must be ESM with type declarations.
  * Side-effects: IO
- * Links: docs/spec/langgraph-patterns.md
+ * Links: https://node-template.cognidao.org/knowledge/graph-execution-invariants
  * @internal
  */
 

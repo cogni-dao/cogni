@@ -49,7 +49,7 @@
  * Side-effects: IO (DB read, GitHub REST merge via VcsCapability).
  * Links: packages/node-contracts/src/vcs.merge.v1.contract.ts,
  *   nodes/operator/app/src/features/vcs/merge-gate.ts,
- *   nodes/operator/app/src/app/_lib/node-rbac.ts, docs/spec/development-lifecycle.md
+ *   nodes/operator/app/src/app/_lib/node-rbac.ts, https://node-template.cognidao.org/knowledge/work-item-status-machine
  * @public
  */
 

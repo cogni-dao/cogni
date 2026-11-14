@@ -18,7 +18,7 @@
  * Notes: Runs against dev:stack:full (dev databases, not test databases).
  *   Uses fetch() — not route handler imports — because the full HTTP path through
  *   LiteLLM callback routing is what we're proving.
- * Links: docs/spec/multi-node-tenancy.md, docs/spec/billing-ingest.md, task.0258
+ * Links: https://node-template.cognidao.org/knowledge/node-tenancy-isolation, https://node-template.cognidao.org/knowledge/billing-ingest-callback, task.0258
  * @public
  */
 

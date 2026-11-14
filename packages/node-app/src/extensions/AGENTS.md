@@ -14,7 +14,7 @@ Extension-point types and React context for node customization. Defines the `Nod
 ## Pointers
 
 - [Package AGENTS.md](../../AGENTS.md)
-- [Node App Shell Spec](../../../../docs/spec/node-app-shell.md)
+- [Node App Shell Spec](https://node-template.cognidao.org/knowledge/node-app-shell-contract)
 
 ## Boundaries
 

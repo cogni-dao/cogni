@@ -15,7 +15,7 @@ Build-time scripts for migrations, seeds, type generation, development utilities
 ## Pointers
 
 - [Root AGENTS.md](../AGENTS.md)
-- [Architecture](../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 
 ## Boundaries
 

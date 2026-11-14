@@ -8,9 +8,9 @@ skills:
   - ../../.claude/skills/node-wizard-expert/SKILL.md
   - ../../.claude/skills/cicd-secrets-expert/SKILL.md
 spec_refs:
-  - ../spec/secrets-classification.md
-  - ../spec/secrets-management.md
-  - ../spec/node-ci-cd-contract.md
+  - https://node-template.cognidao.org/knowledge/secrets-routing-tiers
+  - https://cognidao.org/knowledge/secrets-management
+  - https://node-template.cognidao.org/knowledge/node-ci-sovereignty
 related:
   - ./secrets-catalog-per-node.md
 knowledge_id: node-wizard-secret-setting

@@ -11,7 +11,7 @@ description: Living status scorecard for Cogni agent infrastructure — InProc�
 
 ## InProc ↔ LangGraph Server Alignment
 
-`langgraph-patterns.md` north-star: _"InProc must model as closely to LangGraph Server's I/O as possible."_ Where they stand:
+https://node-template.cognidao.org/knowledge/graph-execution-invariants north-star: _"InProc must model as closely to LangGraph Server's I/O as possible."_ Where they stand:
 
 | Dimension              | InProc (live, P0)                             | LangGraph Server (designed)                                                | Aligned?                           |
 | ---------------------- | --------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------- |
@@ -40,13 +40,13 @@ description: Living status scorecard for Cogni agent infrastructure — InProc�
 
 ## DRY, Drift & Consolidation — agent/langgraph cluster
 
-Evidence-backed. **CICD docs are out of scope and on HOLD until the pipeline is green** — no edits to `ci-cd.md` / `cd-pipeline-*`.
+Evidence-backed. **CICD docs are out of scope and on HOLD until the pipeline is green** — no edits to https://cognidao.org/knowledge/operator-pipeline-contract / `cd-pipeline-*`.
 
 | #   | Finding                                                                | Evidence                                                                                                                                                                                      | Fix                                                                          |
 | --- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| 1   | Invariant duplication; `graph-execution.md` is SSOT yet others restate | `GraphExecutorPort`+`AiEvent` in all 4 of graph-execution / langgraph-patterns / langgraph-server / unified-graph-launch; `PACKAGES_NO_SRC_IMPORTS` ×3; `NO_LANGCHAIN_IN_SRC` ×2              | each restated invariant → one-line link to graph-execution                   |
+| 1   | Invariant duplication; https://node-template.cognidao.org/knowledge/graph-execution-invariants is SSOT yet others restate | `GraphExecutorPort`+`AiEvent` in all 4 of graph-execution / langgraph-patterns / langgraph-server / unified-graph-launch; `PACKAGES_NO_SRC_IMPORTS` ×3; `NO_LANGCHAIN_IN_SRC` ×2              | each restated invariant → one-line link to graph-execution                   |
 | 2   | Speculative executor specs for unbuilt paths                           | `claude-sdk-adapter` (_not implemented_), `n8n-adapter` (_P2_), `multi-provider-llm` (_future_), `completions-api` (_proposed_) — all `draft`                                                 | collapse to one "Future Executors" stub under graph-execution                |
-| 3   | Path drift                                                             | `apps/operator` (real `nodes/<node>/app`) in unified-graph-launch, ai-pipeline-e2e, multi-provider-llm; `../LANGGRAPH_SERVER.md` (real `docs/spec/langgraph-server.md`) in langgraph-patterns | mechanical rewrite                                                           |
+| 3   | Path drift                                                             | `apps/operator` (real `nodes/<node>/app`) in unified-graph-launch, ai-pipeline-e2e, multi-provider-llm; `../LANGGRAPH_SERVER.md` (real `https://node-template.cognidao.org/knowledge/langgraph-server-adapter`) in langgraph-patterns | mechanical rewrite                                                           |
 | 4   | `agent-development.md` operator-centric + missing ship/run             | leads shared Tier 1a; no runtime/CI link                                                                                                                                                      | lead node-local `packages/graphs`; add Build→Ship→Run paragraph              |
 | 5   | Paradigm doc masquerading as guide                                     | `agent-design.md` = KPIs/paradigm, not a runbook                                                                                                                                              | → operator knowledge Dolt. Rule: guide = runbook; paradigm = knowledge entry |
 
@@ -54,12 +54,12 @@ Evidence-backed. **CICD docs are out of scope and on HOLD until the pipeline is 
 
 ## Canonical Doc Map (read order + stale flags)
 
-1. [`graph-execution.md`](../../../docs/spec/graph-execution.md) — **authoritative spec.** Executor port, decorator stack, routing, catalog, ALS.
-2. [`langgraph-patterns.md`](../../../docs/spec/langgraph-patterns.md) — package boundaries, InProc flow, anti-patterns. 🟡 fix `../LANGGRAPH_SERVER.md` link.
-3. [`unified-graph-launch.md`](../../../docs/spec/unified-graph-launch.md) — run topology (Temporal → app → Redis → SSE). 🟡 `apps/operator` drift.
-4. [`temporal-patterns.md`](../../../docs/spec/temporal-patterns.md) — durability boundary, webhook→workflow→graph→write.
-5. [`langgraph-server.md`](../../../docs/spec/langgraph-server.md) — alternate executor (designed, not live).
-6. [`ai-pipeline-e2e.md`](../../../docs/spec/ai-pipeline-e2e.md) — auth→execution→billing→security E2E. 🟡 `apps/operator` drift.
+1. [`graph-execution.md`](https://node-template.cognidao.org/knowledge/graph-execution-invariants) — **authoritative spec.** Executor port, decorator stack, routing, catalog, ALS.
+2. [`langgraph-patterns.md`](https://node-template.cognidao.org/knowledge/graph-execution-invariants) — package boundaries, InProc flow, anti-patterns. 🟡 fix `../LANGGRAPH_SERVER.md` link.
+3. [`unified-graph-launch.md`](https://node-template.cognidao.org/knowledge/graph-run-launch-contract) — run topology (Temporal → app → Redis → SSE). 🟡 `apps/operator` drift.
+4. [`temporal-patterns.md`](https://cognidao.org/knowledge/temporal-workflow-rules) — durability boundary, webhook→workflow→graph→write.
+5. [`langgraph-server.md`](https://node-template.cognidao.org/knowledge/langgraph-server-adapter) — alternate executor (designed, not live).
+6. [`ai-pipeline-e2e.md`](https://node-template.cognidao.org/knowledge/charge-receipt-pipeline) — auth→execution→billing→security E2E. 🟡 `apps/operator` drift.
 
 **Narrower/adjacent:** `agent-discovery`, `agent-registry`, `ai-setup`, `sandboxed-agents`, `node-baas-architecture`.
 **Speculative (see DRY #2):** `claude-sdk-adapter`, `n8n-adapter`, `multi-provider-llm`, `completions-api`.

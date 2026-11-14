@@ -31,7 +31,7 @@ import {
   type Secret,
 } from "./lib/secrets-catalog-loader";
 
-// Types are imported from the loader. See docs/spec/secrets-classification.md
+// Types are imported from the loader. See https://node-template.cognidao.org/knowledge/secrets-routing-tiers
 // for tier definitions and docs/design/secrets-catalog-per-node.md for the
 // rationale on why catalog data lives in YAML rather than this file.
 
@@ -41,7 +41,7 @@ import {
 // walks `nodes/*/.cogni/secrets-catalog.yaml` + `infra/secrets-catalog.yaml`,
 // validates via Zod, asserts uniqueness, and emits the Secret[] + routing
 // shapes the rest of this file consumes. See:
-//   - docs/spec/secrets-classification.md (tier definitions + rules)
+//   - https://node-template.cognidao.org/knowledge/secrets-routing-tiers (tier definitions + rules)
 //   - docs/design/secrets-catalog-per-node.md (file-layout rationale)
 //
 // REPO constant below is hardcoded to "Cogni-DAO/cogni" — this script today

@@ -11,7 +11,7 @@
  *   Prevents ciphertext rebind across tenants or connections.
  * - KEY_FROM_CALLER: Key is passed in, not read from env. Caller (adapter) is responsible for key provisioning.
  * Side-effects: none (pure crypto)
- * Links: docs/spec/tenant-connections.md (invariant 4)
+ * Links: https://node-template.cognidao.org/knowledge/tool-credential-brokering (invariant 4)
  * @public
  */
 

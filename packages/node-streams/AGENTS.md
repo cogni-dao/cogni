@@ -13,8 +13,8 @@ Generic streaming backbone for continuous node-level data streams. Provides port
 
 ## Pointers
 
-- [Data Streams Spec](../../docs/spec/data-streams.md): Design, invariants, polling budget
-- [Packages Architecture](../../docs/spec/packages-architecture.md): Package boundaries
+- [Data Streams Spec](https://node-template.cognidao.org/knowledge/node-streams-transport): Design, invariants, polling budget
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules): Package boundaries
 
 ## Boundaries
 

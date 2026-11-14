@@ -10,7 +10,7 @@
  *   - ONE_GATE: No provider ships without implementing this shape.
  *   - POLICY_ON_PROVIDER: requiresPlatformCredits and usageSource live here, not on ModelRef.
  * Side-effects: none (interface only)
- * Links: docs/spec/multi-provider-llm.md
+ * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @public
  */
 

@@ -8,7 +8,7 @@
  * Invariants: All defined layers must exist in filesystem; no unused layer definitions.
  * Side-effects: IO (filesystem checks)
  * Notes: Prevents config drift and phantom layer definitions.
- * Links: .dependency-cruiser.cjs, docs/spec/architecture.md
+ * Links: .dependency-cruiser.cjs, https://node-template.cognidao.org/knowledge/hexagonal-layering-contract
  * @public
  */
 

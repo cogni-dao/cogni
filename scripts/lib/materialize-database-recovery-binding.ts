@@ -7,7 +7,7 @@
  * Scope: Pure binding validation plus a stdin/stdout CLI; does not query databases, operate providers, or write secret stores.
  * Invariants: Native and local cluster identifiers agree; DSN and node identity match; existing physical bindings cannot silently change.
  * Side-effects: IO (CLI reads stdin and writes stdout or a safe validation error)
- * Links: docs/spec/secrets-management.md, scripts/ci/secret-materialize.sh
+ * Links: https://cognidao.org/knowledge/secrets-management, scripts/ci/secret-materialize.sh
  * @internal
  */
 import { readFileSync } from "node:fs";

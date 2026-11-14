@@ -8,7 +8,7 @@
  * Invariants: Keys match CSS custom properties; all values defined in tailwind.css @theme block; maintains strict typing.
  * Side-effects: none
  * Notes: Single source of typed keys for ui.ts and kit components.
- * Links: src/styles/tailwind.css (values), docs/spec/ui-implementation.md
+ * Links: src/styles/tailwind.css (values), https://node-template.cognidao.org/knowledge/frontend-development
  * @public
  */
 

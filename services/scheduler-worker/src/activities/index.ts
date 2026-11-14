@@ -14,7 +14,7 @@
  *   - 4xx retry semantics: permanent 4xx (400/401/403/422) → ApplicationFailure.nonRetryable; transient 4xx (404/408/409/429) + 5xx/network → retryable ApplicationFailure. Grant errors (expired / revoked / scope mismatch / not found) always nonRetryable.
  *   - SCHEDULER_API_TOKEN treated as secret (never logged)
  * Side-effects: IO (HTTP to node internal API via GraphRunHttpWriter / ExecutionGrantHttpValidator)
- * Links: docs/spec/scheduler.md, docs/spec/temporal-patterns.md, docs/spec/unified-graph-launch.md
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, https://cognidao.org/knowledge/temporal-workflow-rules, https://node-template.cognidao.org/knowledge/graph-run-launch-contract
  * @internal
  */
 

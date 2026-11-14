@@ -116,7 +116,7 @@ declare -ga COMPOSE_ONLY_KEYS=(
 # DOLTGRES_PASSWORD is the env-level Doltgres superuser, derived from
 # POSTGRES_ROOT_PASSWORD (salt doltgres-root) and written per-node so DOLTGRES_URL
 # is OpenBao-sole-source (Invariant 15) — the pod connects as that superuser
-# because Doltgres 0.56.3 RBAC is table-DML-only (databases.md §5.2). The same
+# because Doltgres 0.56.3 RBAC is table-DML-only (https://node-template.cognidao.org/knowledge/database-migration-contract §5.2). The same
 # value lands in every node path; provisioners read it set-once. APP_DB_READONLY_PASSWORD
 # stays Compose-only (env-level Grafana role, not pod-facing).
 
@@ -358,12 +358,12 @@ _compose_node_value() {
       # fresh env) — deterministic so a not-yet-seeded peer composes the same value.
       # It is NOT the source of truth: post-init the field is stored + reconciled to the
       # live volume via `pnpm secrets:set <env> operator DOLTGRES_PASSWORD` (immutable
-      # superuser, Doltgres 0.56.3 can't ALTER it — databases.md §5.2), never re-derived.
+      # superuser, Doltgres 0.56.3 can't ALTER it — https://node-template.cognidao.org/knowledge/database-migration-contract §5.2), never re-derived.
       # The superuser is the LANE's own (story.5098) — see `_lane_doltgres_superuser`.
       _lane_doltgres_superuser; return $? ;;
     DOLTGRES_URL)
       # Per-node knowledge_<node> DB, reached as the shared `postgres` superuser
-      # (Doltgres 0.56.3 RBAC is table-DML-only — databases.md §5.2). Embed the LANE's
+      # (Doltgres 0.56.3 RBAC is table-DML-only — https://node-template.cognidao.org/knowledge/database-migration-contract §5.2). Embed the LANE's
       # operator-canonical superuser SSOT — never the per-node value (which can lag a
       # volume restore), and never the writing vault's own env's superuser. Same
       # resolution as the DOLTGRES_PASSWORD branch. Composed, never from .env.

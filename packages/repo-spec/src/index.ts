@@ -7,7 +7,7 @@
  * Scope: Zod schemas, parseRepoSpec() function, typed accessor functions. Does not perform I/O, caching, or side effects.
  * Invariants: REPO_SPEC_AUTHORITY — single canonical parser for Node and Operator code. NO_CROSS_IMPORTS — no src/ or services/ imports.
  * Side-effects: none
- * Links: .cogni/repo-spec.yaml, docs/spec/node-operator-contract.md
+ * Links: .cogni/repo-spec.yaml, https://node-template.cognidao.org/knowledge/node-sovereignty-contract
  * @public
  */
 

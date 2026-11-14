@@ -15,7 +15,7 @@ Component tests for RipgrepAdapter, GitLsFilesAdapter, and Brain repo capability
 
 - [RipgrepAdapter source](../../../src/adapters/server/repo/ripgrep.adapter.ts)
 - [RepoCapability interface](../../../../../packages/ai-tools/src/capabilities/repo.ts)
-- [COGNI_BRAIN_SPEC](../../../../../docs/spec/cogni-brain.md)
+- [COGNI_BRAIN_SPEC](https://node-template.cognidao.org/knowledge/repo-read-tools-contract)
 
 ## Boundaries
 

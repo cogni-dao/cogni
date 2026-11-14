@@ -8,7 +8,7 @@
  * Invariants: Only ui-governance/*, tailwindcss/*, and no-inline-styles/* rules active.
  * Side-effects: none
  * Notes: All TS/import/React/boundaries rules handled by Biome or other tools.
- * Links: docs/spec/architecture.md#styling-invariants, docs/ui-style-spec.json
+ * Links: https://node-template.cognidao.org/knowledge/hexagonal-layering-contract, docs/ui-style-spec.json
  * @public
  */
 
@@ -70,7 +70,7 @@ export default [
       ],
       // Disabled: creates noise with var(--token) patterns (reports them as non-theme values).
       // Real enforcement via ui-governance/* rules (lines 55-58) + scripts/check-ui-tokens.sh.
-      // See docs/spec/ui-implementation.md Phase 0 for token compliance architecture.
+      // See https://node-template.cognidao.org/knowledge/frontend-development Phase 0 for token compliance architecture.
       "tailwindcss/prefer-theme-tokens": "off",
       "tailwindcss/valid-theme-function": "error",
       "tailwindcss/valid-apply-directive": "error",
@@ -140,7 +140,7 @@ export default [
         {
           selector: "Program",
           message:
-            "New components must be added to kit/ or vendor/ during UI cleanup. See docs/spec/ui-implementation.md Phase 0.",
+            "New components must be added to kit/ or vendor/ during UI cleanup. See https://node-template.cognidao.org/knowledge/frontend-development Phase 0.",
         },
       ],
     },
@@ -157,7 +157,7 @@ export default [
             {
               group: ["@headlessui/*", "react-aria/*", "react-aria-components"],
               message:
-                "New UI library imports blocked during cleanup. Use existing kit components. See docs/spec/ui-implementation.md Phase 0.",
+                "New UI library imports blocked during cleanup. Use existing kit components. See https://node-template.cognidao.org/knowledge/frontend-development Phase 0.",
             },
           ],
         },

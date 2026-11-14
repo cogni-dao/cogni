@@ -51,7 +51,7 @@ k3s. Treat that as the critical implementation gap, not the intended lifecycle.
 - `docs/spec/node-baas-architecture.md` — node-as-a-service architecture + substrate model (read for the substrate-gaps work)
 - `docs/design/node-wizard-secret-setting.md`
 - `docs/guides/node-formation-guide.md`
-- `docs/spec/node-ci-cd-contract.md`
+- `https://node-template.cognidao.org/knowledge/node-ci-sovereignty`
 - `scripts/ci/reconcile-edge-caddy.remote.sh` · `scripts/ci/reconcile-node-substrate.sh` — the substrate lane (edge + per-node DB/secret reconcile)
 - `nodes/operator/app/src/features/nodes/launch-pack.ts`
 - `nodes/operator/app/src/app/api/v1/nodes/[id]/launch-pack/route.ts`
@@ -73,7 +73,7 @@ not progress by themselves. Progress is a scorecard row moving from blocked to
 pass without privileged manual bridge work. A child commit without a child
 `sha-<child-sha>` GHCR image is a blocker, not a deployable pin.
 
-**DNS is automatic; edge is automatic-but-fragile (known gap).** A wizard-born node's public host (`<node>-<env>`) has its A-record upserted by `reconcile-node-dns.sh` (catalog-driven) and its edge Caddy route written by the flight's `node-substrate` job (`reconcile-edge-caddy.remote.sh`). DNS is reliable; the **edge is NOT yet reliably hands-off** — see the substrate-gaps table below (a freshly-flighted node can be Argo-Healthy and serve in-cluster yet return external 000 because Caddy's running config didn't pick up the new site). Canon: [`docs/spec/ci-cd.md` Axiom 21 `DNS_IS_RECONCILED_PER_ENV`](../../../docs/spec/ci-cd.md); operational detail in the `dns-ops` skill. A fresh-flight `NXDOMAIN` is usually negative-cache (`dig <host> +short @1.1.1.1`); a fresh-flight **external 000 with DNS resolving + pod Healthy is the edge-reload gap (bug.5031), not DNS**.
+**DNS is automatic; edge is automatic-but-fragile (known gap).** A wizard-born node's public host (`<node>-<env>`) has its A-record upserted by `reconcile-node-dns.sh` (catalog-driven) and its edge Caddy route written by the flight's `node-substrate` job (`reconcile-edge-caddy.remote.sh`). DNS is reliable; the **edge is NOT yet reliably hands-off** — see the substrate-gaps table below (a freshly-flighted node can be Argo-Healthy and serve in-cluster yet return external 000 because Caddy's running config didn't pick up the new site). Canon: [`https://cognidao.org/knowledge/operator-pipeline-contract` Axiom 21 `DNS_IS_RECONCILED_PER_ENV`](https://cognidao.org/knowledge/operator-pipeline-contract); operational detail in the `dns-ops` skill. A fresh-flight `NXDOMAIN` is usually negative-cache (`dig <host> +short @1.1.1.1`); a fresh-flight **external 000 with DNS resolving + pod Healthy is the edge-reload gap (bug.5031), not DNS**.
 
 ## Substrate E2E is NOT yet hands-off — gaps + heal recipes
 

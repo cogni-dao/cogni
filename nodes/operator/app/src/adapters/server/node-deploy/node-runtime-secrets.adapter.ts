@@ -32,7 +32,7 @@
  *     reserved bucket (`operator`) and cannot collide with a state password Secret (`nd-<8 hex>-<workload>`).
  * Side-effects: IO (Kubernetes API: ExternalSecret get/create/replace, Secret get)
  * Links: infra/k8s/secrets/external-secrets/cluster-secret-store.yaml, infra/k8s/base/node-deploy-sequencer/rbac.yaml,
- *   ports/node-runtime.port.ts, shared/secrets/node-secrets-reserved.data.ts, docs/spec/secrets-management.md
+ *   ports/node-runtime.port.ts, shared/secrets/node-secrets-reserved.data.ts, https://cognidao.org/knowledge/secrets-management
  * @internal
  */
 

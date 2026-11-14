@@ -6,7 +6,7 @@
  * Purpose: Single source for supported deployment environments and the born-production birth set.
  * Scope: Pure constants consumed by node-formation generators and route observability.
  * Side-effects: none
- * Links: story.5025, docs/guides/node-formation-guide.md, docs/spec/secrets-management.md
+ * Links: story.5025, docs/guides/node-formation-guide.md, https://cognidao.org/knowledge/secrets-management
  * @public
  */
 

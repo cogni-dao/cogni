@@ -11,7 +11,7 @@
  *   - HYPOTHESIS_HAS_EVALUATE_AT: evaluateAt is required by the Zod schema.
  *   - EDO_TOOLS_ATOMIC: write + edges + commit happen in one capability call.
  * Side-effects: IO (database write + dolt_commit via capability)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

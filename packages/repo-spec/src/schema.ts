@@ -7,7 +7,7 @@
  * Scope: Validates governance-managed payment, governance schedule, and activity ledger configuration structures. Does not enforce chain/token values (chain validation happens in accessor layer via chainId parameter).
  * Invariants: EVM address format required; activity sources require source_refs. REPO_SPEC_AUTHORITY — single canonical schema definition.
  * Side-effects: none
- * Links: .cogni/repo-spec.yaml, docs/spec/node-operator-contract.md
+ * Links: .cogni/repo-spec.yaml, https://node-template.cognidao.org/knowledge/node-sovereignty-contract
  * @public
  */
 
@@ -112,7 +112,7 @@ export type GovernanceScheduleSpec = z.infer<typeof governanceScheduleSchema>;
 /**
  * Schema for the unified `governance` section of repo-spec — the node/scope's
  * on-chain DAO identity (contracts + chain) AND its governance schedules.
- * (identity-model.md `scope_id (1)──(1) dao_address`: each scope has one DAO; this
+ * (https://cognidao.org/knowledge/identity-keys-no-overload `scope_id (1)──(1) dao_address`: each scope has one DAO; this
  * is its governance binding.) All fields optional — a node without on-chain
  * governance still validates; the DAO accessors return null when identity is incomplete.
  */

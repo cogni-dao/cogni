@@ -9,8 +9,8 @@ read_when: "Repairing an existing env whose pod-facing DB credentials still live
 owner: cogni-dev
 created: 2026-06-09
 spec_refs:
-  - ../spec/secrets-management.md
-  - ../spec/secrets-classification.md
+  - https://cognidao.org/knowledge/secrets-management
+  - https://node-template.cognidao.org/knowledge/secrets-routing-tiers
 related:
   - ../design/node-wizard-secret-setting.md
   - ./secrets-rotate.md

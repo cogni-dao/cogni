@@ -8,7 +8,7 @@
  * Invariants: Contracts contain only edge schemas and validation; no business logic or domain types.
  * Side-effects: IO (via runEslint temp file creation)
  * Notes: Tests boundaries/element-types rule for edge schema layer isolation.
- * Links: eslint.config.mjs boundaries settings, src/contracts/, docs/spec/architecture.md
+ * Links: eslint.config.mjs boundaries settings, src/contracts/, https://node-template.cognidao.org/knowledge/hexagonal-layering-contract
  * @public
  */
 

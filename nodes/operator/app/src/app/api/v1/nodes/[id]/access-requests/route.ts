@@ -8,11 +8,11 @@
  *   request the node owner later approves in-UI.
  * Scope: Bearer/session caller requests access FOR ITSELF; agentUserId is the authenticated
  *   principal, never the body. `role` defaults to `developer` (v0). The agent also declares its own
- *   `githubLogin` here (rbac.md §6a) so the owner's approve can grant push without supplying one.
+ *   `githubLogin` here (https://cognidao.org/knowledge/authz-port-contract §6a) so the owner's approve can grant push without supplying one.
  *   Writes a tracking row only — OpenFGA role tuples remain the authority.
  * Invariants: AUTH_REQUIRED, SELF_REQUEST_ONLY, NOT_AUTHORITY, IDEMPOTENT_REOPEN, PUSH_LOGIN_FROM_REQUEST.
  * Side-effects: IO (Postgres read + upsert)
- * Links: docs/spec/rbac.md §6, src/features/nodes/access-requests.ts
+ * Links: https://cognidao.org/knowledge/authz-port-contract §6, src/features/nodes/access-requests.ts
  * @public
  */
 
@@ -35,7 +35,7 @@ const AccessRequestInput = z
   .object({
     role: z.enum(NODE_ACCESS_ROLES).optional(),
     // The agent's OWN GitHub login (SELF_REQUEST_ONLY — it requests access for its own account).
-    // Persisted on the request; the owner's approve grants push for THIS login (rbac.md §6a) so the
+    // Persisted on the request; the owner's approve grants push for THIS login (https://cognidao.org/knowledge/authz-port-contract §6a) so the
     // human never supplies it. Omit it to request only the OpenFGA role (fork-PR fallback).
     githubLogin: z.string().min(1).max(39).optional(),
   })

@@ -14,7 +14,7 @@ Bottom-of-tree type definitions. TS utility types, branded types, ambient global
 ## Pointers
 
 - [Root AGENTS.md](../../../../AGENTS.md)
-- [Architecture](../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 - **Related:** [contracts](../contracts/) (external IO specs), [shared/schemas](../shared/) (runtime primitives), [packages/ai-core](../../../../packages/ai-core/) (canonical AI types)
 
 ## Boundaries

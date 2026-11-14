@@ -13,7 +13,7 @@
  *     work goes through `DoltBranchSessionRunner`, which bounds concurrency
  *     above the pool so a burst cannot wedge it (bug.5386, bug.5391).
  * Side-effects: IO (database connections)
- * Links: docs/spec/knowledge-data-plane.md, packages/knowledge-store/src/adapters/doltgres/session-admission.ts
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane, packages/knowledge-store/src/adapters/doltgres/session-admission.ts
  * @public
  */
 

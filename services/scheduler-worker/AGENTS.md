@@ -13,10 +13,10 @@
 
 ## Pointers
 
-- [Scheduler Spec](../../docs/spec/scheduler.md) - Full scheduler specification
-- [Temporal Patterns](../../docs/spec/temporal-patterns.md) - Temporal patterns and anti-patterns
+- [Scheduler Spec](https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract) - Full scheduler specification
+- [Temporal Patterns](https://cognidao.org/knowledge/temporal-workflow-rules) - Temporal patterns and anti-patterns
 - [Temporal Workflows Package](../../packages/temporal-workflows/AGENTS.md) - Workflow definitions + activity interfaces
-- [Services Architecture](../../docs/spec/services-architecture.md) - Service structure guidelines
+- [Services Architecture](https://cognidao.org/knowledge/service-isolation-contract) - Service structure guidelines
 
 ## Architecture
 

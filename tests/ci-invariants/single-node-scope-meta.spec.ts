@@ -8,7 +8,7 @@
  * Invariants: DIRECTORY_IS_SOURCE_OF_TRUTH, NO_INFRA_ENUMERATION, ACTION_PINNED_BY_SHA (see work/items/task.0381.* §Invariants).
  * Side-effects: IO (reads .github/workflows/ci.yaml)
  * Notes: The workflow is fleet-neutral; each checkout generates its own filters at runtime.
- * Links: .github/workflows/ci.yaml, docs/spec/node-ci-cd-contract.md
+ * Links: .github/workflows/ci.yaml, https://node-template.cognidao.org/knowledge/node-ci-sovereignty
  * @public
  */
 

@@ -14,8 +14,8 @@ Pure domain logic with entities, rules, and business invariants. No I/O, time, o
 ## Pointers
 
 - [Root AGENTS.md](../../../../AGENTS.md)
-- [Architecture](../../../../docs/spec/architecture.md)
-- [Billing Evolution](../../../../docs/spec/billing-evolution.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
+- [Billing Evolution](https://node-template.cognidao.org/knowledge/credit-pricing-billing)
 
 ## Boundaries
 

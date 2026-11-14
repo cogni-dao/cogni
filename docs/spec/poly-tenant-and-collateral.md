@@ -115,7 +115,7 @@ Both share the same tenant boundary: `billing_account_id` is the **data column**
 
 The system tenant has no special bootstrap path for wallet provisioning — it provisions through the same `POST /api/v1/poly/wallet/connect` code path as any other tenant.
 
-Per [database-rls](./database-rls.md) § `SERVICE_BYPASS_CONTAINED`: the service role's password lives in a separate env var the web runtime never sees.
+Per [database-rls](https://node-template.cognidao.org/knowledge/rls-tenant-isolation) § `SERVICE_BYPASS_CONTAINED`: the service role's password lives in a separate env var the web runtime never sees.
 
 ## Signing backends
 
@@ -851,8 +851,8 @@ They do not share a base interface. If a future need surfaces for e.g. per-user 
 ## Related
 
 - [`poly-copy-trade-execution.md`](./poly-copy-trade-execution.md) — placement pipeline, planner, order/position/redeem lifecycle, dashboard semantics.
-- [database-rls](./database-rls.md) — RLS substrate (`SET LOCAL`, dual roles, `app.current_user_id`).
-- [tenant-connections](./tenant-connections.md) — credential-broker pattern reused for CLOB L2 creds.
-- [operator-wallet](./operator-wallet.md) — system-role wallet; not generalized.
-- [packages-architecture](./packages-architecture.md) — capability-package shape this port follows.
+- [database-rls](https://node-template.cognidao.org/knowledge/rls-tenant-isolation) — RLS substrate (`SET LOCAL`, dual roles, `app.current_user_id`).
+- [tenant-connections](https://node-template.cognidao.org/knowledge/tool-credential-brokering) — credential-broker pattern reused for CLOB L2 creds.
+- [operator-wallet](https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary) — system-role wallet; not generalized.
+- [packages-architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules) — capability-package shape this port follows.
 - [`docs/guides/poly-wallet-provisioning.md`](../guides/poly-wallet-provisioning.md) — per-tenant onboarding runbook.

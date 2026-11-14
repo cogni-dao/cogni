@@ -12,7 +12,7 @@
  *   - SKIP_IS_LOUD: without docker the check reports SKIPPED explicitly; a skipped gate must
  *     never read as a pass.
  * Side-effects: IO (reads configs; owned temporary config/containers and read-only Docker socket)
- * Links: bug.5293, docs/spec/cicd-platform-boundary.md
+ * Links: bug.5293, https://cognidao.org/knowledge/operator-plane-contract
  * @public
  *
  * WHY THIS EXISTS. On 2026-09-30 a single `#` comment (River uses `//`) made
@@ -33,7 +33,7 @@
  * non-lane path (so it made the PR undispatchable), and that suite's contract is explicitly
  * "pure-bash ... no network, docker, or shared writable state" — a docker-dependent test violates
  * it. `tests/ci-invariants/` is the typed home for exactly this kind of repo-wide assertion, per
- * docs/spec/cicd-platform-boundary.md's routing of platform work into the `.ts` plane.
+ * https://cognidao.org/knowledge/operator-plane-contract's routing of platform work into the `.ts` plane.
  */
 
 import { execFileSync, spawnSync } from "node:child_process";

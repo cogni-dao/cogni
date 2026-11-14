@@ -12,7 +12,7 @@
  *   - Token fields: prompt_tokens/completion_tokens/total_tokens (NOT input_tokens/output_tokens)
  *   - model_group = user-facing alias; model = full provider path
  * Side-effects: none
- * Links: /api/internal/billing/ingest route, docs/spec/billing-ingest.md
+ * Links: /api/internal/billing/ingest route, https://node-template.cognidao.org/knowledge/billing-ingest-callback
  * @internal
  */
 

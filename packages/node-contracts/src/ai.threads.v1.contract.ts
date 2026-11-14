@@ -7,7 +7,7 @@
  * Scope: Wire format definitions for thread management endpoints. Does not contain business logic.
  * Invariants: Contract remains stable; breaking changes require new version. All consumers use z.infer types.
  * Side-effects: none
- * Links: docs/spec/thread-persistence.md, src/ports/thread-persistence.port.ts
+ * Links: https://node-template.cognidao.org/knowledge/thread-persistence-contract, src/ports/thread-persistence.port.ts
  * @public
  */
 

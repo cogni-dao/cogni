@@ -11,7 +11,7 @@
  *   - DERIVED_INIT_THEN_RECOMPUTE: derived rows init to min-of-cited when a basis
  *     is supplied, else a conservative baseline; never NULL, never throws.
  * Side-effects: none
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

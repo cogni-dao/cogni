@@ -9,7 +9,7 @@
  *   - Per SUBPATH_ISOLATION: this barrel exports types only (plus pure domain functions), never workflow functions
  *   - Safe to import from Next.js app code without pulling in @temporalio/workflow
  * Side-effects: none
- * Links: docs/spec/packages-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @public
  */
 

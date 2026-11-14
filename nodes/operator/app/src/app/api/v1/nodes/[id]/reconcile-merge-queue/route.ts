@@ -14,7 +14,7 @@
  *     `cogni.env-manager.v1` PR; ordinary PRs remain serialized by the queue.
  *   - READBACK_OR_FAIL: a successful response means GitHub returned the desired active policy.
  * Side-effects: GitHub ruleset write only when live state differs from committed policy.
- * Links: task.5141, docs/spec/merge-queue-config.md
+ * Links: task.5141, https://cognidao.org/knowledge/merge-queue-required-checks
  * @public
  */
 

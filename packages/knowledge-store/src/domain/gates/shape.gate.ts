@@ -8,7 +8,7 @@
  * Invariants:
  *   - SHAPE_IS_THE_FLOOR: every accepted write satisfies these constraints uniformly across HTTP and tool entry points.
  * Side-effects: none
- * Links: work/projects/proj.knowledge-syntropy.md, docs/spec/knowledge-syntropy.md
+ * Links: work/projects/proj.knowledge-syntropy.md, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

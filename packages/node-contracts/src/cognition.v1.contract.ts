@@ -16,7 +16,7 @@
  *     render even when the hub is empty or unreachable, so a session always
  *     bootstraps.
  * Side-effects: none
- * Links: https://cognidao.org/knowledge/node-baas-substrate-model, docs/spec/knowledge-syntropy.md
+ * Links: https://cognidao.org/knowledge/node-baas-substrate-model, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @internal
  */
 

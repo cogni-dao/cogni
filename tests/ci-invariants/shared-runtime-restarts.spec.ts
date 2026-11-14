@@ -7,7 +7,7 @@
  * Scope: Production Compose service policy; does not dispatch or restart services.
  * Invariants: Health remains observable; Docker owns process-exit restarts.
  * Side-effects: IO (reads the runtime Compose declaration).
- * Links: bug.5489, docs/spec/vm-watchdog.md
+ * Links: bug.5489, https://cognidao.org/knowledge/container-watchdog-contract
  * @public
  */
 

@@ -9,7 +9,7 @@
  * Invariants:
  *   - SELECTION_ONLY: This port lists models. It does not create LlmServices or check billing policy.
  * Side-effects: none (interface only)
- * Links: docs/spec/multi-provider-llm.md
+ * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @public
  */
 

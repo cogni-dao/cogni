@@ -9,7 +9,7 @@
  *   - Schedule ownership enforced (callerUserId must match ownerUserId)
  *   - Delete also revokes the associated grant
  * Side-effects: IO (HTTP request/response, database)
- * Links: docs/spec/scheduler.md, schedules.*.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, schedules.*.v1.contract
  * @public
  */
 

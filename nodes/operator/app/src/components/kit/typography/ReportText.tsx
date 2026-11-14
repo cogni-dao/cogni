@@ -7,7 +7,7 @@
  * Scope: Presentational text only; no report logic or IO.
  * Invariants: Semantic element and visual hierarchy are independent; className is layout-only.
  * Side-effects: none
- * Links: docs/spec/ui-implementation.md
+ * Links: https://node-template.cognidao.org/knowledge/frontend-development
  * @public
  */
 import type { VariantProps } from "class-variance-authority";

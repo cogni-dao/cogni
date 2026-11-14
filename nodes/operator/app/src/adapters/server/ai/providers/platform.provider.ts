@@ -11,7 +11,7 @@
  *   - requiresPlatformCredits inverts isFree from catalog metadata
  *   - Non-chat models (embedding, image_generation) filtered out via LiteLLM mode field
  * Side-effects: global (cache), IO (fetch to LiteLLM)
- * Links: docs/spec/multi-provider-llm.md
+ * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @internal
  */
 

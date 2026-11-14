@@ -14,7 +14,7 @@ Unit tests for application bootstrapping and dependency injection container logi
 ## Pointers
 
 - [Bootstrap container](../../../src/bootstrap/container.ts)
-- [Architecture](../../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 
 ## Boundaries
 

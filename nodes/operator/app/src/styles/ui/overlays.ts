@@ -8,7 +8,7 @@
  * Invariants: All variants use design tokens; factories return valid Tailwind class strings; maintains z-index hierarchy.
  * Side-effects: none
  * Notes: Terminal components serve as reference for overlay patterns.
- * Links: docs/spec/ui-implementation.md
+ * Links: https://node-template.cognidao.org/knowledge/frontend-development
  * @public
  */
 

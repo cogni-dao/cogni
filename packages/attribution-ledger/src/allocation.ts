@@ -10,7 +10,7 @@
  * - ALL_MATH_BIGINT: All weight and unit computation uses BigInt.
  * - WEIGHTS_VALIDATED: rejects floats, NaN, Infinity, unsafe integers.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

@@ -14,7 +14,7 @@ HTTP-specific contract layer using ts-rest. Generates OpenAPI specs and HTTP rou
 ## Pointers
 
 - [Contracts AGENTS.md](../AGENTS.md)
-- [Architecture](../../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 - [ts-rest Documentation](https://ts-rest.com/)
 
 ## Boundaries

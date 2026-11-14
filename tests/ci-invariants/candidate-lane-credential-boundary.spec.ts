@@ -16,7 +16,7 @@
  *     declare an `environment` that resolves to production while a step in it
  *     claims to be operating on a candidate lane, outside that bounded bridge.
  * Side-effects: IO (reads .github/workflows/candidate-flight*.yml)
- * Links: bug.5394, docs/spec/ci-cd.md, .claude/skills/devops-expert/SKILL.md rule 3
+ * Links: bug.5394, https://cognidao.org/knowledge/operator-pipeline-contract, .claude/skills/devops-expert/SKILL.md rule 3
  * @public
  */
 

@@ -18,7 +18,7 @@ name: Stack Test
 #   gh workflow run stack-test.yml --ref <branch> -f node=node-template   # one node
 # Or trigger from the Actions UI.
 #
-# Spec: docs/spec/merge-queue-config.md § Excluded from required.
+# Spec: https://cognidao.org/knowledge/merge-queue-required-checks § Excluded from required.
 
 on:
   workflow_dispatch:

@@ -8,7 +8,7 @@
  * Invariants: Never shows success/error content; loading only during IN_FLIGHT phases (not TERMINAL).
  * Side-effects: none
  * Notes: Part of refactored payment UI; opens PaymentFlowDialog on click.
- * Links: docs/spec/payments-design.md, ~/.claude/plans/floating-stirring-trinket.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design, ~/.claude/plans/floating-stirring-trinket.md
  * @public
  */
 

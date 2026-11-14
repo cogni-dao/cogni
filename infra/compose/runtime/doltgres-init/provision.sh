@@ -13,7 +13,7 @@ set -euo pipefail
 # Scope: Executed by doltgres-provision compose service (bootstrap profile).
 # Invariants: Follows postgres-init/provision.sh pattern. Idempotent.
 # Side-effects: IO (psql commands against Doltgres server)
-# Links: docs/spec/knowledge-data-plane.md, nodes/poly/app/schema/README.md
+# Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane, nodes/poly/app/schema/README.md
 
 DG_HOST="${DOLTGRES_HOST:-doltgres}"
 DG_PORT="${DOLTGRES_PORT:-5432}"

@@ -7,7 +7,7 @@
  * Scope: Temporal SDK bundles all exported functions from the workflowsPath file. Does not contain logic.
  * Invariants: One barrel per task queue. All scheduler-queue workflows exported here.
  * Side-effects: none
- * Links: docs/spec/temporal-patterns.md
+ * Links: https://cognidao.org/knowledge/temporal-workflow-rules
  * @internal
  */
 

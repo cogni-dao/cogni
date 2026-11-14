@@ -11,7 +11,7 @@
  * Invariants: NODEPORT_STRIDE_100 — mirrors the shell's `max(node_port)+100`; CEILING_32767 — a
  *   computed port above the NodePort ceiling is a hard error (the stride is exhausted).
  * Side-effects: none — pure function, no IO, no env.
- * Links: scripts/ci/next-free-node-port.sh, docs/spec/ci-cd.md (axiom 16), task.5092
+ * Links: scripts/ci/next-free-node-port.sh, https://cognidao.org/knowledge/operator-pipeline-contract (axiom 16), task.5092
  * @public
  */
 

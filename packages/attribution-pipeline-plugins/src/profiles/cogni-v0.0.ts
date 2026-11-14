@@ -16,7 +16,7 @@
  * - PROFILE_SELECTS_ENRICHERS: enricherRefs is sole authority for which enrichers run.
  * - PROFILE_SELECTS_ALLOCATOR: allocatorRef is sole authority for which allocator runs.
  * Side-effects: none
- * Links: docs/spec/plugin-attribution-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @public
  */
 

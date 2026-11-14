@@ -10,7 +10,7 @@
  *   - All consumers use z.infer types
  *   - Returns only schedules owned by the caller
  * Side-effects: none
- * Links: /api/v1/schedules route, docs/spec/scheduler.md
+ * Links: /api/v1/schedules route, https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @internal
  */
 

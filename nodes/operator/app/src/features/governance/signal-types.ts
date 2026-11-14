@@ -7,7 +7,7 @@
  * Scope: Pure type definitions with runtime validation. Does not perform I/O.
  * Invariants: Signal schema matches CogniSignal contract ABI event structure.
  * Side-effects: none
- * Links: docs/spec/governance-signal-execution.md
+ * Links: https://node-template.cognidao.org/knowledge/dao-merge-signal-loop
  * @public
  */
 

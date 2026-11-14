@@ -9,7 +9,7 @@
  * Invariants:
  *   - RUNTIME_ONLY: This port resolves providers for execution. It does not list models.
  * Side-effects: none (interface only)
- * Links: docs/spec/multi-provider-llm.md
+ * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @public
  */
 

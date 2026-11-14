@@ -9,7 +9,7 @@
  * Invariants: spec.repo-sync-contract DECLARED_DIVERGENCE — every divergence entry must point at a declared artifact.
  * Side-effects: IO
  * Notes: Exits with non-zero code on validation failure.
- * Links: docs/spec/repo-sync-contract.md, .cogni/sync-manifest.schema.json, .github/workflows/ci.yaml
+ * Links: https://cognidao.org/knowledge/sync-manifest-contract, .cogni/sync-manifest.schema.json, .github/workflows/ci.yaml
  * @public
  */
 

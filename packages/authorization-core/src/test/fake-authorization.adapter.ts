@@ -7,7 +7,7 @@
  * Scope: In-memory exact-match decisions over AuthzCheckParams. Does not model local roles or production policy.
  * Invariants: Fake defaults to deny; unavailable can be configured distinctly from deny.
  * Side-effects: none
- * Links: docs/spec/rbac.md
+ * Links: https://cognidao.org/knowledge/authz-port-contract
  * @public
  */
 

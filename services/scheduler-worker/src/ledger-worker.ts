@@ -10,7 +10,7 @@
  *   - All dependencies injected via AttributionContainer from bootstrap/container.ts
  *   - Per TEMPORAL_DETERMINISM: Workflows are bundled separately from activities
  * Side-effects: IO (connects to Temporal, starts worker)
- * Links: docs/spec/attribution-ledger.md, docs/spec/temporal-patterns.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, https://cognidao.org/knowledge/temporal-workflow-rules
  * @internal
  */
 

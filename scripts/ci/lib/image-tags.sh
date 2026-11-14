@@ -4,7 +4,7 @@
 #
 # scripts/ci/lib/image-tags.sh — thin catalog-reader shim.
 #
-# CATALOG_IS_SSOT (docs/spec/ci-cd.md axiom 16): infra/catalog/*.yaml is the
+# CATALOG_IS_SSOT (https://cognidao.org/knowledge/operator-pipeline-contract axiom 16): infra/catalog/*.yaml is the
 # single declaration site for deploy-shape (ports, tag suffixes, branches,
 # path_prefix). This file populates ALL_TARGETS / NODE_TARGETS and resolves
 # them by reading catalog at source time.

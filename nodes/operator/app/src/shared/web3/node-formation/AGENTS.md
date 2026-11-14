@@ -13,7 +13,7 @@ Node Formation P0 web3 primitives: Aragon OSx ABIs and chain address constants. 
 
 ## Pointers
 
-- [Node Formation Spec](../../../../../../docs/spec/node-formation.md)
+- [Node Formation Spec](https://cognidao.org/knowledge/node-formation-contract)
 - [Aragon OSx v1.4.0](https://github.com/aragon/osx/tree/v1.4.0)
 
 ## Boundaries
@@ -73,7 +73,7 @@ import {
 ## Change Protocol
 
 - Update when OSx addresses change or new chains added
-- Sync address changes with [Node Formation Spec](../../../../../../docs/spec/node-formation.md) appendix
+- Sync address changes with [Node Formation Spec](https://cognidao.org/knowledge/node-formation-contract) appendix
 - Bytecode updates require artifact re-extraction
 
 ## Notes

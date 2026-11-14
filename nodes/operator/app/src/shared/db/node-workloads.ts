@@ -22,7 +22,7 @@
  *   - DESIRED_IS_ONE_ROW_PER_WORKLOAD: pk `(node_id, env, workload)`; only operator verbs write it.
  * Side-effects: none
  * Links: adapters/server/node-deploy/postgres-store.adapter.ts, features/node-deploy/sequencer.ts,
- *   docs/spec/databases.md, task.5400
+ *   https://node-template.cognidao.org/knowledge/database-migration-contract, task.5400
  * @public
  */
 

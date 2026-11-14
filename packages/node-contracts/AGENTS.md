@@ -13,8 +13,8 @@ Shared Zod route contracts and HTTP router definitions for all node apps. PURE_L
 
 ## Pointers
 
-- [Packages Architecture](../../docs/spec/packages-architecture.md)
-- [Architecture — Contracts Layer](../../docs/spec/architecture.md)
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules)
+- [Architecture — Contracts Layer](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 
 ## Boundaries
 

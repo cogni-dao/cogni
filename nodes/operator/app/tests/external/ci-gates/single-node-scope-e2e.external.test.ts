@@ -7,7 +7,7 @@
  * Scope: Self-test of this repo's own gate — opens a draft PR on `Cogni-DAO/cogni` touching two non-operator nodes, polls Actions, asserts conclusion + annotation. Does NOT mock the workflow.
  * Invariants: The gate concludes `failure`; annotation names both touched domains and instructs to split (matches §Diagnostic contract in spec.node-ci-cd-contract).
  * Side-effects: IO (git push to a transient branch, gh PR create/close, GitHub Actions execution).
- * Links: docs/spec/node-ci-cd-contract.md §Single-Domain Scope, .github/workflows/ci.yaml#single-node-scope, work/items/task.0381.*
+ * Links: https://node-template.cognidao.org/knowledge/node-ci-sovereignty §Single-Domain Scope, .github/workflows/ci.yaml#single-node-scope, work/items/task.0381.*
  * @internal
  */
 

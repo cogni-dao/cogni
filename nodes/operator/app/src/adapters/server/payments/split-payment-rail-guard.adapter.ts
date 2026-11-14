@@ -7,7 +7,7 @@
  * Scope: Read-only chain validation; does not create intents, settle payments, or sign transactions.
  * Invariants: Payment intents fail closed when Split contract state cannot be proven to match config.
  * Side-effects: IO (EVM RPC reads)
- * Links: docs/spec/payments-design.md, docs/spec/operator-wallet.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design, https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary
  * @public
  */
 

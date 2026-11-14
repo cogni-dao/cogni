@@ -8,7 +8,7 @@
  * Invariants: Fixed windows only (7d/30d/90d); contract-validated output; rate limit + cache via wrapPublicRoute().
  * Side-effects: IO (reads metrics via facade)
  * Notes: wrapPublicRoute() auto-applies rate limiting (10 req/min/IP + burst 5) and cache headers (60s + swr 300s).
- * Links: docs/spec/public-analytics.md, contracts/analytics.summary.v1.contract.ts, bootstrap/http/wrapPublicRoute.ts
+ * Links: https://node-template.cognidao.org/knowledge/public-analytics-privacy, contracts/analytics.summary.v1.contract.ts, bootstrap/http/wrapPublicRoute.ts
  * @public
  */
 

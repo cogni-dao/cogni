@@ -6,7 +6,7 @@
  * Scope: Thin injected-pool composition. Does not implement native ownership, admission, settlement, reconciliation or pool replacement.
  * Invariants: One helper module owns guards and native capacity; private domain errors and existing operator budgets remain stable.
  * Side-effects: IO (delegates native session operations), time (delegates deadlines)
- * Links: docs/spec/knowledge-data-plane.md, packages/knowledge-store/AGENTS.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane, packages/knowledge-store/AGENTS.md
  * @public
  */
 

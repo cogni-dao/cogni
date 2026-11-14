@@ -10,7 +10,7 @@
  * Invariants: Idempotent (upsert). Independent read/write clients and the normal
  *   database writer scope own every seed commit. Requires packages:build first.
  * Side-effects: IO (database writes, console output)
- * Links: docs/spec/knowledge-data-plane.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane
  * @public
  */
 

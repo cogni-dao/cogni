@@ -11,7 +11,7 @@
  *   - requiresConnection always true (needs endpoint URL)
  *   - DYNAMIC_MODEL_DISCOVERY: models fetched from user endpoint, not hardcoded
  * Side-effects: IO (DB query for connection, HTTP to user endpoint for model discovery)
- * Links: docs/spec/multi-provider-llm.md
+ * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @internal
  */
 

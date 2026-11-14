@@ -19,7 +19,7 @@ Per DATABASE_RLS_SPEC.md design decision 7: runtime app uses explicit DSNs, no U
 ## Pointers
 
 - [Root AGENTS.md](../../../../../AGENTS.md)
-- [Database Architecture](../../../../../docs/spec/databases.md)
+- [Database Architecture](https://node-template.cognidao.org/knowledge/database-migration-contract)
 
 ## Boundaries
 

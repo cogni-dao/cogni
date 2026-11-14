@@ -4,7 +4,7 @@
 #
 # scripts/setup/bootstrap.sh — agentic fork bootstrap entry point.
 #
-# Spec:  docs/spec/agentic-fork-bootstrap.md
+# Spec:  https://cognidao.org/knowledge/fork-bootstrap-credential-floor
 # Usage: pnpm bootstrap
 #
 # Two-phase, idempotent:

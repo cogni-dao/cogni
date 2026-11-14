@@ -33,7 +33,7 @@
 set -euo pipefail
 
 # Source catalog (ALL_TARGETS / NODE_TARGETS) so additions to infra/catalog/*
-# flow through here without script edits. CATALOG_IS_SSOT (docs/spec/ci-cd.md
+# flow through here without script edits. CATALOG_IS_SSOT (https://cognidao.org/knowledge/operator-pipeline-contract
 # axiom 16). task.5079 follow-up.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib/image-tags.sh

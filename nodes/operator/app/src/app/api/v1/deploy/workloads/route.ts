@@ -30,7 +30,7 @@
  * Side-effects: IO (authz check, GitHub App contents read, anonymous ghcr.io manifest read, operator
  *   Postgres write)
  * Links: contracts/deploy.workloads.v1.contract.ts, _facades/deploy/record-node-release.server.ts,
- *   _lib/lane.ts, docs/spec/rbac.md, hub `node-service-delivery`,
+ *   _lib/lane.ts, https://cognidao.org/knowledge/authz-port-contract, hub `node-service-delivery`,
  *   hub `workload-manifest`
  * @public
  */

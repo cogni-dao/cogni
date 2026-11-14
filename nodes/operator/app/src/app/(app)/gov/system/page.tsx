@@ -7,7 +7,7 @@
  * Scope: Server component only; delegates all client behavior to GovernanceView. Does not perform data fetching.
  * Invariants: Auth enforced by (app) layout guard.
  * Side-effects: none (server render only)
- * Links: docs/spec/governance-status-api.md
+ * Links: https://node-template.cognidao.org/knowledge/governance-status-api
  * @public
  */
 

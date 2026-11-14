@@ -7,7 +7,7 @@
  * Scope: Total function `(currentStatus, event) → nextStatus | InvalidTransition`. No IO, no env.
  * Invariants: STATE_MACHINE_TOTAL — every (status, event) pair returns a defined result; transitions are linear with a single `fail` escape hatch.
  * Side-effects: none
- * Links: docs/spec/node-formation.md, task.5083
+ * Links: https://cognidao.org/knowledge/node-formation-contract, task.5083
  * @public
  */
 

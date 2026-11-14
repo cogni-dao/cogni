@@ -14,7 +14,7 @@ MCP host entrypoint. Registers tools that mirror src/contracts/\*\* operations a
 ## Pointers
 
 - [Root AGENTS.md](../../../../AGENTS.md)
-- [Architecture](../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 - [Related ADRs](../../../../docs/decisions/adr/)
 
 ## Boundaries

@@ -14,8 +14,8 @@ Feature layer for USDC payment attempts with backend verification. Handles payme
 ## Pointers
 
 - [Root AGENTS.md](../../../../../AGENTS.md)
-- [Payments Design](../../../../../docs/spec/payments-design.md)
-- [Billing Evolution](../../../../../docs/spec/billing-evolution.md)
+- [Payments Design](https://node-template.cognidao.org/knowledge/payments-usdc-verification-design)
+- [Billing Evolution](https://node-template.cognidao.org/knowledge/credit-pricing-billing)
 
 ## Boundaries
 

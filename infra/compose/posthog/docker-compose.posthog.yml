@@ -10,7 +10,7 @@
 #   docker compose -f platform/infra/services/posthog/docker-compose.posthog.yml up -d
 #
 # Resource requirements: ~4GB RAM minimum for all services.
-# See docs/guides/posthog-setup.md for setup, docs/spec/posthog.md for architecture.
+# See docs/guides/posthog-setup.md for setup, https://node-template.cognidao.org/knowledge/posthog-capture-contract for architecture.
 
 services:
   posthog-postgres:

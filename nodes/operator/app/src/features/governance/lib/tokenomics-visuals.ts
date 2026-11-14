@@ -12,7 +12,7 @@
  *   - ATTRIBUTION_IS_NOT_OWNERSHIP: credit shares describe finalized attribution only.
  *   - ALL_MATH_BIGINT: source amounts remain bigint until a bounded display percentage is derived.
  * Side-effects: none
- * Links: docs/spec/tokenomics.md, docs/spec/tokenomics-distribution.md
+ * Links: https://cognidao.org/knowledge/tokenomics-budget-policy, https://node-template.cognidao.org/knowledge/distribution-lifecycle
  * @public
  */
 

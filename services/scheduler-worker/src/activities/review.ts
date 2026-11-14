@@ -32,7 +32,7 @@
  *     (requestId, operator buildSha, model, citations, evidence). The buildSha is the serving
  *     operator's (graph host field, else the pr-context build) — never this worker's.
  * Side-effects: IO (HTTP to operator review plane)
- * Links: bug.5000, task.0191, task.0410, task.0280, story.5102, docs/spec/unified-graph-launch.md,
+ * Links: bug.5000, task.0191, task.0410, task.0280, story.5102, https://node-template.cognidao.org/knowledge/graph-run-launch-contract,
  *   services/scheduler-worker/src/adapters/review-http.ts
  * @internal
  */

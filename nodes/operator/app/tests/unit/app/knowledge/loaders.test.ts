@@ -8,7 +8,7 @@
  * Invariants: RESPONSE_SHAPED_OUTPUT (createdAt is a JSON-safe ISO string, not a
  *   Date), LIST_LIMIT_PARITY, EDGE_ENDPOINTS_EXIST.
  * Side-effects: none (in-memory fake)
- * Links: src/app/(app)/knowledge/_server/loaders.ts, docs/spec/knowledge-syntropy.md
+ * Links: src/app/(app)/knowledge/_server/loaders.ts, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @internal
  */
 

@@ -13,8 +13,8 @@ Built-in enricher and allocator plugin implementations for the attribution pipel
 
 ## Pointers
 
-- [Plugin Attribution Pipeline Spec](../../docs/spec/plugin-attribution-pipeline.md)
-- [Packages Architecture](../../docs/spec/packages-architecture.md)
+- [Plugin Attribution Pipeline Spec](https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline)
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules)
 - [Contracts Package](../attribution-pipeline-contracts/AGENTS.md)
 
 ## Boundaries
@@ -84,7 +84,7 @@ pnpm --filter @cogni/attribution-pipeline-plugins build
 ## Change Protocol
 
 - Update this file when public exports change
-- Coordinate with plugin-attribution-pipeline.md spec invariants
+- Coordinate with https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline spec invariants
 - New plugins: add descriptor + adapter + tests; update registry and barrel
 
 ## Notes

@@ -8,7 +8,7 @@
  * Invariants: txHash must be valid 32-byte hex string; idempotent on same hash for same attempt.
  * Side-effects: none
  * Notes: Status enum imported from /types (canonical source).
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

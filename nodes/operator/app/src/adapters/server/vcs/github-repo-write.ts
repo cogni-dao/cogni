@@ -38,7 +38,7 @@
  *   - BRANCH_HEAD_IS_LEASE: divergent reviewed trees are serialized by a synthetic commit parented
  *     on the observed deploy-ref head and a non-force ref update; stale writers fail closed.
  * Side-effects: IO (GitHub REST API)
- * Links: docs/spec/node-formation.md, task.0370, task.5083
+ * Links: https://cognidao.org/knowledge/node-formation-contract, task.0370, task.5083
  * @internal
  */
 
@@ -2653,7 +2653,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
   /**
    * Grant a GitHub identity branch-push (Write) on a node repo — the operator App as the
-   * privilege bridge for the contributor golden path (rbac.md §6a, TRUST_BOUNDARY_IS_MERGE_NOT_PUSH).
+   * privilege bridge for the contributor golden path (https://cognidao.org/knowledge/authz-port-contract §6a, TRUST_BOUNDARY_IS_MERGE_NOT_PUSH).
    * The App installation supplies the privilege (`administration: write`); the agent never holds
    * standing GitHub admin. Idempotent: re-granting an existing collaborator is a GitHub no-op.
    * Returns the invitation id when GitHub creates a pending invite (an outside collaborator the agent
@@ -2685,7 +2685,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
   }
 
   /**
-   * Revoke a node-repo collaborator (rbac.md §6a de-provision, on reject/revoke). Idempotent: a 404
+   * Revoke a node-repo collaborator (https://cognidao.org/knowledge/authz-port-contract §6a de-provision, on reject/revoke). Idempotent: a 404
    * (already not a collaborator) is treated as success so revocation is safe to retry.
    */
   async removeNodeCollaborator(input: {

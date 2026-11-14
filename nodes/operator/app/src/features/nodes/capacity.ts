@@ -14,7 +14,7 @@
  *     NOT `.gitmodules` (retired by #1647, CATALOG_SOURCE_SHA_IS_THE_DEPLOY_PIN) and NOT the
  *     RLS-scoped operator `nodes` table. Counting lives in `GitHubRepoWriter.countDeployedWizardNodes`.
  * Side-effects: none
- * Links: docs/spec/merge-authority.md, docs/spec/node-submodule-retirement.md
+ * Links: docs/spec/merge-authority.md, https://cognidao.org/knowledge/operator-no-node-clone
  * @public
  */
 

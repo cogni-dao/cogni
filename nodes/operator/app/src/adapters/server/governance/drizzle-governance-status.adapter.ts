@@ -10,7 +10,7 @@
  * - RLS_COMPATIBLE: Queries use owner_user_id filter
  * - Returns Date objects (not ISO strings)
  * Side-effects: IO (database reads)
- * Links: src/ports/governance-status.port.ts, docs/spec/governance-status-api.md
+ * Links: src/ports/governance-status.port.ts, https://node-template.cognidao.org/knowledge/governance-status-api
  * @public
  */
 

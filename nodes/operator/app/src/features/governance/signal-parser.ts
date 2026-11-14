@@ -7,7 +7,7 @@
  * Scope: Pure parsing logic — uses viem for ABI decoding, Zod for runtime validation. Does not perform I/O.
  * Invariants: Signal schema validated at parse time. Invalid logs return null (logged, not thrown).
  * Side-effects: none
- * Links: docs/spec/governance-signal-execution.md
+ * Links: https://node-template.cognidao.org/knowledge/dao-merge-signal-loop
  * @public
  */
 

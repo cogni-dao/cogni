@@ -8,7 +8,7 @@
  * Invariants: ABI matches ERC20 standard.
  * Side-effects: none
  * Notes: Used for generic ERC20 interactions (balance queries, transfers). Token-agnostic.
- * Links: docs/spec/onchain-readers.md
+ * Links: https://node-template.cognidao.org/knowledge/onchain-read-ports
  * @public
  */
 

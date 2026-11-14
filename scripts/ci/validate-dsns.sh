@@ -10,7 +10,7 @@
 #   - Usernames must not be superuser names (postgres, root, admin, superuser)
 #   - Never echo full DSNs; mask them in workflow logs
 # Usage: Called by deploy workflows before SSH to VM
-# Links: docs/spec/database-url-alignment.md
+# Links: https://cognidao.org/knowledge/node-database-contract
 
 set -euo pipefail
 

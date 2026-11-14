@@ -13,8 +13,8 @@ Shared pure utilities, constants, observability helpers, and domain types for al
 
 ## Pointers
 
-- [Packages Architecture](../../docs/spec/packages-architecture.md)
-- [Node App Shell Spec](../../docs/spec/node-app-shell.md)
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules)
+- [Node App Shell Spec](https://node-template.cognidao.org/knowledge/node-app-shell-contract)
 
 ## Boundaries
 

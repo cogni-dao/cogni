@@ -7,7 +7,7 @@
  * Scope: Tests public data invariant - treasury balance accessible to all users. Does not test wallet integration or auth flows.
  * Invariants: TreasuryBadge MUST render without authentication; graceful degradation on API errors.
  * Side-effects: none (mocked fetch)
- * Links: docs/spec/onchain-readers.md
+ * Links: https://node-template.cognidao.org/knowledge/onchain-read-ports
  * @vitest-environment jsdom
  */
 

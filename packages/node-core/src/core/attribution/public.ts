@@ -7,7 +7,7 @@
  * Scope: Re-exports only. Does not define any logic.
  * Invariants: Only exports stable public interfaces and functions.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md, packages/attribution-ledger/
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, packages/attribution-ledger/
  * @public
  */
 

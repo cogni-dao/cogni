@@ -2,7 +2,7 @@ name: litellm
 # infra = shared VM-infra image: built in CI like every other target, but
 # deployed via Compose-on-VM (deploy-infra.sh), not k8s/Argo. No node_port /
 # node_id / deploy branches; no k8s overlay or ApplicationSet. See
-# docs/spec/ci-cd.md axiom 16 and docs/guides/create-service.md (Infra images).
+# https://cognidao.org/knowledge/operator-pipeline-contract axiom 16 and docs/guides/create-service.md (Infra images).
 type: infra
 port: 4000
 dockerfile: infra/images/litellm/Dockerfile

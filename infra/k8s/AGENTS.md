@@ -15,8 +15,8 @@ manifests to the cluster. App discovery driven by `infra/catalog/*.yaml`.
 
 ## Pointers
 
-- [CI/CD](../../docs/spec/ci-cd.md): Deployment specification
-- [Services Architecture](../../docs/spec/services-architecture.md): Service contracts
+- [CI/CD](https://cognidao.org/knowledge/operator-pipeline-contract): Deployment specification
+- [Services Architecture](https://cognidao.org/knowledge/service-isolation-contract): Service contracts
 
 ## Boundaries
 

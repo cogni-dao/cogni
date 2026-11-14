@@ -9,7 +9,7 @@
  * - ENRICHER_IDEMPOTENT: same receipts produce same hashes and payload.
  * - EVALUATION_WRITE_VALIDATED: result includes evaluationRef, algoRef, inputsHash, schemaRef, payloadHash.
  * Side-effects: IO (reads from attributionStore via context)
- * Links: docs/spec/plugin-attribution-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @public
  */
 

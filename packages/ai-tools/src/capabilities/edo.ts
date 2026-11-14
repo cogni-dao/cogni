@@ -9,7 +9,7 @@
  *   - AUTH_VIA_CAPABILITY_INTERFACE: tools receive this, never a DSN.
  *   - EDO_TOOLS_ATOMIC: each method writes entry + edges + commit in one call.
  * Side-effects: none
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

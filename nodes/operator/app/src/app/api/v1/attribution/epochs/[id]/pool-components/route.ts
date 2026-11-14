@@ -7,7 +7,7 @@
  * Scope: Auth-protected POST endpoint. Requires wallet in activity_ledger.approvers. Does not contain business logic.
  * Invariants: NODE_SCOPED, ALL_MATH_BIGINT, VALIDATE_IO, WRITE_ROUTES_APPROVER_GATED.
  * Side-effects: IO (HTTP response, database write)
- * Links: docs/spec/attribution-ledger.md, contracts/attribution.record-pool-component.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, contracts/attribution.record-pool-component.v1.contract
  * @public
  */
 

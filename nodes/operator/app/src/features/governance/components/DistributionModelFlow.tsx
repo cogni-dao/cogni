@@ -8,7 +8,7 @@
  *   configured policy amounts and performs no IO.
  * Invariants: FINALIZE_THEN_PUBLISH_THEN_CLAIM, DIRECT_EXECUTE_NO_VOTE, PULL_NOT_PUSH, NO_FABRICATED_FIGURES.
  * Side-effects: none
- * Links: docs/spec/tokenomics-distribution.md
+ * Links: https://node-template.cognidao.org/knowledge/distribution-lifecycle
  * @public
  */
 

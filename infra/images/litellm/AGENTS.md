@@ -13,8 +13,8 @@ Custom LiteLLM Docker image extending upstream with per-node billing callback ro
 
 ## Pointers
 
-- [Multi-Node Tenancy Spec](../../../docs/spec/multi-node-tenancy.md): CALLBACK_IS_ADAPTER_GLUE, AUTHENTICATED_WORKLOAD_ROUTING
-- [Billing Ingest Spec](../../../docs/spec/billing-ingest.md): Callback pipeline, ingest endpoint contract
+- [Multi-Node Tenancy Spec](https://node-template.cognidao.org/knowledge/node-tenancy-isolation): CALLBACK_IS_ADAPTER_GLUE, AUTHENTICATED_WORKLOAD_ROUTING
+- [Billing Ingest Spec](https://node-template.cognidao.org/knowledge/billing-ingest-callback): Callback pipeline, ingest endpoint contract
 
 ## Boundaries
 

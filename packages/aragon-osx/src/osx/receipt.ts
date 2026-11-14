@@ -7,7 +7,7 @@
  * Scope: Pure decoding; does not make RPC calls. Throws if expected events not found.
  * Invariants: No fallback heuristics. Missing events throw errors.
  * Side-effects: none
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 

@@ -10,7 +10,7 @@
  *   - ALL_MATH_BIGINT: All amounts are bigint/u128
  *   - ARCHITECTURE_ALIGNMENT: Pure adapter — no env loading, no process lifecycle
  * Side-effects: IO (TigerBeetle network calls)
- * Links: docs/spec/financial-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/financial-ledger-tigerbeetle
  * @public
  */
 

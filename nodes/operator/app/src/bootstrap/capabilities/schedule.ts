@@ -9,7 +9,7 @@
  *   - RLS_ENFORCED: All schedule operations use the real user's identity, never system principal
  *   - CRUD_IS_TEMPORAL_AUTHORITY: All mutations go through ScheduleUserPort → Temporal
  * Side-effects: none (factory only)
- * Links: docs/spec/scheduler.md
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @internal
  */
 

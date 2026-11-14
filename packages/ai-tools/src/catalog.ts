@@ -11,7 +11,7 @@
  *   - TOOL_ID_STABILITY: Duplicate IDs throw at construction time
  *   - TOOL_ID_NAMESPACED: IDs use core__<name> format
  * Side-effects: none
- * Links: docs/spec/tool-use.md, work/items/bug.0319.ai-tools-per-node-packages.md
+ * Links: https://node-template.cognidao.org/knowledge/tool-use-contract, work/items/bug.0319.ai-tools-per-node-packages.md
  * @public
  */
 

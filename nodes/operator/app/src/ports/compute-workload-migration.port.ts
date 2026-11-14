@@ -55,7 +55,7 @@ export interface ComputeWorkloadMigrationPort {
   /**
    * The migrator's own stdout for a SUCCEEDED digest, so the caller can collect the receipt the
    * migrator printed — "what did this deploy actually apply?" — WITHOUT anyone holding a credential
-   * that can read the node's database (docs/spec/multi-node-tenancy.md NO_CROSS_NODE_QUERIES).
+   * that can read the node's database (https://node-template.cognidao.org/knowledge/node-tenancy-isolation NO_CROSS_NODE_QUERIES).
    *
    * Optional, and never throws: an implementation that cannot produce logs returns null, because a
    * missing receipt is deployment metadata that did not arrive, never a migration that failed.

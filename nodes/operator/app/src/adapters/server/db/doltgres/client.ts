@@ -15,7 +15,7 @@
  *   markdown corpus below 5000, so its allocator must clear it. Nodes booting an
  *   empty store take the package default and start at 1.
  * Side-effects: IO (database connection on first access).
- * Links: docs/spec/work-items-port.md, docs/guides/agent-api-validation.md
+ * Links: https://node-template.cognidao.org/knowledge/work-items-port-contract, docs/guides/agent-api-validation.md
  * @internal
  */
 
@@ -67,7 +67,7 @@ export function getDoltgresSql(): Sql {
 }
 
 /**
- * READ_LANE_IS_NOT_THE_WRITE_LANE (work-items-port.md § Concurrency Model).
+ * READ_LANE_IS_NOT_THE_WRITE_LANE (https://node-template.cognidao.org/knowledge/work-items-port-contract § Concurrency Model).
  * A separate pool for the QUERY port. The write client is deliberately `max: 1`
  * because `dolt_checkout` is session state; routing reads through it made read
  * concurrency structurally 1, so the dashboard's concurrent `list` calls

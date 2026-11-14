@@ -9,7 +9,7 @@
  * - FORBIDDEN: `@/`, `src/`, drizzle-orm, any I/O
  * - ALLOWED: Pure TypeScript types/interfaces only
  * Side-effects: none
- * Links: docs/spec/scheduler.md
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @public
  */
 

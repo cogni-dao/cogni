@@ -64,9 +64,9 @@ Read the nearest `AGENTS.md` before editing a directory. Then read only the surf
 | Surface                           | File                                                                                  |
 | --------------------------------- | ------------------------------------------------------------------------------------- |
 | Payment setup guide               | `docs/guides/payments-setup.md`                                                       |
-| Operator wallet + Split spec      | `docs/spec/operator-wallet.md`                                                        |
+| Operator wallet + Split spec      | `https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary`                                                        |
 | x402 direction (hub atom)         | `node-service-usdc-northstar`                                                         |
-| Node formation payment invariants | `docs/spec/node-formation.md`                                                         |
+| Node formation payment invariants | `https://cognidao.org/knowledge/node-formation-contract`                                                         |
 | Root repo-spec payment config     | `.cogni/repo-spec.yaml`                                                               |
 | Operator repo-spec payment config | `nodes/operator/.cogni/repo-spec.yaml`                                                |
 | Repo-spec schema/accessors        | `packages/repo-spec/src/schema.ts`, `packages/repo-spec/src/accessors.ts`             |

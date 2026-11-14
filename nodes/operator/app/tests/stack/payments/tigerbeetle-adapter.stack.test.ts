@@ -7,7 +7,7 @@
  * Scope: Validates adapter operations — account creation, transfers, linked transfers, lookups, idempotency. Does not test co-write wiring or HTTP routes.
  * Invariants: DOUBLE_ENTRY_CANONICAL, ALL_MATH_BIGINT, idempotent account creation
  * Side-effects: IO (TigerBeetle network calls)
- * Links: packages/financial-ledger/src/adapters/tigerbeetle.adapter.ts, docs/spec/financial-ledger.md
+ * Links: packages/financial-ledger/src/adapters/tigerbeetle.adapter.ts, https://node-template.cognidao.org/knowledge/financial-ledger-tigerbeetle
  * @public
  */
 

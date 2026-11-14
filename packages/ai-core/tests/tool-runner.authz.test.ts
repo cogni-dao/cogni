@@ -10,7 +10,7 @@
  *   - AUTHZ_FAILS_CLOSED_BEFORE_EXEC
  *   - AUTHZ_RESULT_ONLY_STABLE_ID
  * Side-effects: none
- * Links: docs/spec/rbac.md, docs/spec/tool-use.md
+ * Links: https://cognidao.org/knowledge/authz-port-contract, https://node-template.cognidao.org/knowledge/tool-use-contract
  * @internal
  */
 

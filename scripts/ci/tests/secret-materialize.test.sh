@@ -386,7 +386,7 @@ grep -q '://service_node_template:' "$BAO_ROOT/cogni/candidate-a/node-template/D
 # materialize the composer falls back to the deterministic genesis derive, and
 # DOLTGRES_URL is composed sole-source from it (non-empty superuser pw). The pod
 # reaches its own knowledge_<node> DB as the `postgres` superuser — Doltgres 0.56.3
-# RBAC is table-DML-only (databases.md §5.2), so a per-node role is not yet possible.
+# RBAC is table-DML-only (https://node-template.cognidao.org/knowledge/database-migration-contract §5.2), so a per-node role is not yet possible.
 test -f "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_PASSWORD" \
   || { echo "materialize did not materialize per-node DOLTGRES_PASSWORD" >&2; exit 1; }
 test -f "$BAO_ROOT/cogni/candidate-a/node-template/DOLTGRES_URL" \

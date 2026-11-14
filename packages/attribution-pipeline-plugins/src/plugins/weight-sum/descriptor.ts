@@ -9,7 +9,7 @@
  * - ALLOCATOR_NEEDS_DECLARED: requiredEvaluationRefs validated by dispatchAllocator before compute.
  * - ALLOCATION_ALGO_VERSIONED: delegates to versioned weight-sum-v0 implementation.
  * Side-effects: none
- * Links: docs/spec/plugin-attribution-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @public
  */
 

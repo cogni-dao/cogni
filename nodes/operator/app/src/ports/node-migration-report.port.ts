@@ -17,7 +17,7 @@
  *     `null` (never reported), which is NOT the same as a cell whose `applied` is empty.
  * Side-effects: none
  * Links: adapters/server/observability/drizzle-node-migration-report.adapter.ts,
- *   shared/migrations/migration-receipt.ts, docs/spec/cicd-platform-boundary.md (OPERATOR_PLANE_CONTRACT)
+ *   shared/migrations/migration-receipt.ts, https://cognidao.org/knowledge/operator-plane-contract (OPERATOR_PLANE_CONTRACT)
  * @public
  */
 

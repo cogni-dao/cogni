@@ -8,7 +8,7 @@
  * Invariants: amountUsdCents must be between MIN_PAYMENT_CENTS and MAX_PAYMENT_CENTS; all outputs include on-chain transfer parameters.
  * Side-effects: none
  * Notes: Billing account and from address derived from session server-side; not provided in input.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

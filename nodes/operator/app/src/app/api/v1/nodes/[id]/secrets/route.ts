@@ -26,7 +26,7 @@
  *     candidate-a only itself. UP-TRUST IS REFUSED FOREVER (bug.5196).
  *     Why this is not a cross-env write: OpenBao is per-CLUSTER, so the path is always
  *     inside THIS operator's own vault — `cogni/preview/<node>` written by production
- *     never reaches preview's vault. Per secrets-management.md Invariant 1 the
+ *     never reaches preview's vault. Per https://cognidao.org/knowledge/secrets-management Invariant 1 the
  *     blast-radius boundary is `<service>`; the env prefix is a lane label. Required by
  *     the north star: the PAYING cluster must custody every lane's secrets, because the
  *     node-deploy sequencer puts them into the lease that cluster's account is billed for.

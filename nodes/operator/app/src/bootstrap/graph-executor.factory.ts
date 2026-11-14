@@ -16,7 +16,7 @@
  *   - MCP_NOT_SINGLETON: MCP connections use McpConnectionCache with reconnect-on-error + TTL backstop
  *   - MCP_RECONNECT_ON_ERROR: ErrorDetectingMcpToolSource invalidates cache on transport-level connection errors
  * Side-effects: global (module-scoped McpConnectionCache, cached sandbox provider promise)
- * Links: container.ts, NamespaceGraphRouter, GRAPH_EXECUTION.md, OBSERVABILITY.md, mcp-control-plane.md
+ * Links: container.ts, NamespaceGraphRouter, GRAPH_EXECUTION.md, OBSERVABILITY.md, https://node-template.cognidao.org/knowledge/mcp-tool-sources
  * @public
  */
 
@@ -341,7 +341,7 @@ const mcpLog = makeLogger({ component: "mcp-bootstrap" });
  *
  * This is the MVP seam — not the final control plane. Phase 1 replaces
  * `parseMcpConfigFromEnv()` with DB registry reads. The `getSource()` interface
- * stays the same. See docs/spec/mcp-control-plane.md.
+ * stays the same. See https://node-template.cognidao.org/knowledge/mcp-tool-sources.
  *
  * Invariants:
  *   - MCP_NOT_SINGLETON: Connections have bounded lifetime, not forever cache

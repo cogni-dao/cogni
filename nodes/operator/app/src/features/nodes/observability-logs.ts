@@ -27,7 +27,7 @@
  *     ledger-derived identity, so `node` is trustworthy there — while operator k3s streams beyond
  *     `app` (actuator, scheduler-worker, …) stay out of reach exactly as before. Shared-infra
  *     services are still NOT node-attributable; the Phase 1 generic route remains their path.
- *     See docs/spec/grafana-observability-access.md §"Node-dev log scope envelope".
+ *     See https://cognidao.org/knowledge/node-log-proxy-contract §"Node-dev log scope envelope".
  *   - DEPLOY_EVENTS_PIN_BY_LINE (task.5400): `service=deploy` is the one exception to the stream pin.
  *     The sequencer is operator-side, so its streams carry no trustworthy per-node label; the node pin
  *     is a FORCED pipeline stage `|= "node_deploy" | json | nodeId="<id>"` placed between the selector
@@ -43,7 +43,7 @@
  *     (400). For the stream-pinned scopes (app, lease) a filter could never widen the selector, so
  *     there this is hardening, not a fix.
  * Side-effects: none (pure)
- * Links: docs/spec/grafana-observability-access.md, docs/design/substrate-grafana-observability.md,
+ * Links: https://cognidao.org/knowledge/node-log-proxy-contract, docs/design/substrate-grafana-observability.md,
  *   ./flight-status (FLIGHT_ENVS), task.5025
  * @public
  */

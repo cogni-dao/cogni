@@ -7,7 +7,7 @@
  * Scope: Tests that receipts are written only when costUsd is a known number. Does not test database or actual billing writes.
  * Invariants: RECEIPT_WRITES_REQUIRE_CALL_ID_AND_COST, NO_PLACEHOLDER_RECEIPTS, COST_AUTHORITY_IS_LITELLM
  * Side-effects: none
- * Links: src/features/ai/services/billing.ts, docs/spec/billing-ingest.md
+ * Links: src/features/ai/services/billing.ts, https://node-template.cognidao.org/knowledge/billing-ingest-callback
  * @internal
  */
 

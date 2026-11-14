@@ -10,11 +10,11 @@ created: 2026-06-18
 updated: 2026-06-18
 tags: [observability, grafana, loki, rbac, substrate, node-identity]
 spec_refs:
-  - ../spec/identity-model.md
-  - ../spec/ci-cd.md
-  - ../spec/rbac.md
-  - ../spec/grafana-observability-access.md
-  - ../spec/substrate-access-grant.md
+  - https://cognidao.org/knowledge/identity-keys-no-overload
+  - https://cognidao.org/knowledge/operator-pipeline-contract
+  - https://cognidao.org/knowledge/authz-port-contract
+  - https://cognidao.org/knowledge/node-log-proxy-contract
+  - https://cognidao.org/knowledge/read-fleet-health
 related:
   - ./openfga-substrate-unification.md
   - ./node-wizard-formation-wiring.md

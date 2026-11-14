@@ -7,7 +7,7 @@
  * Scope: Maps Cogni authz actions to OpenFGA relations and performs direct or actor/subject dual checks. Resolves a stable store name to OpenFGA's generated store id when configured. Does not read env vars.
  * Invariants: AUTHZ_FAIL_CLOSED_WITH_DISTINCTION; OpenFGA is the sole permission/delegation source; no local role policy.
  * Side-effects: IO (OpenFGA SDK check calls)
- * Links: docs/spec/rbac.md, https://openfga.dev/docs/getting-started/setup-sdk-client
+ * Links: https://cognidao.org/knowledge/authz-port-contract, https://openfga.dev/docs/getting-started/setup-sdk-client
  * @public
  */
 

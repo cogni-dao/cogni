@@ -11,7 +11,7 @@
  * - APPROVERS_PINNED_AT_REVIEW: computeApproverSetHash produces a deterministic SHA-256 from sorted, lowercased addresses.
  * - EIP712_DETERMINISTIC: Same inputs → identical typed data object (no timestamps, no randomness).
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

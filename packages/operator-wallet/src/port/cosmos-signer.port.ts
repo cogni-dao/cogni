@@ -11,7 +11,7 @@
  *   - LOW_S_SIGNATURES — signatures are 64-byte `r||s` with low-s normalization
  *     (Cosmos SDK rejects malleable high-s signatures).
  * Side-effects: none (interface definition only)
- * Links: docs/spec/operator-wallet.md, work item task.5060 (story.5017 Track B)
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary, work item task.5060 (story.5017 Track B)
  * @public
  */
 

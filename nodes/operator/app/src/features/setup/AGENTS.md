@@ -13,7 +13,7 @@ DAO formation feature slice. Pure state machines, transaction builders, server v
 
 ## Pointers
 
-- [Node Formation Spec](../../../../../docs/spec/node-formation.md): P0 MVP design spec
+- [Node Formation Spec](https://cognidao.org/knowledge/node-formation-contract): P0 MVP design spec
 - `packages/aragon-osx`: Pure OSx primitives (no IO)
 
 ## Boundaries

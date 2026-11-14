@@ -22,7 +22,7 @@
  *     errorCode + target nodeId/env + counts only. Never the raw query, never log lines (privacy).
  * Side-effects: IO (registry read, authz check, Loki query)
  * Links: src/features/nodes/observability-logs.ts, src/bootstrap/observability.factory.ts,
- *   docs/spec/grafana-observability-access.md, flight-status/route.ts (same tuple), task.5025
+ *   https://cognidao.org/knowledge/node-log-proxy-contract, flight-status/route.ts (same tuple), task.5025
  * @public
  */
 

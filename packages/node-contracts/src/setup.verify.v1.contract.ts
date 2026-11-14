@@ -7,7 +7,7 @@
  * Scope: Defines request/response schemas for POST /api/setup/verify; does not perform RPC or persistence.
  * Invariants: Server derives ALL addresses from tx receipts; never trusts client-provided addresses.
  * Side-effects: none
- * Links: docs/spec/node-formation.md, work/projects/proj.chain-deployment-refactor.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract, work/projects/proj.chain-deployment-refactor.md
  * @public
  */
 

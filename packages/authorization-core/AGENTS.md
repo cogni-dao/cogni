@@ -13,9 +13,9 @@ Shared authorization port, OpenFGA adapter, resource helpers, and deterministic 
 
 ## Pointers
 
-- [RBAC](../../docs/spec/rbac.md)
+- [RBAC](https://cognidao.org/knowledge/authz-port-contract)
 - [Operator RBAC capability map](https://cognidao.org/knowledge/operator-rbac-capability-map)
-- [Packages Architecture](../../docs/spec/packages-architecture.md)
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules)
 
 ## Boundaries
 

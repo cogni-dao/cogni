@@ -21,9 +21,9 @@
  *     the direct-to-main path via `edoCapability.*` — trusted humans, v0.
  *     Mirrors the same auth-routed branching rule as
  *     `POST /api/v1/knowledge/contributions`. See
- *     `docs/spec/knowledge-syntropy.md` § Write Protocol.
+ *     `https://node-template.cognidao.org/knowledge/knowledge-recall-path` § Write Protocol.
  * Side-effects: IO (HTTP response, Doltgres write via container capability)
- * Links: docs/spec/knowledge-syntropy.md § The Hypothesis Loop, packages/knowledge-store
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path § The Hypothesis Loop, packages/knowledge-store
  * @internal
  */
 

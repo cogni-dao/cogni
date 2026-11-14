@@ -25,7 +25,7 @@ Node identity flows from repo-spec, not env vars. The logger and metrics registr
 - Do NOT add node-specific event names (`poly.ai.*`). Events are domain-scoped; `nodeId` in the payload discriminates.
 - Inter-node calls (billing callbacks, SSO, future federation) MUST log BOTH `sourceNodeId` and `targetNodeId`.
 - Python services: MUST emit structured JSON logs with `nodeId` field. Plain-text `logging` output breaks Loki's JSON pipeline.
-- See: `docs/spec/observability.md` § Multi-Node Identity.
+- See: `https://node-template.cognidao.org/knowledge/observability-logging-contract` § Multi-Node Identity.
 
 ## 2) Decide what to instrument (pick one)
 

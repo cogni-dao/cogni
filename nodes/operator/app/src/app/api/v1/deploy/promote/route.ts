@@ -25,7 +25,7 @@
  *     the CD4 refusal) and is authorized by the operator node's env gate. Never bundled into an
  *     operator promote.
  * Side-effects: IO (authz check, GitHub workflow_dispatch)
- * Links: docs/spec/node-ci-cd-contract.md § Env-promotion progression, docs/spec/rbac.md, docs/spec/cicd-platform-boundary.md
+ * Links: https://node-template.cognidao.org/knowledge/node-ci-sovereignty § Env-promotion progression, https://cognidao.org/knowledge/authz-port-contract, https://cognidao.org/knowledge/operator-plane-contract
  * @public
  */
 

@@ -15,7 +15,7 @@ Utilities for chat error mapping and UI presentation logic.
 ## Pointers
 
 - [Parent: AI Chat Feature](../AGENTS.md)
-- [Error Handling Architecture](../../../../../../../docs/spec/error-handling.md)
+- [Error Handling Architecture](https://node-template.cognidao.org/knowledge/layered-error-translation)
 - [Chat Error Contract](../../../../contracts/error.chat.v1.contract.ts)
 
 ## Boundaries

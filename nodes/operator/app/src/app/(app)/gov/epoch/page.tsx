@@ -7,7 +7,7 @@
  * Scope: Read-only server entrypoint; delegates lifecycle rendering to CurrentEpochView.
  * Invariants: Auth enforced by (app) layout guard. All epoch mutations live in /gov/review.
  * Side-effects: none
- * Links: src/features/governance/types.ts, docs/spec/tokenomics-distribution.md
+ * Links: src/features/governance/types.ts, https://node-template.cognidao.org/knowledge/distribution-lifecycle
  * @public
  */
 

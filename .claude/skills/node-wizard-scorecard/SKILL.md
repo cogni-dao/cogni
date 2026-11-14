@@ -78,7 +78,7 @@ reporting a terminal blocker that prevents opening one:
 - Candidate flight must be requested through the operator API. Do not use
   source-repo deploy workflows or other privileged manual deploy paths.
 - DNS is automatic — never hand-create a `<node>-test` record. The flight upserts
-  it (`reconcile-node-dns.sh`; ci-cd.md Axiom 21). A fresh-flight `NXDOMAIN` is
+  it (`reconcile-node-dns.sh`; https://cognidao.org/knowledge/operator-pipeline-contract Axiom 21). A fresh-flight `NXDOMAIN` is
   almost always negative-cache — re-check `dig <host> +short @1.1.1.1`.
 - **Edge is automatic-but-fragile — DO NOT assume a flighted node serves
   externally (KNOWN GAP).** The `node-substrate` edge reconcile writes the Caddy
@@ -104,7 +104,7 @@ API validation has passed. The human-facing report must include critical repo
 links, child PR/check status, image tag and digest, parent pin status, flight
 status, candidate `/version`, and a short explanation of the child-build ->
 operator-pin -> deploy verb (`POST /api/v1/deploy/workloads`, env=candidate-a) CI/CD path. Use
-`docs/spec/node-ci-cd-contract.md` for the CI/CD facts and
+`https://node-template.cognidao.org/knowledge/node-ci-sovereignty` for the CI/CD facts and
 `docs/guides/agent-api-validation.md` for the post-flight API exercise.
 
 ## Fresh Boot Health

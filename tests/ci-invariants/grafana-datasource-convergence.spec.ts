@@ -13,7 +13,7 @@
  *   - HTTP_200_IS_NOT_SUCCESS: the verify layer fails when a 200 envelope carries the
  *     datasource's own error (SQLSTATE 28P01), not just when the status code is non-200.
  * Side-effects: IO (mktemp sandbox; spawns bash)
- * Links: bug.5117, docs/spec/cicd-platform-boundary.md, infra/grafana/AGENTS.md
+ * Links: bug.5117, https://cognidao.org/knowledge/operator-plane-contract, infra/grafana/AGENTS.md
  * @public
  *
  * WHY THIS EXISTS. Measured 2026-10-08: 55 live Grafana Postgres datasources against a

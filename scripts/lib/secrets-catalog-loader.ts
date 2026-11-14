@@ -6,7 +6,7 @@
  * Scope: Pure data loading and validation only. Does NOT shell out to gh, does NOT write any GitHub or filesystem state beyond reading catalog YAML files via readFileSync.
  * Invariants: every entry has a tier; per-node `service:` matches parent dir; names unique across catalogs.
  * Side-effects: IO (readFileSync of catalog YAML; one execSync to resolve git repo root)
- * Links: docs/design/secrets-catalog-per-node.md, docs/spec/secrets-classification.md
+ * Links: docs/design/secrets-catalog-per-node.md, https://node-template.cognidao.org/knowledge/secrets-routing-tiers
  */
 
 import { execSync } from "node:child_process";
@@ -226,7 +226,7 @@ export function loadSecretsCatalog(opts: LoadOptions): LoadResult {
   // 2. Load operator-domain catalog (single file).
   // Build the set of valid operator-catalog `service:` values: pseudo-services
   // (_shared/_system) + present-day node directories + canonical-but-future
-  // node domains from node-ci-cd-contract.md (poly, resy). The future-domain
+  // node domains from https://node-template.cognidao.org/knowledge/node-ci-sovereignty (poly, resy). The future-domain
   // allowlist exists so A2 placeholder entries in node-template baseline
   // don't fail the loader before cogni-poly imports them. Catches typos like
   // `service: nodee-template` that would otherwise produce an unreconcilable
@@ -264,7 +264,7 @@ export function loadSecretsCatalog(opts: LoadOptions): LoadResult {
         !operatorServiceAllowlist.has(entry.service)
       ) {
         throw new Error(
-          `${operatorAbs}: entry ${entry.name} declares service: "${entry.service}" which is not one of [${[...operatorServiceAllowlist].sort().join(", ")}]. Add a nodes/<name>/ directory or use _shared/_system; for future-node placeholders, the name must match a canonical domain in node-ci-cd-contract.md.`
+          `${operatorAbs}: entry ${entry.name} declares service: "${entry.service}" which is not one of [${[...operatorServiceAllowlist].sort().join(", ")}]. Add a nodes/<name>/ directory or use _shared/_system; for future-node placeholders, the name must match a canonical domain in https://node-template.cognidao.org/knowledge/node-ci-sovereignty.`
         );
       }
       allEntries.push({ entry, source: operatorAbs });

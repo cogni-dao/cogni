@@ -13,7 +13,7 @@ Standalone workspace package (`@cogni/operator-wallet`) providing Privy-managed 
 
 ## Pointers
 
-- [Operator Wallet Spec](../../docs/spec/operator-wallet.md) — lifecycle, custody, access control
+- [Operator Wallet Spec](https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary) — lifecycle, custody, access control
 
 ## Boundaries
 

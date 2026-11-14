@@ -13,7 +13,7 @@
  *   - DISTRIBUTOR_NULLABLE: distributor is null until the on-chain contract is recorded.
  *   - NO_SECRETS: payload exposes only public claim data.
  * Side-effects: none
- * Links: docs/spec/attribution-pipeline-overview.md, packages/cogni-contracts/src/cumulative-merkle-distributor/abi.ts
+ * Links: https://node-template.cognidao.org/knowledge/attribution-pipeline-map, packages/cogni-contracts/src/cumulative-merkle-distributor/abi.ts
  * @public
  */
 

@@ -5,7 +5,7 @@
 # Apply Cogni's canonical `main` branch GH config to a node-template-shaped repo.
 # Idempotent: re-running converges to the desired state.
 #
-# Spec: docs/spec/node-ci-cd-contract.md#repo-setup-fixture
+# Spec: https://node-template.cognidao.org/knowledge/node-ci-sovereignty
 # Fixtures:
 #   - infra/github/branch-protection.json   — required status checks + main-branch rules
 #   - infra/github/merge-queue-ruleset.json — `merge_queue` ruleset (queue requirement, config-as-code)

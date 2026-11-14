@@ -34,7 +34,7 @@
  *   node page (not a hidden API); owners click "Activate distributions". `node.flight` lets a
  *   delegated agent exercise the same endpoint for candidate-a validation.
  * Links: src/adapters/server/vcs/github-repo-write.ts, src/features/nodes/DistributionsCard.client.tsx,
- *   docs/spec/tokenomics.md, task.0135
+ *   https://cognidao.org/knowledge/tokenomics-budget-policy, task.0135
  * @public
  */
 

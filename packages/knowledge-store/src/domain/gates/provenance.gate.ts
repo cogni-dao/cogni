@@ -6,9 +6,9 @@
  * Purpose: Cross-field gate enforcing ENTRY_HAS_PROVENANCE — `source_type` is always set; `source_ref` is required when `source_type ∈ {external, derived}` because those classes are unverifiable without an origin pointer.
  * Scope: Pure cross-field validation tying source_type to source_ref. Does not validate the contents of source_ref itself (URL, DOI, signal ID, etc are all accepted as opaque strings at this layer).
  * Invariants:
- *   - ENTRY_HAS_PROVENANCE (knowledge-syntropy.md): no knowledge without origin.
+ *   - ENTRY_HAS_PROVENANCE (https://node-template.cognidao.org/knowledge/knowledge-recall-path): no knowledge without origin.
  * Side-effects: none
- * Links: work/projects/proj.knowledge-syntropy.md, docs/spec/knowledge-syntropy.md
+ * Links: work/projects/proj.knowledge-syntropy.md, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

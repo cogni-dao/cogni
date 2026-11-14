@@ -12,7 +12,7 @@
  *   - BOUNDED_RESULTS: each result's `content` is truncated to KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS (≤20 hits ×
  *     1500 chars), so one call can never return a multi-MB entry (bug.5518)
  * Side-effects: IO (database read via capability)
- * Links: docs/spec/knowledge-data-plane.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane
  * @public
  */
 

@@ -9,7 +9,7 @@
  * Invariants:
  *   - THE_MIGRATOR_IS_THE_ONLY_AUTHOR: the receipt is emitted by `scripts/db/migrate.mjs`, which runs
  *     inside the node's own workload holding the node's OWN DSN. Nothing else may synthesize one, and
- *     the operator never reads a node database to derive it (docs/spec/multi-node-tenancy.md).
+ *     the operator never reads a node database to derive it (https://node-template.cognidao.org/knowledge/node-tenancy-isolation).
  *   - DECLARED_AND_APPLIED_TRAVEL_TOGETHER: a receipt carries the journal's declared tags AND the
  *     drizzle ledger's applied rows, so "declared but never arrived" is answerable from the receipt
  *     alone — the operator needs neither the node's git tree nor its database to run that gate.
@@ -17,8 +17,8 @@
  *     `scripts/db/migrate.mjs` (a standalone image-copied script that may not import this). The spec
  *     pins both sides so a change to either is a deliberate, reviewed diff.
  * Side-effects: none
- * Links: scripts/db/migrate.mjs, docs/spec/databases.md § 2 Migration Strategy,
- *   docs/spec/multi-node-tenancy.md (NO_CROSS_NODE_QUERIES)
+ * Links: scripts/db/migrate.mjs, https://node-template.cognidao.org/knowledge/database-migration-contract § 2 Migration Strategy,
+ *   https://node-template.cognidao.org/knowledge/node-tenancy-isolation (NO_CROSS_NODE_QUERIES)
  * @public
  */
 

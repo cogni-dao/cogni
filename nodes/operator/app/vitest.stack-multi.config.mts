@@ -10,7 +10,7 @@
  * Side-effects: HTTP requests to running nodes, database connections to per-node DBs
  * Notes: Separate from vitest.stack.config.mts (single-node tests). No DB reset — tests
  *   seed and clean up their own data.
- * Links: task.0258, docs/spec/multi-node-tenancy.md
+ * Links: task.0258, https://node-template.cognidao.org/knowledge/node-tenancy-isolation
  * @public
  */
 

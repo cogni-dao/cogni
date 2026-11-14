@@ -13,8 +13,8 @@ REST API routes for VCS operations — artifact-gated candidate-a flight dispatc
 
 ## Pointers
 
-- [Agentic Contribution Loop](../../../../../../../docs/spec/development-lifecycle.md)
-- [VCS Integration Spec](../../../../../../../docs/spec/vcs-integration.md)
+- [Agentic Contribution Loop](https://node-template.cognidao.org/knowledge/work-item-status-machine)
+- [VCS Integration Spec](https://cognidao.org/knowledge/pr-review-grounded-gate)
 - [VCS Flight Contract](../../../../../../../../packages/node-contracts/src/vcs.flight.v1.contract.ts)
 - [VCS Review Contract](../../../../../../../../packages/node-contracts/src/vcs.review.v1.contract.ts)
 

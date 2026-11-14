@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/ci-invariants/env-declaration-completeness`
- * Purpose: Enforces NO_SILENT_DEFAULT (story.5040, ci-cd.md Axiom 23) — declaring an env for a node is an all-or-nothing act. A declared env whose placement cells or rendered artifacts are absent renders the deprecated k3s lane, or nothing at all, while every gate stays green.
+ * Purpose: Enforces NO_SILENT_DEFAULT (story.5040, https://cognidao.org/knowledge/operator-pipeline-contract Axiom 23) — declaring an env for a node is an all-or-nothing act. A declared env whose placement cells or rendered artifacts are absent renders the deprecated k3s lane, or nothing at all, while every gate stays green.
  * Scope: Static structural read of infra/catalog + the artifacts it implies; does not shell out, build, render, or hit the network, and does not assert artifact CONTENT.
  * Invariants:
  *   PLACEMENT_IS_COMPLETE_PER_ENV: a placed node declares provider + `compute_api: node-deploy` per env (story.5137).
@@ -11,7 +11,7 @@
  *   DECLARED_ENV_HAS_APPSET: each (node, env) has an AppSet under its reconciling cluster's dir, except a `compute_api: node-deploy` cell, which must have none (story.5137).
  *   DECLARED_ENV_HAS_OVERLAY: each in-repo (node, env) has a populated Kustomize overlay dir; a `node-deploy` cell has none.
  * Side-effects: IO (reads infra/catalog, infra/k8s/argocd/appsets, infra/k8s/overlays)
- * Links: docs/spec/ci-cd.md Axiom 23, story.5040, task.5132, bug.5204
+ * Links: https://cognidao.org/knowledge/operator-pipeline-contract Axiom 23, story.5040, task.5132, bug.5204
  * @public
  */
 
@@ -84,7 +84,7 @@ describe("env declaration completeness (NO_SILENT_DEFAULT, story.5040)", () => {
       expect(
         provider,
         `${row.name} declares env '${env}' but has no deployment_provider.${env}. ` +
-          `Absent placement is a HARD FAILURE, not a k3s fallback (ci-cd.md Axiom 23).`
+          `Absent placement is a HARD FAILURE, not a k3s fallback (https://cognidao.org/knowledge/operator-pipeline-contract Axiom 23).`
       ).toBeTruthy();
 
       expect(

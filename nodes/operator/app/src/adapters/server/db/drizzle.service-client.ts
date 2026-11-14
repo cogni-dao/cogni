@@ -9,7 +9,7 @@
  * - MUST NOT be imported from general src/ code (enforced by dependency-cruiser)
  * - Only auth.ts and explicitly-allowed files may import this
  * Side-effects: IO (database connections) - only on first access
- * Links: docs/spec/database-rls.md
+ * Links: https://node-template.cognidao.org/knowledge/rls-tenant-isolation
  * @internal
  */
 

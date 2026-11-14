@@ -7,7 +7,7 @@
  * Scope: Verifies system tenant billing account exists at startup. Does not perform ongoing health monitoring.
  * Invariants: SYSTEM_TENANT_STARTUP_CHECK — app must not start without system tenant billing account.
  * Side-effects: IO (database query via ServiceAccountService port)
- * Links: docs/spec/system-tenant.md
+ * Links: https://node-template.cognidao.org/knowledge/system-tenant-identity
  * @public
  */
 

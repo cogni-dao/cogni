@@ -9,7 +9,7 @@
  * Invariants: NODE_SCOPED, FOLD_FROM_PERSISTED_MANIFEST, PUBLISH_FROM_ON_CHAIN_EVIDENCE,
  *   UNKNOWN_NEVER_COMPLETE.
  * Side-effects: IO (database + one best-effort RPC read)
- * Links: docs/spec/tokenomics-distribution.md, bug.5042
+ * Links: https://node-template.cognidao.org/knowledge/distribution-lifecycle, bug.5042
  * @public
  */
 

@@ -18,7 +18,7 @@
  * - UNROUTABLE_NEVER_WRITES: a verified webhook with no unique attribution target may still drive
  *   non-attribution webhook hooks, but it writes no receipt to any ledger.
  * Side-effects: IO (insertIngestionReceipts for own node; HTTP delivery for foreign nodes)
- * Links: docs/spec/attribution-ledger.md,
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger,
  *   nodes/operator/app/src/adapters/server/ingestion/http-receipt-delivery.ts
  * @public
  */

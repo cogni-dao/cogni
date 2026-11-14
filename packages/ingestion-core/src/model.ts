@@ -10,7 +10,7 @@
  * - Adapter-side type only — mapping to DB tables (which add node_id) is the workflow/store's job.
  * - payloadHash is PROVENANCE_REQUIRED (SHA-256 of canonical payload).
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md#source-adapter-interface
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

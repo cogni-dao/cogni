@@ -8,7 +8,7 @@
  * Invariants: Returns ledger entries ordered by newest first; relies on AccountService for data access.
  * Side-effects: IO (via AccountService port).
  * Notes: Does not perform authentication; billing account resolution handled by app layer.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

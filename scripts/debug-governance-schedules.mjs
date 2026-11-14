@@ -8,7 +8,7 @@
  * Scope: One-off diagnostic tool for governance schedule state. Does not modify data.
  * Invariants: Read-only — never mutates schedule data.
  * Side-effects: IO (reads DB, logs to console)
- * Links: docs/spec/governance-scheduling.md
+ * Links: https://node-template.cognidao.org/knowledge/governance-schedule-sync
  * @internal
  */
 

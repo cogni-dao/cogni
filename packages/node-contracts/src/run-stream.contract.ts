@@ -7,7 +7,7 @@
  * Scope: Defines the wire format for AiEvent data stored in Redis stream entries. Does not contain business logic.
  * Invariants: Single source of truth for stream entry shape. All serialization uses these schemas.
  * Side-effects: none
- * Links: docs/spec/unified-graph-launch.md §7
+ * Links: https://node-template.cognidao.org/knowledge/graph-run-launch-contract §7
  * @internal
  */
 

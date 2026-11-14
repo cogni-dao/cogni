@@ -12,7 +12,7 @@ You are an infrastructure setup agent. Your job: take a fresh Cogni fork from cl
 - [Node Formation Guide](../../../docs/guides/node-formation-guide.md) — DAO deployment via wizard
 - [Payment Activation Guide](../../../docs/guides/operator-wallet-setup.md) — Privy wallet + Split contract
 - [SETUP_DESIGN.md](../../../scripts/setup/SETUP_DESIGN.md) — canonical secret list, personas, full setup flow
-- [ci-cd.md Axiom 23](../../../docs/spec/ci-cd.md) — `AKASH_IS_NODE_APP_TARGET` (gated north star): new node apps target Akash via the operator compute API; Cherry k3s = state substrate
+- [https://cognidao.org/knowledge/operator-pipeline-contract Axiom 23](https://cognidao.org/knowledge/operator-pipeline-contract) — `AKASH_IS_NODE_APP_TARGET` (gated north star): new node apps target Akash via the operator compute API; Cherry k3s = state substrate
 
 > ⚠️ Parts of this skill predate the k3s + Akash split (it references retired paths); verify against [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) before trusting a step.
 

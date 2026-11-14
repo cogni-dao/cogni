@@ -26,7 +26,7 @@
  *   - SERVED_DEFAULT_MODEL: the default review model is `deepseek-v4-flash` (served, the fleet default_free);
  *     a node may override it with repo-spec `review.model`.
  * Side-effects: IO (GitHub REST API)
- * Links: bug.5000, story.5102, docs/spec/node-ci-cd-contract.md#single-domain-scope,
+ * Links: bug.5000, story.5102, https://node-template.cognidao.org/knowledge/node-ci-sovereignty,
  *   services/scheduler-worker/src/adapters/review-http.ts, github-auth.ts
  * @internal
  */

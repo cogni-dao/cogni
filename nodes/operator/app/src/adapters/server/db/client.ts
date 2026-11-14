@@ -8,7 +8,7 @@
  * Invariants: No BYPASSRLS access through this barrel
  * Side-effects: none (re-exports only)
  * Notes: Service-role access requires direct import from drizzle.service-client.ts (depcruiser-gated).
- * Links: docs/spec/database-rls.md
+ * Links: https://node-template.cognidao.org/knowledge/rls-tenant-isolation
  * @public
  */
 

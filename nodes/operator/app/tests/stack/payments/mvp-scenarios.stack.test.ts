@@ -8,7 +8,7 @@
  * Invariants: All 9 MVP scenarios pass; bidirectional invariant (CREDITED ↔ ledger) holds; no flaky tests.
  * Side-effects: IO (database writes, facade calls)
  * Notes: Uses singleton FakeOnChainVerifierAdapter via getTestOnChainVerifier(); resets in beforeEach/afterEach.
- * Links: docs/spec/payments-design.md, docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

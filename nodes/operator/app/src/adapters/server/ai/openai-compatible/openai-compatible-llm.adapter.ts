@@ -12,7 +12,7 @@
  *   - TOKENS_NEVER_LOGGED: Credential values (apiKey, baseUrl) never appear in logs.
  *   - BROKER_RESOLVES_CREDS: Receives pre-resolved { baseUrl, apiKey } — never reads env/DB directly.
  * Side-effects: IO (HTTP calls to user's endpoint)
- * Links: docs/spec/multi-provider-llm.md
+ * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @internal
  */
 

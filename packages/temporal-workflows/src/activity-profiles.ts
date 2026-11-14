@@ -9,7 +9,7 @@
  *   - Per PROXY_CONFIGS_DRY: Deduplicate configs that appear 2+ times across workflows.
  *   - Workflow-specific configs stay inline with rationale comments.
  * Side-effects: none
- * Links: docs/spec/temporal-patterns.md
+ * Links: https://cognidao.org/knowledge/temporal-workflow-rules
  * @public
  */
 

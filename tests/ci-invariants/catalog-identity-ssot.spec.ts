@@ -11,8 +11,8 @@
  *   EVERY_INLINE_NODE_HAS_REPO_SPEC_ID: every inline `type: node` catalog entry has a repo-spec
  *     with a UUID `node_id`; submodule pins are external identities.
  * Side-effects: IO (reads infra/catalog/*.yaml and nodes/<name>/.cogni/repo-spec.yaml)
- * Links: scripts/ci/lib/image-tags.sh, infra/catalog/_schema.json, docs/spec/ci-cd.md (axiom 16),
- *        docs/spec/billing-evolution.md, ROADMAP.md ("Repo-Spec Authority")
+ * Links: scripts/ci/lib/image-tags.sh, infra/catalog/_schema.json, https://cognidao.org/knowledge/operator-pipeline-contract (axiom 16),
+ *        https://node-template.cognidao.org/knowledge/credit-pricing-billing, ROADMAP.md ("Repo-Spec Authority")
  * @public
  */
 

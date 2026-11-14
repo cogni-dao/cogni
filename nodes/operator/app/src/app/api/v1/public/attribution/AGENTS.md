@@ -13,7 +13,7 @@ Public (unauthenticated) HTTP endpoints for finalized attribution data. Exposes 
 
 ## Pointers
 
-- [Attribution Ledger Spec](../../../../../../../../docs/spec/attribution-ledger.md)
+- [Attribution Ledger Spec](https://node-template.cognidao.org/knowledge/attribution-epoch-ledger)
 - [Attribution Contracts](../../../../../contracts/attribution.list-epochs.v1.contract.ts)
 
 ## Boundaries

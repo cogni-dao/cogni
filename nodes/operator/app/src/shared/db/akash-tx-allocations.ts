@@ -59,7 +59,7 @@
  *   tests/ci-invariants/akash-tx-actuator-runtime.spec.ts.
  * Side-effects: none
  * Links: adapters/server/compute/akash-tx-allocation-ledger.adapter.ts,
- *   features/compute/akash-tx/akash-tx-wallet.ts, docs/spec/databases.md, task.5095,
+ *   features/compute/akash-tx/akash-tx-wallet.ts, https://node-template.cognidao.org/knowledge/database-migration-contract, task.5095,
  *   task.5103
  * @public
  */

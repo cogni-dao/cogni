@@ -7,7 +7,7 @@
  * Scope: Pure readiness tests; does not touch chain, DB, or filesystem I/O.
  * Invariants: TOKEN_SETTLEMENT_MINT_AUTHORITY_IS_READINESS.
  * Side-effects: none
- * Links: packages/aragon-osx/src/token-settlement.ts, docs/spec/tokenomics.md
+ * Links: packages/aragon-osx/src/token-settlement.ts, https://cognidao.org/knowledge/tokenomics-budget-policy
  * @internal
  */
 

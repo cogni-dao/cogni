@@ -116,7 +116,7 @@ jobs:
       GRAFANA_CLOUD_ORG_SLUG: ${{ secrets.GH_GRAFANA_ORG_SLUG }}
       # Human-pasted catalog secrets that deploy-infra.sh (Phase 5f) lists in
       # REQUIRED_SECRETS but bootstrap.sh does NOT generate. Set per-env by
-      # `pnpm setup:secrets` (secrets-classification.md tiers A1/A2/B). The
+      # `pnpm setup:secrets` (https://node-template.cognidao.org/knowledge/secrets-routing-tiers tiers A1/A2/B). The
       # node-template port (#1426) dropped these from the env block, so the
       # runner never surfaced them to deploy-infra → "Missing required secret".
       # Surface them here so the Compose stack boots; empty is tolerated for a

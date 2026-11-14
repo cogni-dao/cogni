@@ -13,9 +13,9 @@
 
 ## Pointers
 
-- [Temporal Patterns Spec](../../docs/spec/temporal-patterns.md) - Workflow/activity patterns and anti-patterns
-- [Packages Architecture](../../docs/spec/packages-architecture.md) - Package structure guidelines
-- [Scheduler Spec](../../docs/spec/scheduler.md) - Scheduled graph execution
+- [Temporal Patterns Spec](https://cognidao.org/knowledge/temporal-workflow-rules) - Workflow/activity patterns and anti-patterns
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules) - Package structure guidelines
+- [Scheduler Spec](https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract) - Scheduled graph execution
 
 ## Architecture
 

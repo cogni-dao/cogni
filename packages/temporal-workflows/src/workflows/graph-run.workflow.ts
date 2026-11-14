@@ -16,7 +16,7 @@
  *   - TRANSPORT_UNCERTAINTY_IS_INCOMPLETE: exhausted retryable transport failures become timeout, never false execution errors
  *   - TYPED_TERMINAL_ARTIFACT: returns small typed result {ok, runId, structuredOutput} for parent workflow composition
  * Side-effects: none (deterministic orchestration only)
- * Links: docs/spec/unified-graph-launch.md, docs/spec/temporal-patterns.md
+ * Links: https://node-template.cognidao.org/knowledge/graph-run-launch-contract, https://cognidao.org/knowledge/temporal-workflow-rules
  * @public
  */
 

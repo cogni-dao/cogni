@@ -8,7 +8,7 @@
  * Invariants: All exports are types, interfaces, or domain constants (amount bounds).
  * Side-effects: none
  * Notes: Single source of truth for payment types; prevents circular dependencies.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

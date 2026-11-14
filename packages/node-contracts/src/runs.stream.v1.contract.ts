@@ -7,7 +7,7 @@
  * Scope: Path parameter validation. Response is SSE (not JSON), so no output schema.
  * Invariants: CONTRACTS_ARE_TRUTH — single source for path param shape
  * Side-effects: none
- * Links: docs/spec/unified-graph-launch.md §4 (Reconnection)
+ * Links: https://node-template.cognidao.org/knowledge/graph-run-launch-contract §4 (Reconnection)
  * @public
  */
 

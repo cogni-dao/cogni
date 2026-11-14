@@ -7,7 +7,7 @@
  * Scope: Wraps clsx + tailwind-merge for reuse across kit + feature layers; Does not import design tokens or component code.
  * Invariants: Returns a single string; filters falsy values; merges Tailwind conflicts.
  * Side-effects: none
- * Links: docs/spec/ui-implementation.md
+ * Links: https://node-template.cognidao.org/knowledge/frontend-development
  * @public
  */
 

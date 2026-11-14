@@ -7,7 +7,7 @@
  * Scope: Exports port interfaces, split allocation math, Cosmos signature/address helpers, and domain constants. Does not export adapters (use subpaths `@cogni/operator-wallet/adapters/privy` and `@cogni/operator-wallet/adapters/cosmjs`).
  * Invariants: NO_SRC_IMPORTS, NO_SERVICE_IMPORTS, PURE_LIBRARY.
  * Side-effects: none
- * Links: docs/spec/operator-wallet.md
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary
  * @public
  */
 

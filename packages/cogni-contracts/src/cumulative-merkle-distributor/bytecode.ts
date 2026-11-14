@@ -8,7 +8,7 @@
  * Invariants: Bytecode must be the unmodified 1inch CumulativeMerkleDrop artifact
  *   compiled at the pinned commit + compiler settings (see provenance below).
  * Side-effects: none
- * Links: docs/spec/attribution-pipeline-overview.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-pipeline-map
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Pure validation and reference construction. Does not read registries, files, or deployment state.
  * Invariants: Source SHA and digest use lowercase hex; manifests contain exactly one named bundle payload.
  * Side-effects: none
- * Links: packages/repo-spec/src/artifact-bundle.ts, docs/spec/node-ci-cd-contract.md
+ * Links: packages/repo-spec/src/artifact-bundle.ts, https://node-template.cognidao.org/knowledge/node-ci-sovereignty
  * @public
  */
 

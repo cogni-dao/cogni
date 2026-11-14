@@ -7,7 +7,7 @@
  * Scope: Pure constants; does not make RPC calls.
  * Invariants: Topics computed from keccak256 of canonical signatures.
  * Side-effects: none
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 

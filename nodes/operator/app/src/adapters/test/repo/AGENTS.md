@@ -13,7 +13,7 @@ Deterministic fake RepoCapability for testing. Returns fixed results without spa
 
 ## Pointers
 
-- [COGNI_BRAIN_SPEC](../../../../../../docs/spec/cogni-brain.md)
+- [COGNI_BRAIN_SPEC](https://node-template.cognidao.org/knowledge/repo-read-tools-contract)
 - [RepoCapability interface](../../../../../../packages/ai-tools/src/capabilities/repo.ts)
 
 ## Boundaries

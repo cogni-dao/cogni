@@ -7,7 +7,7 @@
  * Scope: Pure schemas and canonical checks; does not allocate resources, query databases, or publish secrets.
  * Invariants: Assigned TCP endpoint and pinned TLS identity belong to an allocated receipt; readiness alone never authorizes cutover.
  * Side-effects: none
- * Links: docs/spec/secrets-management.md, shared/db/akash-tx-allocations.ts
+ * Links: https://cognidao.org/knowledge/secrets-management, shared/db/akash-tx-allocations.ts
  * @internal
  */
 

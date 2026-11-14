@@ -12,7 +12,7 @@
  *   can proceed against the DOMAIN_FK_ENFORCED_AT_WRITE adapter invariant
  *   without requiring a UI roundtrip).
  * Side-effects: IO (HTTP response, Doltgres read/write via container port)
- * Links: docs/spec/knowledge-domain-registry.md, docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-domain-management, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @internal
  */
 

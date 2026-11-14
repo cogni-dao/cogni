@@ -15,7 +15,7 @@
  *   - Dialect separation: this package is NOT globbed by nodes/operator/drizzle.config.ts
  *     (which targets Postgres); only by nodes/operator/drizzle.doltgres.config.ts.
  * Side-effects: none
- * Links: docs/spec/knowledge-data-plane.md, docs/spec/knowledge-syntropy.md, docs/research/dolt-baseline-port-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane, https://node-template.cognidao.org/knowledge/knowledge-recall-path, docs/research/dolt-baseline-port-syntropy.md
  * @public
  */
 

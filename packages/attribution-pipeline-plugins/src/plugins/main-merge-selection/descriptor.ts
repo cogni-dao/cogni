@@ -12,7 +12,7 @@
  *   event types (and merges to non-main branches) are excluded. Excluded logins are
  *   always `included: false`.
  * Side-effects: none
- * Links: services/scheduler-worker/src/activities/ledger.ts, docs/spec/attribution-ledger.md
+ * Links: services/scheduler-worker/src/activities/ledger.ts, https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  *
  * Why this exists: `promotion-selection.v0` was built for a staging→main promotion
  * model where a direct-to-`main` PR is a "release PR" (reference data, NOT a

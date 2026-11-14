@@ -13,7 +13,7 @@
  *   - Per WEIGHT_PINNING: Epoch weightConfig is pinned at creation; subsequent runs use pinned value
  *   - Per EPOCH_CLOSE_ON_TRANSITION: Previous epoch closes at start of new window, not via timer/grace period
  * Side-effects: none (deterministic orchestration only)
- * Links: docs/spec/attribution-ledger.md, docs/spec/temporal-patterns.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, https://cognidao.org/knowledge/temporal-workflow-rules
  * @public
  */
 

@@ -9,7 +9,7 @@
  *   - MODELREF_NO_POLICY: ModelRef is a pure reference, never carries requiresPlatformCredits/capabilities.
  *   - MODELREF_FULLY_RESOLVED: No defaulting at execution time. Schedules persist exact ModelRef.
  * Side-effects: none
- * Links: docs/spec/multi-provider-llm.md
+ * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @public
  */
 

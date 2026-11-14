@@ -50,7 +50,7 @@ describe("API Auth Guard Stack Test", () => {
 
   // TODO: Re-enable after RainbowKitSiweNextAuth refactor stabilizes
   // Current blocker: synthetic JWT sessions fail JWE decryption in route handlers
-  // See: docs/spec/authentication.md (deferred_work section)
+  // See: https://node-template.cognidao.org/knowledge/authentication-session-bearer (deferred_work section)
   // See: tests/_fixtures/auth/synthetic-session.ts (JWE format notes)
   it.skip("should return 200 when calling /api/v1/chat/completions with valid session and seeded billing account", async () => {
     // Arrange: Create test wallet and synthetic session
@@ -146,7 +146,7 @@ describe("API Auth Guard Stack Test", () => {
 
   // TODO: Re-enable after RainbowKitSiweNextAuth refactor stabilizes
   // Current blocker: synthetic JWT sessions fail JWE decryption in route handlers
-  // See: docs/spec/authentication.md (deferred_work section)
+  // See: https://node-template.cognidao.org/knowledge/authentication-session-bearer (deferred_work section)
   it.skip("should allow authenticated requests through proxy and reach route handler", async () => {
     // Arrange: Create synthetic authenticated session
     const wallet = generateTestWallet("test-proxy-auth-wallet");

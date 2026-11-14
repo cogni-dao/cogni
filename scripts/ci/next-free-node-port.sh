@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 #
 # next-free-node-port.sh — allocate + guard the scarce k8s NodePort resource
-# from infra/catalog/*.yaml (CATALOG_IS_SSOT, docs/spec/ci-cd.md axiom 16).
+# from infra/catalog/*.yaml (CATALOG_IS_SSOT, https://cognidao.org/knowledge/operator-pipeline-contract axiom 16).
 #
 # node_port is the k3s Service NodePort (range 30000–32767) the edge Caddy
 # reverse-proxies to (host.docker.internal:<node_port>). It MUST be unique per

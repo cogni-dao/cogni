@@ -9,7 +9,7 @@
  * - POOL_REPRODUCIBLE: Each pool component stores algorithm_version + inputs_json + amount_credits. Pure function.
  * - ALL_MATH_BIGINT: All credit values use BigInt.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

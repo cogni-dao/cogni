@@ -8,7 +8,7 @@
  * Invariants:
  * - ENRICHER_DESCRIPTOR_PURE: constants and pure functions only.
  * Side-effects: none
- * Links: docs/spec/plugin-attribution-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @public
  */
 

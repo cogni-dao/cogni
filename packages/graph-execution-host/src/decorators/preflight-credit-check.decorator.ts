@@ -11,7 +11,7 @@
  *   - POLICY_VIA_PROVIDER: billing policy comes from PlatformCreditChecker, not string matching
  *   - PURE_LIBRARY: no env vars, no process lifecycle
  * Side-effects: IO (via injected checkFn → accountService.getBalance)
- * Links: docs/spec/multi-provider-llm.md
+ * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @public
  */
 

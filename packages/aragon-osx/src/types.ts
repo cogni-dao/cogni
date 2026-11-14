@@ -7,7 +7,7 @@
  * Scope: Type definitions only; does not contain runtime code.
  * Invariants: Types must be compatible with viem hex types.
  * Side-effects: none
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 

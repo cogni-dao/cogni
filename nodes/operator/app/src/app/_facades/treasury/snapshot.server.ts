@@ -8,7 +8,7 @@
  * Invariants: Timeout enforced (3-5s); returns staleWarning on timeout/error instead of throwing.
  * Side-effects: IO (via TreasuryReadPort → EvmOnchainClient RPC)
  * Notes: No authentication required (public data). Returns 200 with staleWarning on RPC failure.
- * Links: docs/spec/onchain-readers.md
+ * Links: https://node-template.cognidao.org/knowledge/onchain-read-ports
  * @public
  */
 

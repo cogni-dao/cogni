@@ -11,7 +11,7 @@
  * - Per GRANT_NODE_BINDING (M1, task.5029): validation asserts the grant is bound to the dispatched nodeId — a node-task scope embeds its nodeId, so a grant minted for node A cannot authorize a dispatch to node B
  * - withTenantScope called on every method (uniform invariant, no-op on serviceDb)
  * Side-effects: IO (database operations)
- * Links: ports/scheduling/execution-grant.port.ts, docs/spec/scheduler.md
+ * Links: ports/scheduling/execution-grant.port.ts, https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @public
  */
 

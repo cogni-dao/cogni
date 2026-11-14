@@ -9,7 +9,7 @@
  * - Must trigger no-service-db-package-import (direct package import)
  * - Must trigger no-service-db-adapter-import (adapter singleton import)
  * Side-effects: none
- * Links: .dependency-cruiser.cjs, docs/spec/database-rls.md
+ * Links: .dependency-cruiser.cjs, https://node-template.cognidao.org/knowledge/rls-tenant-isolation
  * @internal
  */
 

@@ -9,7 +9,7 @@
  *   - RECOMPUTE_IS_PURE_FROM_CITATIONS: recompute reads ALL relevant citations and computes from scratch — never increments.
  *   - RESOLVER_IDEMPOTENT: double-resolving the same hypothesis is a no-op.
  * Side-effects: none
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 
@@ -152,7 +152,7 @@ export interface EdoResolverPort {
 
   /**
    * Recompute the confidence_pct on a knowledge row by reading its 1-hop
-   * citation neighborhood and applying the formula from knowledge-syntropy.md
+   * citation neighborhood and applying the formula from https://node-template.cognidao.org/knowledge/knowledge-recall-path
    * § Confidence Is Computed, Not Assigned.
    *
    * Pure: reads all relevant citations + the row, computes from scratch,

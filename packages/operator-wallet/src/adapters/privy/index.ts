@@ -7,7 +7,7 @@
  * Scope: Re-exports only. Does not contain runtime logic.
  * Invariants: Consumers use `@cogni/operator-wallet/adapters/privy` to avoid pulling Privy SDK into non-wallet contexts.
  * Side-effects: none
- * Links: docs/spec/operator-wallet.md
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary
  * @public
  */
 

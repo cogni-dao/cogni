@@ -12,7 +12,7 @@
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_BROWSE_VIA_HTTP_REQUIRES_SESSION,
  *   EDGE_ENDPOINTS_EXIST (edges whose cited target isn't in the node set are dropped).
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

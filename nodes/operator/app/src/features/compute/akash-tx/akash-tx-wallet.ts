@@ -34,7 +34,7 @@
  *     actually has. `writer -> envs` is deliberately one-to-many; `account -> writer` must stay
  *     injective, and `tests/ci-invariants/akash-tx-actuator-runtime.spec.ts` pins each funded
  *     environment's writer to its own OpenBao credential path in git. Console/manual writes stay forbidden: an external writer invalidates
- *     cursor recovery and must fail deployment proof (ci-cd.md Axiom 26).
+ *     cursor recovery and must fail deployment proof (https://cognidao.org/knowledge/operator-pipeline-contract Axiom 26).
  *   - SCOPE_IS_ROTATION_STABLE: the scope is derived from the PUBLIC pinned account id — plain,
  *     git-reviewable Deployment config — never from the secret value, so rotating the credential
  *     cannot orphan in-flight allocation receipts. That reasoning is unchanged by bug.5187: the

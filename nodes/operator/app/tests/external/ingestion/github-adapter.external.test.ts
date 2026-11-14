@@ -7,7 +7,7 @@
  * Scope: Creates its own merged PR + closed issue on the test repo, then collects via adapter. Cleans up after. Does not run in CI.
  * Invariants: Requires GH_REVIEW_APP_ID + GH_REVIEW_APP_PRIVATE_KEY_BASE64 in env. Skips gracefully if missing.
  * Side-effects: IO (GitHub API, git push, testcontainers PostgreSQL)
- * Links: services/scheduler-worker/src/adapters/ingestion/github.ts, docs/spec/attribution-ledger.md
+ * Links: services/scheduler-worker/src/adapters/ingestion/github.ts, https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @internal
  */
 

@@ -1479,7 +1479,7 @@ printf '%s=%s\n' APP_DB_READONLY_PASSWORD "$APP_DB_READONLY_PASSWORD" >> "$RUNTI
 # Doltgres superuser password — OpenBao-custodied SSOT at the canonical operator
 # path (cogni/<env>/operator/DOLTGRES_PASSWORD). Shared env-wide (one server, every
 # node's knowledge_<node> DB), immutable post-init (Doltgres 0.56.3 can't ALTER it;
-# databases.md §5.2). Source it via the same ${DEPLOY_ENVIRONMENT}-db-reader seam as
+# https://node-template.cognidao.org/knowledge/database-migration-contract §5.2). Source it via the same ${DEPLOY_ENVIRONMENT}-db-reader seam as
 # OPENFGA_DB_PASSWORD above so the rendered VM .env carries the LIVE value, not a
 # re-derived one that drifts after a volume restore / root-cred rotation (the
 # 2026-06-10 prod node-substrate 28P01). A drifted volume is reconciled via
@@ -2395,7 +2395,7 @@ SECEOF
 
   # ── Scheduler-worker secret ────────────────────────────────────────────────
   # Non-secret routing (COGNI_NODE_ENDPOINTS) belongs in the overlay ConfigMap —
-  # see docs/spec/services-architecture.md → "Configuration source of truth".
+  # see https://cognidao.org/knowledge/service-isolation-contract → "Configuration source of truth".
   # bug.5000/bug.5012: GH_REVIEW_APP_* + GH_WEBHOOK_SECRET are NOT injected —
   # the worker HTTP-delegates GitHub I/O to the operator and holds no GitHub
   # credential. (Parity: SCHEDULER_WORKER_KEYS in scripts/setup/lib/reconcile-secrets.sh.)

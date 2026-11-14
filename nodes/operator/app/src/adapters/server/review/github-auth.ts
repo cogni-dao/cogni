@@ -7,7 +7,7 @@
  * Scope: JWT signing + installation token exchange via @octokit/auth-app. Does not contain business logic.
  * Invariants: TOKEN_SHORT_LIVED — installation tokens are never persisted. NO_PROBOT_DEPENDENCY.
  * Side-effects: IO (GitHub API call to exchange JWT for installation token)
- * Links: task.0153, docs/spec/vcs-integration.md
+ * Links: task.0153, https://cognidao.org/knowledge/pr-review-grounded-gate
  * @public
  */
 

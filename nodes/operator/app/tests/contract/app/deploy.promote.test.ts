@@ -15,7 +15,7 @@
  *   - ENV_SCOPED_PARENT: every dispatch uses `NODE_SUBMODULE_PARENT_OWNER/REPO`; no production
  *     repo hardcode can leak into a test operator.
  * Side-effects: none
- * Links: nodes/operator/app/src/app/api/v1/deploy/promote/route.ts, docs/spec/rbac.md
+ * Links: nodes/operator/app/src/app/api/v1/deploy/promote/route.ts, https://cognidao.org/knowledge/authz-port-contract
  * @internal
  */
 

@@ -11,7 +11,7 @@
  *   - MOBILE_FIRST: equal-width columns keep five checkpoints inside a 360px viewport.
  *   - REDUCED_MOTION_SAFE: rendering is static and contains no animation or transition.
  * Side-effects: none
- * Links: src/features/nodes/wizard/WizardRail.tsx, docs/spec/ui-implementation.md
+ * Links: src/features/nodes/wizard/WizardRail.tsx, https://node-template.cognidao.org/knowledge/frontend-development
  * @public
  */
 

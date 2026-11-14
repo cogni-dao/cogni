@@ -24,11 +24,11 @@ tags: [identity, auth, web3]
 | ------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------ |
 | **Project**  | [proj.decentralized-identity](../../work/projects/proj.decentralized-identity.md)         | Roadmap, phases, work items                |
 | **Research** | [DID-first identity refactor](../research/did-first-identity-refactor.md)                 | Gap analysis, library eval                 |
-| **Spec**     | [Identity Model](./identity-model.md)                                                     | Local user, actor, and binding boundaries  |
-| **Spec**     | [Authentication](./authentication.md)                                                     | SIWE flow, wallet-session                  |
-| **Spec**     | [RBAC](./rbac.md)                                                                         | Actor types (will drop wallet from format) |
+| **Spec**     | [Identity Model](https://cognidao.org/knowledge/identity-keys-no-overload)                                                     | Local user, actor, and binding boundaries  |
+| **Spec**     | [Authentication](https://node-template.cognidao.org/knowledge/authentication-session-bearer)                                                     | SIWE flow, wallet-session                  |
+| **Spec**     | [RBAC](https://cognidao.org/knowledge/authz-port-contract)                                                                         | Actor types (will drop wallet from format) |
 | **Spec**     | [User Context](./user-context.md)                                                         | Agent identity injection                   |
-| **Consumer** | [Attribution Pipeline](./attribution-pipeline-overview.md)                                | Identity claimant → local claim resolution |
+| **Consumer** | [Attribution Pipeline](https://node-template.cognidao.org/knowledge/attribution-pipeline-map)                                | Identity claimant → local claim resolution |
 | **Consumer** | [proj.transparent-credit-payouts](../../work/projects/proj.transparent-credit-payouts.md) | Claimant and future actor migration        |
 
 ## Design
@@ -416,9 +416,9 @@ pnpm check:docs    # docs metadata valid
 
 ## Related
 
-- [Authentication](./authentication.md) — SIWE flow, WALLET_SESSION_COHERENCE invariant
-- [RBAC](./rbac.md) — actor type `user:{walletAddress}` will migrate to `user:{userId}`
+- [Authentication](https://node-template.cognidao.org/knowledge/authentication-session-bearer) — SIWE flow, WALLET_SESSION_COHERENCE invariant
+- [RBAC](https://cognidao.org/knowledge/authz-port-contract) — actor type `user:{walletAddress}` will migrate to `user:{userId}`
 - [User Context](./user-context.md) — `opaqueId` will derive from user_id
-- [Accounts Design](./accounts-design.md) — billing identity references
-- [Security Auth](./security-auth.md) — auth surface identity resolution
+- [Accounts Design](https://node-template.cognidao.org/knowledge/billing-account-tenancy) — billing identity references
+- [Security Auth](https://node-template.cognidao.org/knowledge/credential-handling-invariants) — auth surface identity resolution
 - [proj.transparent-credit-payouts](../../work/projects/proj.transparent-credit-payouts.md) — ledger consumer of user_id

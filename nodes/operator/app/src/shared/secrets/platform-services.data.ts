@@ -25,7 +25,7 @@
  *     `secret-materialize.sh` (`PLATFORM_SERVICE_OWNER_NODE`).
  * Side-effects: none
  * Links: scripts/lib/secrets-catalog-loader.ts, scripts/ci/secret-materialize.sh,
- *   docs/spec/secrets-management.md
+ *   https://cognidao.org/knowledge/secrets-management
  * @public
  */
 

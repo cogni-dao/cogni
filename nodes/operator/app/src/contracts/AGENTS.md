@@ -15,7 +15,7 @@ Single source of truth for externally callable operations. Each file defines an 
 ## Pointers
 
 - [Root AGENTS.md](../../../../AGENTS.md)
-- [Architecture](../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 - **Related:** [shared/schemas](../shared/) (reusable primitives), [types](../types/) (compile-time only)
 
 ## Boundaries

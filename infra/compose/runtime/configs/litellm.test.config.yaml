@@ -4,7 +4,7 @@
 # LiteLLM Test Config
 # Purpose: Routes all model requests to mock-openai-api for deterministic system integration tests.
 # Scope: Used when LITELLM_CONFIG=litellm.test.config.yaml (test stacks only). No real provider keys needed.
-# Links: docs/spec/system-test-architecture.md
+# Links: https://node-template.cognidao.org/knowledge/node-test-contract
 #
 # Model names must match TEST_MODEL_ID and friends in tests/_fakes/ai/test-constants.ts.
 # All entries route to the same mock-openai-api backend.

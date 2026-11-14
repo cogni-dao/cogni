@@ -7,7 +7,7 @@
  * Scope: Server redirect only; node formation must start from a DB-backed node row.
  * Invariants: Requires authenticated session (wallet connected) via (app) route group.
  * Side-effects: redirect
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 

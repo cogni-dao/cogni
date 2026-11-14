@@ -9,7 +9,7 @@
  *   - Session auth required (any logged-in user)
  *   - Response shape remains stable
  * Side-effects: none
- * Links: /api/v1/attribution/collect route, docs/spec/attribution-ledger.md
+ * Links: /api/v1/attribution/collect route, https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

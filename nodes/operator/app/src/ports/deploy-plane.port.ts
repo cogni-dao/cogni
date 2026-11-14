@@ -20,7 +20,7 @@
  *     for governance/code merges). IN-REPO nodes (no catalog `source_repo`) are not source-addressed
  *     by node sha — they pass `source_sha` (the operator checkout ref) instead.
  * Side-effects: none
- * Links: docs/spec/node-ci-cd-contract.md, src/app/api/v1/vcs/flight/route.ts
+ * Links: https://node-template.cognidao.org/knowledge/node-ci-sovereignty, src/app/api/v1/vcs/flight/route.ts
  * @public
  */
 
@@ -397,10 +397,10 @@ export interface DeployPlanePort {
 
   /**
    * Grant a GitHub identity branch-push (Write) on a node repo — the operator App as the privilege
-   * bridge for the contributor golden path (rbac.md §6a, TRUST_BOUNDARY_IS_MERGE_NOT_PUSH). The App
+   * bridge for the contributor golden path (https://cognidao.org/knowledge/authz-port-contract §6a, TRUST_BOUNDARY_IS_MERGE_NOT_PUSH). The App
    * holds `administration: write`; the agent never holds standing GitHub admin. Idempotent (re-granting
    * is a GitHub no-op). Returns the invitation id when GitHub creates a pending invite — an outside
-   * collaborator the agent then auto-accepts with its own token (rbac.md §6 step 5) — else null
+   * collaborator the agent then auto-accepts with its own token (https://cognidao.org/knowledge/authz-port-contract §6 step 5) — else null
    * (applied immediately for an org member / existing collaborator).
    */
   setNodeCollaborator(input: {
@@ -411,7 +411,7 @@ export interface DeployPlanePort {
   }): Promise<{ invitationId: number | null }>;
 
   /**
-   * Revoke a node-repo collaborator (rbac.md §6a de-provision, on access reject/revoke). Idempotent:
+   * Revoke a node-repo collaborator (https://cognidao.org/knowledge/authz-port-contract §6a de-provision, on access reject/revoke). Idempotent:
    * a 404 (already not a collaborator) is treated as success so revocation is safe to retry.
    */
   removeNodeCollaborator(input: {

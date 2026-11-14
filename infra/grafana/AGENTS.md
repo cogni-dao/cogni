@@ -16,7 +16,7 @@ Grafana Cloud observability resources managed from git. This directory owns dash
 - [README.md](README.md): Layout, ownership, and Git Sync setup notes
 - [dashboards/](dashboards/): Dashboard JSON files synced to Grafana Cloud
 - [alerts/](alerts/): Grafana-managed alerting resources; not supported by Git Sync yet
-- [Observability spec](../../docs/spec/observability.md): Logging, metrics, labels, and query contracts
+- [Observability spec](https://node-template.cognidao.org/knowledge/observability-logging-contract): Logging, metrics, labels, and query contracts
 
 ## Boundaries
 
@@ -46,7 +46,7 @@ Grafana Cloud observability resources managed from git. This directory owns dash
 - Dashboard JSON should use datasource UIDs, not environment-specific URLs or credentials.
 - Shared/operator dashboards stay under `dashboards/operator/`; node-specific dashboards stay under `dashboards/nodes/<node>/`.
 - Alerting code stays under `alerts/` because Grafana Git Sync currently supports dashboards and folders only.
-- Keep query labels aligned with `docs/spec/observability.md`: `app`, `env`, `service`, and Prometheus `node_id`.
+- Keep query labels aligned with `https://node-template.cognidao.org/knowledge/observability-logging-contract`: `app`, `env`, `service`, and Prometheus `node_id`.
 
 ## Change Protocol
 

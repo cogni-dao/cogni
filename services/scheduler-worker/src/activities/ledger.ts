@@ -20,7 +20,7 @@
  *   - Per EVALUATION_FINAL_ATOMIC: transitionEpochForWindow passes evaluations to store.transitionEpochForWindow for atomic close + create
  *   - FINALIZE_IS_IN_PROCESS (story.5007): epoch finalization + the R3 cumulative fold no longer run here — they run synchronously in the operator app's finalize route via `runFinalizeEpoch` (@cogni/attribution-pipeline-plugins). This module holds NO distribution/wallet/config deps.
  * Side-effects: IO (database, GitHub API)
- * Links: docs/spec/attribution-ledger.md, docs/spec/temporal-patterns.md, packages/attribution-pipeline-plugins/src/finalize/run-finalize-epoch.ts
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, https://cognidao.org/knowledge/temporal-workflow-rules, packages/attribution-pipeline-plugins/src/finalize/run-finalize-epoch.ts
  * @internal
  */
 

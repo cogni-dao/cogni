@@ -7,7 +7,7 @@
  * Scope: Type re-exports only. Does not contain implementations — canonical types live in the package.
  * Invariants: No runtime code. No adapter deps.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md#source-adapter-interface
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

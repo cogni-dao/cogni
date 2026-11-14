@@ -7,7 +7,7 @@
  * Scope: Client component reading `column.getFacetedUniqueValues()`; assumes the table has `getFacetedRowModel + getFacetedUniqueValues` enabled and `filterFn: "arrIncludesSome"` on the column. Does not fetch data or own URL state.
  * Invariants: HEADER_OWNS_SORT_AND_FILTER — facet UI lives inside the column header dropdown, never as a parallel toolbar chip.
  * Side-effects: none
- * Links: docs/spec/ui-implementation.md, work/items/task.0432.work-items-table-poly-standard.md
+ * Links: https://node-template.cognidao.org/knowledge/frontend-development, work/items/task.0432.work-items-table-poly-standard.md
  * @public
  */
 

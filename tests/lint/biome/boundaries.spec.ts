@@ -8,7 +8,7 @@
  * Invariants: Layers must respect dependency direction; no circular references.
  * Side-effects: IO (via runEslint temp file creation)
  * Notes: Tests boundaries/element-types rule enforcement across architecture layers.
- * Links: eslint.config.mjs boundaries settings, docs/spec/architecture.md
+ * Links: eslint.config.mjs boundaries settings, https://node-template.cognidao.org/knowledge/hexagonal-layering-contract
  * @public
  */
 

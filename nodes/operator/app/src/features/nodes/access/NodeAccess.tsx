@@ -10,7 +10,7 @@
  *   pre-fetched tracking rows + per-row client action islands. OpenFGA role tuples remain the
  *   authority; rows are tracking only.
  * Side-effects: none (AccessActions owns its IO)
- * Links: src/features/nodes/access-requests.ts, ./AccessActions.client.tsx, docs/spec/rbac.md §6
+ * Links: src/features/nodes/access-requests.ts, ./AccessActions.client.tsx, https://cognidao.org/knowledge/authz-port-contract §6
  * @public
  */
 
@@ -31,7 +31,7 @@ import type { NodeAccessRole } from "@/shared/db/node-access-requests";
 
 import { AccessActions } from "./AccessActions.client";
 
-// One access request = one role (rbac.md §6/§6a), so the Access column is just the role name — no
+// One access request = one role (https://cognidao.org/knowledge/authz-port-contract §6/§6a), so the Access column is just the role name — no
 // verbose grant breakdown. developer→can_flight + GitHub branch-push; secrets_manager→
 // can_manage_secrets; production_promoter→can_promote_production; env_manager→can_manage_envs
 // (add/remove which envs a node deploys to — the narrowest, rarest grant; story.5020 W4).

@@ -9,7 +9,7 @@
  *   the knowledge store port; performs no writes or per-endpoint body reads.
  * Invariants: VALIDATE_IO, CITATION_LINKS_ARE_EDGES, DEPTH_1_INDEXED_READ.
  * Side-effects: IO (HTTP response, Doltgres reads)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

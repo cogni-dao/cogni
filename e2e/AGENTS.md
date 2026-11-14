@@ -14,7 +14,7 @@ End-to-end Playwright tests for API routes and UI workflows.
 ## Pointers
 
 - [Root AGENTS.md](../AGENTS.md)
-- [Architecture](../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 
 ## Boundaries
 

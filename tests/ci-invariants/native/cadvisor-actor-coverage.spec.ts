@@ -12,7 +12,7 @@
  *   - DECLARED_VISIBILITY: positive actor scope comes from the actual Compose declaration.
  *   - BASELINE_CONTROL: historical private namespace without metadata exposes root only.
  * Side-effects: IO (CI-owned Docker containers; reads declared host mounts and writes an owned 16MiB file).
- * Links: story.5095, task.5280, docs/spec/cicd-platform-boundary.md
+ * Links: story.5095, task.5280, https://cognidao.org/knowledge/operator-plane-contract
  * @internal
  */
 

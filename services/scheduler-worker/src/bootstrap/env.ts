@@ -11,7 +11,7 @@
  * - SCHEDULER_API_TOKEN required for internal API calls (treat as secret)
  * - Fails fast with clear errors on invalid config
  * Side-effects: Reads process.env
- * Links: services/scheduler-worker/Dockerfile, docs/spec/scheduler.md
+ * Links: services/scheduler-worker/Dockerfile, https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @internal
  */
 

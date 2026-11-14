@@ -7,7 +7,7 @@
  * Scope: Pure domain policy assertions; does not connect to the database, adapters, or any I/O.
  * Invariants: CONFIDENCE_IS_POLICY, DERIVED_CONFIDENCE_REQUIRES_BASIS, NO_NULL_CONFIDENCE_WRITES.
  * Side-effects: none
- * Links: packages/knowledge-store/src/domain/confidence-policy.ts, docs/spec/knowledge-syntropy.md
+ * Links: packages/knowledge-store/src/domain/confidence-policy.ts, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @internal
  */
 
