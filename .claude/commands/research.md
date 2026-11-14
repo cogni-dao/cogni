@@ -1,13 +1,13 @@
 You are a **senior engineer and technical researcher** executing a research spike: #$ITEM
 
-Your sole output is knowledge — not code. You produce a research document in `docs/research/` and a loosely proposed layout for how the findings could be built into the system (project, specs, tasks as appropriate).
+Your sole output is knowledge — not code. You produce findings as a hub contribution and a loosely proposed layout for how they could be built into the system. Write no file under `docs/research/`.
 
-Read these before starting:
+Read, in order, before starting:
 
-- [Architecture](docs/spec/architecture.md) — system architecture and design principles
-- [Feature Development Guide](docs/guides/feature-development.md) — how features are built
-- [Content Boundaries](docs/spec/docs-work-system.md#content-boundaries) — what belongs where
-- [Development Lifecycle](docs/spec/development-lifecycle.md) — workflow and commands
+1. `GET https://cognidao.org/api/v1/knowledge/knowledge-contribution-flow` — recall, edit ops, citations, the focused inbox and human review. Use your saved COGNI key.
+2. `GET https://cognidao.org/api/v1/knowledge/segment-markdown-knowledge` — how research becomes a `finding` or `conclusion`.
+3. [Architecture](docs/spec/architecture.md) — system architecture and design principles
+4. [Feature Development Guide](docs/guides/feature-development.md) — how features are built
 
 Then read the spike work item to understand the research question.
 
@@ -30,45 +30,16 @@ Then read the spike work item to understand the research question.
 
 ---
 
-## Phase 3 — Write Research Document
+## Phase 3 — Contribute the Findings
 
-Create `docs/research/<topic>.md` with this structure:
+File one focused hub contribution (one inbox for the spike). Recall first: search the index and read the nearest entries. Refine an existing owner before you add a new entry. Use `finding` or `conclusion`, with dated evidence, limits and primary sources beside each claim. Cover:
 
-```markdown
-# Research: <Topic>
+- **Question** — what you tried to figure out.
+- **Findings** — each plausible option with pros, cons, OSS tools and fit with our system.
+- **Recommendation** — which option and why. Name the trade-offs accepted.
+- **Open questions** — what still needs answers.
 
-> spike: <spike.XXXX> | date: YYYY-MM-DD
-
-## Question
-
-What are we trying to figure out? One paragraph.
-
-## Context
-
-What exists today? What prompted this research?
-
-## Findings
-
-### Option A: <name>
-
-- **What**: Brief description
-- **Pros**: ...
-- **Cons**: ...
-- **OSS tools**: libraries/frameworks that support this
-- **Fit with our system**: how it integrates
-
-### Option B: <name>
-
-...
-
-## Recommendation
-
-Which option (or combination) and why. Be specific about trade-offs accepted.
-
-## Open Questions
-
-Anything that still needs answers after this research.
-```
+Discard transcripts and obsolete guesses. Hand the human `https://<node>/knowledge/inbox/{id}`. Never merge your own contribution.
 
 ---
 
@@ -76,30 +47,27 @@ Anything that still needs answers after this research.
 
 Based on your findings, sketch a loosely proposed layout. This is directional, not binding:
 
-- **Project**: Would this warrant a `proj.*`? What would the goal and phases look like?
-- **Specs**: What specs would need to be written or updated? What are the key invariants?
+- **Story**: Would this warrant a `story`? What would the goal and phases look like?
+- **Contracts**: What hub entries would need to be written or refined? What are the key invariants?
 - **Tasks**: What are the likely PR-sized work items? Rough sequence?
 
-Include this as a `## Proposed Layout` section at the end of the research doc.
+Put the layout in the spike item's `outcome` checklist, not in a file.
 
 ---
 
 ## Phase 5 — Close Out
 
-1. Update the work item: set `status: done`, add the research doc path to `external_refs`, update `updated:` date.
+1. Update the spike item in place: link the inbox, tick its checklist and set `status: done`. Apply ONE `PATCH` with `expectedRevision` and a one-line `reason`.
 2. Create follow-up `task.*`, `bug.*`, or `spike.*` items as needed from findings. Set their status to `needs_triage` (or `needs_implement`/`needs_design` if routing is obvious from research).
-3. **Finalize**:
-   - Run `pnpm check:docs` and fix any errors until clean.
-   - Commit all changes (research doc, spike item, follow-up items) on the work item's branch.
-   - Push to remote.
-4. Report: what was learned, what's recommended, what follow-up items were created.
+3. Report: what was learned, what is recommended, the inbox link and what follow-up items were created.
 
 ---
 
 ## Rules
 
-- **KNOWLEDGE_NOT_CODE** — the output is a research document and proposed layout, never implementation
+- **KNOWLEDGE_NOT_CODE** — the output is a hub contribution and a proposed layout, never implementation
+- **NO_MARKDOWN_OUTPUT** — no research file or template
 - **OSS_FIRST** — always survey what exists before proposing custom solutions
 - **HONEST_ABOUT_UNKNOWNS** — if you don't know, say so. Flag open questions explicitly
-- **LEAN_PROPOSALS** — propose the minimum viable project/spec/task structure, not an exhaustive plan
+- **LEAN_PROPOSALS** — propose the minimum viable story/task structure, not an exhaustive plan
 - **INTEGRATE_DONT_ISLAND** — every proposal must show how it fits into existing architecture

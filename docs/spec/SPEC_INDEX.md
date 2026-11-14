@@ -112,6 +112,4 @@ Legacy specs in `/docs/*.md` to be migrated to `/docs/spec/`:
 
 ## Adding a Spec
 
-1. Copy `docs/_templates/spec.md`
-2. Place in `docs/spec/`
-3. Add entry to table above
+Do not add a file here. File the contract as a hub `reference` through [knowledge-contribution-flow](https://cognidao.org/knowledge/knowledge-contribution-flow).
