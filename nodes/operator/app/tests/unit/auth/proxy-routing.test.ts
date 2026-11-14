@@ -7,7 +7,7 @@
  * Scope: Tests page-level routing (authed on / → /chat, unauthed on app routes → sign-in prompt) and API protection. Does not test NextAuth internals.
  * Invariants: Single authority for auth routing; no client-side redirect logic.
  * Side-effects: none (mocked getToken)
- * Links: src/proxy.ts, docs/spec/security-auth.md
+ * Links: src/proxy.ts
  * @public
  */
 

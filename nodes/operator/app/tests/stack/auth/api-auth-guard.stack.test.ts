@@ -8,7 +8,7 @@
  * Invariants: Unauthenticated requests return 401; authenticated requests with valid session succeed; no bypass via missing middleware
  * Side-effects: IO (HTTP requests, database writes, LLM service calls)
  * Notes: Uses synthetic sessions not SIWE; See siwe-session.stack.test.ts for SIWE pipeline; Focuses on API auth and billing
- * Links: docs/spec/security-auth.md, src/proxy.ts, tests/stack/auth/siwe-session.stack.test.ts
+ * Links: src/proxy.ts, tests/stack/auth/siwe-session.stack.test.ts
  * @public
  */
 

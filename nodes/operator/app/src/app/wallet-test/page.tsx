@@ -8,7 +8,7 @@
  * Invariants: None (delegates to WalletConnectButton)
  * Side-effects: IO (via WalletConnectButton)
  * Notes: Test harness for proper Web3 UX. Wallet address is canonical user identity for MVP.
- * Links: https://www.rainbowkit.com/docs/connect-button, docs/spec/security-auth.md
+ * Links: https://www.rainbowkit.com/docs/connect-button
  * @public
  */
 

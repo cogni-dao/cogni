@@ -48,11 +48,9 @@ pnpm tsx scripts/experiments/full-chain.ts
 
 After running all 3 experiments, update:
 
-- `docs/spec/web3-openrouter-payments.md` — resolve open questions
 - `work/items/spike.0090.validate-operator-wallet-payment-chain.md` — mark complete
 - `work/items/task.0084.operator-wallet-generation-wiring.md` — unblock with findings
 
 ## Links
 
-- [Spec: Web3 OpenRouter Payments](../../docs/spec/web3-openrouter-payments.md)
 - [Spike: spike.0090](../../work/items/spike.0090.validate-operator-wallet-payment-chain.md)

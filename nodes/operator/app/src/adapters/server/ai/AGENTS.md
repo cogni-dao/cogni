@@ -18,7 +18,6 @@ AI service adapters including LiteLLM completion/streaming, usage telemetry, age
 - [GraphExecutorPort](../../../../../../packages/graph-execution-core/src/graph-executor.port.ts)
 - [Agent Discovery Design](../../../../../../docs/spec/agent-discovery.md)
 - [LiteLLM configuration](../../../../../../infra/compose/runtime/configs/)
-- [Activity Metrics Design](../../../../../../docs/spec/activity-metrics.md)
 - [Graph Execution Design](../../../../../../docs/spec/graph-execution.md)
 - [LangGraph Server Design](../../../../../../docs/spec/langgraph-server.md)
 - [Thread Persistence Spec](../../../../../../docs/spec/thread-persistence.md)

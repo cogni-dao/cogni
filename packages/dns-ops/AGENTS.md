@@ -15,7 +15,6 @@ Programmatic DNS management for Cogni multi-node infrastructure. Provides a port
 
 - [Cloudflare Setup Guide](docs/cloudflare-dns-setup.md)
 - [task.0232](../../work/items/task.0232.dns-ops-node-creation-v0.md)
-- [node-launch spec](../../docs/spec/node-launch.md)
 - [dns-ops skill](../../.claude/skills/dns-ops/SKILL.md)
 
 ## Boundaries

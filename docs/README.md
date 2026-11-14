@@ -83,5 +83,4 @@ Do not add Markdown here. Contribute durable knowledge to the hub through [knowl
 ## Related
 
 - [Work Management](../work/README.md)
-- [Spec Index](./spec/SPEC_INDEX.md)
 - [Organization Plan](./DOCS_ORGANIZATION_PLAN.md)

@@ -9,7 +9,7 @@
  *   - PROMPT_IS_THE_PLAYBOOK: The system prompt is the agent's operating contract
  *   - Tool use is evidence-first: knowledge, repo/git, then web
  * Side-effects: none
- * Links: work/projects/proj.ai-evals-pipeline.md, docs/spec/knowledge-syntropy.md, docs/spec/agent-registry.md
+ * Links: work/projects/proj.ai-evals-pipeline.md, docs/spec/knowledge-syntropy.md
  * @public
  */
 

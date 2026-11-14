@@ -18,7 +18,7 @@ Next.js application source implementing hexagonal architecture for a fully web3-
 - [Architecture](../../../docs/spec/architecture.md)
 - [Authentication overview](../../../docs/spec/authentication.md)
 - [Accounts design (billing + identity)](../../../docs/spec/accounts-design.md)
-- [Security & auth spec](../../../docs/spec/security-auth.md)
+- [Operator identity model](https://cognidao.org/knowledge/operator-identity-model)
 - [Database architecture](../../../docs/spec/databases.md)
 - [Environment modes](../../../docs/spec/environments.md)
 - [DB schema](./shared/db/schema.ts) - Users, billing accounts, ledger, virtual keys

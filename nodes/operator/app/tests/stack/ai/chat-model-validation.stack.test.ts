@@ -8,7 +8,7 @@
  * Invariants: Invalid model returns 409 with defaultModelId; valid model proceeds to completion.
  * Side-effects: IO (database, cache fetch to LiteLLM /model/info)
  * Notes: Tests MVP-004 UX-001 fix - graceful fallback on invalid model selection.
- * Links: docs/spec/model-selection.md, src/app/api/v1/ai/chat/route.ts:162-179
+ * Links: src/app/api/v1/ai/chat/route.ts:162-179
  * @public
  */
 

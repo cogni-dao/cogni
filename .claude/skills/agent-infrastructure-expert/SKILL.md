@@ -16,7 +16,7 @@ You own the **infrastructure altitude** of Cogni agents: how a LangGraph graph b
 | **Author**             | Write the graph: pure factory, prompts, `toolIds`, catalog entry, `cogni-exec.ts` entrypoint                                       | [`langgraph-patterns.md`](../../../docs/spec/langgraph-patterns.md) + [`agent-development.md`](../../../docs/guides/agent-development.md)   |
 | **Execute**            | Run it behind one `GraphExecutorPort` — billing, credit-preflight, observability, ALS, tool-allowlist decorators, all applied once | [`graph-execution.md`](../../../docs/spec/graph-execution.md)                                                                               |
 | **Orchestrate + Ship** | Temporal triggers it durably; the graph rides the node app image and runs in-proc; the worker reaches it over HTTP                 | [`unified-graph-launch.md`](../../../docs/spec/unified-graph-launch.md) + [`temporal-patterns.md`](../../../docs/spec/temporal-patterns.md) |
-| **Evaluate**           | Score graphs after deploy; gate promotion on quality                                                                               | [`ai-evals.md`](../../../docs/spec/ai-evals.md)                                                                                             |
+| **Evaluate**           | Score graphs after deploy; gate promotion on quality                                                                               | [`agent-evaluation-loop`](https://cognidao.org/knowledge/agent-evaluation-loop)                                                                                             |
 
 _(Per-plane build status → scorecard.)_
 
@@ -43,4 +43,4 @@ Temporal (schedule/webhook) → GraphRunWorkflow ─HTTP─► node app /api/int
 - **Writes behind Temporal.** Graphs return recomputable decision artifacts; material/external writes live in post-graph Activities with business-key idempotency.
 - **`graph-execution.md` is the invariant SSOT.** Other specs link to it; they must not restate `GraphExecutorPort` / `AiEvent` / `PACKAGES_NO_SRC_IMPORTS` definitions.
 - **Don't overstate the eval gate.** Nothing currently scores or blocks on graph quality. Treat "eval gate" as roadmap, not a control.
-- **CICD docs are HELD until the pipeline is green.** No consolidation edits to `ci-cd.md` / `cd-pipeline-*` / `legacy-cicd-to-remove.md`.
+- **CICD docs are HELD until the pipeline is green.** No consolidation edits to `ci-cd.md` / `cd-pipeline-*`.

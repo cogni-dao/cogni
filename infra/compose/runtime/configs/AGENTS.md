@@ -16,7 +16,7 @@ Service configuration files for runtime stack services (LiteLLM proxy, Grafana A
 
 - [Parent: runtime](../AGENTS.md)
 - [LiteLLM Provider Docs](https://docs.litellm.ai/docs/providers/openrouter)
-- [Model Selection](../../../../docs/spec/model-selection.md)
+- [Model pricing registry](https://cognidao.org/knowledge/model-pricing-registry)
 
 ## Boundaries
 

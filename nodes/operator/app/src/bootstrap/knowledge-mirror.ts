@@ -10,7 +10,7 @@
  *     derived from its identity — `buildNodeKnowledgeRemote(slug, owner)` →
  *     `<owner>/<slug>`. Explicit config is an OVERRIDE, never the primary
  *     source. Same principle as `agentId = providerId:graphName`
- *     (docs/spec/agent-registry.md): identity is computed from the node, not
+ *     (derived, never registered): identity is computed from the node, not
  *     hand-typed. This is what lets the operator-as-librarian auto-mirror
  *     every sub-registry node with zero per-node wiring.
  *   - PRECEDENCE: explicit env override (throwaway isolation) > repo-spec
@@ -21,7 +21,7 @@
  *     non-prod env into the prod DoltHub org (infra/secrets-catalog.yaml:
  *     "Do not point test/preview at cogni-dao").
  * Side-effects: none
- * Links: docs/spec/agent-registry.md, docs/runbooks/dolthub-remote-bootstrap.md,
+ * Links: docs/runbooks/dolthub-remote-bootstrap.md,
  *   @shared/node-app-scaffold/knowledge-remote (buildNodeKnowledgeRemote)
  * @internal
  */

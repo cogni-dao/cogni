@@ -12,7 +12,7 @@
  * - prompt_tokens, completion_tokens, spend are required for usage data
  * - passthrough() allows unknown fields from LiteLLM without breaking
  * Side-effects: none
- * Links: docs/spec/activity-metrics.md
+ * Links: packages/node-shared/src/schemas/litellm.spend-logs.schema.ts
  * @public
  */
 

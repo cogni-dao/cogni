@@ -7,7 +7,7 @@
  * Scope: Pure package boundary for node-template-based RBAC. Does not load runtime env or select node adapters.
  * Invariants: OpenFGA is the sole permission/delegation source; deny by default; unavailable fails closed with a distinct code.
  * Side-effects: none
- * Links: docs/spec/rbac.md, docs/spec/access-control-charter.md
+ * Links: docs/spec/rbac.md
  * @public
  */
 

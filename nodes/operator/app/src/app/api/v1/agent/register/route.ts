@@ -12,7 +12,7 @@
  *   other /api/v1/* route. auth.mode=none because the endpoint is the
  *   onboarding seam itself — callers can't present credentials they haven't
  *   been issued yet. Security hardening (invitation token) tracked in bug.0297.
- * Links: docs/spec/security-auth.md, bug.0297
+ * Links: bug.0297
  * @public
  */
 

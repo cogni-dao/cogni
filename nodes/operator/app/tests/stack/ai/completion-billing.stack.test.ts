@@ -8,7 +8,7 @@
  * Invariants: Successful LLM call creates charge_receipt row; credit_ledger records debit; balance is atomically updated.
  * Side-effects: IO (database writes via container, LiteLLM calls)
  * Notes: Requires dev stack running (pnpm dev:stack:db:setup). Uses real DB and LiteLLM. Mocks session.
- * Links: docs/spec/activity-metrics.md
+ * Links: src/app/api/v1/ai/chat/route.ts
  * @public
  */
 

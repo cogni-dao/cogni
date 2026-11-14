@@ -9,7 +9,7 @@
  *   passes through (route handler validates token); other /api/v1/* require session.
  *   Single authority for auth routing — no client-side redirect logic.
  * Side-effects: none
- * Links: docs/spec/security-auth.md
+ * Links: src/app/_lib/auth/request-identity.ts
  * @public
  */
 
