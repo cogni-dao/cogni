@@ -1044,7 +1044,7 @@ function createContainer(): Container {
       // Provenance is stamped by the adapter (`source_type='external'`,
       // `source_ref='contribution:<id>:<seq>'`), so the provenance gate is
       // reserved for internal `core__knowledge_write` where the caller
-      // controls those fields. See work/projects/proj.knowledge-syntropy.md.
+      // controls those fields.
       gates: [shapeGate],
       ...(pushMainOnMerge ? { pushMainOnMerge } : {}),
     });

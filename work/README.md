@@ -21,8 +21,6 @@ tags: [work, meta]
 | Directory     | Purpose                                                                 |
 | ------------- | ----------------------------------------------------------------------- |
 | `charters/`   | Strategic themes (`chr.<slug>.md`)                                      |
-| `projects/`   | Legacy phased roadmaps (frozen; new roadmaps are story work items)      |
-| `handoffs/`   | Legacy agent handoff packets (frozen; handoffs now live on the item)    |
 | `_templates/` | Charter template                                                        |
 | ~~`items/`~~  | Removed 2026-05-04 — work items now in prod Doltgres at `cognidao.org`. |
 
@@ -164,13 +162,12 @@ external_refs:
 ## Hard Rules
 
 1. **ID_IMMUTABLE** — `id` never changes once assigned
-2. **PROJECTS_REF_BY_ID** — Projects reference work items by ID only, never by file path
-3. **ITEMS_NOT_IN_CODE** — Work items must not be referenced in code or docs/spec; only projects may reference item IDs
-4. **SPECS_ARE_AS_BUILT** — Specs describe what IS, not what WILL BE; roadmaps live in projects
-5. **ITEMS_ARE_PR_SIZED** — If an item spans multiple PRs, break it up
-6. **PR_LINKS_ITEM** — Every PR references exactly one Work Item ID (e.g., `WI: bug.0004`)
-7. **SLUG_RENAME_OK** — Renaming the slug portion of a filename is allowed; renaming `<type>.<num>` is forbidden
-8. **WORK_ITEMS_MOVE_TO_API** — New work items live in the Cogni API/Dolt source of truth, not a generated markdown index.
+2. **ITEMS_NOT_IN_CODE** — Work items must not be referenced in code or docs/spec
+3. **SPECS_ARE_AS_BUILT** — Specs describe what IS, not what WILL BE; roadmaps live in `story` work items
+4. **ITEMS_ARE_PR_SIZED** — If an item spans multiple PRs, break it up
+5. **PR_LINKS_ITEM** — Every PR references exactly one Work Item ID (e.g., `WI: bug.0004`)
+6. **SLUG_RENAME_OK** — Renaming the slug portion of a filename is allowed; renaming `<type>.<num>` is forbidden
+7. **WORK_ITEMS_MOVE_TO_API** — New work items live in the Cogni API/Dolt source of truth, not a generated markdown index.
 
 ## Agent Safety
 

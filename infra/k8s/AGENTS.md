@@ -16,7 +16,6 @@ manifests to the cluster. App discovery driven by `infra/catalog/*.yaml`.
 ## Pointers
 
 - [CI/CD](../../docs/spec/ci-cd.md): Deployment specification
-- [CI/CD & Services GitOps](../../work/projects/proj.cicd-services-gitops.md): Parent project
 - [Services Architecture](../../docs/spec/services-architecture.md): Service contracts
 
 ## Boundaries

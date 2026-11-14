@@ -69,4 +69,3 @@ Examples that FAIL: anything in our stack; a 10th synonym of an existing entry; 
 - `contribute-knowledge-to-cogni` — the general router; this is the oss-ai specialization.
 - `dolt-human-visuals` — matrix HTML style (tokens + .cogni-\* classes).
 - `edo-loop` — for contestable _predictions_ (separate beat; not used here).
-- `work/projects/proj.oss-research-node.md` — the meta roadmap.

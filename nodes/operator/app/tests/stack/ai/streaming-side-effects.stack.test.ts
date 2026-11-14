@@ -12,7 +12,7 @@
  *   - Abort: 0 charge_receipts + 1 ai_invocation_summaries (status='error', errorCode='aborted')
  * Side-effects: IO (database writes via container)
  * Notes: Requires dev stack (pnpm dev:stack:test). P0 regression test. testTimeout=30s for LLM roundtrip + async callback.
- * Links: docs/archive/COMPLETION_REFACTOR_PLAN.md, src/features/ai/services/completion.ts
+ * Links: src/features/ai/services/completion.ts
  * @public
  */
 

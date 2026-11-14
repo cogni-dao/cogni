@@ -17,7 +17,6 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 - [task.0231](../../work/items/task.0231.knowledge-data-plane.md) — port + adapter
 - [task.0311](../../work/items/task.0311.poly-knowledge-syntropy-seed.md) — candidate-a wiring, clean-slate seeds, Doltgres 0.56 RBAC workaround
 - [Design doc](../../docs/design/knowledge-data-plane-prototype.md) — spike results + agent tooling roadmap
-- [proj.poly-prediction-bot](../../work/projects/proj.poly-prediction-bot.md) — parent project
 
 ## Boundaries
 

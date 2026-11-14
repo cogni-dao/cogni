@@ -100,8 +100,8 @@ For each score, write evidence that combines:
 - Internal: what the charters/codebase show
 - External: what your research found about similar projects/situations
 
-For each constraint, also identify the most relevant **focus project** from
-`work/projects/` that would relieve it. Use `-` if none maps.
+For each constraint, also identify the most relevant **focus work item** on the operator hub
+(`GET /api/v1/work/items`) that would relieve it. Use `-` if none maps.
 
 ### Step 4: Find the binding constraint
 
@@ -119,7 +119,7 @@ Defend it. If you disagree with the previous evaluation's choice, say so and say
 
 Read the evaluation history in the dashboard. For each previous finding:
 
-- Did the recommended focus actually get worked on? Check `work/projects/` and git log.
+- Did the recommended focus actually get worked on? Check the operator hub work items and git log.
 - Did the constraint scores move? If not, why not?
 - Was the previous binding constraint call correct in retrospect?
 - Has the external landscape changed since then?

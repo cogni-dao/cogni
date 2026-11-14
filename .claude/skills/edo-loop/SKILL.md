@@ -137,5 +137,4 @@ All three responses MUST carry the same `contributionId` + `branch`, with `baseC
 - `knowledge-syntropy-expert` — action hierarchy, REFINE_OVER_EXTEND, RECALL_BEFORE_WRITE.
 - `contribute-to-cogni` — PR lifecycle; EDO is orthogonal but often wraps the PR (see § "EDO + PRs" above).
 - `docs/spec/knowledge-syntropy.md` § The Hypothesis Loop — schema, invariants, confidence formula.
-- `work/projects/proj.knowledge-syntropy.md` — W1 + W2 + W2.5 + R0 ship this surface.
 - `dolt-human-visuals` — if your outcome is best rendered as a chart, route through `entryType: html`.
