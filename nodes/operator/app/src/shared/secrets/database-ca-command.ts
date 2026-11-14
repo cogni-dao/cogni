@@ -13,7 +13,7 @@
  *   serving. This is the legacy k3s `migrate` initContainer (infra/k8s/base/node-app/deployment.yaml),
  *   folded into the one Akash container.
  * Side-effects: none (the resulting command writes an owner-only temporary CA at runtime).
- * Links: docs/spec/secrets-management.md, features/compute/node-services-workload-spec.ts
+ * Links: https://cognidao.org/knowledge/secrets-management, features/compute/node-services-workload-spec.ts
  * @internal
  */
 

@@ -8,7 +8,7 @@
  * Invariants: ABI must match the compiled 1inch CumulativeMerkleDrop artifact at
  *   the pinned commit (see provenance below).
  * Side-effects: none
- * Links: docs/spec/attribution-pipeline-overview.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-pipeline-map
  * @public
  */
 

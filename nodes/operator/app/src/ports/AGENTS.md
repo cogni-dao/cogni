@@ -16,7 +16,7 @@ Ports describe _what_ the domain needs from external services, not _how_ they wo
 ## Pointers
 
 - [Root AGENTS.md](../../../../AGENTS.md)
-- [Architecture](../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 
 ## Boundaries
 

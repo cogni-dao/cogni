@@ -6,7 +6,7 @@
 # App's webhook config so the pod's value and the App's value match.
 #
 # WHY: GH_WEBHOOK_SECRET is `source: agent` + `syncTo: github-app-webhook`
-# (secrets-management.md) — we generate it, and it must byte-equal the GitHub
+# (https://cognidao.org/knowledge/secrets-management) — we generate it, and it must byte-equal the GitHub
 # App's webhook secret, which lives on GitHub's side. Provisioning owns BOTH
 # copies: it writes the value to OpenBao / the pod Secret and pushes it to the
 # App here, via the App's own key. Without this, every webhook fails HMAC

@@ -11,7 +11,7 @@
  *   - AUTO_COMMIT: Every write creates a Doltgres commit automatically.
  *   - CONFIDENCE_IS_POLICY: Confidence is never author-set; the domain policy initializes + recomputes it.
  * Side-effects: IO (database write + dolt_commit via capability)
- * Links: docs/spec/knowledge-data-plane.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane
  * @public
  */
 

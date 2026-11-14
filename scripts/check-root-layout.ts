@@ -8,7 +8,7 @@
  * Invariants: Required path set must exist; unexpected non-gitignored root entries must be reported.
  * Side-effects: IO (spawns `git check-ignore` for root entries)
  * Notes: Ignores .git, node_modules, macOS metadata, and pnpm store directories.
- * Links: docs/spec/style.md, scripts/validate-doc-headers.ts
+ * Links: https://node-template.cognidao.org/knowledge/code-style-standard, scripts/validate-doc-headers.ts
  * @internal
  */
 

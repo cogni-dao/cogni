@@ -7,7 +7,7 @@
  * Scope: Defines BillingIdentity shape for billing enrichment. Does not contain billing logic or database access.
  * Invariants: PURE_LIBRARY — no env vars, no process lifecycle.
  * Side-effects: none
- * Links: docs/spec/packages-architecture.md, src/decorators/billing-enrichment.decorator.ts
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules, src/decorators/billing-enrichment.decorator.ts
  * @public
  */
 export interface BillingIdentity {

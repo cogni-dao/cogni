@@ -13,8 +13,8 @@ Stable framework package for the attribution pipeline plugin architecture. Defin
 
 ## Pointers
 
-- [Plugin Attribution Pipeline Spec](../../docs/spec/plugin-attribution-pipeline.md)
-- [Packages Architecture](../../docs/spec/packages-architecture.md)
+- [Plugin Attribution Pipeline Spec](https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline)
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules)
 
 ## Boundaries
 
@@ -89,7 +89,7 @@ pnpm --filter @cogni/attribution-pipeline-contracts build
 ## Change Protocol
 
 - Update this file when public exports change
-- Coordinate with plugin-attribution-pipeline.md spec invariants
+- Coordinate with https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline spec invariants
 - Changes here are rare — this is the stable contract package
 
 ## Notes

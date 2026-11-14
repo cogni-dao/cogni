@@ -14,7 +14,7 @@ Job modules that wire business logic to the application container for ops-trigge
 ## Pointers
 
 - [Bootstrap AGENTS.md](../AGENTS.md)
-- [Governance Scheduling Spec](../../../../../docs/spec/governance-scheduling.md)
+- [Governance Scheduling Spec](https://node-template.cognidao.org/knowledge/governance-schedule-sync)
 
 ## Boundaries
 

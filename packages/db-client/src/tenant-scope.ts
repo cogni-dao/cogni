@@ -14,7 +14,7 @@
  *        1. The regex strictly limits the value to hex digits and hyphens
  *        2. The value comes from server-side JWT sessions, never from request body
  *        3. ActorId branded type guarantees the value was validated at construction time
- * Links: docs/spec/database-rls.md, @cogni/ids
+ * Links: https://node-template.cognidao.org/knowledge/rls-tenant-isolation, @cogni/ids
  * @public
  */
 

@@ -11,7 +11,7 @@
  * - ENCRYPTED_AT_REST: AEAD decrypt with AAD binding.
  * - TOKENS_NEVER_LOGGED: Never logs credential values.
  * Side-effects: IO (database read, optional token refresh + write)
- * Links: docs/spec/tenant-connections.md, src/ports/connection-broker.port.ts
+ * Links: https://node-template.cognidao.org/knowledge/tool-credential-brokering, src/ports/connection-broker.port.ts
  * @internal
  */
 

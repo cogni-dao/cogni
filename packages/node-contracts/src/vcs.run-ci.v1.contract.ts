@@ -14,7 +14,7 @@
  *   - SAFE_BY_STRUCTURE: only standard `pull_request` runs are approved (never
  *     `pull_request_target` / secret-bearing runs); the build runs the same trusted pr-build.yml.
  * Side-effects: none
- * Links: nodes/operator/app/src/app/api/v1/vcs/run-ci/route.ts, docs/spec/node-ci-cd-contract.md
+ * Links: nodes/operator/app/src/app/api/v1/vcs/run-ci/route.ts, https://node-template.cognidao.org/knowledge/node-ci-sovereignty
  * @public
  */
 

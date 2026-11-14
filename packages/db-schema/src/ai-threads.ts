@@ -11,7 +11,7 @@
  *   - messages JSONB stores UIMessage[] — complete conversation history
  *   - SOFT_DELETE_DEFAULT — all reads filter deleted_at IS NULL
  * Side-effects: none (schema definitions only)
- * Links: docs/spec/thread-persistence.md
+ * Links: https://node-template.cognidao.org/knowledge/thread-persistence-contract
  * @public
  */
 

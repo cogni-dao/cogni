@@ -21,7 +21,7 @@
  *     reviewed app-source substrate runner only when workflow and app are the
  *     same commit; all remote or mismatched source flights stay on ci-src.
  * Side-effects: IO (reads workflow inputs; creates and removes owned temporary render/Git fixtures)
- * Links: docs/spec/ci-cd.md axioms 17-20, docs/spec/node-ci-cd-contract.md artifact contract
+ * Links: https://cognidao.org/knowledge/operator-pipeline-contract axioms 17-20, https://node-template.cognidao.org/knowledge/node-ci-sovereignty artifact contract
  * @public
  */
 

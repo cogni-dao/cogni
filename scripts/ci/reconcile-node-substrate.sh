@@ -535,7 +535,7 @@ fi
 # (one server, every node's knowledge_<node> DB), so operator holds the single
 # authoritative value and all consumers read it there — mirrors the #1613
 # OPENFGA_DB_PASSWORD pattern. It is immutable post-init (Doltgres 0.56.3 cannot
-# ALTER it — databases.md §5.2); a restored/rotated volume is reconciled to the live
+# ALTER it — https://cognidao.org/knowledge/database-state-cell-lifecycle §5.2); a restored/rotated volume is reconciled to the live
 # value via `pnpm secrets:set <env> operator DOLTGRES_PASSWORD` (secrets-rotate.md),
 # never re-derived. Passed to doltgres-provision so it connects as the live superuser.
 # Fail-loud if the SSOT is empty — never silently fall back to a poisoned VM .env.

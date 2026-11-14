@@ -8,7 +8,7 @@
  * Invariants: Chain ID must match CHAIN_ID; ledger config requires scope_id + scope_key; DaoConfig requires the four on-chain governance identity fields (base_url optional).
  *   getGithubRepo() is a v0 single-tenant hardcode (OPERATOR_GITHUB_REPO const) — task.0122 wires it to NodeRegistryPort for multi-tenant.
  * Side-effects: IO (reads repo-spec from disk) on first call only. getGithubRepo() has no IO.
- * Links: packages/repo-spec/src/index.ts, .cogni/repo-spec.yaml, docs/spec/vcs-integration.md
+ * Links: packages/repo-spec/src/index.ts, .cogni/repo-spec.yaml, https://cognidao.org/knowledge/pr-review-grounded-gate
  * @public
  */
 

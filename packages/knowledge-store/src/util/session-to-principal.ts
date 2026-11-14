@@ -7,7 +7,7 @@
  * Scope: Pure transformation; structural input type keeps this package independent of `@cogni/node-shared`. Does not call I/O or read env vars.
  * Invariants: KNOWLEDGE_LOOP_CLOSED_VIA_SIGNED_IN_USER (v0) — Bearer = agent (cannot merge); cookie-session = user (can merge).
  * Side-effects: none
- * Links: docs/spec/knowledge-syntropy.md, docs/design/knowledge-contribution-api.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path, docs/design/knowledge-contribution-api.md
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Define and export worker-specific metrics + shared registry. Does not serve HTTP.
  * Invariants: All metrics use `temporal_` or `ledger_` prefix for namespace isolation.
  * Side-effects: Registers default Node.js metrics (heap, RSS, GC) on import.
- * Links: docs/spec/observability.md, src/health.ts (/metrics endpoint)
+ * Links: https://node-template.cognidao.org/knowledge/observability-logging-contract, src/health.ts (/metrics endpoint)
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Defines LoggerPort shape to avoid a pino runtime dependency. Does not contain logging implementation.
  * Invariants: PURE_LIBRARY — no env vars, no process lifecycle.
  * Side-effects: none
- * Links: docs/spec/packages-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @public
  */
 export interface LoggerPort {

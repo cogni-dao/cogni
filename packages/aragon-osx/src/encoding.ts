@@ -7,7 +7,7 @@
  * Scope: Pure encoding only; does not make RPC calls.
  * Invariants: Encoded layout must match OSx TokenVoting setup contract.
  * Side-effects: none
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 

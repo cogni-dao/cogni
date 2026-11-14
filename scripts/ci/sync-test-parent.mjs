@@ -29,7 +29,7 @@
  * Side-effects: IO (clones the mirror into a temp dir; pushes one branch and opens or updates one PR as the operator GitHub App)
  * Notes: git does the tree work (read-tree/checkout/commit-tree) — this file only decides WHICH
  *   paths, from the manifest. No bespoke tree-building, no merge-strategy plugin.
- * Links: docs/spec/repo-sync-contract.md, .cogni/sync-manifest.yaml, scripts/ci/lib/sync-policy.mjs,
+ * Links: https://cognidao.org/knowledge/sync-manifest-contract, .cogni/sync-manifest.yaml, scripts/ci/lib/sync-policy.mjs,
  *   scripts/ci/detect-sync-drift.mjs, .github/workflows/test-parent-sync.yml
  * @public
  */

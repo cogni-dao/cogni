@@ -7,7 +7,7 @@
  * Scope: Delivery composition; node-reference interpretation remains in node-lookup.
  * Invariants: Preserve RLS and owner predicates; never log raw references or override emitter identity.
  * Side-effects: IO (Postgres and structured logs); reads headers for server pages.
- * Links: src/features/nodes/node-lookup.ts, docs/spec/identity-model.md
+ * Links: src/features/nodes/node-lookup.ts, https://cognidao.org/knowledge/identity-keys-no-overload
  * @internal
  */
 

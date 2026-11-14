@@ -13,7 +13,7 @@
  *     Drift = visual regressions. Bump in the same commit per spec TOKEN_BLOCK_PAIRED.
  *   - UTILITY_CSS is ≤15 classes per spec UTILITY_LIB_IS_CAPPED.
  *   - Shell never references external `<link>` or `<script>` per spec SHELL_IS_INLINE.
- * Links: docs/spec/knowledge-html-style.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-human-visuals
  * @internal
  */
 

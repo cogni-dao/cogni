@@ -10,14 +10,14 @@
  *   - EFFECT_TYPED: effect is `state_change`
  *   - NODE_COLLABORATE: `requires: "node.collaborate"`, the same tier as PATCH /api/v1/work/items/{id}; p0/p1 stays
  *     behind the capability's existing node-admin gate
- *   - NO_ONEOF_IN_SCHEMA: Uses flat z.object per tool-use.md #10
- *   - TRANSITION_TABLE_ENFORCED: Capability validates transitions via development-lifecycle.md
+ *   - NO_ONEOF_IN_SCHEMA: Uses flat z.object per https://node-template.cognidao.org/knowledge/tool-use-contract #10
+ *   - TRANSITION_TABLE_ENFORCED: Capability validates transitions via https://node-template.cognidao.org/knowledge/work-item-status-machine
  *   - PATCH_REASON_REQUIRED (task.0086): a `patch` action without a valid reason fails before the capability; the store enforces it again.
  *   - PATCH_CAS_OPTIONAL: patch `expectedRevision` is compare-and-set; absent ⇒ unconditioned patch (unchanged)
  *   - CONFLICT_IS_A_RESULT: a lost compare-and-set returns `{success:false, code:"revision_conflict",
  *     currentRevision}` instead of throwing, so a graph can skip the row and retry next cycle
  * Side-effects: IO (mutates work items via capability)
- * Links: docs/spec/development-lifecycle.md, docs/spec/tool-use.md
+ * Links: https://node-template.cognidao.org/knowledge/work-item-status-machine, https://node-template.cognidao.org/knowledge/tool-use-contract
  * @public
  */
 
@@ -37,7 +37,7 @@ import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 /**
  * Flat object schema for work item transitions.
  *
- * Per tool-use.md #10: inputSchema must compile to JSON Schema `type: "object"`.
+ * Per https://node-template.cognidao.org/knowledge/tool-use-contract #10: inputSchema must compile to JSON Schema `type: "object"`.
  * action enum + all fields optional; implementation validates per-action.
  */
 export const WorkItemTransitionInputSchema = z.object({

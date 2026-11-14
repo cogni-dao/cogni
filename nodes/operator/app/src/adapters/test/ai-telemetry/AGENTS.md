@@ -15,7 +15,7 @@ In-memory test doubles for AI telemetry ports. Records invocations for test asse
 
 - [Root AGENTS.md](../../../../../../AGENTS.md)
 - [Parent test adapters AGENTS.md](../AGENTS.md)
-- [AI Setup](../../../../../../docs/spec/ai-setup.md)
+- [AI Setup](https://node-template.cognidao.org/knowledge/ai-correlation-contract)
 
 ## Boundaries
 

@@ -147,5 +147,5 @@ _(none — future CLI enhancements like --only-stack, --watch, --verbose are tra
 
 ## Related
 
-- [CI/CD](./ci-cd.md)
-- [Build Architecture](./build-architecture.md)
+- [CI/CD](https://cognidao.org/knowledge/operator-pipeline-contract)
+- [Build Architecture](https://node-template.cognidao.org/knowledge/package-build-contract)

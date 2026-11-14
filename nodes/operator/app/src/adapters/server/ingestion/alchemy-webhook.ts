@@ -11,7 +11,7 @@
  * - WEBHOOK_VERIFY_BEFORE_NORMALIZE: verify() must be called before normalize() — enforced by feature service
  * - ACTIVITY_IDEMPOTENT: Deterministic event IDs from tx hash (same tx hash always produces same event ID)
  * Side-effects: none
- * Links: docs/spec/governance-signal-execution.md
+ * Links: https://node-template.cognidao.org/knowledge/dao-merge-signal-loop
  * @internal
  */
 

@@ -12,7 +12,7 @@
  *   - SSR_DISABLED (react-force-graph-3d touches window; dynamic import ssr:false).
  *   - SIDE_SHEET_REUSE (node click → KnowledgeDetail, not a bespoke panel).
  * Side-effects: IO (graph fetch), WebGL render.
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @internal
  */
 

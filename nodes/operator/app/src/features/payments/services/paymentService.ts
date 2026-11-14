@@ -8,7 +8,7 @@
  * Invariants: State transitions via core/rules; atomic settlement via confirmCreditsPayment; post-credit funding via runPostCreditFunding (fires exactly once on CREDITED transition); RPC_ERROR is transient (retried on next poll).
  * Side-effects: IO (via AccountService, ServiceAccountService, PaymentAttemptUserRepository, PaymentAttemptServiceRepository, OnChainVerifier, PostCreditFundingDeps ports)
  * Notes: RPC_ERROR from OnChainVerifier leaves attempt in PENDING_UNVERIFIED for automatic retry via getStatus polling. Post-credit settlement (treasury Split distribute + TB co-write) runs inline after CREDITED but never throws — all steps catch internally. The OpenRouter/Coinbase provider top-up was retired; outbound vendor funding now flows through the operator wallet's withdrawToSteward + a manual human checkout.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

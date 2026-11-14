@@ -8,7 +8,7 @@
  * Invariants: No floating-point arithmetic; all parsing via string manipulation; validates range and format.
  * Side-effects: none
  * Notes: Prevents precision errors from float math. Shared by UI and feature layers.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

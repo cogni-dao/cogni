@@ -13,7 +13,7 @@ REST API routes for schedule CRUD operations. Auth-protected endpoints for creat
 
 ## Pointers
 
-- [Scheduler Spec](../../../../../../../docs/spec/scheduler.md)
+- [Scheduler Spec](https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract)
 - [Schedule Contracts](../../../../contracts/)
 
 ## Boundaries

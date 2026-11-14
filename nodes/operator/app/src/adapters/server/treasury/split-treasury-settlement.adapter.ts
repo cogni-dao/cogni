@@ -7,7 +7,7 @@
  * Scope: Bridges semantic treasury settlement to 0xSplits distribution mechanics. Does not expose token addresses or chain details to consumers.
  * Invariants: Token address injected at construction (not per-call). Delegates to OperatorWalletPort only.
  * Side-effects: IO (via OperatorWalletPort — on-chain tx submission)
- * Links: docs/spec/operator-wallet.md, task.0085
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary, task.0085
  * @public
  */
 

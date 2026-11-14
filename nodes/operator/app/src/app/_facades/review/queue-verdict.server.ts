@@ -21,7 +21,7 @@
  *     (`skipped_exists`), so a GitHub redelivery never double-writes.
  *   - ONE_EVENT_PER_COPY: exactly one structured event per handled queue push.
  * Side-effects: IO (GitHub REST reads + one check-run write via the review plane)
- * Links: task.5438, story.5145, docs/spec/merge-queue-config.md,
+ * Links: task.5438, story.5145, https://cognidao.org/knowledge/merge-queue-required-checks,
  *   features/review/queue-verdict.ts, adapters/server/review/github-review.adapter.ts
  * @public
  */

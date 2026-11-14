@@ -7,7 +7,7 @@
  * Scope: No IO or React. Unknown evidence remains unknown; finalized never implies folded/published.
  * Invariants: UNKNOWN_NEVER_COMPLETE, PUBLISH_FROM_ON_CHAIN_EVIDENCE, CUMULATIVE_COVERS_PRIOR.
  * Side-effects: none
- * Links: docs/spec/tokenomics-distribution.md, bug.5042
+ * Links: https://node-template.cognidao.org/knowledge/distribution-lifecycle, bug.5042
  * @public
  */
 

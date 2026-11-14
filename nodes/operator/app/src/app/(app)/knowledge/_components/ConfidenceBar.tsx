@@ -22,7 +22,7 @@ interface ConfidenceBarProps {
 }
 
 /**
- * Anchors mirror docs/spec/knowledge-syntropy.md:
+ * Anchors mirror https://node-template.cognidao.org/knowledge/knowledge-recall-path:
  *   < 30 muted (draft) · 30–60 warning (candidate) · 60–80 info (established) ·
  *   80–95 success (canonical) · 95+ primary (hardened/factual).
  * All tones use the operator's semantic CSS-var palette (no raw Tailwind colors).

@@ -4,7 +4,7 @@
 /**
  * Module: `@shared/db/node-access-requests`
  * Purpose: Tracking rows for AI-agent → node-owner access requests. UX/audit only — OpenFGA role
- *   tuples remain the sole authority (rbac.md §6); the `node.flight` check never reads this table.
+ *   tuples remain the sole authority (https://cognidao.org/knowledge/authz-port-contract §6); the `node.flight` check never reads this table.
  * Scope: One row per (node, agent user). `role` is the OpenFGA relation requested. v0 grants
  *   `developer` (confers `can_flight`, candidate-a), `secrets_manager` (confers `can_manage_secrets`),
  *   `production_promoter` (confers `can_promote_production`), or `env_manager` (confers
@@ -14,7 +14,7 @@
  * Invariants: NOT_AUTHORITY, ONE_ROW_PER_AGENT_NODE_ROLE (an agent can request multiple roles on
  *   one node — each is its own row), ROLE_MAPS_TO_OPENFGA_RELATION.
  * Side-effects: none
- * Links: docs/spec/rbac.md §6, docs/spec/identity-model.md
+ * Links: https://cognidao.org/knowledge/authz-port-contract §6, https://cognidao.org/knowledge/identity-keys-no-overload
  * @public
  */
 
@@ -71,7 +71,7 @@ export const nodeAccessRequests = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     role: text("role").notNull().default("developer"),
-    // The AI agent's own GitHub login, declared at REQUEST time (rbac.md §6a). The agent requests
+    // The AI agent's own GitHub login, declared at REQUEST time (https://cognidao.org/knowledge/authz-port-contract §6a). The agent requests
     // access for its own GitHub account; on approve the owner-gated grant resolves push-access for
     // THIS login — the human never supplies a login, they just click Approve. Nullable: a request
     // with no GitHub identity grants only the OpenFGA role (the fork-PR fallback still applies).

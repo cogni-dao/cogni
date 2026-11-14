@@ -7,7 +7,7 @@
  * Scope: Provides Zod schema and types for models list endpoint wire format. Does not implement business logic or validation beyond schema definition.
  * Invariants: Contract remains stable; breaking changes require new version. All consumers use z.infer types.
  * Side-effects: none
- * Links: /api/v1/ai/models route, useModels hook, docs/spec/multi-provider-llm.md
+ * Links: /api/v1/ai/models route, useModels hook, https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @internal
  */
 

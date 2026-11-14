@@ -18,7 +18,7 @@
 # proposal, PR #2217 / reverted #2234) buys latency with a permanent multiple on
 # OpenBao read + audit load, against a Shamir 1-of-1 OpenBao that has already
 # OOMKilled (bug.5011). Pushing costs nothing at steady state.
-# See docs/spec/secrets-management.md "Refresh intervals".
+# See https://cognidao.org/knowledge/secrets-management "Refresh intervals".
 #
 # WHY IT IS A SCRIPT AND NOT A CONTROLLER.
 # The push needs a Kubernetes identity that may patch ExternalSecrets. The
@@ -30,7 +30,7 @@
 # reproducible-by-code — the repo's first standard.
 #
 # WHAT IT DOES NOT DO: restart pods. Stakater Reloader already does that on
-# Secret change (secrets-management.md Invariant 11) and is present on the node-app
+# Secret change (https://cognidao.org/knowledge/secrets-management Invariant 11) and is present on the node-app
 # and actuator Deployments. Re-implementing it here would fight the substrate.
 #
 # NEVER PRINTS A SECRET VALUE. Verification compares a truncated SHA-256

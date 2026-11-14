@@ -6,7 +6,7 @@ You are adding or changing an environment variable. **There is exactly one edit 
 old multi-surface checklist (GH secrets + `deploy-infra.sh` ×3 + `setup-secrets.ts` array +
 compose files + `SETUP_DESIGN.md`) is retired — those hand-maintained lists drifted, which is
 the entire reason `DOLTHUB_*` sat dormant despite being declared. The catalog is now the single
-source the provisioner reads. See [`docs/spec/secrets-management.md`](../../docs/spec/secrets-management.md).
+source the provisioner reads. See [`secrets-management`](https://cognidao.org/knowledge/secrets-management).
 
 ## Step 0 — Secret or plain config?
 
@@ -73,7 +73,7 @@ file it, do not hand-patch around it.
 
 ## Reference
 
-- [Secrets Management spec](../../docs/spec/secrets-management.md) — the self-serve model + invariants
+- [Secrets Management spec](https://cognidao.org/knowledge/secrets-management) — the self-serve model + invariants
 - [Per-Node Secrets Catalog design](../../docs/design/secrets-catalog-per-node.md) — the catalog model
 - [`/cicd-secrets-expert`](../skills/cicd-secrets-expert/SKILL.md) — decision trees + file map
 - [`docs/guides/secrets-add-new.md`](../../docs/guides/secrets-add-new.md) — CLI walkthrough

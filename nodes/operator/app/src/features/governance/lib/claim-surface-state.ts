@@ -19,7 +19,7 @@
  *   - ALL_MATH_BIGINT: amounts stay bigint; claimable = cumulativeAmount − cumulativeClaimed,
  *     clamped ≥ 0 (double-claim reverts `NothingToClaim` on-chain — SINGLE_CLAIM_COVERS_ALL).
  * Side-effects: none
- * Links: docs/spec/tokenomics-distribution.md, nodes/operator/app/src/features/governance/hooks/useClaimSurface.ts
+ * Links: https://node-template.cognidao.org/knowledge/distribution-lifecycle, nodes/operator/app/src/features/governance/hooks/useClaimSurface.ts
  * @public
  */
 

@@ -12,7 +12,7 @@
  * - FRAMEWORK_STABLE_PLUGINS_CHURN: this package churns; framework stays stable.
  * - PLUGIN_NO_LEDGER_CORE_LEAK: never imported by @cogni/attribution-ledger.
  * Side-effects: none
- * Links: docs/spec/plugin-attribution-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @public
  */
 

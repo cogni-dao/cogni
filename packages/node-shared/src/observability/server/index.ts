@@ -7,7 +7,7 @@
  * Scope: logEvent wrapper + request lifecycle helpers (type-only pino dependency). Does NOT include logger factory, metrics, or redact.
  * Invariants: PURE_LIBRARY — logger/metrics/redact stay app-local.
  * Side-effects: none
- * Links: docs/spec/packages-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @public
  */
 

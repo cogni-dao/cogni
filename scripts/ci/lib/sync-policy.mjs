@@ -21,7 +21,7 @@
  *     so it is mirrored 1:1 and is never kept at a deployment's stale copy. Only the more specific
  *     `content_may_differ` outranks it (a generated file inside a must-match directory).
  * Side-effects: IO (reads the manifest file passed in).
- * Links: .cogni/sync-manifest.yaml, .cogni/sync-manifest.schema.json, docs/spec/repo-sync-contract.md
+ * Links: .cogni/sync-manifest.yaml, .cogni/sync-manifest.schema.json, https://cognidao.org/knowledge/sync-manifest-contract
  * @public
  */
 

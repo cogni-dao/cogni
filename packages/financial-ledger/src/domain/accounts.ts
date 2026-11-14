@@ -10,7 +10,7 @@
  *   - ALL_MATH_BIGINT: All account IDs are bigint (u128)
  *   - MVP_MINIMAL: Only accounts for flows that exist today (credits + USDC)
  * Side-effects: none
- * Links: docs/spec/financial-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/financial-ledger-tigerbeetle
  * @public
  */
 

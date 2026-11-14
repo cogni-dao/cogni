@@ -41,7 +41,7 @@ Every autonomous agent has four components:
 │  DATA STREAMS (observed)                                  │
 │  What the agent watches between runs                      │
 │  Sources: webhooks, polling, observation_events           │
-│  Spec: docs/spec/data-streams.md                         │
+│  Spec: https://node-template.cognidao.org/knowledge/node-streams-transport                         │
 └──────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────┐

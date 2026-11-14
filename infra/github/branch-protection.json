@@ -12,7 +12,7 @@
     "never drain.",
     "",
     "Apply: see infra/github/setup-main-branch.sh.",
-    "Spec: docs/spec/node-ci-cd-contract.md#repo-setup-fixture."
+    "Spec: https://node-template.cognidao.org/knowledge/node-ci-sovereignty"
   ],
   "required_status_checks": {
     "strict": false,

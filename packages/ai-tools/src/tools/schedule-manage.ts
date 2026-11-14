@@ -9,9 +9,9 @@
  *   - TOOL_ID_NAMESPACED: ID is `core__schedule_manage`
  *   - EFFECT_TYPED: effect is `state_change`
  *   - EDIT_POLICY_ENFORCED: Rejects mutations on schedules with editPolicy=human_only
- *   - NO_ONEOF_IN_SCHEMA: Uses flat z.object (not discriminatedUnion) per tool-use.md #10
+ *   - NO_ONEOF_IN_SCHEMA: Uses flat z.object (not discriminatedUnion) per https://node-template.cognidao.org/knowledge/tool-use-contract #10
  * Side-effects: IO (creates/updates/deletes schedules via capability)
- * Links: docs/spec/scheduler.md, docs/spec/tool-use.md
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, https://node-template.cognidao.org/knowledge/tool-use-contract
  * @public
  */
 
@@ -27,7 +27,7 @@ import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 /**
  * Flat object schema for schedule management.
  *
- * Per tool-use.md #10: inputSchema must compile to JSON Schema `type: "object"`.
+ * Per https://node-template.cognidao.org/knowledge/tool-use-contract #10: inputSchema must compile to JSON Schema `type: "object"`.
  * z.discriminatedUnion produces `oneOf` which OpenAI rejects.
  * Instead: action enum + all fields optional; implementation validates per-action.
  */

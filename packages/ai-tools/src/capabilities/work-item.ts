@@ -9,7 +9,7 @@
  *   - CAPABILITY_INJECTION: Implementation injected at bootstrap, not imported
  *   - PORTS_ARE_AUTHORITY: Delegates to WorkItemQueryPort + WorkItemCommandPort
  * Side-effects: none (interface only)
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://node-template.cognidao.org/knowledge/work-item-status-machine
  * @public
  */
 

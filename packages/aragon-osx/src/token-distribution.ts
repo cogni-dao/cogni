@@ -13,7 +13,7 @@
  * - CUMULATIVE_LEAF_NO_INDEX: cumulative leaves are keccak256(abi.encodePacked(address, uint256 cumulativeAmount)) — NO index, matching the vendored 1inch CumulativeMerkleDrop.
  * - CUMULATIVE_CONSERVES_SUPPLY: a cumulative distribution's leaves sum to the TOTAL supply distributed to date (prior cumulative + this epoch's delta), not just this epoch.
  * Side-effects: none
- * Links: docs/spec/attribution-pipeline-overview.md, packages/cogni-contracts/src/cumulative-merkle-distributor/
+ * Links: https://node-template.cognidao.org/knowledge/attribution-pipeline-map, packages/cogni-contracts/src/cumulative-merkle-distributor/
  * @public
  */
 

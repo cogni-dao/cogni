@@ -8,7 +8,7 @@
  * Scope: Auth check only. Data fetching handled client-side via React Query.
  * Invariants: Protected route (server-side auth check).
  * Side-effects: none
- * Links: [KnowledgeEntryView](../_components/KnowledgeEntryView.tsx), docs/spec/knowledge-syntropy.md
+ * Links: [KnowledgeEntryView](../_components/KnowledgeEntryView.tsx), https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

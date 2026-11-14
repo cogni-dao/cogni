@@ -14,7 +14,7 @@
  *   - pause/resume are idempotent (no-op if already in target state)
  *   - describeSchedule returns config fields (cron, timezone, input) for drift detection
  * Side-effects: none (interface definition only)
- * Links: docs/spec/scheduler.md, docs/spec/temporal-patterns.md
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, https://cognidao.org/knowledge/temporal-workflow-rules
  * @public
  */
 

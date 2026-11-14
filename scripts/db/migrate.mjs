@@ -8,7 +8,7 @@
  * Invariants: One physical session owns the lock and 0063 guards. SQL and ledger stay immutable. Success follows shutdown.
  * Side-effects: IO (Postgres connect, advisory lock, migrate, read drizzle ledger, unlock).
  * Notes: COPY'd into each runtime image at /app/nodes/<node>/app/migrate.mjs. LOCK_KEY shared safely — advisory locks are database-scoped.
- * Links: docs/spec/databases.md §2 Migration Strategy, nodes/operator/app/src/shared/migrations/migration-receipt.ts (the parser twin), work/items/task.0371.kill-presync-migration-hook-step-1.md
+ * Links: https://node-template.cognidao.org/knowledge/database-migration-contract §2 Migration Strategy, nodes/operator/app/src/shared/migrations/migration-receipt.ts (the parser twin), work/items/task.0371.kill-presync-migration-hook-step-1.md
  * @internal
  */
 
@@ -200,7 +200,7 @@ function readJournal(folder) {
  *
  * Reads drizzle's OWN ledger (`drizzle.__drizzle_migrations`) with the node's OWN DSN — the one
  * credential that is allowed to see it. The operator collects this line from the migration Job it
- * created; it never connects to this database (docs/spec/multi-node-tenancy.md NO_CROSS_NODE_QUERIES).
+ * created; it never connects to this database (https://node-template.cognidao.org/knowledge/node-tenancy-isolation NO_CROSS_NODE_QUERIES).
  *
  * Best-effort by construction: a receipt is deployment METADATA, and failing to describe a
  * successful migration must never turn it into a failed one.

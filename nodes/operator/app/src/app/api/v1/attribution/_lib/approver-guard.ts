@@ -7,7 +7,7 @@
  * Scope: For non-open epochs with pinned approvers, checks against the pinned set. For open epochs or when no epoch is provided, checks against repo-spec config. Does not perform database access.
  * Invariants: WRITE_ROUTES_APPROVER_GATED, APPROVERS_PINNED_AT_REVIEW
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md, .cogni/repo-spec.yaml
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, .cogni/repo-spec.yaml
  * @internal
  */
 

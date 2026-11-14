@@ -7,7 +7,7 @@
  * Scope: Argument construction only; does not perform RPC calls or transaction signing.
  * Invariants: Uses pinned OSx version constants.
  * Side-effects: none
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 

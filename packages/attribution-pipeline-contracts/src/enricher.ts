@@ -10,7 +10,7 @@
  * - EVALUATION_WRITE_VALIDATED: every evaluation write includes evaluationRef, algoRef, inputsHash, schemaRef, payloadHash.
  * - FRAMEWORK_NO_IO: this module contains zero I/O.
  * Side-effects: none
- * Links: docs/spec/plugin-attribution-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @public
  */
 

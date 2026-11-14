@@ -7,7 +7,7 @@
  * Scope: Maps raw YAML structures to app-friendly typed objects. Chain ID is always a parameter, not imported from app code.
  * Invariants: REPO_SPEC_AUTHORITY, NO_CROSS_IMPORTS. All functions are pure — no I/O, no caching, no side effects.
  * Side-effects: none
- * Links: .cogni/repo-spec.yaml, docs/spec/node-operator-contract.md
+ * Links: .cogni/repo-spec.yaml, https://node-template.cognidao.org/knowledge/node-sovereignty-contract
  * @public
  */
 
@@ -687,7 +687,7 @@ export type OwningNode =
        * operator node is one of the conflicting domains. Empty array when
        * operator is not involved in the conflict. Lets the diagnostic-comment
        * formatter show contributors which paths triggered the operator domain
-       * match — see docs/spec/node-ci-cd-contract.md § Diagnostic contract.
+       * match — see https://node-template.cognidao.org/knowledge/node-ci-sovereignty § Diagnostic contract.
        */
       operatorPaths: readonly string[];
       /** nodeId of the operator entry when operator is one of the conflicting domains, else undefined. */
@@ -818,7 +818,7 @@ function topUnderNodes(p: string): string | null {
 /**
  * Resolve which domain owns a set of changed paths. Pure — no I/O, no env, no logging.
  * Implements `SINGLE_DOMAIN_HARD_FAIL` from
- * `docs/spec/node-ci-cd-contract.md § Single-Domain Scope`:
+ * `https://node-template.cognidao.org/knowledge/node-ci-sovereignty § Single-Domain Scope`:
  *
  * - `domain(path) = X`         if path starts with `nodes/<X>/` for X in non-operator registry entries
  * - `domain(path) = operator`  otherwise (includes `nodes/operator/**`, `packages/`, `.github/`, etc.)

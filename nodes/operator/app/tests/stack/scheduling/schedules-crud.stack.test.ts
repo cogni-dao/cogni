@@ -10,7 +10,7 @@
  *   - createSchedule creates grant + schedule + enqueues job atomically
  *   - Disabled schedules have nextRunAt = null
  * Side-effects: IO (database, job queue)
- * Links: /api/v1/schedules, docs/spec/scheduler.md
+ * Links: /api/v1/schedules, https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @public
  */
 

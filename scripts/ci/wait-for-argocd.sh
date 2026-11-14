@@ -84,7 +84,7 @@ GH_REPO_FOR_COMPARE="${GH_REPO:-${GITHUB_REPOSITORY:-}}"
 EXPECTED_SHA=$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')
 
 if [ -z "$PROMOTED_APPS" ]; then
-  echo "[ERROR] wait-for-argocd: PROMOTED_APPS is required (CATALOG_IS_SSOT). Source it from a decide job (yq ea -o=tsv '.name' infra/catalog/*.yaml | paste -sd,) or from an upstream promote step's output. See docs/spec/ci-cd.md axiom 16." >&2
+  echo "[ERROR] wait-for-argocd: PROMOTED_APPS is required (CATALOG_IS_SSOT). Source it from a decide job (yq ea -o=tsv '.name' infra/catalog/*.yaml | paste -sd,) or from an upstream promote step's output. See https://cognidao.org/knowledge/operator-pipeline-contract axiom 16." >&2
   exit 1
 fi
 IFS=',' read -r -a APPS <<< "$PROMOTED_APPS"

@@ -8,7 +8,7 @@
  * Invariants: NODE_NAME + DATABASE_URL from env; argv[2] = migrations dir; verifier throws SCHEMA_DRIFT on shape drift.
  * Side-effects: IO (Doltgres connect, DDL, tracking-row writes, dolt_commit).
  * Notes: Re-implements drizzle's journal walk via sql.unsafe to dodge Doltgres 0.56 extended-protocol gap on __drizzle_migrations INSERTs.
- * Links: scripts/db/verify-doltgres-schema.mjs (load-bearing post-apply check), docs/spec/databases.md §5.2
+ * Links: scripts/db/verify-doltgres-schema.mjs (load-bearing post-apply check), https://node-template.cognidao.org/knowledge/database-migration-contract §5.2
  */
 
 // biome-ignore-all lint/suspicious/noConsole: standalone Node script invoked as initContainer CMD; stdout is the only log surface

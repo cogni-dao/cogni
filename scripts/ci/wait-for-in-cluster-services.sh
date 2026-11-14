@@ -7,7 +7,7 @@
 # left the Service's endpoints. Complements the HTTPS /readyz probes in
 # wait-for-candidate-ready.sh, which are served by any pod still in
 # endpoints (old or new) and so do not verify a rollout actually completed.
-# See docs/spec/ci-cd.md → "Minimum Authoritative Validation".
+# See https://cognidao.org/knowledge/operator-pipeline-contract → "Minimum Authoritative Validation".
 #
 # Two gates per routed node-app service (bug.0331):
 #   1. new-RS availability — updatedReplicas + availableReplicas reached desired

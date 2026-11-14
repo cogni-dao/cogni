@@ -9,7 +9,7 @@
  *   - RUNTIME_ONLY: Resolves providers, does not list models.
  *   - THROWS_ON_UNKNOWN: Unknown providerKey throws immediately (fail-fast).
  * Side-effects: none
- * Links: docs/spec/multi-provider-llm.md
+ * Links: https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @internal
  */
 

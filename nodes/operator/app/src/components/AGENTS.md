@@ -14,8 +14,8 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 
 ## Pointers
 
-- [Architecture](../../../../docs/spec/architecture.md)
-- [UI Implementation Guide](../../../../docs/spec/ui-implementation.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
+- [UI Implementation Guide](https://node-template.cognidao.org/knowledge/frontend-development)
 
 ## Boundaries
 
@@ -48,7 +48,7 @@ Shared presentational UI. No business logic, no data fetching. Design tokens and
 
 ## Usage
 
-**IMPORTANT: If you are making any changes to files in this directory, you must read:** [`docs/spec/ui-implementation.md`](../../../../docs/spec/ui-implementation.md)
+**IMPORTANT: If you are making any changes to files in this directory, you must read:** [`frontend-development`](https://node-template.cognidao.org/knowledge/frontend-development)
 
 Minimal local commands:
 
@@ -101,4 +101,4 @@ src/components/
 
 - Promotion policy: colocate → second consumer → promote. Keep root lean.
 - Each file: short header with Purpose, Scope, Invariants. No inline commentary drift.
-- Implementation workflows live in `docs/spec/ui-implementation.md`.
+- Implementation workflows live in `https://node-template.cognidao.org/knowledge/frontend-development`.

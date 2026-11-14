@@ -8,7 +8,7 @@
  * Invariants: Billing account derived from session only; returns ledger ordered newest first; facade handles all DTO mapping.
  * Side-effects: IO (reads billing data via AccountService port).
  * Notes: Used by /credits page for balance and history display. Routes are thin validators; DTO mapping happens in facades.
- * Links: docs/spec/payments-design.md, src/contracts/AGENTS.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design, src/contracts/AGENTS.md
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Auth-protected POST endpoint. Finalizes IN-PROCESS on this node's own DB (story.5007 finalize-in-process) — no Temporal round-trip, no ledger-tasks queue. Returns 200 + the statement + R3 cumulative distribution. Delegates all logic to `finalizeEpochInProcess` (bootstrap) → `runFinalizeEpoch`.
  * Invariants: WRITE_ROUTES_APPROVER_GATED, FINALIZE_IN_PROCESS, EPOCH_FINALIZE_IDEMPOTENT (a re-POST repairs; fold FREEZE preserves a published manifest).
  * Side-effects: IO (HTTP response, service-DB finalize transaction, viem EIP-712 verify, in-process distribution-config read).
- * Links: docs/spec/attribution-ledger.md, contracts/attribution.finalize-epoch.v1.contract, bootstrap/container#finalizeEpochInProcess
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, contracts/attribution.finalize-epoch.v1.contract, bootstrap/container#finalizeEpochInProcess
  * @public
  */
 
@@ -82,7 +82,7 @@ export const POST = wrapRouteHandlerWithLogging<{
         ctx.log
       );
 
-      // Deterministic terminal (observability.md): exactly one of completed / rejected.
+      // Deterministic terminal (https://node-template.cognidao.org/knowledge/observability-logging-contract): exactly one of completed / rejected.
       ctx.log.info(
         {
           epochId: id,
@@ -97,7 +97,7 @@ export const POST = wrapRouteHandlerWithLogging<{
         status: 200,
       });
     } catch (err) {
-      // FAULT_PARTY_BEFORE_BUCKET (error-handling.md): a client-fault finalize failure
+      // FAULT_PARTY_BEFORE_BUCKET (https://node-template.cognidao.org/knowledge/layered-error-translation): a client-fault finalize failure
       // (wrong epoch state / unknown signer / invalid signature) is a typed FinalizeEpochError
       // → HTTP 422 with its stable `code`. It must NOT collapse into the 500 alarm bucket.
       // Anything else (data-integrity mismatch, DB fault) is rethrown → the wrapper's 500.

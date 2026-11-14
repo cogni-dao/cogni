@@ -31,12 +31,12 @@
 
 ## Pointers
 
-- [Architecture](docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 - [Repo State](docs/research/REPO_STATE.md) <!-- Current implementation status -->
 - [Repo Specification](.cogni/repo-spec.yaml) <!-- DAO configuration spec -->
 - [Subdir AGENTS.md Policy](docs/templates/agents_subdir_template.md)
 - [Feature Spec Template](docs/templates/feature_spec_template.md)
-- [Style & Lint Rules](docs/spec/style.md)
+- [Style & Lint Rules](https://node-template.cognidao.org/knowledge/code-style-standard)
 
 ## Usage
 

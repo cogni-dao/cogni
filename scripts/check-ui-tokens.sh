@@ -6,7 +6,7 @@
 # Purpose: Ban raw typography utilities and arbitrary values without var(--token)
 # Runs: Part of pnpm check (see scripts/check-all.sh)
 # Scope: src/** excluding styles/kit/vendor directories
-# Links: docs/spec/ui-implementation.md Phase 2, docs/spec/ui-implementation.md
+# Links: https://node-template.cognidao.org/knowledge/frontend-development Phase 2
 
 set -e
 
@@ -39,7 +39,7 @@ if rg "text-(xs|sm|base|lg|xl|2xl|3xl|4xl|5xl|6xl)" \
     --files-with-matches
   echo ""
   echo "Fix: Use text-[var(--text-sm)] or similar token references"
-  echo "See: docs/spec/ui-implementation.md#token-rules"
+  echo "See: https://node-template.cognidao.org/knowledge/frontend-development"
   exit 1
 fi
 
@@ -67,7 +67,7 @@ if rg '\[[0-9]+px\]|\[[0-9]+rem\]|\[[0-9]+%\]|\[#[0-9a-fA-F]+\]' \
     --files-with-matches
   echo ""
   echo "Fix: Use [var(--token-name)] instead of magic numbers/hex values"
-  echo "See: docs/spec/ui-implementation.md#arbitrary-values"
+  echo "See: https://node-template.cognidao.org/knowledge/frontend-development"
   exit 1
 fi
 

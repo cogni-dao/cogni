@@ -8,7 +8,7 @@
  * The server derives deploymentEnvironment; clients may display and sign it.
  * Invariants: SIGNATURE_SCOPE_BOUND, SIGNATURE_DEPLOYMENT_BOUND.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

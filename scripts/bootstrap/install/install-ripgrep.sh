@@ -5,7 +5,7 @@
 # Module: scripts/bootstrap/install/install-ripgrep.sh
 # Purpose: Install ripgrep (rg) binary. Required by RipgrepAdapter for brain repo search.
 # Usage: bash scripts/bootstrap/install/install-ripgrep.sh
-# Links: docs/spec/cogni-brain.md, src/adapters/server/repo/ripgrep.adapter.ts
+# Links: https://node-template.cognidao.org/knowledge/repo-read-tools-contract, src/adapters/server/repo/ripgrep.adapter.ts
 
 set -euo pipefail
 

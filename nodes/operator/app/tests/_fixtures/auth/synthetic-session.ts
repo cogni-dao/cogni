@@ -14,7 +14,7 @@
  * Current implementation uses encode() from next-auth/jwt, but NextAuth v4 expects JWE (encrypted JWT) format in some deployments.
  * Tests using synthetic sessions are SKIPPED pending RainbowKitSiweNextAuth refactor completion.
  * After refactor: revisit this approach or use real SIWE flow via test fixtures.
- * See: docs/spec/authentication.md (deferred_work section)
+ * See: https://node-template.cognidao.org/knowledge/authentication-session-bearer (deferred_work section)
  *
  * @public
  */

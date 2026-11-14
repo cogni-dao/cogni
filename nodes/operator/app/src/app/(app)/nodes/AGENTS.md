@@ -13,7 +13,7 @@ Authenticated node management and formation wizard routes. `/nodes` is the app-o
 
 ## Pointers
 
-- [Node Formation Spec](../../../../../../docs/spec/node-formation.md)
+- [Node Formation Spec](https://cognidao.org/knowledge/node-formation-contract)
 - [Route Group Rules](../AGENTS.md)
 
 ## Boundaries

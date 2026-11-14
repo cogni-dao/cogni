@@ -326,7 +326,7 @@ A follow-up `bug.*` may be warranted to **codify the capacity ceiling**: extend 
 
 - Internal: `infra/catalog/*.yaml`, `infra/k8s/base/node-app/deployment.yaml`, `infra/k8s/argocd/*-applicationset.yaml`, `infra/provision/cherry/base/terraform.tfvars.example`, `scripts/ci/lib/image-tags.sh`, `.github/workflows/promote-and-deploy.yml`
 - Prior research: `docs/research/nextjs-node-memory-sizing.md` (Tier 0 sizing standard)
-- Specs: `docs/spec/architecture.md`, `docs/spec/database-rls.md`
+- Specs: `https://node-template.cognidao.org/knowledge/hexagonal-layering-contract`, `https://node-template.cognidao.org/knowledge/rls-tenant-isolation`
 - [Vercel Platforms — Multi-tenant template](https://vercel.com/platforms/docs/examples/multi-tenant-template)
 - [Next.js Guides — Multi-tenant](https://nextjs.org/docs/app/guides/multi-tenant)
 - [GoHighLevel — Whitelabel Sub-Accounts (ideas board)](https://ideas.gohighlevel.com/saas/p/whitelabel-sub-accounts)

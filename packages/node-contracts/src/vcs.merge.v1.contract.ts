@@ -16,7 +16,7 @@
  *   - MERGED_XOR_ENQUEUED: exactly one of `merged` (direct, synchronous, carries `sha`) or
  *     `enqueued` (added to the merge queue, async — no `sha` yet) is true. Enforced by `.refine`.
  * Side-effects: none
- * Links: nodes/operator/app/src/app/api/v1/vcs/merge/route.ts, docs/spec/development-lifecycle.md
+ * Links: nodes/operator/app/src/app/api/v1/vcs/merge/route.ts, https://node-template.cognidao.org/knowledge/work-item-status-machine
  * @public
  */
 

@@ -10,7 +10,7 @@
  * Scope: Pure presentation. The sandbox disables scripts, popups, form submission,
  *   and same-origin access. Its sole capability is explicit-user top navigation for
  *   normalized HTTP(S) anchors, so a link cannot replace the iframe itself.
- * Links: docs/spec/knowledge-html-style.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-human-visuals
  * @internal
  */
 

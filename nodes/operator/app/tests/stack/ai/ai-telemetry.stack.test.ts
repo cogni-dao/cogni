@@ -8,7 +8,7 @@
  * Invariants: Per AI_SETUP_SPEC.md P0 test gates - telemetry rows MUST be written on both success and error paths.
  * Side-effects: IO (database writes via container, LiteLLM calls)
  * Notes: Requires dev stack running (pnpm dev:stack:db:setup). Uses real DB and LiteLLM for success path; mocks LiteLLM for error path.
- * Links: docs/spec/ai-setup.md
+ * Links: https://node-template.cognidao.org/knowledge/ai-correlation-contract
  * @public
  */
 

@@ -13,7 +13,7 @@
  *     No Temporal round-trip; idempotent via the fold FREEZE (a re-POST repairs).
  *   - Contract remains stable; breaking changes require new version
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md, packages/attribution-pipeline-plugins/src/finalize/run-finalize-epoch.ts
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, packages/attribution-pipeline-plugins/src/finalize/run-finalize-epoch.ts
  * @public
  */
 

@@ -11,7 +11,7 @@
  *   - REDIS_IS_STREAM_PLANE: Redis holds only ephemeral stream data; loss = stream interruption
  *   - Auth: session-required, verifies requestedBy matches authenticated user
  * Side-effects: IO (Redis stream subscription, HTTP SSE response)
- * Links: docs/spec/unified-graph-launch.md §4 (Reconnection), RunStreamPort, GraphRunRepository
+ * Links: https://node-template.cognidao.org/knowledge/graph-run-launch-contract §4 (Reconnection), RunStreamPort, GraphRunRepository
  * @public
  */
 

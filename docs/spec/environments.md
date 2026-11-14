@@ -18,7 +18,7 @@ tags: [deployment]
 > The fleet moved node apps to **Akash** on 2026-09-11; this document was last
 > verified 2026-02-06 and predates that. Treat its deployment-topology claims as
 > historical. The current contract is
-> [Node CI/CD Contract](node-ci-cd-contract.md) — see `## Lane vs control env`
+> [Node CI/CD Contract](https://node-template.cognidao.org/knowledge/node-ci-sovereignty) — see `## Lane vs control env`
 > for how `env` splits into lane and control env.
 
 # Environment & Stack Deployment Modes
@@ -63,7 +63,7 @@ Provide clear, well-defined deployment modes so developers can choose the right 
 
 **Base Configuration:** `.env.local`
 
-- Database DSNs: `DATABASE_URL`, `DATABASE_SERVICE_URL` (explicit, distinct users per [database-rls.md](./database-rls.md))
+- Database DSNs: `DATABASE_URL`, `DATABASE_SERVICE_URL` (explicit, distinct users per [database-rls.md](https://node-template.cognidao.org/knowledge/rls-tenant-isolation))
 - App settings: `APP_ENV=production`, `LITELLM_MASTER_KEY`, etc.
 - Provisioning vars (for `provision.sh` only): `APP_DB_USER`, `APP_DB_PASSWORD`, `APP_DB_SERVICE_PASSWORD`, `APP_DB_NAME`
 
@@ -243,5 +243,5 @@ _(none)_
 ## Related
 
 - [check:full CI-Parity Gate](./check-full.md) — CI-parity test orchestrator using these modes
-- [Database URL Alignment](./database-url-alignment.md) — DSN single source of truth
-- [CI/CD](./ci-cd.md) — Deployment pipeline using Docker Stack mode
+- [Database URL Alignment](https://cognidao.org/knowledge/node-database-contract) — DSN single source of truth
+- [CI/CD](https://cognidao.org/knowledge/operator-pipeline-contract) — Deployment pipeline using Docker Stack mode

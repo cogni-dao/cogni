@@ -11,7 +11,7 @@
  * - All timestamps ISO 8601 format
  * Side-effects: none
  * Notes: System tenant scope only (COGNI_SYSTEM_PRINCIPAL_USER_ID). No userId parameter.
- * Links: /api/v1/governance/status endpoint, governance-status-api.md spec
+ * Links: /api/v1/governance/status endpoint, https://node-template.cognidao.org/knowledge/governance-status-api spec
  * @public
  */
 

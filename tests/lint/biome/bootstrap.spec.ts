@@ -8,7 +8,7 @@
  * Invariants: Bootstrap connects adapters to ports only; no business logic or UI imports.
  * Side-effects: IO (via runEslint temp file creation)
  * Notes: Tests boundaries/element-types rule for DI container composition.
- * Links: eslint.config.mjs boundaries settings, src/bootstrap/, docs/spec/architecture.md
+ * Links: eslint.config.mjs boundaries settings, src/bootstrap/, https://node-template.cognidao.org/knowledge/hexagonal-layering-contract
  * @public
  */
 

@@ -10,7 +10,7 @@
  * Notes: Used by adapters for database operations. buildDatabaseUrl is NOT exported here —
  *        it lives in db-url.ts for tooling-only use (drizzle.config.ts, test scripts).
  *        Per DATABASE_RLS_SPEC.md design decision 7: no DSN construction in runtime code.
- * Links: docs/spec/database-rls.md
+ * Links: https://node-template.cognidao.org/knowledge/rls-tenant-isolation
  * @public
  */
 

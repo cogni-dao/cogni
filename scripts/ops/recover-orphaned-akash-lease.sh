@@ -65,7 +65,7 @@
 # Exit: 0 = every target closed, verified, and unwedged (or already was)
 #       1 = a target could not be PROVEN closed — finalizer deliberately left on
 #
-# See: docs/spec/cicd-platform-boundary.md (deploy brain is frozen — this is a
+# See: https://cognidao.org/knowledge/operator-plane-contract (deploy brain is frozen — this is a
 #      one-shot ops script, not new pipeline logic), infra/crossplane/AGENTS.md,
 #      nodes/operator/app/src/features/compute/akash-tx/akash-tx-actuator.ts.
 set -euo pipefail

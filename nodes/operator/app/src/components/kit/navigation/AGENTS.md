@@ -14,7 +14,7 @@ Navigation UI components for mobile and desktop. Provides NavigationLink with ac
 ## Pointers
 
 - [Root AGENTS.md](../../../../../../AGENTS.md)
-- [UI Implementation Guide](../../../../../../docs/spec/ui-implementation.md)
+- [UI Implementation Guide](https://node-template.cognidao.org/knowledge/frontend-development)
 
 ## Boundaries
 

@@ -8,7 +8,7 @@
  * Invariants: Always returns 200; staleWarning indicates RPC timeout/error; validates output with contract; rate limit + cache via wrapPublicRoute().
  * Side-effects: IO (HTTP response, RPC via TreasuryReadPort through facade)
  * Notes: USDC balance only. No client-side polling - called once per page load. wrapPublicRoute() auto-applies rate limiting (10 req/min/IP + burst 5) and cache headers (120s + swr 300s).
- * Links: docs/spec/onchain-readers.md, bootstrap/http/wrapPublicRoute.ts
+ * Links: https://node-template.cognidao.org/knowledge/onchain-read-ports, bootstrap/http/wrapPublicRoute.ts
  * @public
  */
 

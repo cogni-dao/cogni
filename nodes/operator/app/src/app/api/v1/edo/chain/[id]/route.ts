@@ -8,7 +8,7 @@
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER.
  *   Query params: ?direction=out|in|both (default both), ?maxDepth=1..10 (default 5).
  * Side-effects: IO (HTTP response, Doltgres reads via container.edoCapability)
- * Links: docs/spec/knowledge-syntropy.md § Chain Read API
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path § Chain Read API
  * @public
  */
 

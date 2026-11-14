@@ -8,7 +8,7 @@
  * Invariants: packages/ is standalone; src/ imports packages via root only.
  * Side-effects: IO (spawns depcruise subprocess)
  * Notes: Uses arch probes in packages/__arch_probes__/ and src/features/__arch_probes__/.
- * Links: .dependency-cruiser.cjs (monorepo boundary rules), docs/spec/architecture.md
+ * Links: .dependency-cruiser.cjs (monorepo boundary rules), https://node-template.cognidao.org/knowledge/hexagonal-layering-contract
  * @public
  */
 

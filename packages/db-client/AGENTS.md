@@ -14,9 +14,9 @@ Database client factory and Drizzle adapter implementations for scheduling and l
 
 ## Pointers
 
-- [Scheduler Spec](../../docs/spec/scheduler.md): Scheduling architecture and invariants
-- [Database RLS Spec](../../docs/spec/database-rls.md): RLS tenant isolation design
-- [Packages Architecture](../../docs/spec/packages-architecture.md): Package isolation boundaries
+- [Scheduler Spec](https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract): Scheduling architecture and invariants
+- [Database RLS Spec](https://node-template.cognidao.org/knowledge/rls-tenant-isolation): RLS tenant isolation design
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules): Package isolation boundaries
 - [scheduler-core](../scheduler-core): Port interfaces implemented by adapters
 
 ## Boundaries

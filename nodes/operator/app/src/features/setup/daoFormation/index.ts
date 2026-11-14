@@ -7,7 +7,7 @@
  * Scope: Re-exports only; does not contain logic.
  * Invariants: none
  * Side-effects: none
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 

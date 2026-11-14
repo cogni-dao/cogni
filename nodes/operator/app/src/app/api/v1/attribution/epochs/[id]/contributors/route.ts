@@ -7,7 +7,7 @@
  * Scope: SIWE-or-bearer-protected GET route reusing the epoch-activity store reads and composeEpochView aggregation. Does not duplicate aggregation logic.
  * Invariants: NODE_SCOPED, ALL_MATH_BIGINT, ACTIVITY_AUTHED, SELECTION_IS_THE_GATE.
  * Side-effects: IO (HTTP response, database read)
- * Links: docs/spec/attribution-ledger.md, contracts/attribution.epoch-contributors.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, contracts/attribution.epoch-contributors.v1.contract
  * @public
  */
 

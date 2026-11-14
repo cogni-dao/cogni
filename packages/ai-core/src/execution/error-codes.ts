@@ -92,7 +92,7 @@ export function isAiExecutionError(error: unknown): error is AiExecutionError {
  * FAULT_PARTY_BEFORE_BUCKET: upstream provider failures the operator must fix map to a
  * provider code, NOT "internal": a 402 (unfunded provider account) is "provider_unfunded",
  * a 5xx provider outage is "provider_unavailable". Collapsing them to "internal" is what
- * masked bug.5056 as a generic "Something went wrong" 500. See docs/spec/error-handling.md.
+ * masked bug.5056 as a generic "Something went wrong" 500. See https://node-template.cognidao.org/knowledge/layered-error-translation.
  */
 export function normalizeErrorToExecutionCode(
   error: unknown

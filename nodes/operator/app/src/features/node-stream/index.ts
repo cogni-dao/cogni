@@ -8,7 +8,7 @@
  * Invariants:
  *   - GENERIC_PORT: Hook returns base StreamEvent, consumers narrow by type
  * Side-effects: none
- * Links: docs/spec/data-streams.md
+ * Links: https://node-template.cognidao.org/knowledge/node-streams-transport
  * @public
  */
 

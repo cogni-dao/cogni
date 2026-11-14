@@ -9,7 +9,7 @@
  *   - PURE_LIBRARY: No env vars, no process lifecycle, no @/ imports
  *   - NO_SRC_IMPORTS: Never imports @/ or src/ paths
  * Side-effects: none
- * Links: docs/spec/packages-architecture.md, docs/spec/graph-execution.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules, https://node-template.cognidao.org/knowledge/graph-execution-invariants
  * @public
  */
 

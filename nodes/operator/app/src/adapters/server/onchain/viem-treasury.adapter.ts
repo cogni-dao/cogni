@@ -8,7 +8,7 @@
  * Invariants: Validates chainId and treasuryAddress from repo-spec; uses EvmOnchainClient for all RPC; reads USDC address from chain config.
  * Side-effects: IO (RPC calls via EvmOnchainClient)
  * Notes: Phase 2: USDC only. Queries ERC20 balance via getErc20Balance().
- * Links: docs/spec/onchain-readers.md
+ * Links: https://node-template.cognidao.org/knowledge/onchain-read-ports
  * @public
  */
 

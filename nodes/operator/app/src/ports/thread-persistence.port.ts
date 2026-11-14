@@ -10,7 +10,7 @@
  *   - MAX_THREAD_MESSAGES: saveThread() rejects if messages.length > 200
  *   - SOFT_DELETE_DEFAULT: all reads filter deleted_at IS NULL
  * Side-effects: none
- * Links: docs/spec/thread-persistence.md
+ * Links: https://node-template.cognidao.org/knowledge/thread-persistence-contract
  * @public
  */
 

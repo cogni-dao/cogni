@@ -15,7 +15,7 @@ Vertical slices containing use cases like accounts/, ai/, and home/. Orchestrate
 ## Pointers
 
 - [Root AGENTS.md](../../../../AGENTS.md)
-- [Architecture](../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 
 ## Boundaries
 
@@ -41,7 +41,7 @@ Vertical slices containing use cases like accounts/, ai/, and home/. Orchestrate
 }
 ```
 
-**Import Rules:** See [Architecture Enforcement Rules](../../../../docs/spec/architecture.md#enforcement-rules) for canonical entry points (@/core, @/ports, etc.) and type-only requirements.
+**Import Rules:** See [Architecture Enforcement Rules](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract) for canonical entry points (@/core, @/ports, etc.) and type-only requirements.
 
 ## Public Surface
 

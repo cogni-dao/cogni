@@ -7,7 +7,7 @@
  * Scope: Validates JSON and composes values; does not query providers, mutate databases, or publish secrets.
  * Invariants: Current custody owns applied connection bytes; receipts retain admission/data history. Readiness never publishes or changes DSNs.
  * Side-effects: IO (CLI stdin/stdout)
- * Links: docs/spec/secrets-management.md, shared/secrets/database-cell-binding.data.ts
+ * Links: https://cognidao.org/knowledge/secrets-management, shared/secrets/database-cell-binding.data.ts
  * @internal
  */
 import { createHash } from "node:crypto";

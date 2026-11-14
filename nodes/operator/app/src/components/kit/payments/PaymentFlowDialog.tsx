@@ -8,7 +8,7 @@
  * Invariants: Dismissible when isInFlight OR isTerminal; parent (UsdcPaymentFlow) decides cancel vs close semantics via onClose callback.
  * Side-effects: none
  * Notes: Dialog uses desktop-only pattern; parent handles escape/backdrop logic via dismissible prop derivation.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

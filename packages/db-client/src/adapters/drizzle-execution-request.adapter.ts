@@ -14,7 +14,7 @@
  *   - idempotencyKey uniqueness enforced at DB level (primary key)
  *   - requestHash mismatch detection returns 'mismatch' status
  * Side-effects: IO (database operations)
- * Links: ports/scheduling/execution-request.port.ts, docs/spec/scheduler.md
+ * Links: ports/scheduling/execution-request.port.ts, https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @public
  */
 

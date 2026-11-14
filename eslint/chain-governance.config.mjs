@@ -7,7 +7,7 @@
  * Scope: Bans hardcoded chain ID literals (11155111 Sepolia, 8453 Base) outside of chain.ts and tests.
  * Invariants: Canonical chain IDs (Sepolia, Base) must come from @/shared/web3/chain in production code.
  * Side-effects: none
- * Links: docs/spec/chain-config.md, src/shared/web3/chain.ts
+ * Links: https://node-template.cognidao.org/knowledge/chain-config-governance, src/shared/web3/chain.ts
  * @public
  */
 

@@ -120,7 +120,7 @@ docker compose --project-name cogni-runtime logs -f app
 - `doltgres-provision` (profile: bootstrap): creates roles + per-node `knowledge_<node>` databases via `doltgres-init/provision.sh`; never commits application working sets. Schema and its first commit belong to drizzle-kit (k8s PreSync Job), not this script
 - Doltgres 0.56 RBAC is non-functional — runtime `DOLTGRES_URL_*` in k8s secrets connects as `postgres` superuser. Writer role is provisioned but vestigial until upstream GRANT works
 - Mirror env vars (operator only): `DOLT_CREDS_JWK`, `DOLT_CREDS_KEYID` (push auth for repo-spec `knowledge.remote`), and explicit env-scoped `DOLTHUB_OWNER`. See [`docs/runbooks/dolthub-remote-bootstrap.md`](../../../docs/runbooks/dolthub-remote-bootstrap.md).
-- See [knowledge data plane spec](../../../docs/spec/knowledge-data-plane.md)
+- See [knowledge data plane spec](https://node-template.cognidao.org/knowledge/knowledge-data-plane)
 
 **Temporal Services:**
 
@@ -145,4 +145,4 @@ docker compose --project-name cogni-runtime logs -f app
 - Image: `mcr.microsoft.com/playwright/mcp`, Streamable HTTP on `/mcp`
 - Env: `MCP_PLAYWRIGHT_URL` on app service (default: `http://playwright-mcp:3003/mcp`)
 - Start: `pnpm dev:infra:mcp`
-- Not in production compose — dev-only. See [MCP Control Plane Spec](../../../docs/spec/mcp-control-plane.md)
+- Not in production compose — dev-only. See [MCP Control Plane Spec](https://node-template.cognidao.org/knowledge/mcp-tool-sources)

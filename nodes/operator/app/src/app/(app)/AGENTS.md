@@ -14,7 +14,7 @@ Protected (authenticated) pages wrapped in `SidebarProvider` + `AppSidebar` + `A
 ## Pointers
 
 - [App AGENTS.md](../AGENTS.md)
-- [Architecture](../../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 - [Layout Feature](../../features/layout/AGENTS.md)
 
 ## Boundaries

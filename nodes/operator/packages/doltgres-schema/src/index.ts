@@ -7,7 +7,7 @@
  * Scope: Re-exports only. Does not define any tables.
  * Invariants: Re-exports every schema slice so cross-process consumers (operator app, future Temporal workers) can import from one place without reaching into app/src/.
  * Side-effects: none
- * Links: docs/spec/knowledge-data-plane.md, docs/spec/packages-architecture.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane, https://node-template.cognidao.org/knowledge/package-isolation-rules, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @public
  */
 

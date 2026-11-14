@@ -1485,7 +1485,7 @@ HCL
   log_info "  ${DEPLOY_ENV}-writer role bound — operator: kubectl create token openbao-operator -n default | bao login -method=kubernetes role=${DEPLOY_ENV}-writer"
 
   # ── 5b.4c db-provisioner reader role (deploy-infra single-source read path) ─
-  # secrets-management.md Invariant 15 / DB-cred migration Phase 1: deploy-infra
+  # https://cognidao.org/knowledge/secrets-management Invariant 15 / DB-cred migration Phase 1: deploy-infra
   # runs on THIS VM with kubectl and must read pod-consumed DB role passwords from
   # OpenBao — the SAME values ESO syncs — instead of a GH-secret-rendered .env, so
   # the DB role and the pod can never diverge (bug.5002). It is NOT a writer and
@@ -1520,7 +1520,7 @@ HCL
   log_info "  ${DEPLOY_ENV}-db-reader role bound — deploy-infra: kubectl create token db-provisioner -n default | bao login -method=kubernetes role=${DEPLOY_ENV}-db-reader (read-only)"
 
   # ── 5b.4b GitHub Actions OIDC writer role (day-2, zero-laptop-cred path) ───
-  # Ships spec secrets-management.md Invariant 9 Entry 2 (previously DEFERRED):
+  # Ships spec https://cognidao.org/knowledge/secrets-management Invariant 9 Entry 2 (previously DEFERRED):
   # the `.github/workflows/secret-set.yml` workflow_dispatch federates a
   # short-lived GitHub Actions OIDC token into a job-scoped OpenBao token via
   # this `jwt` auth method — no kubeconfig, no PAT, no root token on a laptop
@@ -1580,7 +1580,7 @@ HCL
   #   candidate-a -> candidate-a only
   # Up-trust is refused forever: no pre-prod env gains a production path here. OpenBao is
   # per-CLUSTER, so a lane prefix is a LABEL inside this env's own vault, never a reach into
-  # another cluster's vault. Per secrets-management.md Invariant 1 the blast-radius boundary
+  # another cluster's vault. Per https://cognidao.org/knowledge/secrets-management Invariant 1 the blast-radius boundary
   # is <service>; widening the lane set does not widen that boundary.
   # The two _system/_shared denies are carried onto EVERY lane gained, data AND metadata —
   # a per-node grant must never reach a shared path in ANY lane.
@@ -1756,7 +1756,7 @@ else
   seed_kv _shared TEMPORAL_DB_PASSWORD "$TEMPORAL_DB_PASSWORD"
 
   # DOLTGRES_PASSWORD — the doltgres `postgres` superuser, baked into the volume at
-  # first-init and IMMUTABLE post-init (doltgres can't ALTER the superuser; databases.md
+  # first-init and IMMUTABLE post-init (doltgres can't ALTER the superuser; https://node-template.cognidao.org/knowledge/database-migration-contract
   # §5.2). Same shared-infra DB-cred class as OPENFGA/TEMPORAL above and MUST be seeded the
   # same SET-ONCE way. It was the one left out: deploy-infra falls back to
   # `derive_secret doltgres-root` = sha256(POSTGRES_ROOT_PASSWORD) when OpenBao is empty, so
@@ -2016,7 +2016,7 @@ log_step "Phase 6: Apply ExternalSecret manifests"
 # canonical pattern called out in .claude/skills/cicd-secrets-expert
 # anti-patterns ("ssh root@vm kubectl ... — use local kubectl").
 #
-# Leaves are enumerated from the single SSOT tree per secrets-classification.md:
+# Leaves are enumerated from the single SSOT tree per https://node-template.cognidao.org/knowledge/secrets-routing-tiers:
 #   - nodes/<node>/k8s/external-secrets/<env>/           (node-domain, A2)
 # Every node carries its own ExternalSecret leaf in-repo (north-star per-node
 # substrate). The pre-wizard operator-domain tree was purged; there is now ONE

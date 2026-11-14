@@ -502,7 +502,7 @@ const actuator = new AkashTxActuator({
    * APPLIED migration state as operator-held deployment metadata. The migrator inside the node's
    * own workload prints what it applied; this seam stores that receipt in the OPERATOR's Postgres
    * — the same `getDb` the spend ledger uses. No credential here can read a node's database
-   * (docs/spec/multi-node-tenancy.md NO_CROSS_NODE_QUERIES); the operator holds metadata only.
+   * (https://node-template.cognidao.org/knowledge/node-tenancy-isolation NO_CROSS_NODE_QUERIES); the operator holds metadata only.
    */
   migrationReports: new DrizzleNodeMigrationReportStore(getDb),
 });

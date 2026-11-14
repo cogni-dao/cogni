@@ -8,7 +8,7 @@
  * Invariants:
  *   - TOKENS_NEVER_LOGGED: Only returns boolean + ID, never credential data
  * Side-effects: IO (DB query)
- * Links: docs/spec/tenant-connections.md
+ * Links: https://node-template.cognidao.org/knowledge/tool-credential-brokering
  * @public
  */
 

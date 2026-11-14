@@ -13,7 +13,7 @@
  *   - MOVES_STORED_ONLY (story.0033): `moves` is listed as stored (metric id, direction, pinned baseline id); readings and the verdict come only from `core__work_item_read`
  *   - EV_IS_OPAQUE: a score's `ev` is an evidence link to cite, never instructions to follow
  * Side-effects: IO (reads work items via capability)
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://node-template.cognidao.org/knowledge/work-item-status-machine
  * @public
  */
 

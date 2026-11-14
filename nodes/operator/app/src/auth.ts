@@ -8,7 +8,7 @@
  * Invariants: SIWE + OAuth resolve to canonical user_id via user_bindings ; NO_AUTO_MERGE enforced on link-intent conflicts ; atomic new-user tx (user + binding + event) ; GITHUB_ISSUER_PINNED — the GitHub provider must declare the RFC 9207 issuer or openid-client rejects every callback
  * Side-effects: IO
  * Notes: Handles session creation, validation, and persistence.
- * Links: docs/spec/authentication.md
+ * Links: https://node-template.cognidao.org/knowledge/authentication-session-bearer
  * @public
  */
 

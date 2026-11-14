@@ -18,7 +18,7 @@
  *     v1 write path bills a managed account in USD, so there is nothing to settle on-chain yet
  *     (vNext: pass-through billing per spawning account + programmatic crypto funding).
  * Side-effects: none (interface only)
- * Links: docs/spec/cicd-platform-boundary.md § "The next layer: a typed operator control plane",
+ * Links: https://cognidao.org/knowledge/operator-plane-contract § "The next layer: a typed operator control plane",
  *   story.5011 (preview balance-suspension incident), task.5044 (Akash write half),
  *   sibling of ./deploy DeployCapability.
  * @public

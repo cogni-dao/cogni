@@ -11,7 +11,7 @@
  * - /version returns build metadata (sha, service, buildTs, imageDigest)
  * - /metrics returns Prometheus exposition format
  * Side-effects: Binds HTTP server to HEALTH_PORT
- * Links: docs/spec/services-architecture.md, docs/spec/observability.md
+ * Links: https://cognidao.org/knowledge/service-isolation-contract, https://node-template.cognidao.org/knowledge/observability-logging-contract
  * @internal
  */
 

@@ -8,7 +8,7 @@
  * Invariants: Forwards all props to ui components; maintains ref forwarding; provides size variants via CVA.
  * Side-effects: none
  * Notes: Wraps vendor/ui-primitives/shadcn/avatar to keep shadcn components pure and updatable.
- * Links: src/styles/ui.ts, docs/spec/ui-implementation.md
+ * Links: src/styles/ui.ts, https://node-template.cognidao.org/knowledge/frontend-development
  * @public
  */
 

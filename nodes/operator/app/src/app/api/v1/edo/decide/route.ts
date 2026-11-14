@@ -8,7 +8,7 @@
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, PRINCIPAL_DERIVES_SOURCE,
  *   DECISION_CITES_HYPOTHESIS (adapter rejects if cited row is not a hypothesis).
  * Side-effects: IO (HTTP response, Doltgres write via container.edoCapability)
- * Links: docs/spec/knowledge-syntropy.md § The Hypothesis Loop
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path § The Hypothesis Loop
  * @public
  */
 

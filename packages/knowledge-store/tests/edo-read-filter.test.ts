@@ -7,7 +7,7 @@
  * Scope: Fake adapter + capability + Doltgres adapter SQL shape over a scripted postgres.js stand-in. Does not exercise real Doltgres; nodes/operator/app/tests/component/db/doltgres-usewhen-patch.int.test.ts covers the SQL against a real engine in CI.
  * Invariants: SCHEMA_REFINED_BY_READ_FILTER, EDO_ENTRY_TYPES fail-closed.
  * Side-effects: none
- * Links: docs/spec/knowledge-syntropy.md, task.5308
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path, task.5308
  * @internal
  */
 

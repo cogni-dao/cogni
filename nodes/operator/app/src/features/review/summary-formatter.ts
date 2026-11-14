@@ -7,7 +7,7 @@
  * Scope: Pure formatting — receives review results, returns markdown strings. Does not perform I/O.
  * Invariants: Output is valid GitHub-flavored markdown. Format aligns with cogni-git-review.
  * Side-effects: none
- * Links: docs/spec/governance-signal-execution.md
+ * Links: https://node-template.cognidao.org/knowledge/dao-merge-signal-loop
  * @public
  */
 

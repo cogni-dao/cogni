@@ -10,7 +10,7 @@
  *   - Deletion also revokes the associated grant
  *   - Returns 204 No Content on success
  * Side-effects: none
- * Links: /api/v1/schedules/[scheduleId] route, docs/spec/scheduler.md
+ * Links: /api/v1/schedules/[scheduleId] route, https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @internal
  */
 

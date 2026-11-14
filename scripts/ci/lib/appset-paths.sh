@@ -4,7 +4,7 @@
 #
 # appset-paths.sh — THE definition of where a node's per-(env, node) ApplicationSet lives.
 #
-# SPEC: docs/spec/node-ci-cd-contract.md § Lane vs control env
+# SPEC: https://node-template.cognidao.org/knowledge/node-ci-sovereignty § Lane vs control env
 #   (invariant LANE_AND_CONTROL_ENV_ARE_DIFFERENT_QUESTIONS). Change one, change both.
 #
 # WHY THIS IS A LIB AND NOT A STRING EACH CALLER BUILDS (task.5132, bug.5204):

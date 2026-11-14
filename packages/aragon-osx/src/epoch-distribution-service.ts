@@ -11,7 +11,7 @@
  * - EPOCH_DISTRIBUTION_NO_INVENTED_WALLET: a claimant with no resolved wallet is excluded and reported as a `claimants_unresolved` blocker — never given a synthesized address.
  * - EPOCH_DISTRIBUTION_CONTRIBUTOR_WALLET: tokens are allocated to the contributor's own wallet (no-central-custody).
  * Side-effects: none (awaits the injected read-only resolver; no writes)
- * Links: docs/spec/tokenomics.md, docs/spec/attribution-ledger.md, packages/aragon-osx/src/token-distribution.ts
+ * Links: https://cognidao.org/knowledge/tokenomics-budget-policy, https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, packages/aragon-osx/src/token-distribution.ts
  * @public
  */
 
@@ -34,7 +34,7 @@ import type { ClaimantWalletResolver } from "./wallet-resolver";
 /**
  * One line of a finalized signed attribution statement — the signed per-claimant
  * `creditAmount` entitlement is the distribution input (Merkle settlement consumes
- * signed creditAmount, NOT internal finalUnits — see tokenomics.md).
+ * signed creditAmount, NOT internal finalUnits — see https://cognidao.org/knowledge/tokenomics-budget-policy).
  */
 export interface FinalizedStatementLine {
   readonly claimantKey: string;

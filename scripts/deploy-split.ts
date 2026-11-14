@@ -7,7 +7,7 @@
  * Scope: CLI script that deploys a Split contract with operator/DAO allocations derived from billing constants. Outputs checksummed Split address + next steps. Does not modify repo-spec or app config — manual update required after deployment.
  * Invariants: Allocations derived from pricing constants (not hardcoded). Repeatable (idempotent on same params).
  * Side-effects: IO (deploys contract via Base RPC); stdout (prints address).
- * Links: docs/spec/operator-wallet.md, spike.0090
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary, spike.0090
  * @public
  */
 

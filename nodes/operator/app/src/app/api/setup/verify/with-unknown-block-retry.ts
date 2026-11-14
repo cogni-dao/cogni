@@ -11,7 +11,7 @@
  *   possibly-different RPC that has not indexed it yet. Each provider phrases the miss differently:
  *   Alchemy → `Unknown block` (code 3); public `mainnet.base.org` → `block not found` /
  *   `Requested resource not found`; geth → `header not found`. The block catches up within ~1s.
- * Links: docs/spec/node-formation.md, bug.5082
+ * Links: https://cognidao.org/knowledge/node-formation-contract, bug.5082
  * @public
  */
 

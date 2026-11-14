@@ -10,7 +10,7 @@
  * - Per GRANT_SCOPES_CONSTRAIN_GRAPHS: Scopes specify which graphIds can execute
  * - Scope format: "graph:execute:{graphId}" or "graph:execute:*" for wildcard
  * Side-effects: none (interface definition only)
- * Links: docs/spec/scheduler.md, types/scheduling.ts, DrizzleExecutionGrantAdapter
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, types/scheduling.ts, DrizzleExecutionGrantAdapter
  * @public
  */
 

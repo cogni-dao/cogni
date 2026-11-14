@@ -9,7 +9,7 @@
  * - CLAIMANTS_CAN_BE_UNRESOLVED: identity claimants may reference provider + external_id without a resolved user_id.
  * - CLAIMANT_SHARE_SPLIT_DETERMINISTIC: unit splitting uses integer math with largest-remainder tiebroken by claimant key.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

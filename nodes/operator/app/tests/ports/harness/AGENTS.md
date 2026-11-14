@@ -15,7 +15,7 @@ Shared helpers to spin up and tear down resources for port tests and adapter tes
 
 - [Port tests](../)
 - [Component tests](../../component/)
-- [Architecture](../../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 
 ## Boundaries
 

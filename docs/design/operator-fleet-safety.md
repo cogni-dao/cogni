@@ -5,8 +5,8 @@ title: "Operator Fleet Safety — honest env capacity via native Kubernetes, not
 status: draft
 created: 2026-06-29
 spec_refs:
-  - ../spec/ci-cd.md
-  - ../spec/cicd-platform-boundary.md
+  - https://cognidao.org/knowledge/operator-pipeline-contract
+  - https://cognidao.org/knowledge/operator-plane-contract
 related:
   - ./operator-managed-deployments.md
   - ../research/2026-06-10-vm-pod-memory-efficiency.md

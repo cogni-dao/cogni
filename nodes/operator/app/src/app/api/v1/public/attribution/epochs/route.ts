@@ -7,7 +7,7 @@
  * Scope: Public route using wrapPublicRoute(); only returns finalized epochs. Does not expose open/review epoch data.
  * Invariants: NODE_SCOPED, ALL_MATH_BIGINT, VALIDATE_IO, PUBLIC_READS_FINALIZED_ONLY.
  * Side-effects: IO (HTTP response, database read)
- * Links: docs/spec/attribution-ledger.md, contracts/attribution.list-epochs.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, contracts/attribution.list-epochs.v1.contract
  * @public
  */
 

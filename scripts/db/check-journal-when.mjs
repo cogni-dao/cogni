@@ -9,7 +9,7 @@
  *   1. Entries' `when` values are STRICTLY MONOTONIC INCREASING in idx order.
  *   2. No entry's `when` is in the future (> Date.now()).
  * Side-effects: IO (filesystem reads), process.env (CWD only).
- * Links: docs/spec/databases.md §2.6, .claude/skills/schema-update/SKILL.md
+ * Links: https://node-template.cognidao.org/knowledge/database-migration-contract §2.6, .claude/skills/schema-update/SKILL.md
  */
 
 // biome-ignore-all lint/suspicious/noConsole: validator script; stdout is the only log surface
@@ -51,7 +51,7 @@ for (const rel of journals) {
           `  idx ${entry.idx} (${entry.tag}) when=${entry.when} ≤ idx ${prev.idx} (${prev.tag}) when=${prev.when}\n` +
           `  drizzle-orm sorts by \`when\`; out-of-order entries are silently skipped at runtime.\n` +
           `  Fix: bump idx ${entry.idx} to when=${prev.when + 1} (or a real future-safe Date.now()).\n` +
-          `  See docs/spec/databases.md §2.6.`
+          `  See https://node-template.cognidao.org/knowledge/database-migration-contract §2.6.`
       );
       violations++;
     }

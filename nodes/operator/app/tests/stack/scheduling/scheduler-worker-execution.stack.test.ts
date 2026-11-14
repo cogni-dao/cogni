@@ -11,7 +11,7 @@
  *   - Per SLOT_IDEMPOTENCY_VIA_EXECUTION_REQUESTS: idempotency_key = scheduleId:scheduledFor
  * Side-effects: IO (database, Temporal, internal API via worker)
  * Notes: Requires full stack running (pnpm dev:stack:test) including scheduler-worker.
- * Links: docs/spec/scheduler.md, services/scheduler-worker/
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, services/scheduler-worker/
  * @public
  */
 

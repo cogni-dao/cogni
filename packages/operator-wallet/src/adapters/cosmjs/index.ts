@@ -8,7 +8,7 @@
  * Invariants: Consumers use `@cogni/operator-wallet/adapters/cosmjs` to avoid pulling
  *   `@cosmjs/proto-signing` into non-Cosmos contexts.
  * Side-effects: none
- * Links: docs/spec/operator-wallet.md, work item task.5060 (story.5017 Track B)
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary, work item task.5060 (story.5017 Track B)
  * @public
  */
 

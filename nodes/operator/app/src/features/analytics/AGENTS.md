@@ -15,7 +15,7 @@ Public analytics backend service providing privacy-preserving aggregated platfor
 
 - [Analytics Service](services/analytics.ts)
 - [Analytics Contract](../../contracts/analytics.summary.v1.contract.ts)
-- [Metrics Observability Docs](../../../../../docs/spec/public-analytics.md)
+- [Metrics Observability Docs](https://node-template.cognidao.org/knowledge/public-analytics-privacy)
 
 ## Boundaries
 

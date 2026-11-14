@@ -8,7 +8,7 @@
  * Invariants: Credits via usdCentsToCredits (integer math); idempotent on clientPaymentId; system tenant bonus sequential + idempotent.
  * Side-effects: IO (via AccountService and ServiceAccountService ports).
  * Notes: Billing account resolved at app layer. revenueShare is governance config from repo-spec (payments_in), passed in by the caller.
- * Links: docs/spec/payments-design.md, docs/spec/system-tenant.md, src/core/billing/pricing.ts
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design, https://node-template.cognidao.org/knowledge/system-tenant-identity, src/core/billing/pricing.ts
  * @public
  */
 

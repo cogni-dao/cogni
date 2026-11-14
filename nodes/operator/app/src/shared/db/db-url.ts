@@ -8,7 +8,7 @@
  * Invariants: Pure function; no Next.js/Zod deps; requires POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, DB_HOST.
  * Side-effects: none
  * Notes: Tooling only (drizzle.config.ts, reset-db.ts, drop-test-db.ts). NOT in barrel — import from `@/shared/db/db-url`.
- * Links: docs/spec/database-rls.md (design decision 7)
+ * Links: https://node-template.cognidao.org/knowledge/rls-tenant-isolation (design decision 7)
  * @public
  */
 

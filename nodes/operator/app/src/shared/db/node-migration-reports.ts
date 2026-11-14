@@ -8,16 +8,16 @@
  *   node DATA — only the node's own migrator's receipt about its own schema.
  * Invariants:
  *   - METADATA_NOT_DATA_ACCESS: these rows are REPORTED to the operator by the node's own migrator.
- *     The operator never connects to `cogni_<node>` to populate them (docs/spec/multi-node-tenancy.md
+ *     The operator never connects to `cogni_<node>` to populate them (https://node-template.cognidao.org/knowledge/node-tenancy-isolation
  *     NO_CROSS_NODE_QUERIES / OPERATOR_READS_NODE_VIA_VCS). A read here is a read of operator Postgres.
  *   - KEY_IS_THE_DEPLOYMENT_CELL: the primary key is `(node_id, environment)` — one node's schema state
  *     in one environment. `node_id` is the immutable repo-spec UUID used strictly as infrastructure /
- *     DB-tenancy identity (docs/spec/identity-model.md); a renameable slug is never the key.
+ *     DB-tenancy identity (https://cognidao.org/knowledge/identity-keys-no-overload); a renameable slug is never the key.
  *   - ABSENCE_IS_NOT_SUCCESS: no row means "this node has never reported". A reported node with an
  *     empty `applied` array is a DIFFERENT, representable fact, so silence can never read as green.
  * Side-effects: none
  * Links: adapters/server/observability/drizzle-node-migration-report.adapter.ts,
- *   shared/migrations/migration-receipt.ts, docs/spec/databases.md § 2 Migration Strategy
+ *   shared/migrations/migration-receipt.ts, https://node-template.cognidao.org/knowledge/database-migration-contract § 2 Migration Strategy
  * @public
  */
 

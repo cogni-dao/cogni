@@ -9,11 +9,11 @@
  * - TOKEN_SETTLEMENT_MINT_AUTHORITY_IS_READINESS: under the mint-per-epoch model, inventory
  *   readiness is DAO mint authority (MINT_PERMISSION on the GovernanceERC20) + an executed
  *   mint into the distributor — NOT a pre-minted balance parked in a vault. A genesis-holder
- *   mint is only a formation probe (tokenomics.md Walk reconciliation).
+ *   mint is only a formation probe (https://cognidao.org/knowledge/tokenomics-budget-policy Walk reconciliation).
  * - TOKEN_SETTLEMENT_STATEMENT_BOUND: claim manifests must bind to a finalized signed attribution statement.
  * - TOKEN_SETTLEMENT_FUNDING_MATCHES_ROOT: funding must match the manifest amount and root.
  * Side-effects: none
- * Links: docs/spec/tokenomics.md, docs/spec/financial-ledger.md
+ * Links: https://cognidao.org/knowledge/tokenomics-budget-policy, https://node-template.cognidao.org/knowledge/financial-ledger-tigerbeetle
  * @public
  */
 

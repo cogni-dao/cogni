@@ -13,7 +13,7 @@
  *     run route, only for catalog entries that declare it, and only after owner/repo matched
  *     `resolveNodeRepo(nodeId)`. Graphs that do not declare it never receive it.
  * Side-effects: none (ALS is process-scoped, no I/O)
- * Links: docs/spec/unified-graph-launch.md
+ * Links: https://node-template.cognidao.org/knowledge/graph-run-launch-contract
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Error definitions and type guards. Does not perform I/O or contain business logic.
  * Invariants: All errors have a readonly `code` discriminant for type guards.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

@@ -10,7 +10,7 @@
  * - FORBIDDEN: @/shared/env, process.env, Next.js imports
  * - createServiceDbClient lives in service.ts, NOT here
  * Side-effects: IO (database connections)
- * Links: docs/spec/packages-architecture.md, docs/spec/database-rls.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules, https://node-template.cognidao.org/knowledge/rls-tenant-isolation
  * @public
  */
 

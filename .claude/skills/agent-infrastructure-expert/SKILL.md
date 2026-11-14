@@ -11,12 +11,12 @@ You own the **infrastructure altitude** of Cogni agents: how a LangGraph graph b
 
 ## Mental Model — Four Planes
 
-| Plane                  | What it does                                                                                                                       | Canonical doc                                                                                                                               |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Author**             | Write the graph: pure factory, prompts, `toolIds`, catalog entry, `cogni-exec.ts` entrypoint                                       | [`langgraph-patterns.md`](../../../docs/spec/langgraph-patterns.md) + [`agent-development.md`](../../../docs/guides/agent-development.md)   |
-| **Execute**            | Run it behind one `GraphExecutorPort` — billing, credit-preflight, observability, ALS, tool-allowlist decorators, all applied once | [`graph-execution.md`](../../../docs/spec/graph-execution.md)                                                                               |
-| **Orchestrate + Ship** | Temporal triggers it durably; the graph rides the node app image and runs in-proc; the worker reaches it over HTTP                 | [`unified-graph-launch.md`](../../../docs/spec/unified-graph-launch.md) + [`temporal-patterns.md`](../../../docs/spec/temporal-patterns.md) |
-| **Evaluate**           | Score graphs after deploy; gate promotion on quality                                                                               | [`agent-evaluation-loop`](https://cognidao.org/knowledge/agent-evaluation-loop)                                                             |
+| Plane                  | What it does                                                                                                                       | Canonical doc                                                                                                                                                                          |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Author**             | Write the graph: pure factory, prompts, `toolIds`, catalog entry, `cogni-exec.ts` entrypoint                                       | [`langgraph-patterns.md`](https://node-template.cognidao.org/knowledge/graph-execution-invariants) + [`agent-development.md`](../../../docs/guides/agent-development.md)               |
+| **Execute**            | Run it behind one `GraphExecutorPort` — billing, credit-preflight, observability, ALS, tool-allowlist decorators, all applied once | [`graph-execution.md`](https://node-template.cognidao.org/knowledge/graph-execution-invariants)                                                                                        |
+| **Orchestrate + Ship** | Temporal triggers it durably; the graph rides the node app image and runs in-proc; the worker reaches it over HTTP                 | [`unified-graph-launch.md`](https://node-template.cognidao.org/knowledge/graph-run-launch-contract) + [`temporal-patterns.md`](https://cognidao.org/knowledge/temporal-workflow-rules) |
+| **Evaluate**           | Score graphs after deploy; gate promotion on quality                                                                               | [`agent-evaluation-loop`](https://cognidao.org/knowledge/agent-evaluation-loop)                                                                                                        |
 
 _(Per-plane build status → scorecard.)_
 
@@ -41,6 +41,6 @@ Temporal (schedule/webhook) → GraphRunWorkflow ─HTTP─► node app /api/int
 - **One executor.** All AI execution flows through `GraphExecutorPort.runGraph()`. No bypass paths. Billing/observability/credit are decorators applied once in app bootstrap — never re-implement them in the worker.
 - **`NO_LANGCHAIN_IN_SRC`.** `@langchain/*` only in `packages/langgraph-graphs/**`. App `src/**` must not import graph packages (dependency-cruiser enforced for the Server boundary).
 - **Writes behind Temporal.** Graphs return recomputable decision artifacts; material/external writes live in post-graph Activities with business-key idempotency.
-- **`graph-execution.md` is the invariant SSOT.** Other specs link to it; they must not restate `GraphExecutorPort` / `AiEvent` / `PACKAGES_NO_SRC_IMPORTS` definitions.
+- **https://node-template.cognidao.org/knowledge/graph-execution-invariants is the invariant SSOT.** Other specs link to it; they must not restate `GraphExecutorPort` / `AiEvent` / `PACKAGES_NO_SRC_IMPORTS` definitions.
 - **Don't overstate the eval gate.** Nothing currently scores or blocks on graph quality. Treat "eval gate" as roadmap, not a control.
-- **CICD docs are HELD until the pipeline is green.** No consolidation edits to `ci-cd.md` / `cd-pipeline-*`.
+- **CICD docs are HELD until the pipeline is green.** No consolidation edits to https://cognidao.org/knowledge/operator-pipeline-contract / `cd-pipeline-*`.

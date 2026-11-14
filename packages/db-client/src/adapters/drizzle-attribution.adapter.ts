@@ -20,7 +20,7 @@
  * - EPOCH_CLOSE_ON_TRANSITION: transitionEpochForWindow closes stale open epoch + creates new epoch in one DB transaction.
  * - STATEMENT_LINES_BOUNDARY_CLONE: toStatementLinesJson converts readonly statement lines to mutable Drizzle-compatible JSONB at the adapter boundary.
  * Side-effects: IO (database operations)
- * Links: docs/spec/attribution-ledger.md, packages/attribution-ledger/src/store.ts
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, packages/attribution-ledger/src/store.ts
  * @public
  */
 

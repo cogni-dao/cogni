@@ -10,7 +10,7 @@
  * - TX_HASH_DEDUP: Same tx hash is executed at most once (in-memory Set for crawl)
  * - DAO_CONFIG_FROM_SPEC: chain_id + dao_address validated against repo-spec.yaml
  * Side-effects: IO (EVM RPC read, GitHub API writes via action handlers)
- * Links: docs/spec/governance-signal-execution.md
+ * Links: https://node-template.cognidao.org/knowledge/dao-merge-signal-loop
  * @public
  */
 

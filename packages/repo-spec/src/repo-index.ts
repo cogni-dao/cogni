@@ -15,7 +15,7 @@
  *     collision is reported (never silently overwritten) — a repo attributes to exactly one node.
  * Side-effects: none
  * Links: packages/repo-spec/src/accessors.ts (extractLedgerConfig → sourceRefs),
- *   docs/spec/attribution-ledger.md
+ *   https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

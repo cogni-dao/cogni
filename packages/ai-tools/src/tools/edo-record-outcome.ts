@@ -12,7 +12,7 @@
  *   - CONFIDENCE_RECOMPUTE_ON_RESOLVE: triggers 1-hop pure recompute.
  *   - RESOLVER_IDEMPOTENT: double-firing returns existing state, no double-write.
  * Side-effects: IO (database write + dolt_commit)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

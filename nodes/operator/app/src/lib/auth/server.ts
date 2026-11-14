@@ -7,7 +7,7 @@
  * Scope: Server-only. Wraps NextAuth's getServerSession with invariant enforcement. Do not use on client.
  * Invariants: Returns null unless id is present. walletAddress may be null for OAuth-only users.
  * Side-effects: IO (NextAuth session retrieval)
- * Links: docs/spec/authentication.md
+ * Links: https://node-template.cognidao.org/knowledge/authentication-session-bearer
  * @public
  */
 

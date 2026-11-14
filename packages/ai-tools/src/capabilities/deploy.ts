@@ -10,13 +10,13 @@
  *   - ADAPTER_SWAPPABLE: Argo/k8s adapter for v0; the interface never names a provider.
  *   - ARGO_IS_TRUTH: Reads live Argo/catalog state; it is NOT a parallel control plane. Promotion
  *     reuses the existing VcsCapability.dispatchCandidateFlight seam; Argo stays the reconciler and
- *     git stays the deploy-state truth (ci-cd.md Axioms 4 & 6).
+ *     git stays the deploy-state truth (https://cognidao.org/knowledge/operator-pipeline-contract Axioms 4 & 6).
  *   - PROVIDER_AGNOSTIC: Speaks the Argo/k8s API, so it is blind to the compute substrate underneath
  *     (Cherry today, Akash future). Compute provisioning + crypto settlement live in a separate
  *     ComputeResourcePort, never here.
  * Side-effects: none (interface only)
- * Links: docs/spec/cicd-platform-boundary.md § "The next layer: a typed operator control plane",
- *   docs/spec/mcp-control-plane.md (registry/adapter-swap pattern), PR #628 (Argo GitOps foundation)
+ * Links: https://cognidao.org/knowledge/operator-plane-contract § "The next layer: a typed operator control plane",
+ *   https://node-template.cognidao.org/knowledge/mcp-tool-sources (registry/adapter-swap pattern), PR #628 (Argo GitOps foundation)
  * @public
  */
 
@@ -49,7 +49,7 @@ export interface EnvSummary {
  *
  * `sourceSha` is the artifact source SHA recorded in `.promote-state/source-sha-by-app.json`;
  * `buildSha` is what the running pod serves at `/version.buildSha`. They match on a healthy,
- * fully-rolled deploy (ci-cd.md Axiom 19) and diverge mid-rollout.
+ * fully-rolled deploy (https://cognidao.org/knowledge/operator-pipeline-contract Axiom 19) and diverge mid-rollout.
  */
 export interface NodeDeployState {
   readonly env: string;

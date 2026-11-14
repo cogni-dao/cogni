@@ -10,7 +10,7 @@
  *   - The user in DATABASE_SERVICE_URL must exist as a PostgreSQL role
  *   - Must run after Docker Postgres is healthy, before reset-db
  * Side-effects: IO (single read-only query to Postgres)
- * Links: infra/compose/runtime/postgres-init/provision.sh, docs/spec/database-rls.md
+ * Links: infra/compose/runtime/postgres-init/provision.sh, https://node-template.cognidao.org/knowledge/rls-tenant-isolation
  * @internal
  */
 

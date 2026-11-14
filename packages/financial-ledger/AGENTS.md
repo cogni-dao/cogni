@@ -13,8 +13,8 @@ Double-entry financial ledger capability package. Provides `FinancialLedgerPort`
 
 ## Pointers
 
-- [Financial Ledger Spec](../../docs/spec/financial-ledger.md)
-- [Packages Architecture](../../docs/spec/packages-architecture.md)
+- [Financial Ledger Spec](https://node-template.cognidao.org/knowledge/financial-ledger-tigerbeetle)
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules)
 
 ## Boundaries
 
@@ -79,7 +79,7 @@ pnpm --filter @cogni/financial-ledger test
 ## Notes
 
 - Main barrel (`@cogni/financial-ledger`) deliberately excludes N-API adapter — import `@cogni/financial-ledger/adapters` only where TigerBeetle is needed.
-- Account hierarchy changes must sync with [Financial Ledger Spec](../../docs/spec/financial-ledger.md).
+- Account hierarchy changes must sync with [Financial Ledger Spec](https://node-template.cognidao.org/knowledge/financial-ledger-tigerbeetle).
 
 ## Change Protocol
 

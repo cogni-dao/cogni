@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 #
 # Stakater Reloader — closes the secrets-rotation loop (spec
-# secrets-management.md Invariant 11 ROTATION_DOES_NOT_EDIT_GIT). When ESO
+# https://cognidao.org/knowledge/secrets-management Invariant 11 ROTATION_DOES_NOT_EDIT_GIT). When ESO
 # writes a changed key into a `<service>-env-secrets` k8s Secret, Reloader
 # performs a controlled rolling restart of the annotated Deployment so the new
 # value reaches the pod (pods read `envFrom: secretRef` once, at container

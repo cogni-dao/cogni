@@ -7,7 +7,7 @@
  * Scope: Re-exports only; does not define new symbols.
  * Invariants: Must export all public symbols from submodules.
  * Side-effects: none
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 

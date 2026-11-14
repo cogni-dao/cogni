@@ -22,7 +22,7 @@
  *   - REVIEW_SUBJECT_IS_HOST_BOUND (story.5102): `input.codeSubject` binds to the run scope only for
  *     catalog entries declaring `codeSubject` and only when owner/repo match `resolveNodeRepo(nodeId)`.
  * Side-effects: IO (HTTP request/response, database, graph execution, Redis stream publishing, thread persistence)
- * Links: docs/spec/scheduler.md, graphs.run.internal.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, graphs.run.internal.v1.contract
  * @internal
  */
 

@@ -9,7 +9,7 @@
  *   - EXACT_REVIEWED_SOURCE: the operator-validated immutable source SHA pins both workflow scripts
  *     and deploy-infra input; blank manual dispatches fall back to the workflow event SHA/ref.
  * Side-effects: IO (reads .github/workflows/candidate-flight-infra.yml)
- * Links: task.5100, docs/spec/ci-cd.md
+ * Links: task.5100, https://cognidao.org/knowledge/operator-pipeline-contract
  * @public
  */
 

@@ -13,7 +13,7 @@
  *   - SOFT_DELETE: Revokes previous active connection for same provider before inserting
  *   - TOKENS_NEVER_LOGGED: Endpoint URL and API key never appear in logs
  * Side-effects: IO (HTTP probe to user endpoint, DB insert)
- * Links: docs/spec/tenant-connections.md, docs/spec/multi-provider-llm.md
+ * Links: https://node-template.cognidao.org/knowledge/tool-credential-brokering, https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @public
  */
 

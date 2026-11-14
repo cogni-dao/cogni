@@ -25,7 +25,7 @@
  *   - CONTRACTS_ARE_TRUTH: input/output parsed through `runCiOperation`.
  * Side-effects: IO (DB read, catalog read + GitHub REST approve + workflow_dispatch via the App).
  * Links: packages/node-contracts/src/vcs.run-ci.v1.contract.ts,
- *   nodes/operator/app/src/app/_lib/node-rbac.ts, docs/spec/node-ci-cd-contract.md
+ *   nodes/operator/app/src/app/_lib/node-rbac.ts, https://node-template.cognidao.org/knowledge/node-ci-sovereignty
  * @public
  */
 

@@ -8,7 +8,7 @@
  * Invariants: Fire-and-forget — errors logged, never block webhook response. System tenant billing.
  *   ARCHITECTURE_ALIGNMENT — deps injected, no adapter imports.
  * Side-effects: IO (GitHub API via injected deps, LLM via graph executor)
- * Links: docs/spec/governance-signal-execution.md
+ * Links: https://node-template.cognidao.org/knowledge/dao-merge-signal-loop
  * @public
  */
 

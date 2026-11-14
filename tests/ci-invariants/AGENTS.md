@@ -14,7 +14,7 @@ Static structural tests that pin CI/CD-side policy invariants (workflow shape, a
 ## Pointers
 
 - [.github/workflows/ci.yaml](../../.github/workflows/ci.yaml) — the workflows these tests pin
-- [docs/spec/node-ci-cd-contract.md](../../docs/spec/node-ci-cd-contract.md) — the invariants
+- [`node-ci-sovereignty`](https://node-template.cognidao.org/knowledge/node-ci-sovereignty) — the invariants
 - [work/items/task.0381.\*](../../work/items/) — single-node-scope rationale
 - [infra/k8s/argocd/argocd-cm-runtime-patch.yaml](../../infra/k8s/argocd/argocd-cm-runtime-patch.yaml) — the merge-patch body `argocd-core-configmap-ownership.spec.ts` pins
 

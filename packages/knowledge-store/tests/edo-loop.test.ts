@@ -14,7 +14,7 @@
  *   not main.
  * Invariants: parity with DoltgresKnowledgeStoreAdapter on every enforcement gate exercised here.
  * Side-effects: none (in-memory fakes)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @internal
  */
 

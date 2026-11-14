@@ -22,7 +22,7 @@
  * Side-effects: none
  * Links: src/features/nodes/DistributionsCard.client.tsx,
  *   src/app/api/v1/nodes/[id]/distributions-status/route.ts,
- *   docs/spec/tokenomics-distribution.md ("Activation — one guided flow, git-authoritative")
+ *   https://node-template.cognidao.org/knowledge/distribution-lifecycle ("Activation — one guided flow, git-authoritative")
  * @public
  */
 

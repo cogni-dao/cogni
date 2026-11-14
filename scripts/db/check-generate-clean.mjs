@@ -12,7 +12,7 @@
  * Invariants: never leaves generated artifacts behind; never connects to a DB (generate is a
  *             pure schema-vs-snapshot diff — DATABASE_URL is a dummy, matching db:check:operator).
  * Side-effects: IO (spawns drizzle-kit, reads/writes the migrations dir transiently, git restore).
- * Links: docs/spec/databases.md §2.6, scripts/db/check-migrations-immutable.mjs (companion guard).
+ * Links: https://node-template.cognidao.org/knowledge/database-migration-contract §2.6, scripts/db/check-migrations-immutable.mjs (companion guard).
  */
 
 // biome-ignore-all lint/suspicious/noConsole: validator script; stdout is the only log surface

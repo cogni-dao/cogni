@@ -13,8 +13,8 @@
 
 ## Pointers
 
-- [LangGraph Server Spec](../../docs/spec/langgraph-server.md)
-- [Graph Execution](../../docs/spec/graph-execution.md)
+- [LangGraph Server Spec](https://node-template.cognidao.org/knowledge/langgraph-server-adapter)
+- [Graph Execution](https://node-template.cognidao.org/knowledge/graph-execution-invariants)
 
 ## Boundaries
 

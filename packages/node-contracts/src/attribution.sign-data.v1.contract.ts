@@ -11,7 +11,7 @@
  *   - SIGNATURE_SCOPE_BOUND: returned typed data includes all scope-binding fields
  *   - Contract remains stable; breaking changes require new version
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

@@ -14,7 +14,7 @@ AI telemetry adapters for recording invocation summaries and Langfuse trace corr
 ## Pointers
 
 - [Root AGENTS.md](../../../../../../AGENTS.md)
-- [AI Setup](../../../../../../docs/spec/ai-setup.md)
+- [AI Setup](https://node-template.cognidao.org/knowledge/ai-correlation-contract)
 - [Parent adapters AGENTS.md](../../AGENTS.md)
 
 ## Boundaries

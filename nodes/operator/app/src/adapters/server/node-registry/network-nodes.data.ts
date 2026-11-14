@@ -23,7 +23,7 @@
  *     fails the test. Publish keeps it green automatically via the `insertNetworkNode` splice.
  *   - NO_OPERATOR_IDENTITY_LITERALS: this module holds NO title/tagline/thumbnail. Identity comes from the
  *     node's well-known projection at runtime (resolveNodeLiveness). The operator never names a node.
- *   - PRIMARY_SERVES_APEX (task.5078; docs/spec/ci-cd.md axiom 16): `primary: true` marks the single node
+ *   - PRIMARY_SERVES_APEX (task.5078; https://cognidao.org/knowledge/operator-pipeline-contract axiom 16): `primary: true` marks the single node
  *     serving the bare base domain (`https://${DOMAIN}` — operator); every other node is served at
  *     `${name}-${DOMAIN}`. It mirrors the catalog's `is_primary_host: true` (the SSoT).
  * Side-effects: none

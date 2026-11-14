@@ -823,7 +823,7 @@ services:
   # Browser automation tools for agents via Model Context Protocol.
   # Per MCP_DOCKER_NOT_STDIO: runs as network service, not stdio subprocess.
   # Opt-in: --profile mcp-playwright
-  # Docs: docs/spec/mcp-control-plane.md
+  # Docs: https://node-template.cognidao.org/knowledge/mcp-tool-sources
   # =============================================================================
 
   playwright-mcp:
@@ -855,7 +855,7 @@ services:
   # Observability tools for agents — dashboards, Prometheus, Loki, alerting.
   # Per MCP_DOCKER_NOT_STDIO: runs as network service, not stdio subprocess.
   # Opt-in: --profile mcp-playwright (shared profile with playwright-mcp)
-  # Docs: docs/spec/mcp-control-plane.md
+  # Docs: https://node-template.cognidao.org/knowledge/mcp-tool-sources
   # =============================================================================
 
   grafana-mcp:

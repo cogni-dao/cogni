@@ -12,7 +12,7 @@
  * Notes: Uses ConnectButton.Custom for full styling control. No wagmi hooks (state from render props only).
  *        ready = mounted && authenticationStatus !== 'loading'
  *        connected = ready && account && chain && (!authenticationStatus || authenticationStatus === 'authenticated')
- * Links: docs/spec/authentication.md, https://rainbowkit.com/docs/custom-connect-button
+ * Links: https://node-template.cognidao.org/knowledge/authentication-session-bearer, https://rainbowkit.com/docs/custom-connect-button
  * @public
  */
 

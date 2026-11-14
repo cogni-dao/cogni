@@ -17,7 +17,7 @@ The node-deploy blue/green sequencer (task.5400, story.5127) and its read model.
 - [Contract](../../contracts/deploy.workloads.v1.contract.ts) · [Store port](../../ports/node-deploy.port.ts)
 - [Release routes](../../app/api/v1/deploy/workloads/) · [Log proxy scope](../nodes/observability-logs.ts)
 - [Dashboard](../../../../../infra/grafana/dashboards/operator/node-deploy.json) · [Alerts](../../../../../infra/grafana/alerts/node-deploy.alerts.yaml)
-- [Log access spec](../../../../../docs/spec/grafana-observability-access.md)
+- [Log access spec](https://cognidao.org/knowledge/node-log-proxy-contract)
 
 ## Boundaries
 

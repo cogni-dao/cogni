@@ -8,7 +8,7 @@
  * Invariants: Status values match contract exactly; error codes map via formatPaymentError (one SSOT).
  * Side-effects: none
  * Notes: Single place backend status strings are interpreted.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

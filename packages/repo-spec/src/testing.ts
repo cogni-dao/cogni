@@ -12,7 +12,7 @@
  * Invariants: Pure builders — no I/O, no global state. UUIDs are deterministic and disjoint
  *   from any production node_id (no collision with real `.cogni/repo-spec.yaml`).
  * Side-effects: none
- * Links: docs/spec/node-operator-contract.md, packages/repo-spec/src/schema.ts
+ * Links: https://node-template.cognidao.org/knowledge/node-sovereignty-contract, packages/repo-spec/src/schema.ts
  * @public
  */
 

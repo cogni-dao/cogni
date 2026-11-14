@@ -10,7 +10,7 @@
  *   - EFFECT_TYPED: effect is `read_only`
  *   - HARD_BOUNDS: max 50 results for list mode
  * Side-effects: IO (database read via capability)
- * Links: docs/spec/knowledge-data-plane.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane
  * @public
  */
 

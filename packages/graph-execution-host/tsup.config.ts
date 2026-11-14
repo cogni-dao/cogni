@@ -7,7 +7,7 @@
  * Scope: Build tooling only. Does not contain runtime code.
  * Invariants: Output must be ESM with sourcemaps.
  * Side-effects: IO
- * Links: docs/spec/packages-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @internal
  */
 

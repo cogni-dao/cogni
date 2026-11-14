@@ -25,7 +25,7 @@
  *     `listActiveGoals()` read, not the PER_DOMAIN_LIMIT scan.
  *   - NO_INTERNAL_BIND_ADDR: origin derived from forwarded headers first.
  * Side-effects: IO (HTTP response, Doltgres reads via container port)
- * Links: https://cognidao.org/knowledge/node-baas-substrate-model, docs/spec/knowledge-syntropy.md
+ * Links: https://cognidao.org/knowledge/node-baas-substrate-model, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

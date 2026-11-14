@@ -6,7 +6,7 @@
  * Scope: Verify current dedicated credentials, TLS, roles and budgets; delegate shared lanes. Does not provision cells or mutate native roles.
  * Invariants: Current custody owns connection bytes. Retained-instance identity belongs to native recovery, not routine release readiness.
  * Side-effects: IO (existing canonical writer, SSH/Kubernetes reads, idempotent ESO refresh, bounded read-only PostgreSQL transactions).
- * Links: docs/spec/databases.md, scripts/ci/run-node-substrate.sh, scripts/lib/materialize-database-cell-placement.ts
+ * Links: https://node-template.cognidao.org/knowledge/database-migration-contract, scripts/ci/run-node-substrate.sh, scripts/lib/materialize-database-cell-placement.ts
  * @internal
  */
 import { spawnSync } from "node:child_process";

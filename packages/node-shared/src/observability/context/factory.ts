@@ -8,7 +8,7 @@
  * Invariants: reqId is validated; routeId is stable; child logger binds userId from session when present.
  * Side-effects: none
  * Notes: Use in route handlers to create ctx for request. Cross-cutting observability concern.
- * Links: Returns RequestContext type; called at route handler entry points; referenced by docs/spec/observability.md § Context Propagation.
+ * Links: Returns RequestContext type; called at route handler entry points; referenced by https://node-template.cognidao.org/knowledge/observability-logging-contract § Context Propagation.
  * @public
  */
 

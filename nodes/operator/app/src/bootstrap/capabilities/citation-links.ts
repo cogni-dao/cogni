@@ -14,7 +14,7 @@
  *     `ItemLinksPort`. The composition, the deadline and the `unavailable` mapping live in
  *     `@cogni/work-items` (`composeItemEnvelope`); only this store adapter and the citations route are node code.
  * Side-effects: IO (knowledge store read)
- * Links: app/src/app/api/v1/citations/[id]/route.ts, docs/spec/knowledge-syntropy.md
+ * Links: app/src/app/api/v1/citations/[id]/route.ts, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @internal
  */
 

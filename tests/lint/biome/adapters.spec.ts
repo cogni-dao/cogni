@@ -8,7 +8,7 @@
  * Invariants: Adapters implement port interfaces using core types; no business logic or UI.
  * Side-effects: IO (via runEslint temp file creation)
  * Notes: Tests boundaries/element-types rule for infrastructure layer isolation.
- * Links: eslint.config.mjs boundaries settings, src/adapters/, docs/spec/architecture.md
+ * Links: eslint.config.mjs boundaries settings, src/adapters/, https://node-template.cognidao.org/knowledge/hexagonal-layering-contract
  * @public
  */
 

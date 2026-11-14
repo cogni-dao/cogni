@@ -7,7 +7,7 @@
  * Scope: Pure string assertions for renderer shell CSS. No DOM, network, or auth.
  * Invariants: UTILITY_LIB_IS_CAPPED, DIAGRAMS_USE_SVG.
  * Side-effects: none
- * Links: src/app/(app)/knowledge/_components/htmlShell.ts, docs/spec/knowledge-html-style.md
+ * Links: src/app/(app)/knowledge/_components/htmlShell.ts, https://node-template.cognidao.org/knowledge/knowledge-human-visuals
  * @internal
  */
 

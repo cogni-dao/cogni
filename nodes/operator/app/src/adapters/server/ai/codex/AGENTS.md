@@ -15,7 +15,7 @@ Codex SDK adapter for BYO ChatGPT execution. Spawns `codex exec` subprocess per 
 
 - [Codex MCP docs](https://developers.openai.com/codex/mcp)
 - [bug.0232](../../../../../../../work/items/bug.0232.llmservice-silently-drops-tools.md): MCP tool drop fix
-- [mcp-control-plane spec](../../../../../../../docs/spec/mcp-control-plane.md)
+- [mcp-control-plane spec](https://node-template.cognidao.org/knowledge/mcp-tool-sources)
 
 ## Boundaries
 

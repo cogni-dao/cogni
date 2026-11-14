@@ -10,7 +10,7 @@
  * - FEATURE_SERVICE_LAYER: Delegates to getGovernanceStatus, never queries DB
  * - CONTRACT_FIRST: Output validated against governance.status.v1 contract
  * Side-effects: IO (reads via feature service → ports)
- * Links: docs/spec/governance-status-api.md, src/contracts/governance.status.v1.contract.ts
+ * Links: https://node-template.cognidao.org/knowledge/governance-status-api, src/contracts/governance.status.v1.contract.ts
  * @public
  */
 

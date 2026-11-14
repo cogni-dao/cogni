@@ -8,7 +8,7 @@
  * Invariants: Forwards ref; accepts aria-* and data-* unchanged; always renders valid button or slot.
  * Side-effects: none
  * Notes: Uses CVA factory from \@/styles/ui - no literal classes allowed; supports asChild pattern.
- * Links: docs/spec/ui-implementation.md
+ * Links: https://node-template.cognidao.org/knowledge/frontend-development
  * @public
  */
 

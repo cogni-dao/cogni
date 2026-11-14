@@ -8,7 +8,7 @@
  * Invariants: 1 cent = 100,000 credits (CREDITS_PER_USD / 100); idempotent per clientPaymentId; system tenant bonus is sequential + idempotent.
  * Side-effects: none
  * Notes: Uses mocked AccountService and ServiceAccountService with stub implementations.
- * Links: docs/spec/payments-design.md, docs/spec/system-tenant.md, src/features/payments/services/creditsConfirm.ts
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design, https://node-template.cognidao.org/knowledge/system-tenant-identity, src/features/payments/services/creditsConfirm.ts
  * @public
  */
 

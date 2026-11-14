@@ -10,7 +10,7 @@
  * - All cross-slice FK references point to tables defined here
  * - FORBIDDEN: Importing from scheduling, auth, billing slices (would create cycles)
  * Side-effects: none (schema definitions only)
- * Links: docs/spec/packages-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @public
  */
 

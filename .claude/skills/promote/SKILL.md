@@ -24,7 +24,7 @@ You are operating the operator release pipeline. The pipeline is multi-layered (
 
 ## Promotion runs as the operator — call the API, never personal `gh`
 
-`PROMOTION_RUNS_AS_THE_OPERATOR` ([node-ci-cd-contract.md](../../../docs/spec/node-ci-cd-contract.md) § Env-promotion): every dispatch is an operator-GitHub-App action keyed off your registered Bearer token. **Do not `gh workflow run` a promote/flight — that uses a personal credential and is not allowed.** For the operator node, drive the ladder over HTTP:
+`PROMOTION_RUNS_AS_THE_OPERATOR` ([node-ci-cd-contract.md](https://node-template.cognidao.org/knowledge/node-ci-sovereignty) § Env-promotion): every dispatch is an operator-GitHub-App action keyed off your registered Bearer token. **Do not `gh workflow run` a promote/flight — that uses a personal credential and is not allowed.** For the operator node, drive the ladder over HTTP:
 
 | Step                           | Call                                                                 | Authz (action → relation)                                                                        | Result                                                     |
 | ------------------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |

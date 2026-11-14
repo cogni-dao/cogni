@@ -15,7 +15,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
 ## Pointers
 
 - [App AGENTS.md](../AGENTS.md)
-- [Architecture](../../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 - [Feature Development Guide](../../../../../docs/guides/feature-development.md)
 
 ## Boundaries
@@ -60,7 +60,7 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
   - `/api/v1/deploy/infra-reconcile` [POST] - operator-node-only infra reconcile through the operator GitHub App; preserves the requested lane's deployed app source pin. `preview` is env-manager-gated (`node.manage_envs`), `production`/`candidate-a` production-promoter-gated
   - `/api/internal/billing/ingest` [POST] - LiteLLM generic_api callback receiver (bearer auth, Docker-internal only)
   - `/api/internal/ops/governance/schedules/sync` [POST] - deploy-time governance sync trigger (bearer auth)
-  - `/api/v1/chat/completions` [POST] - OpenAI-compatible chat completions (streaming + non-streaming, `cogni_status` extension); see [completions spec](../../../docs/spec/completions-api.md)
+  - `/api/v1/chat/completions` [POST] - OpenAI-compatible chat completions (streaming + non-streaming, `cogni_status` extension); see [completions spec](https://node-template.cognidao.org/knowledge/chat-completions-api)
   - `/api/v1/ai/chat` [POST] - streaming chat with server-authoritative thread persistence
   - `/api/v1/activity` [GET]
   - `/api/v1/citations/[id]` [GET] - depth-1 citation links for a knowledge or work-item endpoint, each with this side's `label` and `tone` from the published citation definitions (bug.0011)

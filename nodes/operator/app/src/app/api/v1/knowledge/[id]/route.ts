@@ -9,7 +9,7 @@
  *   Reads via container.knowledgeStorePort.getKnowledge.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, KNOWLEDGE_READ_REQUIRES_PRINCIPAL.
  * Side-effects: IO (HTTP response, Doltgres read via container port)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

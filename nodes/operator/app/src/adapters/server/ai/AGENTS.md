@@ -16,11 +16,11 @@ AI service adapters including LiteLLM completion/streaming, usage telemetry, age
 - [LlmService port](../../../ports/llm.port.ts)
 - [AgentCatalogPort](../../../ports/agent-catalog.port.ts)
 - [GraphExecutorPort](../../../../../../packages/graph-execution-core/src/graph-executor.port.ts)
-- [Agent Discovery Design](../../../../../../docs/spec/agent-discovery.md)
+- [Agent Discovery Design](https://node-template.cognidao.org/knowledge/agent-discovery-pipeline)
 - [LiteLLM configuration](../../../../../../infra/compose/runtime/configs/)
-- [Graph Execution Design](../../../../../../docs/spec/graph-execution.md)
-- [LangGraph Server Design](../../../../../../docs/spec/langgraph-server.md)
-- [Thread Persistence Spec](../../../../../../docs/spec/thread-persistence.md)
+- [Graph Execution Design](https://node-template.cognidao.org/knowledge/graph-execution-invariants)
+- [LangGraph Server Design](https://node-template.cognidao.org/knowledge/langgraph-server-adapter)
+- [Thread Persistence Spec](https://node-template.cognidao.org/knowledge/thread-persistence-contract)
 
 ## Boundaries
 

@@ -8,7 +8,7 @@
  * Invariants: Always parses JSON body to surface server error codes; returns discriminated union for pattern matching.
  * Side-effects: IO (fetch API); never throws (returns ApiError for both HTTP errors and network failures).
  * Notes: All types derived from contracts via z.infer; hook layer handles React Query integration.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

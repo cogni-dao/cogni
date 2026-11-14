@@ -227,7 +227,7 @@ catalog_target_from_path() {
 # Substrate machinery exercised on candidate-a by the node-substrate job. These
 # are not image-build inputs, so absent this rule a change to them selects no
 # target and the provisioning path goes unproven until a preview/prod promote.
-# deploy-infra.sh is excluded — candidate-flight never runs it. See docs/spec/ci-cd.md.
+# deploy-infra.sh is excluded — candidate-flight never runs it. See https://cognidao.org/knowledge/operator-pipeline-contract.
 #
 # THE PREFLIGHT ASSERTER IS ITSELF SUBSTRATE MACHINERY (bug.5299). assert-target-substrate.sh
 # and the libs it sources run inside assert-substrate/node-substrate, so a change to them

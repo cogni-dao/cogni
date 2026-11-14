@@ -8,7 +8,7 @@
  * Invariants: Validates caller params against canonical config; requires verified sender/recipient/token/amount; uses MIN_CONFIRMATIONS.
  * Side-effects: IO (via EvmOnchainClient RPC calls)
  * Notes: Production verifier for Phase 3. Replaces PonderOnChainVerifierAdapter stub.
- * Links: docs/spec/payments-design.md, docs/spec/onchain-readers.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design, https://node-template.cognidao.org/knowledge/onchain-read-ports
  * @public
  */
 

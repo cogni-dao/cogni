@@ -24,7 +24,7 @@
  * Side-effects: IO (database advisory lock, Temporal RPC, grant creation)
  * Links: packages/scheduler-core/src/services/syncGovernanceSchedules.ts,
  *   nodes/operator/app/src/bootstrap/jobs/resolveRoutableNodeGovernanceConfigs.ts,
- *   docs/spec/substrate-temporal.md, docs/spec/governance-scheduling.md
+ *   https://cognidao.org/knowledge/temporal-substrate-model, https://node-template.cognidao.org/knowledge/governance-schedule-sync
  * @public
  */
 

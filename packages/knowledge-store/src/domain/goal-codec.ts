@@ -16,7 +16,7 @@
  *   - GOAL_REQUIRES_METRIC_STRATEGY — `goalFromRow` only projects a row whose
  *     `resolution_strategy` is `metric:<kpi-id>` (else returns null).
  * Side-effects: none
- * Links: docs/design/knowledge-goal-loop.md, docs/spec/knowledge-syntropy.md
+ * Links: docs/design/knowledge-goal-loop.md, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

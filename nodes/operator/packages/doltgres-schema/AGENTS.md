@@ -16,9 +16,9 @@ This package owns **operator-specific** table definitions only. None exist today
 
 ## Pointers
 
-- [Work Items Port Spec](../../../../docs/spec/work-items-port.md) — port + adapter contract
-- [Knowledge Data Plane Spec](../../../../docs/spec/knowledge-data-plane.md) — Doltgres-side architecture
-- [Packages Architecture](../../../../docs/spec/packages-architecture.md) — workspace package shape
+- [Work Items Port Spec](https://node-template.cognidao.org/knowledge/work-items-port-contract) — port + adapter contract
+- [Knowledge Data Plane Spec](https://node-template.cognidao.org/knowledge/knowledge-data-plane) — Doltgres-side architecture
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules) — workspace package shape
 - [@cogni/poly-doltgres-schema](../../../poly/packages/doltgres-schema/AGENTS.md) — sibling package; reference structure
 - [task.0423](../../../../work/items/task.0423.doltgres-work-items-source-of-truth.md) — design + invariants
 

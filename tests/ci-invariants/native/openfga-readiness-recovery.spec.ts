@@ -12,7 +12,7 @@
  *   - OWNED_FAULT_ONLY: the unique autoheal selector and paused database belong only to this test.
  *   - PROVISIONING_IS_NOT_CONTENT_WRITE: fresh and repeated provisioning never commit application working sets.
  * Side-effects: IO (CI-owned Docker containers/network; pauses and restores owned Postgres).
- * Links: story.5095, task.5281, docs/spec/cicd-platform-boundary.md
+ * Links: story.5095, task.5281, https://cognidao.org/knowledge/operator-plane-contract
  * @internal
  */
 

@@ -7,7 +7,7 @@
  * Scope: Pure action execution — receives Octokit + signal context, returns ActionResult. Does not import adapters.
  * Invariants: Each handler validates input before API call. Action key = `${action}:${target}`.
  * Side-effects: IO (GitHub API calls via injected Octokit)
- * Links: docs/spec/governance-signal-execution.md
+ * Links: https://node-template.cognidao.org/knowledge/dao-merge-signal-loop
  * @public
  */
 

@@ -15,7 +15,7 @@
  *   - FAIL_CLOSED_WITH_DISTINCTION: deny → 403 `authz_denied`; no adapter, a missing actor, an
  *     adapter-reported outage or a thrown check → 503 `authz_unavailable`. Never conflated.
  * Side-effects: IO (one OpenFGA check via the injected port)
- * Links: docs/spec/rbac.md, src/app/_lib/node-rbac.ts, task.5286, task.5306
+ * Links: https://cognidao.org/knowledge/authz-port-contract, src/app/_lib/node-rbac.ts, task.5286, task.5306
  * @public
  */
 

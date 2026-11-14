@@ -8,7 +8,7 @@
  * Invariants: Ownership enforced via session billing account; verification throttled to 10-second intervals server-side.
  * Side-effects: IO (reads payment_attempts, may trigger verification and update status).
  * Notes: Returns 404 if attempt not found or not owned; polling endpoint for client to check status.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

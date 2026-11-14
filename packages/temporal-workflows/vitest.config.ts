@@ -7,7 +7,7 @@
  * Scope: Test tooling only. Does not contain runtime code.
  * Invariants: none
  * Side-effects: IO
- * Links: docs/spec/temporal-patterns.md
+ * Links: https://cognidao.org/knowledge/temporal-workflow-rules
  * @internal
  */
 

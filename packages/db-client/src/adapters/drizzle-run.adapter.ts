@@ -11,7 +11,7 @@
  * - withTenantScope called on every method (uniform invariant, no-op on serviceDb)
  * - listRunsByUser relies on RLS for row visibility (no app-level requestedBy filter)
  * Side-effects: IO (database operations)
- * Links: ports/scheduling/schedule-run.port.ts, docs/spec/unified-graph-launch.md
+ * Links: ports/scheduling/schedule-run.port.ts, https://node-template.cognidao.org/knowledge/graph-run-launch-contract
  * @public
  */
 

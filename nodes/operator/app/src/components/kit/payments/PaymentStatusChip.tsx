@@ -8,7 +8,7 @@
  * Invariants: Only visible when txHash exists and dialog is closed; clicking reopens dialog.
  * Side-effects: none
  * Notes: Part of refactored payment UI; allows users to close dialog but still monitor payment.
- * Links: docs/spec/payments-design.md, ~/.claude/plans/floating-stirring-trinket.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design, ~/.claude/plans/floating-stirring-trinket.md
  * @public
  */
 

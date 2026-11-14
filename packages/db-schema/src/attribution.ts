@@ -17,9 +17,9 @@
  * - EVALUATION_FINAL_ATOMIC: locked evaluation writes + artifacts_hash + epoch open→review in one transaction (enforced in store).
  * - RLS deny-all on the user-FK ledger tables (epoch_selection, epoch_user_projections):
  *   ENABLE + FORCE with no policy (migration 0032). All access is via the BYPASSRLS
- *   service-role worker; there is no app-role read path. See docs/spec/database-rls.md (RLS_COVERAGE).
+ *   service-role worker; there is no app-role read path. See https://node-template.cognidao.org/knowledge/rls-tenant-isolation (RLS_COVERAGE).
  * Side-effects: none (schema definitions only)
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

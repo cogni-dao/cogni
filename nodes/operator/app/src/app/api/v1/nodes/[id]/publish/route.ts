@@ -420,7 +420,7 @@ export async function POST(request: Request, routeArgs: RouteParams) {
         // exactly when something is wrong (violating operator-fleet-safety.md "a node or
         // deploy spec must never silently starve an environment of capacity"). Fail
         // CLOSED with a diagnostic 503 — never a raw adapter throw → `unhandled` 500
-        // (error-handling.md Inv 2/3/6: translate at the boundary, fault-party before
+        // (https://node-template.cognidao.org/knowledge/layered-error-translation Inv 2/3/6: translate at the boundary, fault-party before
         // bucket). Node birth needs this SAME GitHub/App plane for the very next steps
         // (fork + submodule PR), so a catalog read we cannot make means the birth cannot
         // succeed anyway — failing here fails faster and names the real cause. (Advisory

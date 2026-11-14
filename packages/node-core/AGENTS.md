@@ -13,8 +13,8 @@ Shared domain models, types, and pure business logic for all node apps. Contains
 
 ## Pointers
 
-- [Packages Architecture](../../docs/spec/packages-architecture.md)
-- [Node App Shell Spec](../../docs/spec/node-app-shell.md)
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules)
+- [Node App Shell Spec](https://node-template.cognidao.org/knowledge/node-app-shell-contract)
 
 ## Boundaries
 

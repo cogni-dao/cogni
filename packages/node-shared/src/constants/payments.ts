@@ -7,7 +7,7 @@
  * Scope: Shared constants for payment features. Does not contain business logic.
  * Invariants: widget_payment is the only allowed reason for widget-funded credits.
  * Side-effects: none
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

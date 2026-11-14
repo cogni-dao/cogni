@@ -15,7 +15,7 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
 ## Pointers
 
 - [Root AGENTS.md](../../../../AGENTS.md)
-- [Architecture](../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 - [Feature Development Guide](../../../../docs/guides/feature-development.md)
 
 ## Boundaries

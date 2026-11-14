@@ -15,7 +15,7 @@ App-local building blocks that cannot be extracted to `@cogni/node-shared` (env,
 ## Pointers
 
 - [Root AGENTS.md](../../../../AGENTS.md)
-- [Architecture](../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 - **Related:** [contracts](../contracts/) (external IO specs), [types](../types/) (compile-time only)
 
 ## Boundaries

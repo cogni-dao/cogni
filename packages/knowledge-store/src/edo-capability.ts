@@ -10,7 +10,7 @@
  *   - AUTO_COMMIT_ON_WRITE: every write triggers one dolt_commit.
  *   - RESOLVER_IDEMPOTENT (recordOutcome): double-firing returns existing state.
  * Side-effects: none (delegates I/O to ports)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

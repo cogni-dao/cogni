@@ -13,8 +13,8 @@ LangGraph dev server adapter. Connects to external `langgraph dev` server (port 
 
 ## Pointers
 
-- [LangGraph Server Design](../../../../../../../../docs/spec/langgraph-server.md)
-- [Graph Execution](../../../../../../../../docs/spec/graph-execution.md)
+- [LangGraph Server Design](https://node-template.cognidao.org/knowledge/langgraph-server-adapter)
+- [Graph Execution](https://node-template.cognidao.org/knowledge/graph-execution-invariants)
 - [Parent ai/ AGENTS.md](../../../../../../../../AGENTS.md)
 
 ## Boundaries

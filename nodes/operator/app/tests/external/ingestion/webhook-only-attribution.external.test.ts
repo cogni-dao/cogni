@@ -15,7 +15,7 @@
  * Invariants: WEBHOOK_ONLY_SOURCE, SOURCE_NO_ADAPTER (loud-at-bootstrap, graceful-at-runtime),
  *   SELECTION_AUTO_POPULATE.
  * Side-effects: IO (GitHub GraphQL, git push, testcontainers PostgreSQL)
- * Links: services/scheduler-worker/src/activities/ledger.ts (resolveStreams), docs/spec/attribution-ledger.md
+ * Links: services/scheduler-worker/src/activities/ledger.ts (resolveStreams), https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @internal
  */
 

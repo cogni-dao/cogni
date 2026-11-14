@@ -11,7 +11,7 @@
  *   - Non-success entries and unresolvable billing accounts are skipped
  *   - Response shape: { processed, skipped }
  * Side-effects: none
- * Links: src/app/api/internal/billing/ingest/route.ts, docs/spec/billing-ingest.md
+ * Links: src/app/api/internal/billing/ingest/route.ts, https://node-template.cognidao.org/knowledge/billing-ingest-callback
  * @internal
  */
 

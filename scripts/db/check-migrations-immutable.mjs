@@ -8,7 +8,7 @@
  * Invariants: applied `.sql` files are byte-frozen; applied `<idx>_snapshot.json` files are byte-frozen; `_journal.json` is append-only.
  * Side-effects: IO (git commands, filesystem reads).
  * Notes: drizzle-orm tracks "applied?" by `folderMillis`, never hash — modified applied migrations silently no-op on deployed DBs.
- * Links: docs/spec/databases.md §2.6, scripts/db/check-journal-when.mjs (companion guard)
+ * Links: https://node-template.cognidao.org/knowledge/database-migration-contract §2.6, scripts/db/check-journal-when.mjs (companion guard)
  */
 
 // biome-ignore-all lint/suspicious/noConsole: validator script; stdout is the only log surface

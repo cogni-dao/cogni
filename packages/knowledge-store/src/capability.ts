@@ -9,7 +9,7 @@
  *   - AUTO_COMMIT: Every write() call upserts + commits automatically.
  *   - PACKAGES_NO_ENV: Connection is injected, never from process.env.
  * Side-effects: none (delegates I/O to port)
- * Links: docs/spec/knowledge-data-plane.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane
  * @public
  */
 

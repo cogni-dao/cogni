@@ -4,7 +4,7 @@
 # Cogni LiteLLM — extends upstream with per-node billing callback routing.
 # The custom callback class (cogni_callbacks.py) routes billing events to the
 # correct node's ingest endpoint based on node_id metadata.
-# See: docs/spec/multi-node-tenancy.md (CALLBACK_IS_ADAPTER_GLUE)
+# See: https://node-template.cognidao.org/knowledge/node-tenancy-isolation (CALLBACK_IS_ADAPTER_GLUE)
 
 FROM ghcr.io/berriai/litellm@sha256:7e7816d58c265c182be5f3568ed8e5d999f11a5deda1d85e8e347a18bc578f64
 

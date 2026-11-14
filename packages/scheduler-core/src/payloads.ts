@@ -10,7 +10,7 @@
  * - Consumer validates at task entry
  * - No `payload as X` casts allowed
  * Side-effects: none
- * Links: docs/spec/scheduler.md
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @public
  */
 

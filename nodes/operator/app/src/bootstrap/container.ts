@@ -919,7 +919,7 @@ function createContainer(): Container {
 
   // Applied-migration readout (the schema readout): a plain read of the OPERATOR's own Postgres.
   // The rows get there because the node's own migrator reported them, so this seam is metadata,
-  // never node data access (docs/spec/multi-node-tenancy.md NO_CROSS_NODE_QUERIES).
+  // never node data access (https://node-template.cognidao.org/knowledge/node-tenancy-isolation NO_CROSS_NODE_QUERIES).
   const nodeMigrationReportStore = new DrizzleNodeMigrationReportStore(
     async () => serviceDb
   );

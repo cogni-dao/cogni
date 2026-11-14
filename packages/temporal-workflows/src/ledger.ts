@@ -7,7 +7,7 @@
  * Scope: Re-exports only. Does not contain logic.
  * Invariants: Per TEMPORAL_DETERMINISM: only re-exports deterministic workflow functions.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @internal
  */
 

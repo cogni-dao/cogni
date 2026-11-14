@@ -21,7 +21,7 @@
  *     held-out check) reads the KPI. A loop that grades itself by its own
  *     `confidence_pct` is a smoke-test only — never a real goal's KPI.
  * Side-effects: none
- * Links: docs/spec/knowledge-syntropy.md, docs/design/knowledge-goal-loop.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path, docs/design/knowledge-goal-loop.md
  * @public
  */
 

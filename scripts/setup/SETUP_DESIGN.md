@@ -143,7 +143,7 @@ pnpm setup github --env production
        - `GH_REVIEW_APP_ID` + `GH_REVIEW_APP_PRIVATE_KEY_BASE64` (from github.com/organizations → Developer settings → GitHub Apps)
        - `GH_WEBHOOK_SECRET` (from the GitHub App's webhook settings page — the secret used for HMAC-SHA256 payload verification)
        - **Webhook URL must be set in the GitHub App** to `https://<domain>/api/internal/webhooks/github` (e.g. `https://preview.cognidao.org/api/internal/webhooks/github`)
-       - See [VCS Integration Spec](../../docs/spec/vcs-integration.md) for app permissions and setup
+       - See [VCS Integration Spec](https://cognidao.org/knowledge/pr-review-grounded-gate) for app permissions and setup
      - **GitHub repos for ingestion:**
        - `GH_REPOS` (comma-separated, e.g. `Cogni-DAO/cogni` — set as GitHub Actions **variable**, not secret)
      - **Grafana (optional):**

@@ -8,7 +8,7 @@
  * Invariants: All variants use design tokens; factories return valid Tailwind class strings; TypeScript enforces variant types.
  * Side-effects: none
  * Notes: Migrated to domain-split architecture - factories now in ui/* modules with explicit barrel exports.
- * Links: docs/spec/ui-implementation.md, src/styles/ui/index.ts
+ * Links: https://node-template.cognidao.org/knowledge/frontend-development, src/styles/ui/index.ts
  * @public
  */
 

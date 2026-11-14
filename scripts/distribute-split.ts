@@ -7,7 +7,7 @@
  * Scope: CLI script that calls distributeSplit() on a deployed Push Split V2o2. Does not modify repo-spec or app config — distributes accumulated USDC to operator + DAO treasury.
  * Invariants: KEY_NEVER_IN_APP — Privy HSM signs the transaction. Uses splitV2ABI (not manual selectors).
  * Side-effects: IO (submits distribute tx via Privy API); stdout (prints txHash).
- * Links: docs/spec/operator-wallet.md, task.0085
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary, task.0085
  * @public
  */
 

@@ -8,7 +8,7 @@
  * Invariants: Close when txHash null triggers reset; auto-opens on transitions only; userClosedOnChain tracks chip visibility.
  * Side-effects: none
  * Notes: Transition-based auto-open prevents flash loops; phase-aware close decides cancel vs preserve.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

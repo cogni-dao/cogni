@@ -28,7 +28,7 @@
  * Side-effects: IO (service-DB read of `nodes`).
  * Links: packages/scheduler-core/src/services/syncGovernanceSchedules.ts,
  *   node-template `app/src/app/api/internal/attribution/collect/route.ts` (the receiver),
- *   docs/spec/substrate-temporal.md, .cogni/repo-spec.yaml (operator's own LEDGER_INGEST cron)
+ *   https://cognidao.org/knowledge/temporal-substrate-model, .cogni/repo-spec.yaml (operator's own LEDGER_INGEST cron)
  * @public
  */
 

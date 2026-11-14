@@ -14,7 +14,7 @@ Unit tests for shared layer modules, ensuring validation and type safety across 
 ## Pointers
 
 - [Root AGENTS.md](../../../../../AGENTS.md)
-- [Architecture](../../../../../docs/spec/architecture.md)
+- [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
 - [Tests AGENTS.md](../../../../../AGENTS.md)
 
 ## Boundaries

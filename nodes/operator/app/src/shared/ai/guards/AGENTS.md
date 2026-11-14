@@ -13,7 +13,7 @@ Pure validation guards for Brain-mode AI responses. Checks server-collected sour
 
 ## Pointers
 
-- [COGNI_BRAIN_SPEC](../../../../../../docs/spec/cogni-brain.md)
+- [COGNI_BRAIN_SPEC](https://node-template.cognidao.org/knowledge/repo-read-tools-contract)
 
 ## Boundaries
 

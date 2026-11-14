@@ -4,13 +4,13 @@
 /**
  * Module: `@tests/contract/app/nodes.developers`
  * Purpose: Contract tests for owner-gated node developer approval — OpenFGA tuple writes AND the
- *   rbac.md §6a GitHub branch-push provisioning side-effect.
+ *   https://cognidao.org/knowledge/authz-port-contract §6a GitHub branch-push provisioning side-effect.
  * Scope: Verifies POST /api/v1/nodes/[id]/developers validates ownership before OpenFGA writes, and
  *   that approval provisions / rejection de-provisions a node-repo collaborator for the agent's bound
  *   (or owner-attested) GitHub login — skipping safely when no login is resolvable.
  * Invariants: OWNER_GATING, OPENFGA_IS_AUTHORITY, TRUST_BOUNDARY_IS_MERGE_NOT_PUSH, PUSH_LOGIN_FROM_BINDING.
  * Side-effects: none
- * Links: nodes/operator/app/src/app/api/v1/nodes/[id]/developers/route.ts, docs/spec/rbac.md §6a
+ * Links: nodes/operator/app/src/app/api/v1/nodes/[id]/developers/route.ts, https://cognidao.org/knowledge/authz-port-contract §6a
  * @internal
  */
 
@@ -445,7 +445,7 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
   });
 
   it("reject without a resolvable login skips de-provision (no orphaned removeNodeCollaborator)", async () => {
-    // V0 owner-attest gap (rbac.md §6a): no `github` binding + no githubLogin on the reject ⇒ the
+    // V0 owner-attest gap (https://cognidao.org/knowledge/authz-port-contract §6a): no `github` binding + no githubLogin on the reject ⇒ the
     // collaborator can't be auto-removed. The tuple delete is still authoritative; branch-push de-prov
     // is skipped + warned, never a silent wrong-arg removeNodeCollaborator call.
     await testApiHandler({

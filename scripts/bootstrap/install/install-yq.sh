@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 # Module: scripts/bootstrap/install/install-yq.sh
-# Purpose: Install yq (mikefarah Go-based v4) for catalog reads (CATALOG_IS_SSOT, ci-cd.md axiom 16).
+# Purpose: Install yq (mikefarah Go-based v4) for catalog reads (CATALOG_IS_SSOT, https://cognidao.org/knowledge/operator-pipeline-contract axiom 16).
 # Usage: bash scripts/bootstrap/install/install-yq.sh
 # Note: Pre-installed on ubuntu-24.04 GHA runners. This script is for local dev parity.
 

@@ -7,7 +7,7 @@
  * Scope: CLI script that creates a new Privy-managed wallet and prints the checksummed address. Does not modify repo-spec — operator must update .cogni/repo-spec.yaml manually.
  * Invariants: KEY_NEVER_IN_APP — no private key material emitted or stored. PRIVY_SIGNED_REQUESTS — uses signed requests.
  * Side-effects: IO (creates wallet via Privy API); stdout (prints address).
- * Links: docs/spec/operator-wallet.md
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary
  * @public
  */
 

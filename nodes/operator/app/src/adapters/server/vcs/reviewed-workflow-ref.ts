@@ -12,7 +12,7 @@
  *   - CURRENT_MAIN_INCLUDED: an old reviewed PR cannot dispatch obsolete workflow writers.
  *   - CROSS_REPO_FAILS_CLOSED: fork PR heads are never accepted as workflow code.
  * Side-effects: IO (GitHub REST API reads)
- * Links: bug.5455, docs/spec/cicd-platform-boundary.md
+ * Links: bug.5455, https://cognidao.org/knowledge/operator-plane-contract
  * @internal
  */
 

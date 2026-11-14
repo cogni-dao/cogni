@@ -19,7 +19,7 @@
  *   - LATEST_COMPLETED_WINS: among the App's completed runs of that name on the head SHA, the one with
  *     the highest id (GitHub ids are monotonic) is the verdict.
  * Side-effects: none
- * Links: docs/spec/merge-queue-config.md, task.5438, story.5145
+ * Links: https://cognidao.org/knowledge/merge-queue-required-checks, task.5438, story.5145
  * @public
  */
 

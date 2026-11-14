@@ -6,7 +6,7 @@
 # Wraps infra/k8s/argocd/reloader/ (kustomize-with-helm) so Argo CD reconciles
 # drift on the controller that rolling-restarts a Deployment when a Secret or
 # ConfigMap it references changes. Closes the secrets-rotation loop
-# (secrets-management.md Invariant 11): ESO syncs OpenBao → k8s Secret, then
+# (https://cognidao.org/knowledge/secrets-management Invariant 11): ESO syncs OpenBao → k8s Secret, then
 # Reloader restarts the annotated pod so the new value is actually consumed.
 # Together with openbao + external-secrets this is the third substrate pillar.
 #

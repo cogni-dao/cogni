@@ -15,7 +15,7 @@
  *   - All dependencies injected via ServiceContainer from bootstrap/container.ts
  *   - No concrete adapter imports — uses container for wiring
  * Side-effects: IO (connects to Temporal, starts workers)
- * Links: docs/spec/scheduler.md, docs/spec/temporal-patterns.md, docs/spec/multi-node-tenancy.md
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, https://cognidao.org/knowledge/temporal-workflow-rules, https://node-template.cognidao.org/knowledge/node-tenancy-isolation
  * @internal
  */
 
@@ -371,7 +371,7 @@ export async function startSchedulerWorker(
     // Fail-loud config drift check: node-app submitters use repo-spec UUIDs
     // as the nodeId, so a worker with no UUID endpoints will starve every
     // per-node queue. k8s overlays and compose files MUST register UUID
-    // aliases alongside slug aliases. See docs/spec/multi-node-tenancy.md
+    // aliases alongside slug aliases. See https://node-template.cognidao.org/knowledge/node-tenancy-isolation
     // QUEUE_PER_NODE_ISOLATION.
     logger.error(
       {

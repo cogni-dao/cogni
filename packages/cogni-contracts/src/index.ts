@@ -7,7 +7,7 @@
  * Scope: Constants only; does not include addresses, tx builders, or RPC logic.
  * Invariants: No runtime dependencies; pure constants.
  * Side-effects: none
- * Links: docs/spec/packages-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @public
  */
 

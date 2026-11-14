@@ -8,7 +8,7 @@
  * Invariants: Query key includes limit parameter for separate cache entries per limit value.
  * Side-effects: IO (creditsSummaryClient); React Query cache (useQuery).
  * Notes: Throws errors on failure for React Query error boundary compatibility.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

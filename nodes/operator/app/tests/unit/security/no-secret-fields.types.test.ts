@@ -8,7 +8,7 @@
  * Invariants: Security invariant - secrets must not cross port boundaries; NO_SECRETS_IN_CONTEXT.
  * Side-effects: none (type-only tests)
  * Notes: Uses @ts-expect-error to fail compilation if secret fields are re-added.
- * Links: src/ports/accounts.port.ts, src/ports/llm.port.ts, @cogni/ai-core/tooling/types.ts, docs/spec/tool-use.md
+ * Links: src/ports/accounts.port.ts, src/ports/llm.port.ts, @cogni/ai-core/tooling/types.ts, https://node-template.cognidao.org/knowledge/tool-use-contract
  * @public
  */
 

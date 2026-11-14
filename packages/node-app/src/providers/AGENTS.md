@@ -14,7 +14,7 @@ Client-side provider composition for the Cogni node platform. Configures React c
 ## Pointers
 
 - [Package AGENTS.md](../../AGENTS.md)
-- [Node App Shell Spec](../../../../docs/spec/node-app-shell.md)
+- [Node App Shell Spec](https://node-template.cognidao.org/knowledge/node-app-shell-contract)
 
 ## Boundaries
 

@@ -13,14 +13,14 @@ Everything about how the system runs. Split by responsibility, not by tool.
 
 ## Pointers
 
-- [CI/CD](../docs/spec/ci-cd.md): Deployment specification
+- [CI/CD](https://cognidao.org/knowledge/operator-pipeline-contract): Deployment specification
 - [catalog/](catalog/): Renderer-agnostic app/node inventory
 - [k8s/](k8s/): Kubernetes deployment manifests (Argo CD + Kustomize)
 - [compose/](compose/): Docker Compose stacks (VM-shared infra runtime)
 - [grafana/](grafana/): Grafana Cloud dashboards and alerting resources as code
 - [images/](images/): Infra-owned Docker image build contexts
 - [provision/](provision/): Substrate/bootstrap (OpenTofu, cloud-init)
-- [akash/](akash/): Akash pointer README — the SDL renderer SHIPPED as TypeScript (`nodes/operator/app/src/adapters/server/compute/akash-sdl.ts`, task.5044); node apps target Akash per ci-cd.md Axiom 23
+- [akash/](akash/): Akash pointer README — the SDL renderer SHIPPED as TypeScript (`nodes/operator/app/src/adapters/server/compute/akash-sdl.ts`, task.5044); node apps target Akash per https://cognidao.org/knowledge/operator-pipeline-contract Axiom 23
 
 ## Boundaries
 
@@ -56,7 +56,7 @@ Everything about how the system runs. Split by responsibility, not by tool.
 
 ## Standards
 
-- `catalog/` is the SSoT for nodes (`CATALOG_IS_SSOT`, ci-cd.md axiom 16). Each `catalog/<name>.yaml` declares: `name`, `type` (node/service), `port`, `node_id` (uuid; node only), `dockerfile`, `image_tag_suffix`, `migrator_tag_suffix`, `path_prefix` (consumed by `scripts/ci/detect-affected.sh`), and `{candidate_a,preview,production}_branch`. Schema is `catalog/_schema.json` (validated on every PR by `check-jsonschema`). Do not add runtime container config, image digests, or non-GitOps wiring here.
+- `catalog/` is the SSoT for nodes (`CATALOG_IS_SSOT`, https://cognidao.org/knowledge/operator-pipeline-contract axiom 16). Each `catalog/<name>.yaml` declares: `name`, `type` (node/service), `port`, `node_id` (uuid; node only), `dockerfile`, `image_tag_suffix`, `migrator_tag_suffix`, `path_prefix` (consumed by `scripts/ci/detect-affected.sh`), and `{candidate_a,preview,production}_branch`. Schema is `catalog/_schema.json` (validated on every PR by `check-jsonschema`). Do not add runtime container config, image digests, or non-GitOps wiring here.
 - `k8s/` and `akash/` are peer renderers. Both read from `catalog/`.
 - `compose/` is for infra services intentionally kept off-cluster.
 - `images/` contains only Dockerfiles and build contexts, not runtime config.
@@ -71,4 +71,4 @@ Everything about how the system runs. Split by responsibility, not by tool.
 
 - `infra/cd/` was renamed to `infra/k8s/` and `infra/tofu/` to `infra/provision/` in the CD pipeline implementation
 - `infra/litellm/` moved to `infra/images/litellm/`, `infra/compose/sandbox-proxy/` to `infra/images/sandbox-proxy/`
-- See `docs/spec/ci-cd.md` for the rationale behind the directory layout
+- See `https://cognidao.org/knowledge/operator-pipeline-contract` for the rationale behind the directory layout

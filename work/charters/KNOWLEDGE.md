@@ -233,7 +233,7 @@ _Updated by governance skills_
 
 | What                   | Where                                                                                                                |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Spec                   | [knowledge-data-plane.md](../../docs/spec/knowledge-data-plane.md)                                                   |
+| Spec                   | [knowledge-data-plane.md](https://node-template.cognidao.org/knowledge/knowledge-data-plane)                         |
 | Design doc             | [knowledge-data-plane-prototype.md](../../docs/design/knowledge-data-plane-prototype.md)                             |
 | Shared package         | [packages/knowledge-store/](../../packages/knowledge-store/)                                                         |
 | Node schema (template) | [nodes/node-template/packages/knowledge/](../../nodes/node-template/packages/knowledge/)                             |

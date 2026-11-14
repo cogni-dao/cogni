@@ -8,7 +8,7 @@
  * Invariants: Shows "$ --" on loading/error; no polling (hook handles fetch strategy); links to Aragon DAO assets page when data available.
  * Side-effects: none (pure presentation)
  * Notes: Phase 2: USDC only. Optional stale indicator for RPC timeouts. Links to app.aragon.org based on chainId.
- * Links: docs/spec/onchain-readers.md
+ * Links: https://node-template.cognidao.org/knowledge/onchain-read-ports
  * @public
  */
 

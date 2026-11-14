@@ -11,7 +11,7 @@
  *   - ROUTE_RELATIVE_ONLY (M3/SSRF): `route` is a node-relative path (must start with "/", no scheme/host) — the dispatch activity binds it to the node's OWN resolved host. Absolute/foreign URLs reject at parse time.
  *   - SCOPE_IS_NODE_BOUND (M1+M2): grant scope for a node task is `task:dispatch:<nodeId>:<route>` — the nodeId is embedded so grant↔node binding is structural (the grants table has no node_id column; no migration). The scope is minted + checked in `@cogni/scheduler-core` `scopes.ts` (single source); validation rejects a grant whose embedded nodeId ≠ the dispatched nodeId.
  * Side-effects: none
- * Links: docs/design/node-temporal-tenant-interface.md (story.5008, task.5029), docs/spec/temporal-patterns.md (SINGLE_INPUT_CONTRACT), pr-review.schema.ts (reference)
+ * Links: docs/design/node-temporal-tenant-interface.md (story.5008, task.5029), https://cognidao.org/knowledge/temporal-workflow-rules (SINGLE_INPUT_CONTRACT), pr-review.schema.ts (reference)
  * @public
  */
 

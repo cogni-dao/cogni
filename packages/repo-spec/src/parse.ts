@@ -7,7 +7,7 @@
  * Scope: Accepts raw YAML string or pre-parsed object, validates with Zod, returns typed result. Does not perform I/O, caching, or side effects.
  * Invariants: REPO_SPEC_AUTHORITY — single canonical parser. Input flexibility enables local file, GitHub API, and test fixture use cases.
  * Side-effects: none
- * Links: .cogni/repo-spec.yaml, docs/spec/node-operator-contract.md
+ * Links: .cogni/repo-spec.yaml, https://node-template.cognidao.org/knowledge/node-sovereignty-contract
  * @public
  */
 

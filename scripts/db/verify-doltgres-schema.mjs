@@ -8,7 +8,7 @@
  * Invariants: latest snapshot is authoritative end-state; checks table/column presence + nullability; throws synchronously on drift.
  * Side-effects: IO (Doltgres reads, filesystem reads).
  * Notes: Uses `sql.unsafe` due to Doltgres 0.56 extended-protocol gap.
- * Links: docs/spec/databases.md §2.6, scripts/db/migrate-doltgres.mjs
+ * Links: https://node-template.cognidao.org/knowledge/database-migration-contract §2.6, scripts/db/migrate-doltgres.mjs
  */
 
 // biome-ignore-all lint/suspicious/noConsole: standalone script; stdout is the only log surface

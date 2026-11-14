@@ -8,7 +8,7 @@
  *   operator-local ones in sibling files here.
  * Invariants: This file must not define any tables - only re-export from the package.
  * Side-effects: none
- * Links: docs/spec/packages-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @public
  */
 

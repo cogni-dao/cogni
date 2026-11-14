@@ -112,9 +112,9 @@ implementable.
   gate-before-move, matching the work item.
 - Cut the Doltgres row or give it a mechanism: `DOLTGRES_URL` composes
   `knowledge_<node>` at the control env's immutable superuser password, which
-  Doltgres 0.56.3 cannot `ALTER` (`databases.md §5.2`), so lane residency makes
-  the embedded credential the wrong env's — a direct
-  `CONTROL_AUTHORITY_UNMOVED` contradiction.
+  Doltgres 0.56.3 cannot `ALTER` (https://node-template.cognidao.org/knowledge/database-migration-contract §5.2`), so lane residency makes
+the embedded credential the wrong env's — a direct
+`CONTROL_AUTHORITY_UNMOVED` contradiction.
 - Name Temporal, Redis and LiteLLM server custody as explicit residual risk, or
   narrow the title to Postgres residency. `SUBSTRATE_PORTS` is one host and the
   Rule table covers two of five services. Non-production Temporal workflow

@@ -10,7 +10,7 @@
  *   - Per STAGE_IO_COLOCATED: Input type defined here, not in a separate barrel
  *   - Per ACTIVITY_IDEMPOTENT: Existing activity idempotency guarantees preserved
  * Side-effects: none (deterministic orchestration only)
- * Links: docs/spec/attribution-ledger.md, docs/spec/temporal-patterns.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, https://cognidao.org/knowledge/temporal-workflow-rules
  * @public
  */
 

@@ -10,7 +10,7 @@
  *   - TRIGGER_IS_SCHEDULE: Uses ScheduleHandle.trigger() — same workflow, same input as the cron
  *   - COOLDOWN_ENFORCED: Rejects requests within 5 minutes of last run
  * Side-effects: IO (HTTP response, Temporal schedule trigger via ScheduleControlPort)
- * Links: docs/spec/attribution-ledger.md, contracts/attribution.collect-trigger.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, contracts/attribution.collect-trigger.v1.contract
  * @public
  */
 

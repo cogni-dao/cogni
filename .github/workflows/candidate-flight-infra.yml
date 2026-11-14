@@ -19,7 +19,7 @@ name: Candidate Flight — Infra
 # of the reviewed script (the false proof from run 34722512025).
 #
 # The two levers are orthogonal: dispatch either without blocking the other.
-# See docs/spec/ci-cd.md "Argo owns reconciliation" axiom.
+# See https://cognidao.org/knowledge/operator-pipeline-contract "Argo owns reconciliation" axiom.
 
 on:
   workflow_dispatch:

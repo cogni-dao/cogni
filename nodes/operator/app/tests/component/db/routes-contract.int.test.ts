@@ -8,7 +8,7 @@
  * Invariants: HTTP status codes correct; Zod schemas enforced; auth failures return 401; ownership returns 404/409.
  * Side-effects: IO (database via test harness)
  * Notes: Focuses on HTTP layer only - contract compliance, not payment scenarios.
- * Links: docs/spec/payments-design.md, src/app/api/v1/payments
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design, src/app/api/v1/payments
  * @public
  */
 

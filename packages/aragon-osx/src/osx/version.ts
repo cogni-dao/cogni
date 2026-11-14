@@ -7,7 +7,7 @@
  * Scope: Pure constants; does not make RPC calls.
  * Invariants: Version tags must match deployed OSx infrastructure.
  * Side-effects: none
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 

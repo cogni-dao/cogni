@@ -11,7 +11,7 @@
  *   - REUSE_GRAPH_RUN_WORKFLOW: delegates to GraphRunWorkflow via executeChild
  *   - Short-lived per tick (~10 events, well under Temporal history limits)
  * Side-effects: none (deterministic orchestration only)
- * Links: docs/spec/agent-roles.md, docs/spec/temporal-patterns.md
+ * Links: docs/spec/agent-roles.md, https://cognidao.org/knowledge/temporal-workflow-rules
  * @public
  */
 

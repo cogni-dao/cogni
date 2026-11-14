@@ -7,7 +7,7 @@
  * Scope: Pure validation schemas. Does not contain I/O or side effects.
  * Invariants: SCHEMA_GENERIC_CONTENT_SPECIFIC — domain specificity in `domain` field + `tags`, not schema structure.
  * Side-effects: none
- * Links: docs/spec/knowledge-data-plane.md, docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 
@@ -29,13 +29,13 @@ export type SourceType = z.infer<typeof SourceTypeSchema>;
 // ---------------------------------------------------------------------------
 // Entry type — what KIND of knowledge a row represents within its domain.
 // The DB column is plain `text` (default 'finding'); this enum is the
-// recommended set per docs/spec/knowledge-syntropy.md § Seed Schema +
+// recommended set per https://node-template.cognidao.org/knowledge/knowledge-recall-path § Seed Schema +
 // § The Hypothesis Loop. Adding values here is a doc + UI change, not a
 // schema migration.
 // ---------------------------------------------------------------------------
 
 export const EntryTypeSchema = z.enum([
-  // Four-beat hypothesis loop (codename EDO; see knowledge-syntropy.md)
+  // Four-beat hypothesis loop (codename EDO; see https://node-template.cognidao.org/knowledge/knowledge-recall-path)
   "event",
   "hypothesis",
   "decision",
@@ -116,7 +116,7 @@ export const CitationTypeSchema = z.enum([
   "supersedes",
   // Cross-plane work item ↔ knowledge tracking edge
   "tracks",
-  // Hypothesis loop edges (see knowledge-syntropy.md § The Hypothesis Loop)
+  // Hypothesis loop edges (see https://node-template.cognidao.org/knowledge/knowledge-recall-path § The Hypothesis Loop)
   "evidence_for", // event/observation/finding → hypothesis (or decision)
   "derives_from", // decision → hypothesis (strict)
   "validates", // outcome → hypothesis (strict)

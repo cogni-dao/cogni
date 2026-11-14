@@ -6,7 +6,7 @@ Read, in order, before starting:
 
 1. `GET https://cognidao.org/api/v1/knowledge/knowledge-contribution-flow` — recall, edit ops, citations, the focused inbox and human review. Use your saved COGNI key.
 2. `GET https://cognidao.org/api/v1/knowledge/segment-markdown-knowledge` — how research becomes a `finding` or `conclusion`.
-3. [Architecture](docs/spec/architecture.md) — system architecture and design principles
+3. [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract) — system architecture and design principles
 4. [Feature Development Guide](docs/guides/feature-development.md) — how features are built
 
 Then read the spike work item to understand the research question.

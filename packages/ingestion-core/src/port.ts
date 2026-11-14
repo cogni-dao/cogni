@@ -10,7 +10,7 @@
  * - All adapter deps (octokit, discord.js) live in the adapter, never in this package.
  * - CAPABILITY_REQUIRED: DataSourceRegistration must have at least one of poll or webhook.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md#source-adapter-interface
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

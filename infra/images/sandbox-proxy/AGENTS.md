@@ -15,7 +15,7 @@ Nginx config template for the **ephemeral** sandbox LLM proxy container (`nginx.
 
 - [Sandbox Spec](https://cognidao.org/knowledge/sandbox-agent-execution-architecture)
 - [LlmProxyManager](../../../apps/operator/src/adapters/server/sandbox/llm-proxy-manager.ts) (generates config from template)
-- [Billing Ingest Spec](../../../docs/spec/billing-ingest.md)
+- [Billing Ingest Spec](https://node-template.cognidao.org/knowledge/billing-ingest-callback)
 
 ## Boundaries
 

@@ -7,7 +7,7 @@ description: Use any time you are about to add, change, or migrate a Postgres or
 
 The minimal procedure for changing a table. Follow it; don't improvise.
 
-**Canon:** [`docs/spec/databases.md` §2.6](../../../docs/spec/databases.md). This skill is the operational checklist.
+**Canon:** [`https://node-template.cognidao.org/knowledge/database-migration-contract` §2.6](https://node-template.cognidao.org/knowledge/database-migration-contract). This skill is the operational checklist.
 
 ## Postgres — the only path
 
@@ -22,10 +22,10 @@ The minimal procedure for changing a table. Follow it; don't improvise.
 
 Drizzle does not generate RLS. If your new table has a foreign key to `users`, you MUST add RLS in the same migration (hand-authored fallback below) or the coverage gate fails CI. Two correct shapes:
 
-- **User-facing reads** → an owner-scoped policy (`USING (... = current_setting('app.current_user_id', true))`). See `docs/spec/database-rls.md`.
+- **User-facing reads** → an owner-scoped policy (`USING (... = current_setting('app.current_user_id', true))`). See `https://node-template.cognidao.org/knowledge/rls-tenant-isolation`.
 - **Service-role-only** (worker reads/writes via the BYPASSRLS role, no app-role path) → `ENABLE + FORCE` with **no policy** = deny-all (fail-closed). No fake policy needed.
 
-The gate (`tests/component/setup/testcontainers-postgres.global.ts`) fails if any `public` table with a FK to `users` has `relrowsecurity = false` — invariant `RLS_COVERAGE` in `database-rls.md`. It exists because user-FK tables historically shipped with no RLS (the `0010`→`0032` epoch-ledger leak); the gate makes that class of drift impossible to merge.
+The gate (`tests/component/setup/testcontainers-postgres.global.ts`) fails if any `public` table with a FK to `users` has `relrowsecurity = false` — invariant `RLS_COVERAGE` in https://node-template.cognidao.org/knowledge/rls-tenant-isolation. It exists because user-FK tables historically shipped with no RLS (the `0010`→`0032` epoch-ledger leak); the gate makes that class of drift impossible to merge.
 
 ## Hand-authored fallback — only if drizzle-kit literally can't emit it
 

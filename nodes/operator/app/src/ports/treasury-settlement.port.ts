@@ -7,7 +7,7 @@
  * Scope: Defines the settlement interface and outcome type. Does not expose token addresses, chain details, or distribution mechanics.
  * Invariants: SEMANTIC_PORT — method names describe business intent, not infrastructure mechanism.
  * Side-effects: none (interface definition only)
- * Links: docs/spec/operator-wallet.md, task.0085
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary, task.0085
  * @public
  */
 

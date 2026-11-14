@@ -18,7 +18,7 @@
  *   - DENIES_FOLLOW_EVERY_LANE: `_system` and `_shared` are denied on every lane gained,
  *     data AND metadata — a per-node grant must never reach a shared path in ANY lane.
  * Side-effects: IO (reads repo scripts + source)
- * Links: bug.5196, docs/spec/secrets-management.md Invariant 1,
+ * Links: bug.5196, https://cognidao.org/knowledge/secrets-management Invariant 1,
  *   nodes/operator/app/src/shared/secrets/secrets-lane-trust.data.ts
  * @public
  */

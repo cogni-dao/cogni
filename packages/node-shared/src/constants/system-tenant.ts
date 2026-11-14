@@ -7,7 +7,7 @@
  * Scope: Deterministic UUID PKs for the cogni_system billing account and its owner principal. Does not contain business logic or authorization checks.
  * Invariants: IDs match the seeded records in migration 0008_seed_system_tenant.sql. All PKs are valid UUID v4.
  * Side-effects: none
- * Links: docs/spec/system-tenant.md
+ * Links: https://node-template.cognidao.org/knowledge/system-tenant-identity
  * @public
  */
 

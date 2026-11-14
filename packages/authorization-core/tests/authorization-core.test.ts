@@ -7,7 +7,7 @@
  * Scope: Package-local unit tests with injected fake OpenFGA clients only. Does not call network services.
  * Invariants: Deny and unavailable remain distinct; OBO execution performs permission and delegation checks.
  * Side-effects: none
- * Links: docs/spec/rbac.md
+ * Links: https://cognidao.org/knowledge/authz-port-contract
  * @internal
  */
 

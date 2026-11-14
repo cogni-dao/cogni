@@ -9,7 +9,7 @@
  *   - Schedule creation always succeeds regardless of balance
  *   - Credit gating happens at execution time via PreflightCreditCheckDecorator
  * Side-effects: none
- * Links: src/app/api/v1/schedules/route.ts, docs/spec/multi-provider-llm.md
+ * Links: src/app/api/v1/schedules/route.ts, https://node-template.cognidao.org/knowledge/multi-provider-llm-routing
  * @internal
  */
 

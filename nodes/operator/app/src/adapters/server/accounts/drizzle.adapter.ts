@@ -16,7 +16,7 @@
  * - ServiceDrizzleAccountService uses serviceDb directly (BYPASSRLS)
  * Side-effects: IO (database operations)
  * Notes: Uses transactions for consistency; recordChargeReceipt is non-blocking (never throws InsufficientCredits per ACTIVITY_METRICS.md)
- * Links: Implements AccountService port, uses shared database schema, docs/spec/graph-execution.md, docs/spec/financial-ledger.md, types/billing.ts
+ * Links: Implements AccountService port, uses shared database schema, https://node-template.cognidao.org/knowledge/graph-execution-invariants, https://node-template.cognidao.org/knowledge/financial-ledger-tigerbeetle, types/billing.ts
  * @public
  */
 

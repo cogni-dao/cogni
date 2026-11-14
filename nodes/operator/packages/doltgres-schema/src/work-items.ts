@@ -16,7 +16,7 @@
  *   - PATCH_ALLOWLIST: server-managed columns (`id`, `created_at`, `updated_at`)
  *     are not in the adapter's PATCH allowlist.
  * Side-effects: none
- * Links: docs/spec/work-items-port.md, docs/spec/knowledge-data-plane.md, docs/research/dolt-baseline-port-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/work-items-port-contract, https://node-template.cognidao.org/knowledge/knowledge-data-plane, docs/research/dolt-baseline-port-syntropy.md
  * @public
  */
 

@@ -14,11 +14,11 @@
  *     boundary is OpenFGA per-node + the operator-stamped `cogni/<env>/<node>/*`
  *     path + the OpenBao `_system`/`_shared` policy deny — NOT a per-key list.
  *     This needs no per-node codegen and never blocks a node adding a new key.
- *   - SUBSTRATE_OWNS_DB_CREDS: the reserved set mirrors secrets-management.md
+ *   - SUBSTRATE_OWNS_DB_CREDS: the reserved set mirrors https://cognidao.org/knowledge/secrets-management
  *     Invariant 15 (DB role material is OpenBao/substrate-owned). Fixed +
  *     operator-domain — independent of any node's catalog.
  * Side-effects: none
- * Links: docs/design/node-self-serve-secrets.md, docs/spec/secrets-management.md
+ * Links: docs/design/node-self-serve-secrets.md, https://cognidao.org/knowledge/secrets-management
  * @public
  */
 
@@ -41,7 +41,7 @@
  * let a self-serve write clobber `CONNECTIONS_ENCRYPTION_KEY` on prod beacon.
  */
 export const SUBSTRATE_RESERVED_KEYS: ReadonlySet<string> = new Set<string>([
-  // Per-node DB role material + DSNs (substrate-owned; secrets-management.md Inv 15).
+  // Per-node DB role material + DSNs (substrate-owned; https://cognidao.org/knowledge/secrets-management Inv 15).
   "APP_DB_PASSWORD",
   "APP_DB_SERVICE_PASSWORD",
   "APP_DB_MIGRATION_PASSWORD",
@@ -236,7 +236,7 @@ export const OFF_CLUSTER_WORKLOAD_DENIED_KEYS: ReadonlySet<string> = new Set([
   "IDENTITY_ATTESTATION_PRIVATE_KEY",
   "GH_REVIEW_APP_ID",
   "GH_REVIEW_APP_PRIVATE_KEY_BASE64",
-  // Substrate-owned database role material (secrets-management.md Invariant 15).
+  // Substrate-owned database role material (https://cognidao.org/knowledge/secrets-management Invariant 15).
   // Minted by the DB provisioners, not by the node; they authorize direct
   // in-cluster Postgres/Doltgres role login, bypassing the node's app layer.
   // An off-cluster workload reaches its data through its own DSN, not these.

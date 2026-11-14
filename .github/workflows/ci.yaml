@@ -213,7 +213,7 @@ jobs:
 
       # Intentionally inline — single-workflow gate, no logic duplicated across
       # workflows. SCRIPTS_ARE_THE_API targets cross-workflow drift, not unique
-      # gate policy. See docs/spec/node-ci-cd-contract.md.
+      # gate policy. See https://node-template.cognidao.org/knowledge/node-ci-sovereignty.
       #
       # ARG_MAX: dorny's matched-file JSON is spliced into a quoted heredoc at
       # YAML-render time, NOT passed via `env:`. A whole-node-retirement diff
@@ -513,7 +513,7 @@ jobs:
   component:
     # Skip on merge_group: not in required-status-checks (see infra/github/branch-protection.json),
     # so the queue doesn't gate on it. Re-running on the rebased candidate burns ~3 min for marginal
-    # incremental signal vs PR-time. Spec: docs/spec/merge-queue-config.md § Excluded from required.
+    # incremental signal vs PR-time. Spec: https://cognidao.org/knowledge/merge-queue-required-checks § Excluded from required.
     needs: env_manager_fast_path
     if: always() && github.event_name != 'merge_group' && (needs.env_manager_fast_path.result != 'success' || needs.env_manager_fast_path.outputs.eligible != 'true')
     runs-on: ubuntu-latest

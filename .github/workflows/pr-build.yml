@@ -7,7 +7,7 @@ name: PR Build
 # artifact so downstream candidate-flight consumers see no contract change.
 #
 # ONE artifact identity: every event publishes `<image_repository>:sha-<sourceSha>`
-# (SOURCE_SHA_IS_DEPLOY_IDENTITY / BUILD_ONCE_PROMOTE_DIGEST, node-ci-cd-contract.md).
+# (SOURCE_SHA_IS_DEPLOY_IDENTITY / BUILD_ONCE_PROMOTE_DIGEST, https://node-template.cognidao.org/knowledge/node-ci-sovereignty).
 # The legacy pr-{N}-{X} / mq-{N}-{Y} / preview-{sha} split-brain is purged — the
 # operator app artifact now follows the same contract as every node-template node.
 #
@@ -325,7 +325,7 @@ jobs:
           check-jsonschema --schemafile infra/catalog/_schema.json infra/catalog/*.yaml
           # Cross-file node_port uniqueness — inexpressible in pure JSON-schema.
           # node_port is the per-VM k8s NodePort; a clash silently blackholes a
-          # node (CATALOG_IS_SSOT, docs/spec/ci-cd.md axiom 16).
+          # node (CATALOG_IS_SSOT, https://cognidao.org/knowledge/operator-pipeline-contract axiom 16).
           bash scripts/ci/next-free-node-port.sh --check
 
       - name: Detect affected image targets

@@ -13,8 +13,8 @@ Pure domain logic for the attribution ledger — shared between the Next.js app 
 
 ## Pointers
 
-- [Attribution Ledger Spec](../../docs/spec/attribution-ledger.md)
-- [Packages Architecture](../../docs/spec/packages-architecture.md)
+- [Attribution Ledger Spec](https://node-template.cognidao.org/knowledge/attribution-epoch-ledger)
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules)
 
 ## Boundaries
 
@@ -112,7 +112,7 @@ pnpm --filter @cogni/attribution-ledger build
 ## Change Protocol
 
 - Update this file when public exports change
-- Coordinate with attribution-ledger.md spec invariants
+- Coordinate with https://node-template.cognidao.org/knowledge/attribution-epoch-ledger spec invariants
 
 ## Notes
 

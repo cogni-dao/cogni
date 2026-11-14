@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 # Module: scripts/bootstrap/install/install-check-jsonschema.sh
-# Purpose: Install check-jsonschema CLI for catalog schema validation (CATALOG_IS_SSOT, ci-cd.md axiom 16).
+# Purpose: Install check-jsonschema CLI for catalog schema validation (CATALOG_IS_SSOT, https://cognidao.org/knowledge/operator-pipeline-contract axiom 16).
 # Status: OPT-IN. Not wired into setup.sh. Only catalog editors need it locally.
 #         CI is the authoritative validator (pipx install + run inside pr-build.yml).
 # Usage: bash scripts/bootstrap/install/install-check-jsonschema.sh

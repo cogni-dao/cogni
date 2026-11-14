@@ -10,9 +10,9 @@ skills:
   - ../../.claude/skills/cicd-secrets-expert/SKILL.md
 spec_refs:
   - node-baas-substrate-model
-  - ../spec/secrets-management.md
-  - ../spec/secrets-classification.md
-  - ../spec/node-ci-cd-contract.md
+  - https://cognidao.org/knowledge/secrets-management
+  - https://node-template.cognidao.org/knowledge/secrets-routing-tiers
+  - https://node-template.cognidao.org/knowledge/node-ci-sovereignty
 related:
   - ./node-wizard-secret-setting.md
   - ./secrets-catalog-per-node.md

@@ -7,7 +7,7 @@
  * Scope: Pure data and constants only. Does NOT include wagmi/viem runtime deps — evm-wagmi + onchain interface stay app-local.
  * Invariants: PURE_LIBRARY — pure data and constants only.
  * Side-effects: none
- * Links: docs/spec/packages-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @public
  */
 

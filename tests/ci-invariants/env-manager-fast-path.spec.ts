@@ -11,7 +11,7 @@
  *   SKIP_WITHOUT_RUNNERS: eligible changes satisfy standard contexts as skipped jobs.
  *   INVALID_CLAIMS_RUN: classifier failure/ineligibility enters enforcement rather than skipping.
  * Side-effects: IO (reads .github/workflows/{ci.yaml,pr-build.yml})
- * Links: scripts/ci/classify-env-manager-fast-path.sh, docs/spec/merge-queue-config.md
+ * Links: scripts/ci/classify-env-manager-fast-path.sh, https://cognidao.org/knowledge/merge-queue-required-checks
  * @public
  */
 

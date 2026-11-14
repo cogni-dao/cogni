@@ -20,7 +20,7 @@
  *   `.cogni/secrets-catalog.yaml`. The spec carries no `secret_refs` (retired, bug.5254; the
  *   schema refuses it).
  * Side-effects: none — pure function, no IO, no env.
- * Links: Cogni-DAO/node-template:.cogni/repo-spec.yaml, src/features/nodes/repo-spec-builder.ts, docs/spec/node-ci-cd-contract.md, task.5092, task.5079
+ * Links: Cogni-DAO/node-template:.cogni/repo-spec.yaml, src/features/nodes/repo-spec-builder.ts, https://node-template.cognidao.org/knowledge/node-ci-sovereignty, task.5092, task.5079
  * @public
  */
 
@@ -96,7 +96,7 @@ export function renderRepoSpec(input: RenderRepoSpecInput): string {
 # regenerate both UUIDs:
 #   node_id:  openssl rand -hex 16 | sed 's/\\(.\\{8\\}\\)\\(.\\{4\\}\\)\\(.\\{4\\}\\)\\(.\\{4\\}\\)\\(.\\{12\\}\\)/\\1-\\2-\\3-\\4-\\5/'
 #   scope_id: uuidv5(node_id, "default")
-# See docs/spec/identity-model.md, docs/spec/multi-node-tenancy.md.
+# See https://cognidao.org/knowledge/identity-keys-no-overload, https://node-template.cognidao.org/knowledge/node-tenancy-isolation.
 
 schema_version: "0.1.4"
 

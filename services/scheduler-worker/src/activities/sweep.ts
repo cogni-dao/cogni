@@ -11,7 +11,7 @@
  *   - LIFECYCLE_ORDER_FROM_HUB: fetched items rank closest-to-done first
  *     (needs_closeout > needs_merge > needs_implement …), then by priority
  * Side-effects: IO (HTTP to app API)
- * Links: docs/spec/agent-roles.md, docs/spec/temporal-patterns.md
+ * Links: docs/spec/agent-roles.md, https://cognidao.org/knowledge/temporal-workflow-rules
  * @internal
  */
 

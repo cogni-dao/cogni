@@ -8,7 +8,7 @@
  * Invariants: Contracts may import from contracts//types; not core/features/ports/adapters/app/components.
  * Side-effects: IO (spawns depcruise subprocess)
  * Notes: Uses arch probes in src/contracts/__arch_probes__/ to test boundary enforcement.
- * Links: .dependency-cruiser.cjs (contracts layer rules), docs/spec/architecture.md
+ * Links: .dependency-cruiser.cjs (contracts layer rules), https://node-template.cognidao.org/knowledge/hexagonal-layering-contract
  * @public
  */
 

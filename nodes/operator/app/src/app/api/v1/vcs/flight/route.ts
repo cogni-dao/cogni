@@ -22,7 +22,7 @@
  *     this route does not write a competing lease.
  * Side-effects: IO (DB read, GitHub REST API via DeployPlanePort)
  * Links: task.0370, packages/node-contracts/src/vcs.flight.v1.contract.ts,
- *   docs/spec/development-lifecycle.md
+ *   https://node-template.cognidao.org/knowledge/work-item-status-machine
  * @public
  */
 

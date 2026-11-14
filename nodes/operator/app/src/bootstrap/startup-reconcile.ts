@@ -22,7 +22,7 @@
  *     succeeds. A kick that loses the advisory-lock race is retried, not dropped.
  * Side-effects: IO (Temporal schedule reconcile, DB advisory lock) — async, detached.
  * Links: bootstrap/container.ts (getContainer trigger),
- *   bootstrap/jobs/syncGovernanceSchedules.job.ts, docs/spec/plugin-attribution-pipeline.md
+ *   bootstrap/jobs/syncGovernanceSchedules.job.ts, https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  *
  * Triggered from getContainer() (first server use, e.g. the readyz probe), not from
  * instrumentation.ts: dep-cruiser forbids instrumentation → bootstrap, and the

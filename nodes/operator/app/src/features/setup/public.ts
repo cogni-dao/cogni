@@ -7,7 +7,7 @@
  * Scope: Re-exports hooks and types for external consumers. Does not contain implementation logic.
  * Invariants: Only exports public API; internal modules remain private.
  * Side-effects: none
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 

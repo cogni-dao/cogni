@@ -11,7 +11,7 @@
  *   - All input/output types are plain serializable objects (JSON-safe for Temporal wire format)
  *   - Per NO_SERVICE_IMPORTS: never imports from services/
  * Side-effects: none
- * Links: docs/spec/temporal-patterns.md, docs/spec/packages-architecture.md
+ * Links: https://cognidao.org/knowledge/temporal-workflow-rules, https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @public
  */
 

@@ -12,7 +12,7 @@
  *   - `initialState` MUST be sourced from `cookieToInitialState(wagmiConfig, cookie)` —
  *     anything else triggers React hydration-mismatch warnings on authed loads.
  * Side-effects: reads request headers (Next.js dynamic API).
- * Links: ./providers.client, @/shared/web3/wagmi.config, docs/spec/architecture.md §SSR-unsafe libraries
+ * Links: ./providers.client, @/shared/web3/wagmi.config, https://node-template.cognidao.org/knowledge/hexagonal-layering-contract §SSR-unsafe libraries
  * @public
  */
 

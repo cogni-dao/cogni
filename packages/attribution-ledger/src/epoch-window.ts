@@ -7,7 +7,7 @@
  * Scope: Computes epoch period boundaries from a reference timestamp, aligned to Monday 00:00 UTC. Does not perform I/O or depend on Temporal runtime.
  * Invariants: Deterministic, timezone-anchored, versioned. No I/O or side-effects.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

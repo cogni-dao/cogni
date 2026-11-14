@@ -18,7 +18,7 @@
  *   - LIST_LIMIT_PARITY: caller passes the same params the client fetcher uses
  *     (the browse UI fetches `?limit=500`).
  * Side-effects: IO (Doltgres reads via the injected port)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @internal
  */
 

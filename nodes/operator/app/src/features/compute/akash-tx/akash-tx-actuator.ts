@@ -31,7 +31,7 @@
  *     however many environments this writer mints for. The account's sole writer is this
  *     actuator; its legacy controller is absent and Console/manual writes are forbidden.
  *     candidate-a holds the managed test account and production a dedicated one; preview hosts
- *     no writer (ci-cd.md Axiom 26).
+ *     no writer (https://cognidao.org/knowledge/operator-pipeline-contract Axiom 26).
  *   - FAIL_CLOSED_BUT_RECOVERABLE: an allocation that cannot be resolved to exactly one LIVE
  *     lease raises allocation_ambiguous and is NEVER healed by a fresh create. An allocation
  *     PROVEN not to be billing — no live deployment beyond its baseline, or a create that

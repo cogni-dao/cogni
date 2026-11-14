@@ -32,7 +32,7 @@
  *     `composeItemEnvelope`, the same call the HTTP facade makes. `query` and `queryPage` never do.
  * Evaluation: returns package rankScore and forwards whole-score CAS patches without changing priority.
  * Side-effects: none (factory only)
- * Links: docs/spec/development-lifecycle.md
+ * Links: https://node-template.cognidao.org/knowledge/work-item-status-machine
  * @internal
  */
 

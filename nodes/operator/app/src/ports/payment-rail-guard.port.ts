@@ -6,7 +6,7 @@
  * Purpose: Fail-closed guard for live payment rail activation before an intent is issued.
  * Scope: Defines the port and typed misconfiguration error. Implementations may read chain state.
  * Side-effects: none
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

@@ -13,8 +13,8 @@ Branded ID types for compile-time RLS enforcement across the monorepo. Provides 
 
 ## Pointers
 
-- [Database RLS Spec](../../docs/spec/database-rls.md): RLS architecture and actor model
-- [Packages Architecture](../../docs/spec/packages-architecture.md): Package conventions
+- [Database RLS Spec](https://node-template.cognidao.org/knowledge/rls-tenant-isolation): RLS architecture and actor model
+- [Packages Architecture](https://node-template.cognidao.org/knowledge/package-isolation-rules): Package conventions
 
 ## Boundaries
 

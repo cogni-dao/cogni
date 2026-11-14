@@ -11,7 +11,7 @@
  * - Used by worker activities, not by schedule CRUD adapter
  * - actorId required on all methods for RLS SET LOCAL / audit trail
  * Side-effects: none (interface definition only)
- * Links: docs/spec/scheduler.md, docs/spec/unified-graph-launch.md, DrizzleGraphRunAdapter
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, https://node-template.cognidao.org/knowledge/graph-run-launch-contract, DrizzleGraphRunAdapter
  * @public
  */
 

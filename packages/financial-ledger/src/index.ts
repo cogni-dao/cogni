@@ -9,7 +9,7 @@
  *   - This barrel does NOT export adapters (N-API isolation)
  *   - All public types and constants exported here
  * Side-effects: none
- * Links: docs/spec/financial-ledger.md, docs/spec/packages-architecture.md
+ * Links: https://node-template.cognidao.org/knowledge/financial-ledger-tigerbeetle, https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @public
  */
 

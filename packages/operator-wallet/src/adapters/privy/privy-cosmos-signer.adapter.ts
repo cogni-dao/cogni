@@ -15,7 +15,7 @@
  *   mirroring PRIVY_SIGNED_REQUESTS in the EVM adapter); an unprotected wallet
  *   can sign with app-id + secret alone.
  * Side-effects: IO (Privy REST API calls)
- * Links: docs/spec/operator-wallet.md, work items task.5059 (live raw_sign proof), task.5060
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary, work items task.5059 (live raw_sign proof), task.5060
  * @public
  */
 

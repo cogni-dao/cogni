@@ -29,7 +29,7 @@
  *     interfaces. Producers parse with `PrReviewWorkflowInputSchema` before
  *     `workflowClient.start(...)`.
  * Side-effects: none (deterministic orchestration only)
- * Links: docs/spec/temporal-patterns.md, docs/spec/node-ci-cd-contract.md#single-domain-scope, task.0191, task.0410, task.0419, story.5102
+ * Links: https://cognidao.org/knowledge/temporal-workflow-rules, https://node-template.cognidao.org/knowledge/node-ci-sovereignty, task.0191, task.0410, task.0419, story.5102
  * @public
  */
 
@@ -274,7 +274,7 @@ async function legacyWebhookReview(
   }
 
   // 2a. Routing — short-circuit conflict / miss without spending AI tokens.
-  //     Per docs/spec/node-ci-cd-contract.md § Single-Domain Scope, cross-domain
+  //     Per https://node-template.cognidao.org/knowledge/node-ci-sovereignty § Single-Domain Scope, cross-domain
   //     PRs are refused at review-time mirroring the CI gate's verdict.
   if (context.owningNode.kind !== "single") {
     await postRoutingDiagnosticActivity({

@@ -23,7 +23,7 @@
  *     errorCode + target nodeId/env + count only. Never trace content.
  * Side-effects: IO (registry read, authz check, Langfuse query)
  * Links: src/bootstrap/observability.factory.ts, src/ports/langfuse-reader.port.ts,
- *   docs/spec/substrate-access-grant.md, docs/spec/observability.md#langfuse-integration, logs/route.ts
+ *   https://cognidao.org/knowledge/read-fleet-health, https://node-template.cognidao.org/knowledge/observability-logging-contract, logs/route.ts
  * @public
  */
 

@@ -13,7 +13,7 @@ Legacy setup pages. Protected route group requiring wallet connection.
 
 ## Pointers
 
-- [Node Formation Spec](../../../../../../docs/spec/node-formation.md): P0 MVP design
+- [Node Formation Spec](https://cognidao.org/knowledge/node-formation-contract): P0 MVP design
 
 ## Boundaries
 

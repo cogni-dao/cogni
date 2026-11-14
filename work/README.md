@@ -179,4 +179,4 @@ external_refs:
 ## Related
 
 - [Documentation System](../docs/README.md)
-- [Spec + Project Lifecycle](../docs/spec/development-lifecycle.md)
+- [Spec + Project Lifecycle](https://node-template.cognidao.org/knowledge/work-item-status-machine)

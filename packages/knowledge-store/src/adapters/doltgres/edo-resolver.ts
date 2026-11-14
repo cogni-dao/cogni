@@ -10,7 +10,7 @@
  *   - RESOLVER_IDEMPOTENT: re-resolving an already-resolved hypothesis is a no-op.
  *   - All SQL via sql.unsafe() + escapeValue() for injection safety.
  * Side-effects: IO (database reads + writes + dolt_commit)
- * Links: docs/spec/knowledge-syntropy.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

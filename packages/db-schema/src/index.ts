@@ -7,7 +7,7 @@
  * Scope: Re-exports only. Does not define any tables.
  * Invariants: Must re-export every slice so the resulting namespace matches src/shared/db/schema.ts.
  * Side-effects: none
- * Links: docs/spec/packages-architecture.md, docs/spec/database-rls.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules, https://node-template.cognidao.org/knowledge/rls-tenant-isolation
  * @public
  */
 

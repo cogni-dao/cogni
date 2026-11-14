@@ -9,7 +9,7 @@
  *   - SSE_RESUME_SAFE: Supports Last-Event-ID header for cursor-based replay
  *   - ONE_STREAM_PER_NODE: Single stream key per node, multiplexed by event.type
  * Side-effects: IO (Redis stream subscription, HTTP SSE response)
- * Links: docs/spec/data-streams.md, @cogni/node-streams
+ * Links: https://node-template.cognidao.org/knowledge/node-streams-transport, @cogni/node-streams
  * @public
  */
 

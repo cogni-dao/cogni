@@ -123,7 +123,7 @@ export const serverSchema = z.object({
   // Billing (Stage 6.5)
   // SPEND-side LLM markup (calculateLlmUserCharge). The PURCHASE-side markup +
   // system-tenant revenue share are governance config in repo-spec payments_in
-  // (markup_factor / revenue_share), not env. See docs/spec/chain-config.md.
+  // (markup_factor / revenue_share), not env. See https://node-template.cognidao.org/knowledge/chain-config-governance.
   USER_PRICE_MARKUP_FACTOR: z.coerce.number().min(1.0).default(2.0),
 
   // Database connections — both required, no component-piece fallback.
@@ -365,13 +365,13 @@ export const serverSchema = z.object({
 
   // Privy (Operator Wallet) - Optional
   // Required only when operator wallet features are enabled.
-  // Per operator-wallet.md: KEY_NEVER_IN_APP — Privy HSM holds signing keys.
+  // Per https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary: KEY_NEVER_IN_APP — Privy HSM holds signing keys.
   PRIVY_APP_ID: optionalString,
   PRIVY_APP_SECRET: optionalString,
   PRIVY_SIGNING_KEY: optionalString,
 
   // Operator wallet top-up cap (USD)
-  // Per operator-wallet.md: MAX_TOPUP_CAP — per-tx ceiling for OpenRouter top-ups.
+  // Per https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary: MAX_TOPUP_CAP — per-tx ceiling for OpenRouter top-ups.
   OPERATOR_MAX_TOPUP_USD: z.coerce.number().positive().default(500),
 
   // OpenRouter API key — optional. Provider funding disabled when not set.

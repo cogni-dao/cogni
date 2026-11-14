@@ -7,7 +7,7 @@
  * Scope: Public route using wrapPublicRoute(); returns unsigned per-user projections for finalized epochs. Does not contain business logic.
  * Invariants: NODE_SCOPED, ALL_MATH_BIGINT, VALIDATE_IO, PUBLIC_READS_FINALIZED_ONLY.
  * Side-effects: IO (HTTP response, database read)
- * Links: docs/spec/attribution-ledger.md, contracts/attribution.epoch-user-projections.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, contracts/attribution.epoch-user-projections.v1.contract
  * @public
  */
 

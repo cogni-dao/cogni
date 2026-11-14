@@ -20,7 +20,7 @@
  * Side-effects: IO (clones artifacts into /tmp and reads the hub via git; prints markdown to stdout)
  * Notes: Drives sync-drift-detector.yml, which pipes stdout into `gh issue create` / `gh issue edit`
  *   for the ONE hub tracking issue.
- * Links: docs/spec/repo-sync-contract.md, .cogni/sync-manifest.yaml, scripts/ci/lib/sync-policy.mjs,
+ * Links: https://cognidao.org/knowledge/sync-manifest-contract, .cogni/sync-manifest.yaml, scripts/ci/lib/sync-policy.mjs,
  *   scripts/ci/sync-test-parent.mjs, .github/workflows/sync-drift-detector.yml
  * @public
  */

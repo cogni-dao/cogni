@@ -23,7 +23,7 @@
  *     materialized bridge secrets — froze at whatever last hand-provisioned it.
  *   - ENV_SCOPED_PARENT: the environment's App targets only its configured deployment parent.
  * Side-effects: IO (authz check, GitHub workflow dispatch or Git ref update)
- * Links: story.5027, bug.5409, docs/spec/cicd-platform-boundary.md
+ * Links: story.5027, bug.5409, https://cognidao.org/knowledge/operator-plane-contract
  * @public
  */
 

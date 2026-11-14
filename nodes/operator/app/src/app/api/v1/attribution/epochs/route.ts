@@ -7,7 +7,7 @@
  * Scope: SIWE-protected route; returns all epochs for the current node. Does not contain business logic.
  * Invariants: NODE_SCOPED, ALL_MATH_BIGINT, VALIDATE_IO, WRITE_ROUTES_AUTHED.
  * Side-effects: IO (HTTP response, database read)
- * Links: docs/spec/attribution-ledger.md, contracts/attribution.list-epochs.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, contracts/attribution.list-epochs.v1.contract
  * @public
  */
 

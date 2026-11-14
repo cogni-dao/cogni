@@ -8,7 +8,7 @@
  * Invariants: No horizontal overflow; min-w-0/truncate/shrink-0 guards; GitHub hidden <lg; theme hidden <md; treasury always visible.
  * Side-effects: none
  * Notes: Lives in features/layout as app-shell composition that knows about treasury, account chrome, etc.
- * Links: src/features/layout/components/AccountSlot.tsx, src/styles/tailwind.css, docs/spec/onchain-readers.md
+ * Links: src/features/layout/components/AccountSlot.tsx, src/styles/tailwind.css, https://node-template.cognidao.org/knowledge/onchain-read-ports
  * @public
  */
 

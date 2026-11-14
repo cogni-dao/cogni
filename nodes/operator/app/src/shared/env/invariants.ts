@@ -8,7 +8,7 @@
  * Invariants: Throws RuntimeSecretError on missing secrets; throws InfraConnectivityError on unreachable infra; memoizes production only.
  * Side-effects: IO (network calls for connectivity checks)
  * Notes: Call assert* functions from adapter methods and runtime endpoints only, never from build-reachable code.
- * Links: src/shared/env/server.ts, src/app/(infra)/readyz/route.ts, docs/spec/scheduler.md
+ * Links: src/shared/env/server.ts, src/app/(infra)/readyz/route.ts, https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @public
  */
 

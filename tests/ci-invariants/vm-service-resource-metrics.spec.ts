@@ -17,7 +17,7 @@
  *     never on the public fleet-status share.
  *   - KUBELET_SCRAPE_HAS_A_DEADMAN: the telemetry deadman covers the kubelet_cadvisor job.
  * Side-effects: IO (reads committed files)
- * Links: story.5084, docs/spec/observability.md, infra/compose/runtime/configs/alloy-config.metrics.alloy
+ * Links: story.5084, https://node-template.cognidao.org/knowledge/observability-logging-contract, infra/compose/runtime/configs/alloy-config.metrics.alloy
  * @public
  */
 

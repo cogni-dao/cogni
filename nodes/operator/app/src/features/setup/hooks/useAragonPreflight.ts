@@ -7,7 +7,7 @@
  * Scope: Client-side preflight checks (getCode + PSP invariant); does not initiate transactions or modify state.
  * Invariants: Must verify DAOFactory, PSP, and TokenVotingRepo have deployed code.
  * Side-effects: IO (RPC reads via wagmi)
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 

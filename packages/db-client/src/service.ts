@@ -9,7 +9,7 @@
  * - MUST NOT be imported from Next.js web runtime code (enforced by dependency-cruiser)
  * - Only drizzle.service-client.ts (getServiceDb singleton) and services/ may import this
  * Side-effects: IO (database connections)
- * Links: docs/spec/database-rls.md
+ * Links: https://node-template.cognidao.org/knowledge/rls-tenant-isolation
  * @public
  */
 

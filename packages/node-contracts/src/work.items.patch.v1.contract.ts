@@ -11,7 +11,7 @@
  *   - PATCH_ALLOWLIST: only fields in `set` are mutable. id/created_at/updated_at are server-managed.
  *   - STRICT_WRAPPER: the payload wrapper is `{ set: {...} }` and the top level is strict.
  *     `set` is the SQL-style UPDATE…SET envelope and mirrors the domain port
- *     `WorkItemCommandPort.patch(id, set)` (docs/spec/work-items-port.md) — the operation
+ *     `WorkItemCommandPort.patch(id, set)` (https://node-template.cognidao.org/knowledge/work-items-port-contract) — the operation
  *     is PATCH, the field being applied is `set`. The canonical wrapper is `set`, NOT
  *     `patch`. A mistaken `{ patch: {...} }` (guessed from the operation name) surfaces as
  *     an explicit `Unrecognized key: "patch"` issue instead of a silent-ignore that only
@@ -26,7 +26,7 @@
  *     The package schema owns the cite rules.
  *   - MOVES_SERVER_PINS_BASELINE (story.0033): `set.moves` is `[{ metricId, direction }]`, at most 3, or `[]`; the shared schema drops any other key on an entry and the store pins the baseline.
  * Side-effects: none
- * Links: /api/v1/work/items/[id] route, docs/spec/work-items-port.md, work/items/task.0423.doltgres-work-items-source-of-truth.md
+ * Links: /api/v1/work/items/[id] route, https://node-template.cognidao.org/knowledge/work-items-port-contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
  * @internal
  */
 

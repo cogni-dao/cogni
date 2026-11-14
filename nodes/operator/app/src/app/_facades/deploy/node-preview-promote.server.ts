@@ -38,7 +38,7 @@
  *     A `node.promote` gate is vNext if a node can earn preview without candidate-a.
  * Side-effects: IO (DB read, GitHub REST/GraphQL via DeployPlanePort). The caller awaits the
  * observed workflow run identity before acknowledging the webhook.
- * Links: docs/spec/ci-cd.md, docs/spec/node-ci-cd-contract.md,
+ * Links: https://cognidao.org/knowledge/operator-pipeline-contract, https://node-template.cognidao.org/knowledge/node-ci-sovereignty,
  *   src/ports/deploy-plane.port.ts, .github/workflows/promote-and-deploy.yml
  * @public
  */

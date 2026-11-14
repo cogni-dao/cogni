@@ -17,7 +17,7 @@
  *   - SINGLE_HOME: writes ONLY to the node's own `.cogni/repo-spec.yaml`.
  *   - IDEMPOTENT_SPLICE: re-splicing an already-activated spec is a no-op.
  * Side-effects: none.
- * Links: docs/spec/node-formation.md, docs/spec/tokenomics.md, task.0135
+ * Links: https://cognidao.org/knowledge/node-formation-contract, https://cognidao.org/knowledge/tokenomics-budget-policy, task.0135
  * @public
  */
 

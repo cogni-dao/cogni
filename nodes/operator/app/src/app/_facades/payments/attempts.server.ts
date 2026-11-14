@@ -8,7 +8,7 @@
  * Invariants: Billing account from session only; state transition events include chainId and errorCode; post-credit funding deps threaded to service layer (not invoked in facade).
  * Side-effects: IO (via PaymentAttemptUserRepository, PaymentAttemptServiceRepository, AccountService, ServiceAccountService, OnChainVerifier, PostCreditFundingDeps ports).
  * Notes: Facades own DTO mapping. Emits payments.verified on CREDITED transitions. buildPostCreditFundingDeps() constructs settlement deps (treasury + ledger) from container when at least one downstream port is available. Provider top-up was retired (OpenRouter 410'd programmatic crypto top-up).
- * Links: docs/spec/payments-design.md, src/contracts/AGENTS.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design, src/contracts/AGENTS.md
  * @public
  */
 

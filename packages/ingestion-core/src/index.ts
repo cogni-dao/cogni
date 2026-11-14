@@ -9,7 +9,7 @@
  * - ADAPTERS_NOT_IN_CORE: Only types + pure helpers here. Implementations in services/.
  * - No imports from src/ or services/. Pure domain package.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md#source-adapter-interface
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger
  * @public
  */
 

@@ -8,7 +8,7 @@
  *   publication from unreconciled evidence; reports the cumulative epoch whose root is live.
  * Invariants: ALL_MATH_BIGINT, FOLD_FROM_PERSISTED_MANIFEST, PUBLISH_FROM_ON_CHAIN_EVIDENCE.
  * Side-effects: none
- * Links: docs/spec/tokenomics-distribution.md, bug.5042
+ * Links: https://node-template.cognidao.org/knowledge/distribution-lifecycle, bug.5042
  * @public
  */
 

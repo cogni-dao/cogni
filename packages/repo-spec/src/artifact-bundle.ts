@@ -7,7 +7,7 @@
  * Scope: Pure schemas and assembly. Does not read git, registries, files, or deployment state.
  * Invariants: EXACT_SERVICE_COVERAGE, EXACT_ARTIFACT_COVERAGE, ONE_SOURCE_SHA, DIGEST_PINNED, ATOMIC_OR_NOTHING.
  * Side-effects: none
- * Links: story.5016, task.5065, docs/spec/node-ci-cd-contract.md
+ * Links: story.5016, task.5065, https://node-template.cognidao.org/knowledge/node-ci-sovereignty
  * @public
  */
 

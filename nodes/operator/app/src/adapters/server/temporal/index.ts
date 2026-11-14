@@ -7,7 +7,7 @@
  * Scope: Re-exports Temporal schedule control adapters. Does not contain implementations.
  * Invariants: Named exports only
  * Side-effects: none
- * Links: ScheduleControlPort, docs/spec/scheduler.md
+ * Links: ScheduleControlPort, https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @public
  */
 

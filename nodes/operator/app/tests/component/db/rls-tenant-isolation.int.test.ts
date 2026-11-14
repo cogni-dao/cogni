@@ -11,7 +11,7 @@
  * Side-effects: IO (database operations via testcontainers)
  * Notes: getAppDb() connects as app_user (FORCE RLS via provision.sh). getSeedDb()
  *        connects as app_service (BYPASSRLS) for seed/cleanup.
- * Links: docs/spec/database-rls.md, src/adapters/server/db/tenant-scope.ts
+ * Links: https://node-template.cognidao.org/knowledge/rls-tenant-isolation, src/adapters/server/db/tenant-scope.ts
  * @public
  */
 

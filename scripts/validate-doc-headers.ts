@@ -8,7 +8,7 @@
  * Invariants: Required fields non-empty; Module matches `@layer/path` pattern; SPDX headers exact match.
  * Side-effects: IO
  * Notes: Supports parenthetical descriptions in side-effects; supports Next.js dynamic routes [] and route groups (); enforces unified header format.
- * Links: docs/spec/style.md, scripts/validate-agents-md.mjs
+ * Links: https://node-template.cognidao.org/knowledge/code-style-standard, scripts/validate-agents-md.mjs
  * @internal
  */
 

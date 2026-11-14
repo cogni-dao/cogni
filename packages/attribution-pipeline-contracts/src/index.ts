@@ -14,7 +14,7 @@
  * - ALLOCATOR_NEEDS_DECLARED: required evaluations validated before compute().
  * - SELECTION_POLICY_PLUGGABLE: adding a new selection policy requires zero changes to this package.
  * Side-effects: none
- * Links: docs/spec/plugin-attribution-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @public
  */
 

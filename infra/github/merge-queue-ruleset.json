@@ -6,7 +6,7 @@
     "silently DROPS `required_merge_queue` (verified 2026-04-28) — which is why enabling the queue was",
     "a manual UI step. The rulesets API DOES carry the queue: a `merge_queue` rule is REST-settable",
     "(the 2026-04-28 test-repo experiment enabled the queue this way). So the queue toggle is now",
-    "config-as-code, killing the last manual step. See docs/spec/merge-queue-config.md.",
+    "config-as-code, killing the last manual step. See https://cognidao.org/knowledge/merge-queue-required-checks.",
     "",
     "Scope discipline: this ruleset carries ONLY the `merge_queue` rule. The required-status-checks",
     "set stays in classic protection (`branch-protection.json`) — the 'rulesets for event-specific",

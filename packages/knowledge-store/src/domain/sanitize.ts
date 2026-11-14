@@ -11,7 +11,7 @@
  *     Every other C0 control (U+0000–U+0008, U+000B, U+000C, U+000E–U+001F) and
  *     DEL (U+007F) is stripped.
  * Side-effects: none
- * Links: docs/spec/knowledge-data-plane.md, bug.5062
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane, bug.5062
  * @public
  */
 

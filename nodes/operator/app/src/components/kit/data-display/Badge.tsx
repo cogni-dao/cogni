@@ -8,7 +8,7 @@
  * Invariants: No className forwarding; uses typed props only; integrates with design system.
  * Side-effects: none
  * Notes: Wraps shadcn Badge but replaces styling with project CVA factories from styles/ui/data.ts
- * Links: docs/spec/ui-implementation.md, src/styles/ui/data.ts
+ * Links: https://node-template.cognidao.org/knowledge/frontend-development, src/styles/ui/data.ts
  * @public
  */
 

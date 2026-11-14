@@ -7,7 +7,7 @@
  * Scope: Drizzle CLI configuration only; does not establish runtime database connections or migrate node application tables.
  * Invariants: The control schema and migration output remain excluded from application schema globs and barrels.
  * Side-effects: none
- * Links: packages/db-schema/infra-control.ts, docs/spec/databases.md
+ * Links: packages/db-schema/infra-control.ts, https://node-template.cognidao.org/knowledge/database-migration-contract
  * @internal
  */
 import { defineConfig } from "drizzle-kit";

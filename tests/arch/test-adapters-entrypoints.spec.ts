@@ -8,7 +8,7 @@
  * Invariants: Only index.ts can be imported; internal files blocked.
  * Side-effects: IO (spawns depcruise subprocess)
  * Notes: Uses arch probes in src/bootstrap/__arch_probes__/ to test entry point enforcement.
- * Links: .dependency-cruiser.cjs (no-internal-test-adapter-imports rule), docs/spec/architecture.md
+ * Links: .dependency-cruiser.cjs (no-internal-test-adapter-imports rule), https://node-template.cognidao.org/knowledge/hexagonal-layering-contract
  * @public
  */
 

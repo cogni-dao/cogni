@@ -10,7 +10,7 @@
  * - ALLOCATION_CONTEXT_EXTENSIBLE: context grows by adding optional fields, never by changing compute() signature.
  * - FRAMEWORK_NO_IO: this module contains zero I/O.
  * Side-effects: none
- * Links: docs/spec/plugin-attribution-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @public
  */
 

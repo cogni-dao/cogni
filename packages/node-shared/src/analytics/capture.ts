@@ -13,7 +13,7 @@
  *   - Server-side only (minimal HTTP batch client, no posthog-node dependency)
  * Side-effects: IO (HTTP to PostHog API)
  * Notes: Supports both self-hosted PostHog and PostHog Cloud via POSTHOG_HOST + POSTHOG_API_KEY env vars.
- * Links: docs/analytics/events.v0.md, docs/spec/posthog.md
+ * Links: docs/analytics/events.v0.md, https://node-template.cognidao.org/knowledge/posthog-capture-contract
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Re-exports all scheduling port interfaces and errors. Does not contain implementations.
  * Invariants: All exports are interfaces or error classes only.
  * Side-effects: none
- * Links: docs/spec/scheduler.md
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract
  * @public
  */
 

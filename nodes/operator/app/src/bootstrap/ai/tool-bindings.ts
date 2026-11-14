@@ -179,7 +179,7 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
       knowledgeCapability: deps.knowledgeCapability,
     }) as AnyToolImplementation,
 
-    // EDO hypothesis-loop tools (knowledge-syntropy.md § The Hypothesis Loop)
+    // EDO hypothesis-loop tools (https://node-template.cognidao.org/knowledge/knowledge-recall-path § The Hypothesis Loop)
     // Wired to runtime EdoCapability from the container (createEdoCapability
     // over DoltgresKnowledgeStoreAdapter + DoltgresEdoResolverAdapter).
     [EDO_HYPOTHESIZE_NAME]: createEdoHypothesizeImplementation({

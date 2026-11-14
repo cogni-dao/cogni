@@ -7,7 +7,7 @@
  * Scope: Auth-protected GET endpoint for listing unsigned user projections. PATCH returns 410 — use review-subject-overrides instead. Does not perform override writes or finalization logic.
  * Invariants: NODE_SCOPED, VALIDATE_IO.
  * Side-effects: IO (HTTP response, database read)
- * Links: docs/spec/attribution-ledger.md, contracts/attribution.epoch-user-projections.v1.contract
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, contracts/attribution.epoch-user-projections.v1.contract
  * @public
  */
 

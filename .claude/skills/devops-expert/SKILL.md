@@ -41,11 +41,11 @@ When current code differs from a north star, report the gap. Do not weaken the t
 
 ## Freeze policy (read first for any new platform behavior)
 
-[CI/CD Platform Boundary and Freeze Policy](../../../docs/spec/cicd-platform-boundary.md). The deploy brain (`scripts/ci/*.sh` and `.github/workflows/*.yml`) is frozen. Add no new platform logic in bash or YAML. Add no new deploy, promote or provision workflow. Add no new infra-mutating `.sh`. New platform behavior goes into the typed `.ts` operator plane (`nodes/operator/app/src/features/node-deploy/`, `DeployCapability`). The gate when reviewing: bug fix, catalog-driven change and guard tightening are fine in place. New branching, env policy, promotion semantics and secret or domain rules are platform work. A standalone node's own GitHub Actions are not frozen.
+[CI/CD Platform Boundary and Freeze Policy](https://cognidao.org/knowledge/operator-plane-contract). The deploy brain (`scripts/ci/*.sh` and `.github/workflows/*.yml`) is frozen. Add no new platform logic in bash or YAML. Add no new deploy, promote or provision workflow. Add no new infra-mutating `.sh`. New platform behavior goes into the typed `.ts` operator plane (`nodes/operator/app/src/features/node-deploy/`, `DeployCapability`). The gate when reviewing: bug fix, catalog-driven change and guard tightening are fine in place. New branching, env policy, promotion semantics and secret or domain rules are platform work. A standalone node's own GitHub Actions are not frozen.
 
 Other contracts to recall:
 
-- [Multi-Repo Sync Contract](../../../docs/spec/repo-sync-contract.md): a change under `.github/**`, `scripts/**` or `infra/**` must consider sync impact to node-template and nodes.
+- [Multi-Repo Sync Contract](https://cognidao.org/knowledge/sync-manifest-contract): a change under `.github/**`, `scripts/**` or `infra/**` must consider sync impact to node-template and nodes.
 - [`unexecuted-lane-untested`](https://cognidao.org/knowledge/unexecuted-lane-untested): CI-green without one real execution does not validate a new lane.
 - [`lane-is-not-control`](https://cognidao.org/knowledge/lane-is-not-control): reconciler, payer and shared-substrate identity follow the control environment.
 - [`test-fleet-parity-boundary`](https://cognidao.org/knowledge/test-fleet-parity-boundary): `cogni-test-org` mirrors behavior but isolates authority. The test operator (`test.cognidao.org`) serves test-org nodes only.
@@ -113,6 +113,6 @@ SSH keys and IPs live in `.local/{env}-vm-key` and `.local/{env}-vm-ip` on the p
 
 ## Pointers
 
-- [CI/CD Spec](../../../docs/spec/ci-cd.md)
+- [CI/CD Spec](https://cognidao.org/knowledge/operator-pipeline-contract)
 - [`promote` skill](../promote/SKILL.md): operator promotion and its failure modes.
 - `.github/workflows/` and `scripts/ci/`: actual source. Verify claims against code.

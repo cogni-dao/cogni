@@ -8,7 +8,7 @@
  * Invariants: Adapters may import from ports/core/shared; not features/app/components/bootstrap.
  * Side-effects: IO (spawns depcruise subprocess)
  * Notes: Uses arch probes in src/adapters/__arch_probes__/ to test boundary enforcement.
- * Links: .dependency-cruiser.cjs (adapters layer rules), docs/spec/architecture.md
+ * Links: .dependency-cruiser.cjs (adapters layer rules), https://node-template.cognidao.org/knowledge/hexagonal-layering-contract
  * @public
  */
 

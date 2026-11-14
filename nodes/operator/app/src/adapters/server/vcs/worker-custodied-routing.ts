@@ -8,7 +8,7 @@
  * Invariants: Protected immutable generated authority, additive admission, bounded Contents CAS,
  *   same-App signed receipt provenance, unrelated bytes preserved, no cluster/image mutation.
  * Side-effects: GitHub reads and Contents writes through the configured operator installation.
- * Links: spike.5010, docs/spec/cicd-platform-boundary.md
+ * Links: spike.5010, https://cognidao.org/knowledge/operator-plane-contract
  * @internal
  */
 import { createHash } from "node:crypto";

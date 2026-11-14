@@ -7,7 +7,7 @@
  * Scope: Re-exports only; does not define new symbols.
  * Invariants: Must export all public symbols from submodules.
  * Side-effects: none
- * Links: docs/spec/tokenomics-distribution.md
+ * Links: https://node-template.cognidao.org/knowledge/distribution-lifecycle
  * @public
  */
 

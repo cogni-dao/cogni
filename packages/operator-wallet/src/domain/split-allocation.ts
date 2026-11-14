@@ -7,7 +7,7 @@
  * Scope: Derives operator/DAO allocation ratios from billing economics using bigint-only arithmetic. Does not perform I/O, access env, or use floating-point math.
  * Invariants: Allocations sum to SPLIT_TOTAL_ALLOCATION; operator share strictly between 0 and 1; all inputs are scaled bigint (PPM).
  * Side-effects: none
- * Links: docs/spec/operator-wallet.md, scripts/deploy-split.ts
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary, scripts/deploy-split.ts
  * @public
  */
 

@@ -11,7 +11,7 @@
  *   - COGNI_TOKEN_ONLY (Bearer-first); DEVELOPER_GATED (`node.flight`); fail-closed without a store.
  *   - OPERATOR_HOLDS_METADATA_NOT_DATA_ACCESS: the answer comes from the OPERATOR's own Postgres,
  *     populated by the node's own migrator. There is no credential here that can read `cogni_<node>`
- *     (docs/spec/multi-node-tenancy.md NO_CROSS_NODE_QUERIES).
+ *     (https://node-template.cognidao.org/knowledge/node-tenancy-isolation NO_CROSS_NODE_QUERIES).
  *   - SILENCE_IS_NOT_SUCCESS: a node that has never reported returns `state:"never_reported"` with null
  *     contents — never an empty applied list, which would read as "migrated, nothing pending".
  *   - GRACEFUL_UNWIRED: 503 `observability_unwired` when the report store is not wired on this runtime.
@@ -19,7 +19,7 @@
  *     + errorCode + nodeId/env + counts + state only. Never a migration tag, hash, or DSN.
  * Side-effects: IO (registry read, authz check, operator Postgres read)
  * Links: src/features/nodes/observability-db-schema.ts, src/ports/node-migration-report.port.ts,
- *   observability/logs/route.ts (same tuple, same shape), docs/spec/databases.md § 2
+ *   observability/logs/route.ts (same tuple, same shape), https://node-template.cognidao.org/knowledge/database-migration-contract § 2
  * @public
  */
 

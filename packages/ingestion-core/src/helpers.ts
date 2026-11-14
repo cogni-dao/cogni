@@ -10,7 +10,7 @@
  * - canonicalJson() produces identical output regardless of input key order.
  * - hashCanonicalPayload() produces identical SHA-256 for identical canonical fields.
  * Side-effects: none
- * Links: docs/spec/attribution-ledger.md (ACTIVITY_IDEMPOTENT, PROVENANCE_REQUIRED)
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger (ACTIVITY_IDEMPOTENT, PROVENANCE_REQUIRED)
  * @public
  */
 

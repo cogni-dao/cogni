@@ -7,7 +7,7 @@
  * Scope: Server component only; delegates all client-side behavior to CreditsPageClient; does not perform data fetching or payment wiring.
  * Invariants: All payment configuration handled via backend intent endpoint (chain-agnostic).
  * Side-effects: none (server render only)
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

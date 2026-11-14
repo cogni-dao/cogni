@@ -9,7 +9,7 @@
  * - PROFILE_SELECTS_ALLOCATOR: worker resolves allocators via registries, not deriveAllocationAlgoRef().
  * - EXECUTOR_IS_GENERIC: worker does not call computeReceiptWeights() directly.
  * Side-effects: filesystem reads
- * Links: [services/scheduler-worker/src/activities/ledger.ts, services/scheduler-worker/src/workflows/collect-epoch.workflow.ts, docs/spec/plugin-attribution-pipeline.md]
+ * Links: [services/scheduler-worker/src/activities/ledger.ts, services/scheduler-worker/src/workflows/collect-epoch.workflow.ts, https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline]
  * @internal
  */
 

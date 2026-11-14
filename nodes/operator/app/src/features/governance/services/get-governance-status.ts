@@ -10,7 +10,7 @@
  * - BIGINT_SERIALIZATION: Balance converted to string for JSON compatibility
  * - FEATURE_SERVICE_LAYER: Route delegates here, never queries DB directly
  * Side-effects: IO (reads via ports)
- * Links: docs/spec/governance-status-api.md, src/ports/governance-status.port.ts
+ * Links: https://node-template.cognidao.org/knowledge/governance-status-api, src/ports/governance-status.port.ts
  * @public
  */
 

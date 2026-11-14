@@ -7,7 +7,7 @@
  * Scope: Covers pure Temporal configuration and failure policy; does not start a Worker or server.
  * Invariants: TRANSPORT_UNCERTAINTY_IS_INCOMPLETE, ACTIVITY_IDEMPOTENCY.
  * Side-effects: none
- * Links: docs/spec/scheduler.md, docs/spec/temporal-patterns.md, bug.5447.
+ * Links: https://node-template.cognidao.org/knowledge/scheduled-run-grant-contract, https://cognidao.org/knowledge/temporal-workflow-rules, bug.5447.
  * @internal
  */
 

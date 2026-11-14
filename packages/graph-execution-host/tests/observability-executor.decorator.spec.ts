@@ -8,7 +8,7 @@
  * Invariants:
  *   - LANGFUSE_NODE_ATTRIBUTION: nodeId on every trace (tag + metadata) when wired; omitted (not null) when absent
  * Side-effects: none (in-memory spies only)
- * Links: src/decorators/observability-executor.decorator.ts, docs/spec/observability.md#langfuse-integration
+ * Links: src/decorators/observability-executor.decorator.ts, https://node-template.cognidao.org/knowledge/observability-logging-contract
  * @internal
  */
 

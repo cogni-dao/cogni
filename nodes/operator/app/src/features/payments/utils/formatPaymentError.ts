@@ -12,7 +12,7 @@
  *     through to "Something went wrong"). Backend error codes win first.
  *   - `debug` is for logging only — NEVER render in UI.
  * Side-effects: none
- * Links: docs/spec/payments-design.md, docs/spec/error-handling.md (FAULT_PARTY_BEFORE_BUCKET)
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design, https://node-template.cognidao.org/knowledge/layered-error-translation (FAULT_PARTY_BEFORE_BUCKET)
  * @public
  */
 

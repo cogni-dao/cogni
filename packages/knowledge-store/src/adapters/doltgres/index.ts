@@ -12,7 +12,7 @@
  *   - No Drizzle query builder for writes (parameterized queries fail on Doltgres).
  *   - Connection string injected, never from process.env (PACKAGES_NO_ENV).
  * Side-effects: IO (database reads/writes)
- * Links: docs/spec/knowledge-data-plane.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-data-plane
  * @public
  */
 

@@ -13,7 +13,7 @@
  *   - Returns the resolved owningNode; the worker activity emits the
  *     `review.routed` structured log for the validate-candidate scorecard loop.
  * Side-effects: IO (GitHub REST via adapter).
- * Links: review.pr-context.internal.v1 contract, docs/spec/node-ci-cd-contract.md
+ * Links: review.pr-context.internal.v1 contract, https://node-template.cognidao.org/knowledge/node-ci-sovereignty
  * @internal
  */
 

@@ -8,7 +8,7 @@
  * Invariants: Ownership enforced via session billing account; idempotent on same txHash for same attempt.
  * Side-effects: IO (binds txHash, updates payment_attempts, logs payment_events, initiates verification).
  * Notes: Returns 404 if attempt not found or not owned; 409 if txHash already bound to different attempt.
- * Links: docs/spec/payments-design.md
+ * Links: https://node-template.cognidao.org/knowledge/payments-usdc-verification-design
  * @public
  */
 

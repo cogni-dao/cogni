@@ -8,7 +8,7 @@
  * Invariants: Native rows need trusted per-observation evidence, never names/tags alone;
  *   shared backend credentials remain server-side and paging is bound to node/lane/query.
  * Side-effects: none (interface)
- * Links: src/adapters/server/observability/langfuse-reader.adapter.ts, src/bootstrap/observability.factory.ts, docs/spec/substrate-access-grant.md
+ * Links: src/adapters/server/observability/langfuse-reader.adapter.ts, src/bootstrap/observability.factory.ts, https://cognidao.org/knowledge/read-fleet-health
  * @public
  */
 

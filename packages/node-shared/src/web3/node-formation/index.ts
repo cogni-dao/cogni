@@ -7,7 +7,7 @@
  * Scope: Re-exports all node formation web3 primitives from subdirectory; does not contain implementation logic.
  * Invariants: All exports are pure constants or types.
  * Side-effects: none
- * Links: docs/spec/node-formation.md
+ * Links: https://cognidao.org/knowledge/node-formation-contract
  * @public
  */
 
