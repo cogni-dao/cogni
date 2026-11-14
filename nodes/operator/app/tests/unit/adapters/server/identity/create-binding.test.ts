@@ -9,7 +9,7 @@
  * - BINDINGS_ARE_EVIDENCED: Every new binding INSERT is paired with an identity_events INSERT.
  * - NO_AUTO_MERGE: ON CONFLICT(provider, external_id) DO NOTHING — idempotent, no re-pointing.
  * Side-effects: none
- * Links: docs/spec/decentralized-identity.md
+ * Links: https://cognidao.org/knowledge/user-identity-bindings
  * @internal
  */
 
