@@ -970,6 +970,7 @@ function createContainer(): Container {
             : undefined,
         appId: env.GH_REVIEW_APP_ID,
         privateKeyBase64: env.GH_REVIEW_APP_PRIVATE_KEY_BASE64,
+        workflowClient: async () => (await getTemporalWorkflowClient()).client,
       },
       // Substrate host pressure (bug.5613): the operator Grafana read credential, or null when unwired.
       prometheus: createGoalPrometheusReader(),

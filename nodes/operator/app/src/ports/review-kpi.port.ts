@@ -34,6 +34,8 @@ export interface ReviewCheckFacts {
   readonly status: string;
   /** Lowercase GitHub conclusion (`success`, `failure`, `neutral`, ...); absent until completed. */
   readonly conclusion: string | undefined;
+  /** GitHub's actual check start; absent timestamps cannot establish a duration. */
+  readonly startedAt: Date | undefined;
   readonly completedAt: Date | undefined;
 }
 
@@ -68,6 +70,32 @@ export interface ReviewKpiSourcePort {
     readonly prs: readonly ReviewPrFacts[];
     /** Present when more pages exist. */
     readonly nextCursor: string | undefined;
+    readonly asOf: Date;
+  }>;
+}
+
+/** Duration discovery uses durable review workflow identities, never the PR's mutable commit list. */
+export interface ReviewDurationSourcePort {
+  readReviewHeads(input: {
+    readonly repo: ReviewKpiRepo;
+    readonly from: Date;
+    readonly to: Date;
+    readonly signal: AbortSignal;
+  }): Promise<{
+    readonly heads: readonly {
+      readonly headSha: string;
+      readonly pr: number;
+    }[];
+    readonly incomplete: boolean;
+    readonly asOf: Date;
+  }>;
+  readHeadChecks(input: {
+    readonly repo: ReviewKpiRepo;
+    readonly headSha: string;
+    readonly signal: AbortSignal;
+  }): Promise<{
+    readonly checks: readonly ReviewCheckFacts[];
+    readonly incomplete: boolean;
     readonly asOf: Date;
   }>;
 }

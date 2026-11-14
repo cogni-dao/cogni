@@ -5,7 +5,9 @@
  * Module: `@adapters/server/review/review-kpi-source.adapter`
  * Purpose: The PR-review goal-KPI source (task.5450): bounded read-only GitHub GraphQL reads of a repo's
  *   pull requests with the review App's `Cogni Git PR Review` check runs on their commits.
- * Scope: IO only. Classification and the calculators live in `features/review/review-kpis.ts`.
+ * Scope: IO only. Coverage/fix-rate use bounded PR reads. Duration discovers immutable heads from
+ *   the owning Temporal namespace's request-bound PrReviewWorkflow identities, then reads the
+ *   App's ALL check runs directly on each head. PR updatedAt and rebases cannot drop duration samples.
  *   Goal metrics, not telemetry: nothing here touches Prometheus (hub goal-metrics-vs-telemetry).
  * Invariants:
  *   - READ_ONLY: queries only; the review App's installation token is used for reads.
@@ -17,14 +19,18 @@
  *     each); anything that does not fit marks the PR `incomplete`, never drops it silently.
  *   - STABLE_PAGING: results sort by creation time ascending, so a PR updated mid-read does not move.
  *   - NO_HARDCODED_IDENTITY: the repo comes from the caller and the App id from operator env.
+ *   - DURATION_COVERAGE: verify native retention, include running and later-closed workflows,
+ *     cap visibility at 300 executions/50 distinct heads, and make truncated or missing sources unknown.
  * Side-effects: IO (outbound HTTPS to api.github.com)
  * Links: ports/review-kpi.port.ts, adapters/server/review/github-review.adapter.ts, task.5450
  * @internal
  */
 
 import { createAppAuth } from "@octokit/auth-app";
+import type { WorkflowClient } from "@temporalio/client";
 import type {
   ReviewCheckFacts,
+  ReviewDurationSourcePort,
   ReviewKpiRepo,
   ReviewKpiSourcePort,
   ReviewPrFacts,
@@ -55,9 +61,9 @@ const QUERY = `query($q: String!, $after: String, $pageSize: Int!, $appId: Int!,
               checkSuites(first: ${SUITES_PER_COMMIT}, filterBy: { appId: $appId }) {
                 pageInfo { hasNextPage }
                 nodes {
-                  checkRuns(first: ${RUNS_PER_SUITE}, filterBy: { checkName: $check }) {
+                  checkRuns(first: ${RUNS_PER_SUITE}, filterBy: { checkName: $check, checkType: ALL }) {
                     pageInfo { hasNextPage }
-                    nodes { databaseId status conclusion completedAt }
+                    nodes { databaseId status conclusion startedAt completedAt }
                   }
                 }
               }
@@ -69,10 +75,75 @@ const QUERY = `query($q: String!, $after: String, $pageSize: Int!, $appId: Int!,
   }
 }`;
 
+const HEAD_CHECKS_QUERY = `query($owner: String!, $repo: String!, $sha: String!, $appId: Int!, $check: String!) {
+  repository(owner: $owner, name: $repo) {
+    object(oid: $sha) { ... on Commit {
+      oid
+      checkSuites(first: ${SUITES_PER_COMMIT}, filterBy: { appId: $appId }) {
+        pageInfo { hasNextPage }
+        nodes { checkRuns(first: ${RUNS_PER_SUITE}, filterBy: { checkName: $check, checkType: ALL }) {
+          pageInfo { hasNextPage }
+          nodes { databaseId status conclusion startedAt completedAt }
+        } }
+      }
+    } }
+  }
+}`;
+
+/** At most 300 native workflow executions and 50 distinct heads per duration read. */
+export const MAX_DURATION_WORKFLOWS = 300;
+export const MAX_DURATION_HEADS = 50;
+
+/** Native visibility outlives a force-pushed head. A closed review finalizes its check before closing. */
+export async function readTemporalReviewHeads(
+  client: WorkflowClient,
+  input: Parameters<ReviewDurationSourcePort["readReviewHeads"]>[0],
+  asOf: Date
+): ReturnType<ReviewDurationSourcePort["readReviewHeads"]> {
+  searchQueryFor(input.repo, { kind: "updated", since: input.from });
+  const prefix = `pr-review:${input.repo.owner}/${input.repo.repo}/`;
+  return client.connection.withAbortSignal(input.signal, async () => {
+    const namespace = await client.connection.workflowService.describeNamespace(
+      { namespace: client.options.namespace }
+    );
+    const retention = Number(
+      namespace.config?.workflowExecutionRetentionTtl?.seconds
+    );
+    if (
+      !Number.isFinite(retention) ||
+      retention * 1000 < asOf.getTime() - input.from.getTime()
+    )
+      return { heads: [], incomplete: true, asOf };
+    const heads = new Map<string, { headSha: string; pr: number }>();
+    let count = 0;
+    // No upper CloseTime: a check can finish in-window while its workflow closes later.
+    const query = `WorkflowType = 'PrReviewWorkflow' AND WorkflowId STARTS_WITH '${prefix}' AND StartTime < '${input.to.toISOString()}' AND (CloseTime >= '${input.from.toISOString()}' OR ExecutionStatus = 'Running')`;
+    for await (const execution of client.list({ query, pageSize: 100 })) {
+      input.signal.throwIfAborted();
+      if (++count > MAX_DURATION_WORKFLOWS)
+        return { heads: [...heads.values()], incomplete: true, asOf };
+      const suffix = execution.workflowId.startsWith(prefix)
+        ? execution.workflowId.slice(prefix.length)
+        : "";
+      const match = /^([1-9][0-9]*)\/([0-9a-f]{40})$/.exec(suffix);
+      if (!match || !Number.isSafeInteger(Number(match[1])))
+        return { heads: [...heads.values()], incomplete: true, asOf };
+      heads.set(match[2] as string, {
+        pr: Number(match[1]),
+        headSha: match[2] as string,
+      });
+      if (heads.size > MAX_DURATION_HEADS)
+        return { heads: [], incomplete: true, asOf };
+    }
+    return { heads: [...heads.values()], incomplete: false, asOf };
+  });
+}
+
 interface CheckRunNode {
   databaseId: number | null;
   status: string | null;
   conclusion: string | null;
+  startedAt: string | null;
   completedAt: string | null;
 }
 
@@ -106,10 +177,21 @@ interface SearchResponse {
   };
 }
 
+interface HeadChecksResponse {
+  repository: {
+    object: {
+      oid: string;
+      checkSuites: NonNullable<
+        PullRequestNode["commits"]
+      >["nodes"][number]["commit"]["checkSuites"];
+    } | null;
+  } | null;
+}
+
 export type GraphqlFn = (
   query: string,
   variables: Record<string, unknown>
-) => Promise<SearchResponse>;
+) => Promise<SearchResponse | HeadChecksResponse>;
 
 /** Map one GraphQL PR node to port facts. Non-PR search hits (empty objects) return undefined. */
 export function mapPullRequestNode(
@@ -125,12 +207,20 @@ export function mapPullRequestNode(
     for (const suite of commit.checkSuites.nodes) {
       if (suite.checkRuns.pageInfo.hasNextPage) incomplete = true;
       for (const run of suite.checkRuns.nodes) {
-        if (run.databaseId === null) continue;
+        if (
+          run.databaseId === null ||
+          !Number.isSafeInteger(run.databaseId) ||
+          run.databaseId <= 0
+        ) {
+          incomplete = true;
+          continue;
+        }
         checks.push({
           id: run.databaseId,
           headSha: commit.oid,
           status: (run.status ?? "").toLowerCase(),
           conclusion: run.conclusion ? run.conclusion.toLowerCase() : undefined,
+          startedAt: run.startedAt ? new Date(run.startedAt) : undefined,
           completedAt: run.completedAt ? new Date(run.completedAt) : undefined,
         });
       }
@@ -168,13 +258,16 @@ export interface GitHubReviewKpiSourceConfig {
   readonly checkName: string;
 }
 
-export class GitHubReviewKpiSource implements ReviewKpiSourcePort {
+export class GitHubReviewKpiSource
+  implements ReviewKpiSourcePort, ReviewDurationSourcePort
+{
   private readonly graphqlByRepo = new Map<string, GraphqlFn>();
 
   constructor(
     private readonly config: GitHubReviewKpiSourceConfig,
     private readonly clock: () => Date = () => new Date(),
-    private readonly graphqlOverride?: GraphqlFn
+    private readonly graphqlOverride?: GraphqlFn,
+    private readonly workflowClient?: () => Promise<WorkflowClient>
   ) {}
 
   /** Resolve the review App's installation on the repo, then keep one token-caching client per repo. */
@@ -219,7 +312,7 @@ export class GitHubReviewKpiSource implements ReviewKpiSourcePort {
       REQUEST_TIMEOUT_MS
     );
     const graphql: GraphqlFn = (query, variables) =>
-      octokit.graphql<SearchResponse>(query, variables);
+      octokit.graphql<SearchResponse | HeadChecksResponse>(query, variables);
     this.graphqlByRepo.set(key, graphql);
     return graphql;
   }
@@ -247,6 +340,7 @@ export class GitHubReviewKpiSource implements ReviewKpiSourcePort {
       request: { signal: input.signal },
     });
     input.signal.throwIfAborted();
+    if (!("search" in data)) throw new Error("review_kpi_response_invalid");
     const prs = data.search.nodes
       .map(mapPullRequestNode)
       .filter((p): p is ReviewPrFacts => p !== undefined);
@@ -254,6 +348,57 @@ export class GitHubReviewKpiSource implements ReviewKpiSourcePort {
     return {
       prs,
       nextCursor: hasNextPage && endCursor ? endCursor : undefined,
+      asOf: this.clock(),
+    };
+  }
+
+  async readReviewHeads(
+    input: Parameters<ReviewDurationSourcePort["readReviewHeads"]>[0]
+  ) {
+    if (!this.workflowClient)
+      throw new Error("review_duration_visibility_unavailable");
+    return readTemporalReviewHeads(
+      await this.workflowClient(),
+      input,
+      this.clock()
+    );
+  }
+
+  async readHeadChecks(
+    input: Parameters<ReviewDurationSourcePort["readHeadChecks"]>[0]
+  ) {
+    searchQueryFor(input.repo, { kind: "updated", since: new Date(0) });
+    if (
+      !/^[0-9a-f]{40}$/.test(input.headSha) ||
+      !/^\d+$/.test(this.config.appId) ||
+      !this.config.checkName.trim()
+    )
+      throw new Error("review_duration_identity_invalid");
+    const graphql = await this.graphqlFor(input.repo, input.signal);
+    const data = await graphql(HEAD_CHECKS_QUERY, {
+      owner: input.repo.owner,
+      repo: input.repo.repo,
+      sha: input.headSha,
+      appId: Number(this.config.appId),
+      check: this.config.checkName,
+      request: { signal: input.signal },
+    });
+    input.signal.throwIfAborted();
+    if (
+      !("repository" in data) ||
+      !data.repository?.object ||
+      data.repository.object.oid !== input.headSha
+    )
+      throw new Error("review_duration_head_unavailable");
+    const mapped = mapPullRequestNode({
+      number: 1,
+      headRefOid: input.headSha,
+      commits: { totalCount: 1, nodes: [{ commit: data.repository.object }] },
+    });
+    if (!mapped) throw new Error("review_duration_response_invalid");
+    return {
+      checks: mapped.checks,
+      incomplete: mapped.incomplete,
       asOf: this.clock(),
     };
   }
