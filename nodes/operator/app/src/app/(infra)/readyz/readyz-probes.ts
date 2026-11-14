@@ -112,6 +112,16 @@ function checkDoltgres(container: Container, env: Env): Promise<void> {
       )
     );
   }
+  // bug.0042: a held work-item writer refuses every write while reads stay
+  // green, so deep readiness reports it from the adapter's in-memory state.
+  const writer = container.doltgresWorkItems.writerHealth?.();
+  if (writer?.state === "held") {
+    return Promise.reject(
+      new InfraConnectivityError(
+        `Work-item writer held ${writer.heldMs}ms since ${writer.since}: ${writer.reason} at ${writer.stage} (operation ${writer.operationId}, native ${writer.nativeState}, settle attempts ${writer.settleAttempts})`
+      )
+    );
+  }
   return probeKnowledgePlane(port, DOLTGRES_READYZ_PROBE_ID, {
     wrapError: wrapInfra,
   })();

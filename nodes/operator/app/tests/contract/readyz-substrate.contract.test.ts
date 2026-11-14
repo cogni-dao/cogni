@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   getNodeId: vi.fn(),
   assertEvmRpcConfig: vi.fn(),
   getKnowledge: vi.fn(),
+  writerHealth: vi.fn(() => ({ state: "available" })),
   streamLength: vi.fn(),
   fetch: vi.fn(),
   assertRuntimeSecrets: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("@/bootstrap/container", () => ({
     mocks.getContainer() ?? {
       evmOnchainClient: {},
       knowledgeStorePort: { getKnowledge: mocks.getKnowledge },
+      doltgresWorkItems: { writerHealth: () => mocks.writerHealth() },
       runStream: { streamLength: mocks.streamLength },
       paymentRailsActive: false,
       scheduleControl: {},
@@ -476,6 +478,31 @@ describe("GET /readyz async substrate contract", () => {
       unreachable: ["doltgres"],
       message: "doltgres check exceeded 3000ms budget",
     });
+  });
+
+  it("fails the Doltgres probe while the work-item writer is held, naming the hold (bug.0042)", async () => {
+    mocks.writerHealth.mockReturnValueOnce({
+      state: "held",
+      nativeState: "unknown",
+      since: "2026-11-13T17:05:15.813Z",
+      heldMs: 42_000,
+      reason: "outcome_unknown",
+      stage: "lock.try",
+      operationId: "op-1",
+      operation: "patch task.0120",
+      settleAttempts: 2,
+      settling: false,
+    } as never);
+
+    const response = await GET(request("/readyz?deep=1"));
+
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body).toMatchObject({ unreachable: ["doltgres"] });
+    expect(body.message).toMatch(
+      /Work-item writer held 42000ms .*outcome_unknown at lock\.try \(operation op-1/
+    );
+    expect(mocks.getKnowledge).not.toHaveBeenCalled();
   });
 
   it("a config 503 carries no deep evidence", async () => {
