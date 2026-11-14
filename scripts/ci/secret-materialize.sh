@@ -378,7 +378,7 @@ key_is_agent_generated() {
 #   DOLTGRES_URL                         from DOLTGRES_PASSWORD — the LANE env's Doltgres
 #     superuser (cogni/<lane>/operator, story.5098) on the lane's own host, materialized
 #     per-node just above it in NODE_BASELINE_KEYS (the pod connects as that superuser because
-#     Doltgres 0.56.3 RBAC is table-DML-only — https://node-template.cognidao.org/knowledge/database-migration-contract §5.2).
+#     Doltgres 0.56.3 RBAC is table-DML-only — https://cognidao.org/knowledge/database-state-cell-lifecycle §5.2).
 # Nothing is deferred: materialize is the SOLE OpenBao writer of all per-node DSNs,
 # reconcile is read-only. The DSN_DEFER mechanism is retained (empty) so a future
 # transitional key can be parked without re-introducing the loop guard.
@@ -387,7 +387,7 @@ DSN_DEFER_KEYS=" "
 # The per-node Postgres DSNs are COMPOSED from the per-node app_<node>/service_<node>
 # role (#1584). DOLTGRES_URL is composed from the lane's operator-canonical Doltgres
 # superuser (cogni/<lane>/operator/DOLTGRES_PASSWORD), which is shared env-wide and
-# immutable post-init (Doltgres 0.56.3 can't ALTER it; https://node-template.cognidao.org/knowledge/database-migration-contract §5.2).
+# immutable post-init (Doltgres 0.56.3 can't ALTER it; https://cognidao.org/knowledge/database-state-cell-lifecycle §5.2).
 #
 # All three DSNs are recomposed authoritatively every run and overwritten ONLY on
 # drift. Compare-then-write keeps a correct DSN byte-stable, so healthy nodes see
