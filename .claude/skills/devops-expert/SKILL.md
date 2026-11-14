@@ -113,6 +113,6 @@ SSH keys and IPs live in `.local/{env}-vm-key` and `.local/{env}-vm-ip` on the p
 
 ## Pointers
 
-- [CI/CD Spec](../../../docs/spec/ci-cd.md) and [CI/CD Project Scorecard](../../../work/projects/proj.cicd-services-gitops.md)
+- [CI/CD Spec](../../../docs/spec/ci-cd.md)
 - [`promote` skill](../promote/SKILL.md): operator promotion and its failure modes.
 - `.github/workflows/` and `scripts/ci/`: actual source. Verify claims against code.

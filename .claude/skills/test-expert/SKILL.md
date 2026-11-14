@@ -216,7 +216,6 @@ Triage in this order:
 - `docs/guides/github-app-webhook-setup.md` — per-env GitHub App setup; `cogni-operator-test` is the candidate/test app
 - `docs/spec/node-ci-cd-contract.md` — submodule-pinned node CI/CD, test org identity, node-ref flight constraints
 - `docs/runbooks/dolthub-remote-bootstrap.md` — `DOLTHUB_OWNER`, DoltHub PAT, and Dolt push credential split
-- `work/projects/proj.system-test-architecture.md` — mock-LLM + FakeLlmAdapter strategy
 - `nodes/operator/app/tests/external/AGENTS.md` — per-lane invariants for external tests
 - `.github/workflows/ci.yaml` — exact CI step list; compare against this matrix if anything above looks wrong
 - AGENTS.md, Local execution safety — which checks you may run locally

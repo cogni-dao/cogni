@@ -6,10 +6,10 @@
  * Module: `@scripts/validate-docs-metadata`
  * Purpose: Validates Obsidian-style YAML frontmatter in /docs and /work directories.
  * Scope: Enforces field requirements, enums, date format, field set separation, and required H2 headings; does NOT validate prose content or cross-references.
- * Invariants: /docs uses id/type/status/trust; /work projects use id/type; /work items use id/type/status; no wikilinks.
+ * Invariants: /docs uses id/type/status/trust; /work items use id/type/status; no wikilinks.
  * Side-effects: IO
  * Notes: Uses `yaml` package for proper YAML parsing. Exits with error code if validation fails.
- * Links: docs/archive/DOCS_ORGANIZATION_PLAN.md
+ * Links: scripts/validate-agents-md.mjs
  * @public
  */
 
@@ -24,7 +24,6 @@ const DOC_TRUST = ["canonical", "reviewed", "draft", "external"];
 const ADR_DECISION = ["proposed", "accepted", "deprecated", "superseded"];
 
 // === WORK ENUMS ===
-const PROJECT_STATE = ["Active", "Paused", "Done", "Dropped"];
 const ITEM_STATUS = [
   "needs_triage",
   "needs_research",
@@ -40,7 +39,6 @@ const ITEM_STATUS = [
 const ITEM_TYPES = ["task", "bug", "spike", "story", "subtask"];
 const PRIORITY = [0, 1, 2, 3];
 const ESTIMATE = [0, 1, 2, 3, 4, 5];
-const PROJECT_ESTIMATE_MAX = 50;
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -48,14 +46,6 @@ const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 // Spec headings gated on spec_state being present (exempts legacy specs and indexes)
 const SPEC_REQUIRED_HEADINGS = ["Design", "Goal", "Non-Goals"];
 const ADR_REQUIRED_HEADINGS = ["Decision", "Rationale", "Consequences"];
-const PROJECT_REQUIRED_HEADINGS = [
-  "Goal",
-  "Roadmap",
-  "Constraints",
-  "Dependencies",
-  "As-Built Specs",
-  "Design Notes",
-];
 const CHARTER_REQUIRED_HEADINGS = ["Goal", "Projects", "Constraints"];
 const POSTMORTEM_REQUIRED_HEADINGS = ["Summary", "Timeline"];
 const ITEM_REQUIRED_HEADINGS = ["Validation"];
@@ -71,19 +61,6 @@ const DOC_REQUIRED = [
   "read_when",
   "owner",
   "created",
-];
-const PROJECT_REQUIRED = [
-  "id",
-  "type",
-  "title",
-  "state",
-  "priority",
-  "estimate",
-  "summary",
-  "outcome",
-  "assignees",
-  "created",
-  "updated",
 ];
 const CHARTER_REQUIRED = [
   "id",
@@ -254,65 +231,6 @@ function validateDoc(file, props, content, allIds) {
   return errors;
 }
 
-function validateProject(file, props, content, allIds) {
-  const errors = [];
-
-  for (const key of PROJECT_REQUIRED) {
-    if (props[key] === undefined || props[key] === null || props[key] === "") {
-      errors.push(`missing required key: ${key}`);
-    }
-  }
-
-  if (props.type !== "project") {
-    errors.push(`type must be "project"`);
-  }
-  if (props.state && !PROJECT_STATE.includes(props.state)) {
-    errors.push(
-      `invalid state: ${props.state} (expected: ${PROJECT_STATE.join("|")})`
-    );
-  }
-  if (props.priority !== undefined && !PRIORITY.includes(props.priority)) {
-    errors.push(
-      `invalid priority: ${props.priority} (expected: ${PRIORITY.join("|")})`
-    );
-  }
-  if (
-    props.estimate !== undefined &&
-    (typeof props.estimate !== "number" ||
-      props.estimate < 0 ||
-      props.estimate > PROJECT_ESTIMATE_MAX)
-  ) {
-    errors.push(
-      `invalid estimate: ${props.estimate} (expected: 0-${PROJECT_ESTIMATE_MAX})`
-    );
-  }
-  if (props.id && !String(props.id).startsWith("proj.")) {
-    errors.push(`id must start with "proj."`);
-  }
-
-  const created = String(props.created || "");
-  const updated = String(props.updated || "");
-  if (props.created && !DATE_REGEX.test(created)) {
-    errors.push(`invalid created date: ${props.created}`);
-  }
-  if (props.updated && !DATE_REGEX.test(updated)) {
-    errors.push(`invalid updated date: ${props.updated}`);
-  }
-
-  if (props.id) {
-    const id = String(props.id);
-    if (allIds.has(id)) {
-      errors.push(`duplicate id: ${id}`);
-    } else {
-      allIds.set(id, file);
-    }
-  }
-
-  errors.push(...checkRequiredHeadings(content, PROJECT_REQUIRED_HEADINGS));
-
-  return errors;
-}
-
 function validateCharter(file, props, content, allIds) {
   const errors = [];
 
@@ -352,7 +270,7 @@ function validateCharter(file, props, content, allIds) {
   return errors;
 }
 
-function validateItem(file, props, content, allIds, projectIds) {
+function validateItem(file, props, content, allIds) {
   const errors = [];
 
   const TRIAGE_OPTIONAL = ["priority", "rank", "estimate"];
@@ -443,9 +361,6 @@ function validateItem(file, props, content, allIds, projectIds) {
     if (!proj.startsWith("proj.")) {
       errors.push(`project must reference "proj.*"`);
     }
-    if (!projectIds.has(proj)) {
-      errors.push(`project "${proj}" not found`);
-    }
   }
 
   const created = String(props.created || "");
@@ -475,20 +390,6 @@ function validateItem(file, props, content, allIds, projectIds) {
 async function main() {
   let hasErrors = false;
   const allIds = new Map();
-  const projectIds = new Set();
-
-  // Phase 1: collect project IDs for cross-reference validation
-  const projectFiles = await fg(["work/projects/**/*.md"]);
-  for (const f of projectFiles) {
-    try {
-      const content = readFileSync(f, "utf8");
-      const props = extractFrontmatter(content);
-      if (props.id) projectIds.add(String(props.id));
-    } catch {
-      // Ignore parse errors in phase 1
-    }
-  }
-
   // Validate docs
   const docFiles = await fg([
     "docs/spec/**/*.md",
@@ -505,25 +406,6 @@ async function main() {
       const errors = [
         ...checkForbidden(content),
         ...validateDoc(f, props, content, allIds),
-      ];
-      if (errors.length) {
-        hasErrors = true;
-        for (const e of errors) console.error(`${f}: ${e}`);
-      }
-    } catch (e) {
-      hasErrors = true;
-      console.error(`${f}: ${e.message}`);
-    }
-  }
-
-  // Validate projects
-  for (const f of projectFiles) {
-    try {
-      const content = readFileSync(f, "utf8");
-      const props = extractFrontmatter(content);
-      const errors = [
-        ...checkForbidden(content),
-        ...validateProject(f, props, content, allIds),
       ];
       if (errors.length) {
         hasErrors = true;
@@ -563,7 +445,7 @@ async function main() {
       const props = extractFrontmatter(content);
       const errors = [
         ...checkForbidden(content),
-        ...validateItem(f, props, content, allIds, projectIds),
+        ...validateItem(f, props, content, allIds),
       ];
       if (errors.length) {
         hasErrors = true;
@@ -577,11 +459,7 @@ async function main() {
 
   if (hasErrors) process.exit(1);
 
-  const total =
-    docFiles.length +
-    projectFiles.length +
-    charterFiles.length +
-    itemFiles.length;
+  const total = docFiles.length + charterFiles.length + itemFiles.length;
   console.log(
     `docs/work metadata OK (${total} files, ${allIds.size} unique ids)`
   );

@@ -23,7 +23,7 @@ A node-owner sets a secret with only an API key — `POST <env-host>/api/v1/node
 
 ## North star
 
-[`proj.agentic-fork-bootstrap`](../../../work/projects/proj.agentic-fork-bootstrap.md) — easy-start guide for a forking dev that uses OpenBao. Every PR is measured against the **forker's manual-command count**. If your change adds a manual step to `fork-quickstart.md`, that's debt — try a workflow first.
+`proj.agentic-fork-bootstrap` — easy-start guide for a forking dev that uses OpenBao. Every PR is measured against the **forker's manual-command count**. If your change adds a manual step to `fork-quickstart.md`, that's debt — try a workflow first.
 
 ## Load-bearing invariants — gate every secrets decision
 

@@ -54,6 +54,5 @@ After running all 3 experiments, update:
 
 ## Links
 
-- [Project: AI Operator Wallet](../../work/projects/proj.ai-operator-wallet.md)
 - [Spec: Web3 OpenRouter Payments](../../docs/spec/web3-openrouter-payments.md)
 - [Spike: spike.0090](../../work/items/spike.0090.validate-operator-wallet-payment-chain.md)

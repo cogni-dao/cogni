@@ -5,10 +5,10 @@
  * Module: `@tests/unit/validate-docs-metadata.test`
  * Purpose: Unit tests for docs/work metadata validation logic.
  * Scope: Tests property extraction, CSV validation, enum validation; does NOT test file I/O.
- * Invariants: All validation rules from DOCS_ORGANIZATION_PLAN.md must be tested.
+ * Invariants: All validation rules in scripts/validate-docs-metadata.mjs must be tested.
  * Side-effects: none
  * Notes: Uses vitest; tests validator functions in isolation.
- * Links: scripts/validate-docs-metadata.mjs, docs/archive/DOCS_ORGANIZATION_PLAN.md
+ * Links: scripts/validate-docs-metadata.mjs
  * @internal
  */
 
@@ -19,7 +19,6 @@ import { describe, expect, it } from "vitest";
 const DOC_TYPES = ["spec", "adr", "runbook", "howto", "reference", "concept"];
 const DOC_STATUS = ["active", "deprecated", "superseded", "draft"];
 const _DOC_TRUST = ["canonical", "reviewed", "draft", "external"]; // Reserved for future tests
-const PROJECT_STATE = ["Active", "Paused", "Done", "Dropped"];
 const _ISSUE_STATE = ["Backlog", "Todo", "In Progress", "Done", "Cancelled"]; // Reserved for future tests
 const PRIORITY = ["Urgent", "High", "Medium", "Low", "None"];
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -177,12 +176,6 @@ describe("enum validation", () => {
     expect(DOC_STATUS).toContain("active");
     expect(DOC_STATUS).toContain("draft");
     expect(DOC_STATUS).not.toContain("todo");
-  });
-
-  it("validates project state (Plane-aligned)", () => {
-    expect(PROJECT_STATE).toContain("Active");
-    expect(PROJECT_STATE).toContain("Done");
-    expect(PROJECT_STATE).not.toContain("active"); // case-sensitive
   });
 
   it("validates priority (Plane-aligned)", () => {
