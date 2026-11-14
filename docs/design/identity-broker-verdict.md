@@ -14,7 +14,7 @@ tags: [identity, oauth, design, task-5024]
 
 # Identity broker: design verdict
 
-> As-built behaviour lives in [`decentralized-user-identity.md`](../spec/decentralized-user-identity.md).
+> As-built behaviour lives in [user-identity-bindings](https://cognidao.org/knowledge/user-identity-bindings).
 > Registration steps live in the hub entry [OAuth setup](https://cognidao.org/knowledge/oauth-per-env-proxy).
 > This file holds the **why**, including the paths not taken.
 
@@ -54,7 +54,7 @@ Ephemeral hosts settle it independently: `preview-deployments.md` mints a new
 | Per-node or fleet-shared OAuth on each node                              | client secret on every node; see above                                                                                                     |
 | A single callback shared with NextAuth sign-in, discriminated by `state` | requires intercepting NextAuth's `[...nextauth]` handler, and re-couples the broker to the account model — the exact defect being fixed    |
 | Adopt a mature OSS IdP (Keycloak / Zitadel / Hydra / Dex)                | does not fix subject provenance — an IdP with a live SSO session commits the identical error — and adds a stateful service per environment |
-| DID / VC credential system                                               | superseded by the node-local-UUID + evidenced-bindings model already accepted in `decentralized-user-identity.md`                          |
+| DID / VC credential system                                               | superseded by the node-local-UUID + evidenced-bindings model already accepted in [user-identity-bindings](https://cognidao.org/knowledge/user-identity-bindings)                          |
 
 ## Prior art: this conclusion was reached twice
 
