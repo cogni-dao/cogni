@@ -110,7 +110,7 @@ REQUIRED=(
 )
 # task.0284 — OPENROUTER_API_KEY moved out of bootstrap; it's an app secret
 # entered via `pnpm secrets:set <env> node-template OPENROUTER_API_KEY` after
-# the substrate (OpenBao + ESO) is up. See docs/guides/secrets-add-new.md.
+# the substrate (OpenBao + ESO) is up. See https://cognidao.org/knowledge/break-glass-secret-write.
 MISSING=()
 for v in "${REQUIRED[@]}"; do
   [[ -z "${!v:-}" ]] && MISSING+=("$v")
@@ -156,7 +156,7 @@ if [[ "$SSL_PROBE_CODE" != "200" ]]; then
 
 Bootstrap PATCHes zone SSL mode to 'Full' at Phase 4b — that's the
 cloudflare-proxy + tls-internal architecture (see Step 6.2 of
-docs/runbooks/fork-quickstart.md).
+https://cognidao.org/knowledge/fork-quickstart-guide).
 
 Fix (one-time):
   1. Open https://dash.cloudflare.com/profile/api-tokens
@@ -254,7 +254,7 @@ log "GitHub repo: ${BOLD}${GH_REPO}${NC}"
 # deploy state. The hub (cogni-dao/cogni) is valid; the bare template is not.
 if [[ "$GH_REPO_LOWER" == "cogni-dao/standalone-node" ]]; then
   err "origin points at the upstream node template (${GH_REPO}). Bootstrap must run inside the hub or a fork."
-  err "Fork first for node-template: see docs/runbooks/fork-quickstart.md"
+  err "Fork first for node-template: see https://cognidao.org/knowledge/fork-quickstart-guide"
   exit 2
 fi
 
@@ -490,7 +490,7 @@ set_repo_var   DOMAIN                       "$DOMAIN"
 #   pnpm secrets:set <env> node-template OPENROUTER_API_KEY
 #   pnpm secrets:set <env> node-template GRAFANA_CLOUD_LOKI_API_KEY
 #   ...
-# See docs/guides/secrets-add-new.md. Phase 6 of this script prints the list.
+# See https://cognidao.org/knowledge/break-glass-secret-write. Phase 6 of this script prints the list.
 
 # DSNs — construct from parts. provision-env-vm.sh re-derives with VM IP after
 # tofu apply; this pre-set is for env validation (server-env.ts requires them
@@ -544,7 +544,7 @@ ${BOLD}App secrets — enter via the substrate now${NC} (task.0284):
   pnpm secrets:set ${DEPLOY_ENV} node-template PROMETHEUS_PASSWORD         # optional
 
   Catalog of accepted services: ls infra/catalog/*.yaml
-  Guides: docs/guides/secrets-add-new.md  |  docs/guides/secrets-rotate.md
+  Guides: https://cognidao.org/knowledge/break-glass-secret-write
 
 Re-running ${BOLD}pnpm bootstrap${NC} is safe (idempotent).
 

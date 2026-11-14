@@ -10,7 +10,7 @@
  *   - DISPATCHABLE_WORKFLOWS_DECLARED — manual levers must expose `workflow_dispatch`.
  *   - SENSITIVE_INPUTS_NOT_INTERPOLATED — dispatch secrets are read at runtime from GITHUB_EVENT_PATH, never rendered into step details.
  * Side-effects: IO (filesystem reads)
- * Links: .github/workflows/ACTION_TRIGGERS.md
+ * Links: https://node-template.cognidao.org/knowledge/github-actions-trigger-model
  * @internal
  */
 

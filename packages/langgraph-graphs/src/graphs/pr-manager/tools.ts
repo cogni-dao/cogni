@@ -24,7 +24,7 @@ import {
 /**
  * Tool IDs available to the PR Manager agent.
  *
- * - repo_open: reads the evolving playbook at docs/guides/pr-management-playbook.md
+ * - repo_open: reads the evolving playbook at https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/guides/pr-management-playbook.md
  * - VCS tools: PR lifecycle management (list / CI status / merge / branch / flight)
  * - work item query: cross-reference PR ↔ task
  *

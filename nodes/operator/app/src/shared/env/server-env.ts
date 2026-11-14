@@ -174,7 +174,7 @@ export const serverSchema = z.object({
   // Node env-membership verb (story.5020 W4): flag-gated DNS reverse/forward reconcile seam.
   // v0 ships OFF — a node-env add/remove only LOGS the intended Cloudflare change (a removed node's
   // A record lingers until TTL). vNext (W3b) wires the live CloudflareAdapter prune/upsert.
-  // Default: false. See docs/design/operator-fleet-safety.md.
+  // Default: false. See https://cognidao.org/knowledge/fleet-capacity-design.
   DNS_REVERSE_RECONCILE: z
     .enum(["true", "false"])
     .default("false")
@@ -408,7 +408,7 @@ export const serverSchema = z.object({
   OPENBAO_SA_TOKEN_PATH: z.string().default("/var/run/secrets/openbao/token"),
 
   // PostHog product analytics — required
-  // See docs/guides/posthog-setup.md for setup
+  // See https://node-template.cognidao.org/knowledge/configure-posthog for setup
   // PostHog Cloud free tier: 1M events/month at https://us.i.posthog.com
   POSTHOG_API_KEY: optionalString,
   POSTHOG_HOST: optionalUrl,

@@ -15,7 +15,7 @@ Deterministic fake implementations of ports for CI and test environments. No ext
 
 - [Root AGENTS.md](../../../../../AGENTS.md)
 - [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract)
-- [Testing Documentation](../../../../../docs/guides/testing.md)
+- [Testing Documentation](https://node-template.cognidao.org/knowledge/node-test-contract)
 
 ## Boundaries
 

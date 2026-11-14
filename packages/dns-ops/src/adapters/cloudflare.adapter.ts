@@ -7,7 +7,7 @@
  * Scope: HTTP calls to Cloudflare API v4. Does not support domain registration.
  * Invariants: PURE_LIBRARY — credentials via constructor, no process.env access.
  * Side-effects: IO (HTTP to api.cloudflare.com)
- * Links: packages/dns-ops/docs/cloudflare-dns-setup.md
+ * Links: https://cognidao.org/knowledge/node-dns-operations
  * @public
  */
 

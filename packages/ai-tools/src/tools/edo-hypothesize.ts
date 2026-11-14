@@ -29,7 +29,7 @@ import type { BoundTool, ToolContract, ToolImplementation } from "../types";
 // duplicated here (not imported) because ai-tools is the lower package and
 // knowledge-store depends on it, so importing the domain schema would invert the
 // dependency. Widening the tool boundary to admit `metric:<kpi-id>` is the
-// goal-loop hook (docs/design/knowledge-goal-loop.md): a goal is a hypothesis
+// goal-loop hook (https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design): a goal is a hypothesis
 // whose resolution_strategy is `metric:<kpi-id>`.
 const RESOLUTION_STRATEGY_RE = /^[a-z][a-z0-9_]*(:[A-Za-z0-9_./~^-]+)?$/;
 const METRIC_STRATEGY_PREFIX = "metric:";

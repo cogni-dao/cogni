@@ -5,7 +5,7 @@
  * Module: `@app/api/v1/agent/runs/[runId]/stream`
  * Purpose: Agent-first URL surface for graph run SSE reconnection.
  * Scope: Preserves the public `/api/v1/agent/runs/{runId}/stream` URL
- *   documented in docs/guides/agent-api-validation.md while delegating
+ *   documented in https://cognidao.org/knowledge/prove-node-agent-api while delegating
  *   the handler logic to the canonical `/api/v1/ai/runs/{runId}/stream`
  *   route. No behavioral difference — ai/runs/stream already accepts
  *   machine bearer tokens through the shared getSessionUser alias.

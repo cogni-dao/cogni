@@ -13,12 +13,11 @@ Operational procedures and documentation for deployment, rollback, and incident 
 
 ## Pointers
 
-- [INFRASTRUCTURE_SETUP.md](INFRASTRUCTURE_SETUP.md): VM provisioning, DNS, GitHub secrets (disaster recovery)
-- [grafana-postgres-readonly.md](grafana-postgres-readonly.md): Grafana Cloud Postgres datasource + read-only role procedure
-- [github-org-rename-cutover.md](github-org-rename-cutover.md): GitHub organization rename cutover checklist
-- [production-operator-eso-cutover.md](production-operator-eso-cutover.md): Production operator OpenBao/ESO cutover and custody checks
-- [worker-custodied-routing.md](worker-custodied-routing.md): Fixed service routing publication, receipt rollback and proof gates
-- [CI/CD](../../docs/spec/ci-cd.md): Branch model, workflows, deployment automation
+- [dolthub-remote-bootstrap.md](dolthub-remote-bootstrap.md): offline recovery, restore the Dolt knowledge hub when the hub is unreachable (the only runbook kept in the repo; online detail is [dolthub-mirror-bootstrap](https://cognidao.org/knowledge/dolthub-mirror-bootstrap))
+- [grafana-postgres-readonly](https://cognidao.org/knowledge/grafana-postgres-readonly): Grafana Cloud Postgres datasource + read-only role procedure
+- [worker-custodied-routing](https://cognidao.org/knowledge/worker-custodied-routing): Fixed service routing publication, receipt rollback and proof gates
+- [eso-secret-sync-gate](https://cognidao.org/knowledge/eso-secret-sync-gate): Production operator OpenBao/ESO cutover and custody checks
+- [CI/CD](https://cognidao.org/knowledge/operator-pipeline-contract): Branch model, workflows, deployment automation
 
 ## Boundaries
 

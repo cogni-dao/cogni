@@ -18,7 +18,7 @@
  *   are projections of merged catalog intent. A node may deploy to many envs, but exactly one environment ingests activity and
  *   runs epoch schedules; the DB check requires that activity env to be in the deploy set.
  * Side-effects: none
- * Links: https://cognidao.org/knowledge/identity-keys-no-overload, https://cognidao.org/knowledge/node-formation-contract, work/projects/proj.node-formation-ui.md, task.5083
+ * Links: https://cognidao.org/knowledge/identity-keys-no-overload, https://cognidao.org/knowledge/node-formation-contract, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.node-formation-ui.md, task.5083
  * @public
  */
 

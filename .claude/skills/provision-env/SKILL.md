@@ -8,7 +8,7 @@ description: >
   a dead one, debugging a provision that "succeeded" but isn't serving, or when someone says
   "provision prod / candidate-b", "the new VM isn't up", "ImagePullBackOff after provision",
   "apex cut over to an empty VM", "525 after provision", "operator pod won't start".
-  Sibling to `docs/runbooks/fork-quickstart.md` (the forker's zero-to-green) — this is the
+  Sibling to `https://cognidao.org/knowledge/fork-quickstart-guide` (the forker's zero-to-green) — this is the
   operator's reference for ANY env on the hub.
 ---
 
@@ -131,8 +131,8 @@ curl -s https://<public-host>/readyz   # 200 — and curl /version, confirm buil
 
 ## Linked guides
 
-- [`docs/runbooks/fork-quickstart.md`](../../../docs/runbooks/fork-quickstart.md) — forker's zero-to-green (the human seam: bot PAT + minting secrets)
-- [`docs/guides/create-env.md`](../../../docs/guides/create-env.md) — env stand-up + the known e2e gaps
+- [`https://cognidao.org/knowledge/fork-quickstart-guide`](https://cognidao.org/knowledge/fork-quickstart-guide) — forker's zero-to-green (the human seam: bot PAT + minting secrets)
+- [`https://cognidao.org/knowledge/provision-an-environment`](https://cognidao.org/knowledge/provision-an-environment) — env stand-up + the known e2e gaps
 - [`/promote`](../promote/SKILL.md) — fill real per-node digests (the app layer; production is human-gated)
 - [`/cicd-secrets-expert`](../cicd-secrets-expert/SKILL.md) — minting vs runtime secrets, OpenBao/ESO, the quote/extraction traps
 - [`/devops-expert`](../devops-expert/SKILL.md) — pipeline + VM SSH policy (candidate-a write-OK, never prod)

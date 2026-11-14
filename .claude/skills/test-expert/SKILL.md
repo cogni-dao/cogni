@@ -115,7 +115,7 @@ If the user is about to mock the database, push back — use **Component** with 
 
 ## Related but distinct: agent API validation
 
-When the user's question is "does the machine-agent API actually work end-to-end against canary or a local stack?" — that's **validation**, not testing. See `docs/guides/agent-api-validation.md`: a curl-based checklist for discover → register → execute graph → list runs → stream events. It's a human/agent-driven probe, not a CI suite. Point at that guide when the user is validating the agent API surface rather than writing a unit/component/stack test.
+When the user's question is "does the machine-agent API actually work end-to-end against canary or a local stack?" — that's **validation**, not testing. See `https://cognidao.org/knowledge/prove-node-agent-api`: a curl-based checklist for discover → register → execute graph → list runs → stream events. It's a human/agent-driven probe, not a CI suite. Point at that guide when the user is validating the agent API surface rather than writing a unit/component/stack test.
 
 ## Environment e2e test lane — GitHub App + DoltHub + flight
 
@@ -125,15 +125,15 @@ This is the production-like lane for questions such as "can the operator really 
 
 Current test topology:
 
-| Boundary              | Value / rule                                                                                                                                                                           | Source                                                                                                                                                  |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GitHub App            | `cogni-operator-test` for candidate/test. It must be an env-scoped App, installed on the disposable mint org as **all repositories**, with `workflows:write`.                          | `.claude/skills/git-app-expert/SKILL.md`, `docs/guides/github-app-webhook-setup.md`, `https://node-template.cognidao.org/knowledge/node-ci-sovereignty` |
-| GitHub mint org       | `cogni-test-org` via `NODE_MINT_OWNER` and `NODE_TEMPLATE_OWNER`. Candidate/preview operators must not mint into `Cogni-DAO`.                                                          | `infra/k8s/overlays/{candidate-a,preview}/operator/kustomization.yaml`                                                                                  |
-| Parent pin repo       | `cogni-test-org/cogni-monorepo` via `NODE_SUBMODULE_PARENT_OWNER` / `NODE_SUBMODULE_PARENT_REPO` for test runs.                                                                        | `infra/k8s/overlays/candidate-a/operator/kustomization.yaml`                                                                                            |
-| DoltHub knowledge org | `cogni-test-nodes` via explicit `DOLTHUB_OWNER`. Production uses `cogni-dao`; non-prod must fail closed rather than silently creating prod knowledge repos.                            | `.claude/skills/database-expert/SKILL.md`, `docs/runbooks/dolthub-remote-bootstrap.md`                                                                  |
-| Control endpoint      | Candidate operator remains `https://test.cognidao.org`. This is where the test App calls operator APIs; it is not a node-workload DNS suffix.                                          | hub `test-fleet-parity-boundary`                                                                                                                        |
-| Deploy target         | Test-org Akash nodes serve at `https://<node>-test.cogni-testing.org` (live: `spawny-boi-test.cogni-testing.org`). Follow the release to `active`, then read `/version.buildSha` once. | hub `test-fleet-parity-boundary`, `nodes/operator/app/src/features/node-deploy/AGENTS.md`                                                               |
-| DNS credential        | The writer token is restricted to the `cogni-testing.org` zone and held by candidate-a OpenBao/ESO, never by `cogni-test-org`.                                                         | hub `test-fleet-parity-boundary`, `.claude/skills/cicd-secrets-expert/SKILL.md`                                                                         |
+| Boundary              | Value / rule                                                                                                                                                                           | Source                                                                                                                                                                    |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub App            | `cogni-operator-test` for candidate/test. It must be an env-scoped App, installed on the disposable mint org as **all repositories**, with `workflows:write`.                          | `.claude/skills/git-app-expert/SKILL.md`, `https://cognidao.org/knowledge/github-app-per-environment`, `https://node-template.cognidao.org/knowledge/node-ci-sovereignty` |
+| GitHub mint org       | `cogni-test-org` via `NODE_MINT_OWNER` and `NODE_TEMPLATE_OWNER`. Candidate/preview operators must not mint into `Cogni-DAO`.                                                          | `infra/k8s/overlays/{candidate-a,preview}/operator/kustomization.yaml`                                                                                                    |
+| Parent pin repo       | `cogni-test-org/cogni-monorepo` via `NODE_SUBMODULE_PARENT_OWNER` / `NODE_SUBMODULE_PARENT_REPO` for test runs.                                                                        | `infra/k8s/overlays/candidate-a/operator/kustomization.yaml`                                                                                                              |
+| DoltHub knowledge org | `cogni-test-nodes` via explicit `DOLTHUB_OWNER`. Production uses `cogni-dao`; non-prod must fail closed rather than silently creating prod knowledge repos.                            | `.claude/skills/database-expert/SKILL.md`, `https://cognidao.org/knowledge/dolthub-mirror-bootstrap`                                                                      |
+| Control endpoint      | Candidate operator remains `https://test.cognidao.org`. This is where the test App calls operator APIs; it is not a node-workload DNS suffix.                                          | hub `test-fleet-parity-boundary`                                                                                                                                          |
+| Deploy target         | Test-org Akash nodes serve at `https://<node>-test.cogni-testing.org` (live: `spawny-boi-test.cogni-testing.org`). Follow the release to `active`, then read `/version.buildSha` once. | hub `test-fleet-parity-boundary`, `nodes/operator/app/src/features/node-deploy/AGENTS.md`                                                                                 |
+| DNS credential        | The writer token is restricted to the `cogni-testing.org` zone and held by candidate-a OpenBao/ESO, never by `cogni-test-org`.                                                         | hub `test-fleet-parity-boundary`, `.claude/skills/cicd-secrets-expert/SKILL.md`                                                                                           |
 
 Recent PR context to know before changing this lane:
 
@@ -210,12 +210,12 @@ Triage in this order:
 
 ## References
 
-- `docs/guides/testing.md` — APP_ENV=test pattern + fake adapter conventions
-- `docs/guides/full-stack-testing.md` — stack-test specifics
-- `docs/guides/agent-api-validation.md` — machine-agent API validation checklist (validation, not testing)
-- `docs/guides/github-app-webhook-setup.md` — per-env GitHub App setup; `cogni-operator-test` is the candidate/test app
+- `https://node-template.cognidao.org/knowledge/node-test-contract` — APP_ENV=test pattern + fake adapter conventions
+- `https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/guides/full-stack-testing.md` — stack-test specifics
+- `https://cognidao.org/knowledge/prove-node-agent-api` — machine-agent API validation checklist (validation, not testing)
+- `https://cognidao.org/knowledge/github-app-per-environment` — per-env GitHub App setup; `cogni-operator-test` is the candidate/test app
 - `https://node-template.cognidao.org/knowledge/node-ci-sovereignty` — submodule-pinned node CI/CD, test org identity, node-ref flight constraints
-- `docs/runbooks/dolthub-remote-bootstrap.md` — `DOLTHUB_OWNER`, DoltHub PAT, and Dolt push credential split
+- `https://cognidao.org/knowledge/dolthub-mirror-bootstrap` — `DOLTHUB_OWNER`, DoltHub PAT, and Dolt push credential split
 - `nodes/operator/app/tests/external/AGENTS.md` — per-lane invariants for external tests
 - `.github/workflows/ci.yaml` — exact CI step list; compare against this matrix if anything above looks wrong
 - AGENTS.md, Local execution safety — which checks you may run locally

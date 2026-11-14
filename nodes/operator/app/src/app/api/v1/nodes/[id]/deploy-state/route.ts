@@ -24,7 +24,7 @@
  *     nodeId, coverage, counts and latency only (no secrets, keys or host list).
  * Side-effects: IO (registry/ledger reads, authz check, public network probes and LCD GETs)
  * Links: src/adapters/server/deploy/probe-deploy.adapter.ts, src/bootstrap/capabilities/deploy.ts,
- *   flight-status/route.ts (same tuple), docs/design/operator-managed-deployments.md § SEE
+ *   flight-status/route.ts (same tuple), https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/design/operator-managed-deployments.md § SEE
  * @public
  */
 

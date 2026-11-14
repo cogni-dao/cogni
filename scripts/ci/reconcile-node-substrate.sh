@@ -14,7 +14,7 @@
 # Caddy/NodePort edge; external placement leaves that edge untouched. It performs
 # zero OpenBao writes (no bao kv put/patch), does not promote images, and does not
 # run the broad deploy-infra compose reconcile.
-# See docs/guides/vm-secrets-repair.md.
+# See https://cognidao.org/knowledge/converge-database-credentials.
 
 set -euo pipefail
 

@@ -38,7 +38,7 @@
  *   `@cogni/*` workspace packages resolve from src via tsconfig.e2e-roundtrip.json, so
  *   NO prior `pnpm build` is required. Not run in PR CI (external lane, ❌ in CI).
  * ────────────────────────────────────────────────────────────────────────────
- * Links: docs/runbooks/dolthub-remote-bootstrap.md, .context/dolthub-e2e-roundtrip-plan.md
+ * Links: https://cognidao.org/knowledge/dolthub-mirror-bootstrap, .context/dolthub-e2e-roundtrip-plan.md
  * @internal
  */
 

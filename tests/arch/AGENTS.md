@@ -14,7 +14,7 @@ Enforces hexagonal architecture boundaries via dependency-cruiser. Tests validat
 ## Pointers
 
 - [Architecture](https://node-template.cognidao.org/knowledge/hexagonal-layering-contract): hexagonal layer definitions
-- [Linting Rules](../../docs/research/LINTING_RULES.md): boundary enforcement migration status
+- [Linting Rules](https://cognidao.org/knowledge/operator-lint-toolchain): boundary enforcement migration status
 - [.dependency-cruiser.cjs](../../.dependency-cruiser.cjs): boundary rules configuration
 
 ## Boundaries

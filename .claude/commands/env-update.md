@@ -74,6 +74,6 @@ file it, do not hand-patch around it.
 ## Reference
 
 - [Secrets Management spec](https://cognidao.org/knowledge/secrets-management) — the self-serve model + invariants
-- [Per-Node Secrets Catalog design](../../docs/design/secrets-catalog-per-node.md) — the catalog model
+- [Per-Node Secrets Catalog design](https://node-template.cognidao.org/knowledge/secrets-routing-tiers) — the catalog model
 - [`/cicd-secrets-expert`](../skills/cicd-secrets-expert/SKILL.md) — decision trees + file map
-- [`docs/guides/secrets-add-new.md`](../../docs/guides/secrets-add-new.md) — CLI walkthrough
+- [`https://cognidao.org/knowledge/break-glass-secret-write`](https://cognidao.org/knowledge/break-glass-secret-write) — CLI walkthrough

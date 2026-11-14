@@ -2,7 +2,7 @@
 # poly-rls-smoke.sh — manual smoke test for poly_copy_trade_targets RLS policy.
 #
 # Reproduces task.0318 Phase A acceptance check #2 from
-# docs/spec/poly-multi-tenant-auth.md:
+# https://poly.cognidao.org/knowledge/poly-tenant-wallet-authorization:
 #
 #   "psql smoke as app_user: SET LOCAL app.current_user_id = '<userA-uuid>';
 #    INSERT INTO poly_copy_trade_targets (..., created_by_user_id) VALUES

@@ -38,7 +38,7 @@
  * Side-effects: IO (GitHub REST API, Postgres read)
  * Links: src/adapters/server/vcs/github-repo-write.ts (openNodeEnvPr),
  *   src/shared/node-app-scaffold/gens/env-membership-plan.ts,
- *   docs/design/operator-fleet-safety.md, story.5020, task.5411
+ *   https://cognidao.org/knowledge/fleet-capacity-design, story.5020, task.5411
  * @public
  */
 

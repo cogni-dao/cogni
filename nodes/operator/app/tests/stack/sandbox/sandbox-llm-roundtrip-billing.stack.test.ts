@@ -13,7 +13,7 @@
  *   - Per PROXY_DRIVEN_BILLING: Billing data (callId + cost) captured from proxy audit log, not agent stdout
  *   - Per USAGE_UNIT_IS_LITELLM_CALL_ID: charge_receipts.litellm_call_id matches audit log exactly
  * Side-effects: IO (Docker containers, nginx proxy, filesystem, database writes)
- * Links: docs/SANDBOXED_AGENTS.md, docs/SYSTEM_TEST_ARCHITECTURE.md
+ * Links: https://node-template.cognidao.org/knowledge/node-test-contract
  * @public
  */
 

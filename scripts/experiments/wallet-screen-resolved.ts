@@ -7,7 +7,7 @@
  * Scope: Read-only public Data API + CLOB market lookups. Does not authenticate, does not place orders, does not modify state.
  * Invariants: Global conditionId dedupe; CLOB concurrency bounded; per-wallet trade fetch bounded.
  * Side-effects: IO (HTTPS to data-api.polymarket.com + clob.polymarket.com; writes JSON fixture at docs/research/fixtures/poly-wallet-screen.json and markdown ranking to stdout).
- * Links: work/items/spike.0323.poly-copy-trade-candidate-identification.md, docs/research/polymarket-copy-trade-candidates.md
+ * Links: https://poly.cognidao.org/knowledge/poly-category-edge-scorecard
  * @internal — spike research, not production code.
  */
 

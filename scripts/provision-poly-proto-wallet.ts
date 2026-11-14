@@ -15,7 +15,7 @@
  * Invariants: KEY_NEVER_IN_APP — no private key material emitted. Does NOT
  *   modify .cogni/repo-spec.yaml (prototype, not a node payment activation).
  * Side-effects: IO (Privy API, stdout)
- * Links: work/items/task.0315.poly-copy-trade-prototype.md
+ * Links: https://poly.cognidao.org/knowledge/poly-tenant-wallet-runbook
  * @public
  */
 

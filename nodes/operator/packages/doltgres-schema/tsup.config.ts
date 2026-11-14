@@ -7,7 +7,7 @@
  * Scope: Build tooling only; does not contain runtime code.
  * Invariants: Output is ESM. Mirrors @cogni/poly-doltgres-schema shape — per-slice entry points so downstream importers can tree-shake via subpath imports.
  * Side-effects: IO
- * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules, work/items/task.0423.doltgres-work-items-source-of-truth.md
+ * Links: https://node-template.cognidao.org/knowledge/package-isolation-rules
  * @internal
  */
 

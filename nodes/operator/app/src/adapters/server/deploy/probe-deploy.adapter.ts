@@ -27,7 +27,7 @@
  *     release-backed source and a `failed` member on `NodeHealthState` — out of scope here.
  * Side-effects: network I/O (via the injected prober)
  * Links: packages/ai-tools/src/capabilities/deploy.ts (the interface),
- *   src/features/nodes/flight-status.ts (hostForEnv/FLIGHT_ENVS), docs/design/operator-managed-deployments.md § SEE
+ *   src/features/nodes/flight-status.ts (hostForEnv/FLIGHT_ENVS), https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/design/operator-managed-deployments.md § SEE
  * @public
  */
 

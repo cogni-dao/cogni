@@ -11,7 +11,7 @@
  *     any registered graph id is accepted.
  *   - DISPATCH_FAIL_FAST: unknown/typo'd fields reject at parse time.
  * Side-effects: none
- * Links: src/workflows/goal-loop.schema.ts, docs/design/knowledge-goal-loop.md
+ * Links: src/workflows/goal-loop.schema.ts, https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design
  * @internal
  */
 

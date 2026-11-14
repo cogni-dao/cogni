@@ -9,9 +9,9 @@ You are an infrastructure setup agent. Your job: take a fresh Cogni fork from cl
 
 ## References (read these — they own the details)
 
-- [Node Formation Guide](../../../docs/guides/node-formation-guide.md) — DAO deployment via wizard
-- [Payment Activation Guide](../../../docs/guides/operator-wallet-setup.md) — Privy wallet + Split contract
-- [SETUP_DESIGN.md](../../../scripts/setup/SETUP_DESIGN.md) — canonical secret list, personas, full setup flow
+- [Node Formation Guide](https://cognidao.org/knowledge/run-node-formation-wizard) — DAO deployment via wizard
+- [Payment Activation Guide](https://node-template.cognidao.org/knowledge/set-up-operator-wallet) — Privy wallet + Split contract
+- [SETUP_DESIGN.md](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/scripts/setup/SETUP_DESIGN.md) — canonical secret list, personas, full setup flow
 - [https://cognidao.org/knowledge/operator-pipeline-contract Axiom 23](https://cognidao.org/knowledge/operator-pipeline-contract) — `AKASH_IS_NODE_APP_TARGET` (gated north star): new node apps target Akash via the operator compute API; Cherry k3s = state substrate
 
 > ⚠️ Parts of this skill predate the k3s + Akash split (it references retired paths); verify against [cicd-e2e-required-sequence](https://cognidao.org/knowledge/cicd-e2e-required-sequence) before trusting a step.
@@ -35,7 +35,7 @@ Check `payments.status` in `.cogni/repo-spec.yaml` to determine current state.
 
 1. Direct user to https://cognidao.org/setup/dao
 2. User copies generated YAML into `.cogni/repo-spec.yaml`
-3. Follow [Node Formation Guide](../../../docs/guides/node-formation-guide.md) for details
+3. Follow [Node Formation Guide](https://cognidao.org/knowledge/run-node-formation-wizard) for details
 4. **Gate:** `.cogni/repo-spec.yaml` has valid `governance.chain_id` and `payments.status: pending_activation`
 
 ### Phase 1: Repo Identity
@@ -57,7 +57,7 @@ Derive `REPO_SLUG` (e.g., `my-cogni-node`) and `REPO_SNAKE` (e.g., `my_cogni_nod
 **Goal:** `.env.local` configured, dev stack running, database provisioned.
 
 1. Copy `.env.local.example` → `.env.local`, update DB names and `COGNI_REPO_URL`
-2. Prompt user for credentials they must create (see [SETUP_DESIGN.md](../../../scripts/setup/SETUP_DESIGN.md) for full list):
+2. Prompt user for credentials they must create (see [SETUP_DESIGN.md](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/scripts/setup/SETUP_DESIGN.md) for full list):
 
    | Secret               | Where to create                                                                         |
    | -------------------- | --------------------------------------------------------------------------------------- |
@@ -78,7 +78,7 @@ Derive `REPO_SLUG` (e.g., `my-cogni-node`) and `REPO_SNAKE` (e.g., `my_cogni_nod
 
 **Goal:** Split contract deployed, payments active.
 
-1. User adds `operator_wallet.address` to repo-spec (provision via Privy if needed — see [Payment Activation Guide](../../../docs/guides/operator-wallet-setup.md))
+1. User adds `operator_wallet.address` to repo-spec (provision via Privy if needed — see [Payment Activation Guide](https://node-template.cognidao.org/knowledge/set-up-operator-wallet))
 2. Restart dev server to pick up repo-spec changes
 3. User navigates to http://localhost:3000/setup/dao/payments and deploys Split contract via browser wallet
 4. User pastes the output `payments_in` + `payments.status: active` into repo-spec
@@ -89,7 +89,7 @@ Derive `REPO_SLUG` (e.g., `my-cogni-node`) and `REPO_SNAKE` (e.g., `my_cogni_nod
 
 **Goal:** VMs provisioned, SSH keys generated and stored.
 
-Follow [INFRASTRUCTURE_SETUP.md](../../../docs/runbooks/INFRASTRUCTURE_SETUP.md) for detailed steps. Key points:
+Follow [INFRASTRUCTURE_SETUP.md](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/runbooks/INFRASTRUCTURE_SETUP.md) for detailed steps. Key points:
 
 1. Generate SSH keypairs, commit public keys
 2. Discover Cherry project ID via API (never hardcode)
@@ -103,7 +103,7 @@ Follow [INFRASTRUCTURE_SETUP.md](../../../docs/runbooks/INFRASTRUCTURE_SETUP.md)
 
 **Goal:** All secrets set for CI/CD deployment.
 
-Follow the secret list in [SETUP_DESIGN.md](../../../scripts/setup/SETUP_DESIGN.md). Three categories:
+Follow the secret list in [SETUP_DESIGN.md](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/scripts/setup/SETUP_DESIGN.md). Three categories:
 
 1. **Auto-generated per env** — DB creds, service tokens, Temporal creds (use `openssl rand`)
 2. **From .env.local** — shared credentials (OpenRouter, EVM RPC, PostHog, etc.)

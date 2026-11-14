@@ -12,7 +12,7 @@
  *   - GOAL_IS_GRAPH_AGNOSTIC: `stepGraphId` is goal-level config (any graph can
  *     be driven by a goal), defaulting to `langgraph:research`.
  * Side-effects: none
- * Links: docs/design/knowledge-goal-loop.md, https://cognidao.org/knowledge/temporal-workflow-rules
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design, https://cognidao.org/knowledge/temporal-workflow-rules
  * @public
  */
 

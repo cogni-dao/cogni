@@ -20,7 +20,7 @@
  *     check-and-set refusal is a conflict; it re-reads and retries (max 3). It reads key NAMES and the
  *     version, never keeps a value, and never writes the `operator` bucket.
  * Side-effects: IO (reads the projected SA token file; OpenBao HTTP API).
- * Links: docs/design/node-self-serve-secrets.md, scripts/secrets/set-secret.sh
+ * Links: https://cognidao.org/knowledge/node-secret-write-design, scripts/secrets/set-secret.sh
  *   (the put-vs-patch gate this mirrors), src/ports/operator-secrets-plane.port.ts
  * @public
  */

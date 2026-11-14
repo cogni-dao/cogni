@@ -14,9 +14,7 @@ Shared ports, contribution workflow, and adapters for versioned domain knowledge
 ## Pointers
 
 - [Spec](https://node-template.cognidao.org/knowledge/knowledge-data-plane) — authoritative design
-- [task.0231](../../work/items/task.0231.knowledge-data-plane.md) — port + adapter
-- [task.0311](../../work/items/task.0311.poly-knowledge-syntropy-seed.md) — candidate-a wiring, clean-slate seeds, Doltgres 0.56 RBAC workaround
-- [Design doc](../../docs/design/knowledge-data-plane-prototype.md) — spike results + agent tooling roadmap
+- [Design doc](https://node-template.cognidao.org/knowledge/doltgres-sql-quirks) — spike results + agent tooling roadmap
 
 ## Boundaries
 

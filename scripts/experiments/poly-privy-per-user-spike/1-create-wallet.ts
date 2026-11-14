@@ -8,7 +8,7 @@
  *   Prints the new wallet's `address` + `walletId` for use in spike steps 2-6.
  * Invariants: KEY_NEVER_IN_APP — no private key material emitted or stored.
  * Side-effects: IO (creates wallet via Privy API); stdout (prints address + id).
- * Links: work/items/task.0318.poly-wallet-multi-tenant-auth.md § Phase B B1,
+ * Links: https://poly.cognidao.org/knowledge/poly-tenant-wallet-authorization,
  *        scripts/provision-operator-wallet.ts (pattern source)
  * @internal
  */

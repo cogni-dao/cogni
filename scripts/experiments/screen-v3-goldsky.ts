@@ -7,7 +7,7 @@
  * Scope: Read-only screening — does not authenticate, does not place orders, does not modify state. Data API + Goldsky subgraph + CLOB with rate-limited fallback.
  * Invariants: Goldsky batches of 100 cids; CLOB fallback pace ≤20 req/s; market metadata cached forever once closed.
  * Side-effects: IO (HTTPS to data-api.polymarket.com + api.goldsky.com + clob.polymarket.com; writes disk cache + fixture).
- * Links: work/items/spike.0323.poly-copy-trade-candidate-identification.md
+ * Links: https://poly.cognidao.org/knowledge/poly-wallet-selection-method
  * @internal — spike research, not production code.
  */
 

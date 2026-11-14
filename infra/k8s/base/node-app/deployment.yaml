@@ -106,7 +106,7 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
           # Tier 0 sizing: 512Mi container, 384MB V8 heap. See
-          # docs/research/nextjs-node-memory-sizing.md for the full tier table.
+          # https://cognidao.org/knowledge/nextjs-memory-sizing for the full tier table.
           # Overlays bumping memory MUST also patch NODE_OPTIONS to the matching
           # tier; otherwise V8 auto-sizes to ~50% of cgroup, ignoring the bump.
           env:

@@ -6,7 +6,7 @@
  * Purpose: One-shot bulk import of `work/items/*.md` into Doltgres via the deployed `POST /api/v1/work/items` API. Preserves source IDs (e.g. `bug.0153` stays `bug.0153`) by sending the markdown id in the POST body.
  * Scope: One CLI script. Reads markdown via `MarkdownWorkItemAdapter`, POSTs each row.
  * Side-effects: IO (reads markdown files, makes HTTPS POSTs).
- * Links: docs/guides/work-items-importer.md
+ * Links: https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/guides/work-items-importer.md
  * @public
  */
 

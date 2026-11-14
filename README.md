@@ -49,4 +49,4 @@ fast path is the hub guide
 [Improve a Cogni agent locally](https://cognidao.org/knowledge/local-agent-development).
 Nodes forked from node-template run against this same local substrate; see their own README.
 
-[PolyForm Shield license](LICENSE.md)
+[PolyForm Shield license](LICENSE)

@@ -178,5 +178,5 @@ external_refs:
 
 ## Related
 
-- [Documentation System](../docs/README.md)
+- [Documentation System](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/README.md)
 - [Spec + Project Lifecycle](https://node-template.cognidao.org/knowledge/work-item-status-machine)

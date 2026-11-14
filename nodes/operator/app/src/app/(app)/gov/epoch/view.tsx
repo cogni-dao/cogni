@@ -7,7 +7,7 @@
  * Scope: Renders all epoch data via useEpochsPage hook. Does not perform server-side logic.
  * Invariants: Credit/unit strings stay BigInt-safe through sorting and integer formatting.
  * Side-effects: IO (via useEpochsPage hook)
- * Links: docs/spec/epoch-ledger.md, src/features/governance/types.ts
+ * Links: src/features/governance/types.ts
  * @public
  */
 

@@ -57,8 +57,8 @@ describe("Brain repo mount smoke test", () => {
     expect(result.lineEnd).toBeGreaterThanOrEqual(result.lineStart);
   });
 
-  it("repo.open(ROADMAP.md) is readable", async () => {
-    const result = await adapter.open({ path: "ROADMAP.md" });
+  it("repo.open(README.md) is readable", async () => {
+    const result = await adapter.open({ path: "README.md" });
 
     expect(result.sha).toMatch(/^[0-9a-f]{7}$/);
     expect(result.content.length).toBeGreaterThan(0);

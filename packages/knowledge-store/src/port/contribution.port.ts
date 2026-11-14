@@ -11,7 +11,7 @@
  *   contrib branch — the dedicated `createEdo*` methods apply the multi-row
  *   atomic batch on that branch with one Dolt commit per batch.
  * Side-effects: none
- * Links: docs/design/knowledge-contribution-api.md, https://node-template.cognidao.org/knowledge/knowledge-recall-path
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-branch-design, https://node-template.cognidao.org/knowledge/knowledge-recall-path
  * @public
  */
 

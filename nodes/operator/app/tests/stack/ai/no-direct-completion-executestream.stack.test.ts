@@ -15,7 +15,7 @@
  *     post-bill with no credit gate (bug.5042 — beacon's Research/Generate panels did exactly this).
  * Side-effects: IO (grep subprocess)
  * Notes: Complements ONE_LEDGER_WRITER. Catches call sites that would silently skip the billing gate.
- * Links: graph-execution-spec, docs/guides/agent-development.md, inproc-completion-unit.adapter.ts, completion.ts
+ * Links: graph-execution-spec, https://node-template.cognidao.org/knowledge/agent-development, inproc-completion-unit.adapter.ts, completion.ts
  * @public
  */
 
@@ -97,7 +97,7 @@ describe("BILLABLE_AI_THROUGH_EXECUTOR Invariant", () => {
         "Need platform/system billing instead of end-user billing? That requires human sign-off and STILL"
       );
       console.error(
-        "routes through the executor bound to a system billing account. See docs/guides/agent-development.md.\n"
+        "routes through the executor bound to a system billing account. See https://node-template.cognidao.org/knowledge/agent-development.\n"
       );
     }
 

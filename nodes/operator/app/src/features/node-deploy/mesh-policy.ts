@@ -19,7 +19,7 @@
  *   - STABLE_FORM: owners, rules and ports are sorted, and the serializer orders object keys, so a
  *     readback of what we wrote compares equal byte for byte.
  * Side-effects: none
- * Links: mesh-plane.ts, https://github.com/juanfont/headscale/blob/v0.29.7/docs/ref/policy.md
+ * Links: mesh-plane.ts, https://github.com/juanfont/headscale/blob/c9cf210b8bc84d13177e18b91f555788a44b47b6/docs/ref/policy.md
  * @public
  */
 

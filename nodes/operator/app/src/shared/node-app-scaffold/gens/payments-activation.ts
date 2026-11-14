@@ -18,7 +18,7 @@
  *   - IDEMPOTENT_SPLICE: re-splicing an already-activated spec is a no-op (the blocks converge on the
  *     same values), so re-running activation produces an empty diff.
  * Side-effects: none
- * Links: src/shared/node-app-scaffold/gens/repo-spec.ts, docs/design/node-payments-activation.md, task.5083
+ * Links: src/shared/node-app-scaffold/gens/repo-spec.ts, https://cognidao.org/knowledge/privy-owner-key-custody, task.5083
  * @public
  */
 

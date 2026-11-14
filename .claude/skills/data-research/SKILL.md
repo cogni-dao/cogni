@@ -261,7 +261,7 @@ Add a new recipe when a debugging path has been walked twice. The bar is reuse, 
 
 - **bug.5012** — poly prod OOM crashloop. Reading `wallet-analysis-service.ts:readDbFillsAsOrderFlowTrades` against RN1's 825k-fill backfill (spike.5024) blew the heap. Fix: SQL aggregation per `computeWalletMetrics` field, no raw fills in V8.
 - **PR #1257** (`cc0e70fe8`) — heap-bump + `pLimit(4)` cap on the redeem-catchup boot loop. Stops a _different_ OOM (boot-fan-out), not the read-path one. Sometimes both apply; they're orthogonal.
-- **`docs/research/nextjs-node-memory-sizing.md`** — Tier 0/1 sizing standard. Useful background but **not a substitute for SQL aggregation**. Tier 1 buys ~3× the heap; one big SELECT eats it.
+- **`https://cognidao.org/knowledge/nextjs-memory-sizing`** — Tier 0/1 sizing standard. Useful background but **not a substitute for SQL aggregation**. Tier 1 buys ~3× the heap; one big SELECT eats it.
 - **`features/wallet-analysis/server/wallet-analysis-service.ts`** — the canonical "before" (V8 reduce) and "after" (SQL aggregate) example once the SQL refactor lands.
 - **`app/api/v1/poly/research/trader-comparison/route.ts`** — canonical research-route shape (Zod, partial-failure-200, service-DB delegation).
 

@@ -18,7 +18,7 @@
  *     Invariant 15 (DB role material is OpenBao/substrate-owned). Fixed +
  *     operator-domain — independent of any node's catalog.
  * Side-effects: none
- * Links: docs/design/node-self-serve-secrets.md, https://cognidao.org/knowledge/secrets-management
+ * Links: https://cognidao.org/knowledge/node-secret-write-design, https://cognidao.org/knowledge/secrets-management
  * @public
  */
 

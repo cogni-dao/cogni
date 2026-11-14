@@ -589,7 +589,7 @@ jobs:
     # node's ApplicationSet object — never a shared file carrying other lanes'
     # generators — so a concurrent flight of a different node cannot prune this
     # node's Application. This is the structural fix for the shared-appset
-    # clobber: see work/items/bug.0378.reconcile-appset-shared-write-race.md.
+    # clobber: see bug.0378.
     # Matrix tracks the FLIGHT targets (the nodes actually deploying), in lockstep
     # with the flight job below.
     strategy:

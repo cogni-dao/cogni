@@ -9,7 +9,7 @@
 # a legacy node born before the reservation ran with allocatable == capacity).
 # `provision-env-vm.sh` calls this as an explicit gate after the fresh node comes
 # up, so a dishonest node fails the provision loudly instead of silently drifting.
-# See docs/design/operator-fleet-safety.md SLA#1.
+# See https://cognidao.org/knowledge/fleet-capacity-design SLA#1.
 #
 # Usage:
 #   assert-honest-allocatable.sh            # uses $KUBECONFIG / default context

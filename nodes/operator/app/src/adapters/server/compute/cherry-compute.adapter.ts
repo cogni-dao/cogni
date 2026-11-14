@@ -15,7 +15,7 @@
  *   - FAIL_LOUD: HTTP / network / timeout failures throw CherryComputeError so the scheduled
  *     emitter can observe its own failure (a silently-dead balance monitor is the bug we fix).
  * Side-effects: IO (HTTPS requests to api.cherryservers.com)
- * Links: ComputeResourcePort (@cogni/ai-tools/capabilities/compute), infra/provision/cherry/CHERRY_REFERENCE.md
+ * Links: ComputeResourcePort (@cogni/ai-tools/capabilities/compute), https://cognidao.org/knowledge/cherry-servers-reference
  * @internal
  */
 

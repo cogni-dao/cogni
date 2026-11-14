@@ -6,7 +6,7 @@
  * Scope: Pure read + filter over the loaded catalog routing. Prints to stdout; does NOT shell out, write files, or touch OpenBao/git state.
  * Invariants: pod-consumed iff `pod ∈ consumedBy`, else an A1/A2 entry with an OpenBao pod path.
  * Side-effects: IO (stdout write; reads catalog YAML transitively via loadSecretsCatalog)
- * Links: https://cognidao.org/knowledge/secrets-management, docs/design/secrets-catalog-per-node.md
+ * Links: https://cognidao.org/knowledge/secrets-management, https://node-template.cognidao.org/knowledge/secrets-routing-tiers
  *
  * A key is pod-consumed iff `pod ∈ consumedBy` (explicit), else an A1/A2 entry
  * that resolves to an OpenBao pod path. Per-node membership gating stays in bash
