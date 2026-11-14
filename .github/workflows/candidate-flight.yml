@@ -76,7 +76,7 @@ jobs:
       source_sha_by_target_json: ${{ steps.substrate-targets.outputs.source_sha_by_target_json }}
     steps:
       - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 0
 
@@ -178,7 +178,7 @@ jobs:
           echo "status_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout app source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ steps.meta.outputs.head_sha }}
           fetch-depth: 0
@@ -431,12 +431,12 @@ jobs:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
       - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           path: ci-src
 
       - name: Checkout app source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           fetch-depth: 0
@@ -605,12 +605,12 @@ jobs:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
       - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           path: ci-src
 
       - name: Checkout app source (for AppSet YAML)
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           path: app-src
@@ -764,12 +764,12 @@ jobs:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
       - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           path: ci-src
 
       - name: Checkout app source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           path: app-src
@@ -867,12 +867,12 @@ jobs:
     environment: candidate-a
     steps:
       - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           path: ci-src
 
       - name: Checkout app source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           fetch-depth: 0
@@ -1013,12 +1013,12 @@ jobs:
       head_sha: ${{ needs.decide.outputs.head_sha }}
     steps:
       - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           path: ci-src
 
       - name: Checkout app source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           fetch-depth: 0
@@ -1231,12 +1231,12 @@ jobs:
       # helpers, so telemetry remains available even when the PR-head app source
       # predates .github/actions/loki-push.
       - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       # PR head, not the workflow default branch: a PR that ADDS a node carries
       # the new catalog entry + the reconcile script here, so DNS covers it.
       - name: Checkout app source (PR catalog + scripts)
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           path: app-src
@@ -1358,12 +1358,12 @@ jobs:
     steps:
       # Workflow source at the root owns the loki-push composite action.
       - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       # PR head: a PR that ADDS a node carries the new catalog + the rendered
       # base/scheduler-worker configmap here, so routing covers it.
       - name: Checkout app source (PR catalog + base manifests)
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           # PR flights reconcile the PR's catalog/manifests. Node-ref flights reconcile the
           # target fleet's workflow source; an in-repo operator SHA can come from canonical and
@@ -1548,12 +1548,12 @@ jobs:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
       - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           path: ci-src
 
       - name: Checkout app source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           path: app-src
@@ -1621,7 +1621,7 @@ jobs:
         run: bash ci-src/scripts/ci/resolve-substrate-gate.sh
 
       - name: Checkout per-node deploy branch (for source-sha map)
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           repository: ${{ steps.deploy-repo.outputs.repository }}
           ref: deploy/${{ matrix.env }}-${{ matrix.node }}
@@ -1762,7 +1762,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout workflow source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Decide aggregate state
         id: decide
