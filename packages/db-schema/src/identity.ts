@@ -12,7 +12,7 @@
  * - USER_ID_AT_CREATION: All FKs reference users.id (UUID).
  * - RLS_ENABLED: Both tables have row-level security enabled.
  * Side-effects: none (schema definitions only)
- * Links: docs/spec/decentralized-identity.md
+ * Links: https://cognidao.org/knowledge/user-identity-bindings
  * @public
  */
 

@@ -13,7 +13,7 @@
  *   - SUBJECT_NEVER_FROM_SESSION: `github` is populated ONLY from the GitHub authorization
  *     response for this exact `state`. There is no operator session in this flow (task.5024).
  * Side-effects: none
- * Links: docs/spec/decentralized-user-identity.md, task.5024
+ * Links: https://cognidao.org/knowledge/identity-attestation-v1, task.5024
  * @public
  */
 

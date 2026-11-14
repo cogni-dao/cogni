@@ -17,7 +17,7 @@
  *   - ASYMMETRIC_ONLY: EdDSA on purpose — a shared HMAC would let any node
  *     forge attestations for its peers (the SCHEDULER_API_TOKEN defect).
  * Side-effects: none
- * Links: docs/spec/decentralized-user-identity.md, infra/secrets-catalog.yaml
+ * Links: https://cognidao.org/knowledge/identity-attestation-v1, infra/secrets-catalog.yaml
  * @public
  */
 
