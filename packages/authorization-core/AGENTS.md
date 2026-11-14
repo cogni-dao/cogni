@@ -14,7 +14,7 @@ Shared authorization port, OpenFGA adapter, resource helpers, and deterministic 
 ## Pointers
 
 - [RBAC](../../docs/spec/rbac.md)
-- [Access Control Charter](../../docs/spec/access-control-charter.md)
+- [Operator RBAC capability map](https://cognidao.org/knowledge/operator-rbac-capability-map)
 - [Packages Architecture](../../docs/spec/packages-architecture.md)
 
 ## Boundaries

@@ -7,7 +7,7 @@
  * Scope: Proves the full payment chain works. Does not modify production state; requires experiments 1 & 2 validated first.
  * Invariants: Base mainnet only; test wallet with small amounts only; SPLIT_ADDRESS must be set.
  * Side-effects: IO (network: OpenRouter API + Base RPC), process.env
- * Links: spike.0090, docs/spec/web3-openrouter-payments.md
+ * Links: spike.0090
  * @internal — spike code, not for production use
  */
 

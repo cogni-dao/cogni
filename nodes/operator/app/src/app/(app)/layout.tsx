@@ -7,7 +7,7 @@
  * Scope: Client layout component providing sidebar + top bar shell, and the one entry side sheet linked entries open in, for all routes under (app). Does not handle authentication — proxy.ts guarantees only authenticated users reach this layout.
  * Invariants: Auth enforced at proxy level; this layout is a pure UI shell.
  * Side-effects: none
- * Links: docs/spec/security-auth.md, src/proxy.ts
+ * Links: src/proxy.ts
  * @public
  */
 

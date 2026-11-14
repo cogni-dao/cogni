@@ -13,7 +13,7 @@
  * - Cursor is opaque string.
  * - Per CHARGE_RECEIPTS_IS_LEDGER_TRUTH: all data sourced from charge_receipts + llm_charge_details.
  * Side-effects: none
- * Links: [activity.server.ts](../../app/_facades/ai/activity.server.ts), docs/spec/activity-metrics.md
+ * Links: [activity.server.ts](../../app/_facades/ai/activity.server.ts)
  * @public
  */
 

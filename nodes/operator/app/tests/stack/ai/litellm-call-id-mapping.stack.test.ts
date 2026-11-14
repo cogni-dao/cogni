@@ -10,7 +10,7 @@
  *   - Field name is stable across LiteLLM versions (test breaks if LiteLLM changes the field)
  * Side-effects: IO (LLM call, database read, HTTP request to LiteLLM API)
  * Notes: Requires running stack (dev:stack:test). Uses real LiteLLM via FakeLlmAdapter in test mode.
- * Links: docs/spec/external-executor-billing.md (invariant #2), packages/ai-core/src/usage/usage.ts (usageUnitId comment)
+ * Links: packages/ai-core/src/usage/usage.ts (usageUnitId comment)
  * @public
  */
 

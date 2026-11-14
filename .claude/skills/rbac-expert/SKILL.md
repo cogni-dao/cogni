@@ -17,7 +17,7 @@ Navigation for authorization in cogni-template. **This file deliberately does NO
 | [`infra/openfga/rbac-model.json`](../../../infra/openfga/rbac-model.json)                       | The authored, immutable model — the real SSOT for what's grantable                                                                                                                               |
 | [`packages/authorization-core/src/index.ts`](../../../packages/authorization-core/src/index.ts) | `AuthorizationPort` (`check` / `writeRelation` / `deleteRelation`), decision codes, **`relationForAuthzAction()`** (the action→relation SSOT — read it, don't memorize a copy), resource helpers |
 | [`docs/spec/identity-model.md`](../../../docs/spec/identity-model.md)                           | Principals; `actorId` (runtime string) vs `actor_id` (economic-subject column)                                                                                                                   |
-| [`docs/spec/access-control-charter.md`](../../../docs/spec/access-control-charter.md)           | Layer-cake framing (Identity → AuthN → AuthZ → Secrets → DAO)                                                                                                                                    |
+| [`operator-rbac-capability-map`](https://cognidao.org/knowledge/operator-rbac-capability-map)   | Layer-cake framing (Identity → AuthN → AuthZ → Secrets → DAO)                                                                                                                                    |
 
 ## The mental model (the durable part)
 

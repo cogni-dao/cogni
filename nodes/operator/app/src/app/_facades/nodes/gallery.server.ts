@@ -8,7 +8,7 @@
  *   ledger data to unavailable metrics. Does not mutate node registry or attribution state.
  * Invariants: PROJECTION_NOT_SSOT, RECEIPT_APPEND_ONLY, NO_AI_USAGE_INFERENCE.
  * Side-effects: IO (registry and database reads)
- * Links: src/ports/node-registry.port.ts, docs/spec/attribution-ledger.md, docs/spec/activity-metrics.md
+ * Links: src/ports/node-registry.port.ts, docs/spec/attribution-ledger.md
  * @public
  */
 

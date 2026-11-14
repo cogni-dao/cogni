@@ -8,7 +8,7 @@
  * Invariants: Uses real NextAuth endpoints; no vi.mock() of auth internals; wallet address must be normalized (lowercase)
  * Side-effects: IO (HTTP requests, database writes)
  * Notes: Exercises actual JWT callbacks and session callbacks in src/auth.ts. Uses undici's fetch to access Set-Cookie headers on redirect responses.
- * Links: docs/spec/security-auth.md, src/auth.ts
+ * Links: src/auth.ts
  * @public
  */
 

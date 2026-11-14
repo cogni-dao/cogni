@@ -7,7 +7,7 @@
  * Scope: Deploys a push split, sends USDC, triggers distribution, verifies shares. Does not modify production state.
  * Invariants: Base mainnet only; test wallet with small amounts only.
  * Side-effects: IO (network: Base RPC, deploys contract), process.env
- * Links: spike.0090, docs/spec/web3-openrouter-payments.md
+ * Links: spike.0090
  * @internal — spike code, not for production use
  */
 

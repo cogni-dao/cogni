@@ -69,7 +69,7 @@ governance:
   signal_contract: "0x590FC79B9c925C377fA63F4AaF54cdbF4Ee273A1" # DAO's CogniSignal Contract Address
   chain_id: "8453" # Chain ID: Eth Sepolia testnet
   base_url: "https://proposal.cognidao.org" # v0 Base URL: cogni-proposal-launcher service
-  # Governance council schedules (charter-scoped per governance-council.md).
+  # Governance council schedules (charter-scoped).
   # Each triggers a sandbox agent run with a 1-word entrypoint. Cron: https://crontab.guru/
   schedules:
     - charter: HEARTBEAT

@@ -8,7 +8,7 @@
  * Invariants: Valid session triggers billing account creation and LLM call; missing session returns 401.
  * Side-effects: IO (database writes via container)
  * Notes: Mocks @/app/_lib/auth/session to simulate JWT session state; verifies session enforcement and billing integration.
- * Links: docs/spec/security-auth.md
+ * Links: src/auth.ts
  * @public
  */
 

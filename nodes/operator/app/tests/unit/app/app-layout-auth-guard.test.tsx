@@ -8,7 +8,7 @@
  * Invariants: Layout is a pure shell — no auth logic, no redirects. Proxy.ts is the single authority.
  * Side-effects: none (mocked components)
  * Notes: Uses React Testing Library with mocked layout components. DOM environment via test-level override.
- * Links: src/app/(app)/layout.tsx, src/proxy.ts, docs/spec/security-auth.md
+ * Links: src/app/(app)/layout.tsx, src/proxy.ts
  * @public
  */
 

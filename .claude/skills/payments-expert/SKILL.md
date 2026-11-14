@@ -53,7 +53,7 @@ The current buildable direction from the x402 handoff is narrow:
 | Split-hash guard on inbound rail         | route provider cost to Hyperbolic/x402                       |
 | repo-spec inbound activation             | add per-request spend-vs-credit guard from LiteLLM cost data |
 
-Important: this is not the old "delete credits, delete Splits, inbound x402 everywhere" direction. Credits remain the human pre-auth layer. Splits remain the inbound revenue rail. The operator wallet's inbound 95% becomes working capital for outbound x402 micro-payments. If `docs/spec/x402-e2e.md` still says "no credit system, no Privy, no Splits", treat it as stale until the active x402 design PR lands.
+Important: this is not the old "delete credits, delete Splits, inbound x402 everywhere" direction. Credits remain the human pre-auth layer. Splits remain the inbound revenue rail. The operator wallet's inbound 95% becomes working capital for outbound x402 micro-payments. If any x402 note still says "no credit system, no Privy, no Splits", treat it as stale until the active x402 design PR lands.
 
 Human prerequisite for live x402 proof: a Hyperbolic account, API key, and decision on hosted vs self-hosted x402 facilitator. The signer, shim, LiteLLM wiring, and spend guard can be built and CI-gated without that, but real USDC e2e cannot be proven until the vendor account exists.
 
@@ -61,29 +61,28 @@ Human prerequisite for live x402 proof: a Hyperbolic account, API key, and decis
 
 Read the nearest `AGENTS.md` before editing a directory. Then read only the surfaces relevant to the bug:
 
-| Surface                                        | File                                                                                  |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Payment setup guide                            | `docs/guides/payments-setup.md`                                                       |
-| Operator wallet + Split spec                   | `docs/spec/operator-wallet.md`                                                        |
-| Web3/OpenRouter payment spec                   | `docs/spec/web3-openrouter-payments.md`                                               |
-| x402 spec, may be stale vs active refined plan | `docs/spec/x402-e2e.md`                                                               |
-| Node formation payment invariants              | `docs/spec/node-formation.md`                                                         |
-| Root repo-spec payment config                  | `.cogni/repo-spec.yaml`                                                               |
-| Operator repo-spec payment config              | `nodes/operator/.cogni/repo-spec.yaml`                                                |
-| Repo-spec schema/accessors                     | `packages/repo-spec/src/schema.ts`, `packages/repo-spec/src/accessors.ts`             |
-| Split allocation math                          | `packages/operator-wallet/src/domain/split-allocation.ts`                             |
-| Operator wallet adapter                        | `packages/operator-wallet/src/adapters/privy/privy-operator-wallet.adapter.ts`        |
-| Payment rail guard port                        | `nodes/operator/app/src/ports/payment-rail-guard.port.ts`                             |
-| Split guard adapter                            | `nodes/operator/app/src/adapters/server/payments/split-payment-rail-guard.adapter.ts` |
-| Payment intent route                           | `nodes/operator/app/src/app/api/v1/payments/intents/route.ts`                         |
-| Payment service                                | `nodes/operator/app/src/features/payments/services/paymentService.ts`                 |
-| Credit settlement                              | `nodes/operator/app/src/features/payments/services/creditsConfirm.ts`                 |
-| Facade config bridge                           | `nodes/operator/app/src/app/_facades/payments/attempts.server.ts`                     |
-| Container wiring                               | `nodes/operator/app/src/bootstrap/container.ts`                                       |
-| Activation UI                                  | `nodes/operator/app/src/app/(app)/nodes/payments/PaymentActivationPage.client.tsx`    |
-| Payment feature rules                          | `nodes/operator/app/src/features/payments/AGENTS.md`                                  |
-| Operator-wallet package rules                  | `packages/operator-wallet/AGENTS.md`                                                  |
-| Repo-spec package rules                        | `packages/repo-spec/AGENTS.md`                                                        |
+| Surface                           | File                                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------------------- |
+| Payment setup guide               | `docs/guides/payments-setup.md`                                                       |
+| Operator wallet + Split spec      | `docs/spec/operator-wallet.md`                                                        |
+| x402 direction (hub atom)         | `node-service-usdc-northstar`                                                         |
+| Node formation payment invariants | `docs/spec/node-formation.md`                                                         |
+| Root repo-spec payment config     | `.cogni/repo-spec.yaml`                                                               |
+| Operator repo-spec payment config | `nodes/operator/.cogni/repo-spec.yaml`                                                |
+| Repo-spec schema/accessors        | `packages/repo-spec/src/schema.ts`, `packages/repo-spec/src/accessors.ts`             |
+| Split allocation math             | `packages/operator-wallet/src/domain/split-allocation.ts`                             |
+| Operator wallet adapter           | `packages/operator-wallet/src/adapters/privy/privy-operator-wallet.adapter.ts`        |
+| Payment rail guard port           | `nodes/operator/app/src/ports/payment-rail-guard.port.ts`                             |
+| Split guard adapter               | `nodes/operator/app/src/adapters/server/payments/split-payment-rail-guard.adapter.ts` |
+| Payment intent route              | `nodes/operator/app/src/app/api/v1/payments/intents/route.ts`                         |
+| Payment service                   | `nodes/operator/app/src/features/payments/services/paymentService.ts`                 |
+| Credit settlement                 | `nodes/operator/app/src/features/payments/services/creditsConfirm.ts`                 |
+| Facade config bridge              | `nodes/operator/app/src/app/_facades/payments/attempts.server.ts`                     |
+| Container wiring                  | `nodes/operator/app/src/bootstrap/container.ts`                                       |
+| Activation UI                     | `nodes/operator/app/src/app/(app)/nodes/payments/PaymentActivationPage.client.tsx`    |
+| Payment feature rules             | `nodes/operator/app/src/features/payments/AGENTS.md`                                  |
+| Operator-wallet package rules     | `packages/operator-wallet/AGENTS.md`                                                  |
+| Repo-spec package rules           | `packages/repo-spec/AGENTS.md`                                                        |
 
 Recent refactor to understand: PR `cogni-dao/cogni#1823`, `feat(payments): repo-spec at-cost economics plus Split guard`, head `adc2f8ff5b` in the original workspace. Check GitHub for current merge state before relying on branch-local facts.
 

@@ -9,7 +9,7 @@
  * - Post-call never throws InsufficientCreditsPortError; idempotent by (source_system, source_reference)
  * - Test params include required chargeReason, sourceSystem, runId, attempt fields
  * Side-effects: none (uses mocks)
- * Links: `src/adapters/server/accounts/drizzle.adapter.ts`, docs/spec/activity-metrics.md, types/billing.ts
+ * Links: `src/adapters/server/accounts/drizzle.adapter.ts`, types/billing.ts
  */
 
 import type { UserId } from "@cogni/ids";

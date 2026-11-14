@@ -8,7 +8,7 @@
  * Invariants: wallet_address is the primary user identifier for SIWE authentication.
  * Side-effects: none (schema definitions only)
  * Notes: JWT strategy does not use sessions or accounts tables.
- * Links: docs/spec/security-auth.md
+ * Links: packages/db-schema/src/index.ts
  * @public
  */
 

@@ -7,7 +7,7 @@
  * Scope: Creates a charge via OpenRouter API, executes the Coinbase Commerce transfer, verifies credits. Does not modify production state.
  * Invariants: Base mainnet only; test wallet with small amounts only.
  * Side-effects: IO (network: OpenRouter API + Base RPC), process.env
- * Links: spike.0090, docs/spec/web3-openrouter-payments.md
+ * Links: spike.0090
  * @internal — spike code, not for production use
  */
 

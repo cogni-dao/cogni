@@ -14,7 +14,7 @@
  * Side-effects: IO (NextAuth session retrieval on cookie path)
  * Notes: Routes that must remain session-only (governance, user profile) import
  *   getServerSessionUser from @/lib/auth/server directly instead of using this export.
- * Links: docs/spec/security-auth.md, request-identity.ts
+ * Links: request-identity.ts
  * @public
  */
 export {

@@ -15,7 +15,7 @@
  * - charge_receipts has run_id, attempt columns for run-level queries
  * - charge_receipts uses (source_system, source_reference) for generic linking to external systems
  * Side-effects: none (schema definitions only)
- * Links: docs/spec/payments-design.md, docs/spec/activity-metrics.md, docs/spec/graph-execution.md, types/billing.ts
+ * Links: docs/spec/payments-design.md, docs/spec/graph-execution.md, types/billing.ts
  * @public
  */
 
@@ -114,7 +114,7 @@ export const creditLedger = pgTable(
 /**
  * Charge receipts - minimal audit-focused table.
  * LiteLLM is canonical for telemetry (model/tokens). We only store billing data.
- * See docs/spec/activity-metrics.md, docs/spec/graph-execution.md for design rationale.
+ * See docs/spec/graph-execution.md for design rationale.
  *
  * Per GRAPH_EXECUTION.md:
  * - run_id: Canonical execution identity (groups multiple LLM calls)

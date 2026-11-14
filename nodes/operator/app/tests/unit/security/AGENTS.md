@@ -14,7 +14,7 @@ Security-focused unit tests that enforce architectural invariants and prevent re
 ## Pointers
 
 - [Root AGENTS.md](../../../../../AGENTS.md)
-- [Security Spec](../../../../../docs/spec/security-auth.md)
+- [Operator identity model](https://cognidao.org/knowledge/operator-identity-model)
 
 ## Boundaries
 
@@ -58,7 +58,7 @@ Tests run automatically in CI via `pnpm check`.
 ## Standards
 
 - Tests fail fast on security violations
-- Patterns scanned must be kept in sync with docs/spec/security-auth.md
+- Patterns scanned must be kept in sync with the auth key-storage rules (https://cognidao.org/knowledge/user-identity-bindings)
 - Allowlists must be minimal and justified in comments
 
 ## Dependencies

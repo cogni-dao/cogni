@@ -8,7 +8,7 @@
  * Invariants: All requests use fetch() for real HTTP calls; session cookies are preserved across requests
  * Side-effects: IO (HTTP requests to NextAuth endpoints)
  * Notes: Use for stack tests exercising NextAuth flows end-to-end; Uses undici's fetch for Set-Cookie on redirects
- * Links: tests/stack/auth/, docs/spec/security-auth.md
+ * Links: tests/stack/auth/
  * @public
  */
 
