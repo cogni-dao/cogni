@@ -3,7 +3,7 @@
 
 /**
  * Module: `@tests/ci-invariants/sha-artifact-identity`
- * Purpose: Pins SOURCE_SHA_IS_DEPLOY_IDENTITY for the operator's own app artifact — every in-repo deployable is built, published, and resolved as `<image>:sha-<sourceSha>`, never the legacy `pr-{N}-{X}` / `mq-{N}-{Y}` / `preview-{sha}` namespaces (https://node-template.cognidao.org/knowledge/node-ci-sovereignty invariants 6 & 9), so a regression cannot re-introduce the purged split-brain or drop the self-build triggers.
+ * Purpose: Pins SOURCE_SHA_IS_DEPLOY_IDENTITY for the operator's own app artifact — every in-repo deployable is built, published, and resolved as `<image>:sha-<sourceSha>`, never the legacy `pr-{N}-{X}` / `mq-{N}-{Y}` / `preview-{sha}` namespaces (node-ci-sovereignty invariants 6 & 9), so a regression cannot re-introduce the purged split-brain or drop the self-build triggers.
  * Scope: Static text assertions over the CI workflow source; does not shell out, build, deploy, or hit the network.
  * Invariants:
  *   PR_BUILD_SELF_BUILDS_ON_PUSH_MAIN: pr-build.yml triggers on pull_request +
