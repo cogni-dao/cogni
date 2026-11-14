@@ -7,7 +7,7 @@
  * Scope: Viem client setup, env loading, contract constants, Coinbase Transfers ABI. Does not make RPC calls or broadcast transactions.
  * Invariants: Base mainnet only (chain 8453); no production key material.
  * Side-effects: IO (reads .env file), process.env
- * Links: src/shared/web3/chain.ts, work/items/spike.0090.validate-operator-wallet-payment-chain.md
+ * Links: src/shared/web3/chain.ts
  * @internal — spike code, not for production use
  */
 

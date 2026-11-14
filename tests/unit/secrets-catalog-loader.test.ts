@@ -9,7 +9,7 @@
  *   - appliesTo + shared survive into the routing record
  *   - an entry declaring both service: and appliesTo: is rejected at load
  * Side-effects: IO (creates + removes temp catalog dirs under os.tmpdir())
- * Links: docs/design/secrets-catalog-per-node.md, scripts/lib/secrets-catalog-loader.ts
+ * Links: https://node-template.cognidao.org/knowledge/secrets-routing-tiers, scripts/lib/secrets-catalog-loader.ts
  */
 
 import { execSync } from "node:child_process";

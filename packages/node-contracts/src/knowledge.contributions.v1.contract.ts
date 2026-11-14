@@ -12,7 +12,7 @@
  *   - Server stamps branch edits with source_ref='contribution:<id>:<seq>'
  *   - Confidence is never author-set; the server policy initializes + recomputes it
  * Side-effects: none
- * Links: docs/design/knowledge-contribution-api.md, https://node-template.cognidao.org/knowledge/knowledge-data-plane, work/items/task.0425.knowledge-contribution-api.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-branch-design, https://node-template.cognidao.org/knowledge/knowledge-data-plane
  * @internal
  */
 

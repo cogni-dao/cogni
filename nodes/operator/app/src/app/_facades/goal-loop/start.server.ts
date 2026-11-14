@@ -22,7 +22,7 @@
  *   - WORKFLOW_ID_IS_HYPOTHESIS_ID: `workflowClient.start(GoalLoopWorkflow,
  *     { workflowId: hypothesisId })` — one live loop per goal, idempotent start.
  * Side-effects: IO (Doltgres write via edoCapability; starts a Temporal workflow)
- * Links: docs/design/knowledge-goal-loop.md § MVP checklist (Start surface)
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design § MVP checklist (Start surface)
  * @public
  */
 

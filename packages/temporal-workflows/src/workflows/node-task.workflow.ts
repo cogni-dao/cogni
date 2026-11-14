@@ -13,7 +13,7 @@
  *   - ACTIVITY_IDEMPOTENCY: dispatch forwards `Idempotency-Key: ${nodeId}/${scheduleId}/${scheduledFor}`; the node route MUST dedup on it. Retry profile = maximumAttempts:1 (MVP) until the dedup contract is proven.
  *   - GENERIC_NON_GRAPH: this is the one generic non-graph workflow for ALL nodes (supersedes CollectEpoch's special status). No graph child — the node's route IS the work.
  * Side-effects: none (deterministic orchestration only)
- * Links: docs/design/node-temporal-tenant-interface.md (story.5008, task.5029), https://cognidao.org/knowledge/temporal-workflow-rules
+ * Links: https://node-template.cognidao.org/knowledge/node-task-principal-design (story.5008, task.5029), https://cognidao.org/knowledge/temporal-workflow-rules
  * @public
  */
 

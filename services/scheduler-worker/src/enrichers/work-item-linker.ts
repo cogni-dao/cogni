@@ -9,7 +9,7 @@
  * - ENRICHER_SNAPSHOT_RULE: all external work-item state must be snapshotted into the plugin payload.
  * - INPUTS_HASH_COMPLETE: inputs_hash covers epoch_id, sorted (receipt_id, receipt_payload_hash), and sorted (work_item_id, frontmatter_hash). It does not depend on repo commit SHA for invalidation.
  * Side-effects: none
- * Links: work/items/task.0113.epoch-artifact-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @internal
  */
 

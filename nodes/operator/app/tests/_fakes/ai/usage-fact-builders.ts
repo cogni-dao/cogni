@@ -7,7 +7,7 @@
  * Scope: Creates minimal UsageFact test data for billing validation tests. Does not perform billing or schema validation.
  * Invariants: Builders produce schema-valid facts by default; override to test failures.
  * Side-effects: none
- * Links: packages/ai-core/src/usage/usage.ts, work/projects/proj.graph-execution.md
+ * Links: packages/ai-core/src/usage/usage.ts, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.graph-execution.md
  * @public
  */
 

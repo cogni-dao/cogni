@@ -117,7 +117,7 @@ Human steps:
 2. Copy the app id, app secret, and wallet signing key into a local env file for the AI dev only. Do not paste secret values into chat.
 
 AI dev steps:
-1. Read docs/guides/operator-wallet-setup.md and docs/guides/secrets-add-new.md.
+1. Read https://node-template.cognidao.org/knowledge/set-up-operator-wallet and https://cognidao.org/knowledge/break-glass-secret-write.
 2. Add the node's PRIVY_APP_ID, PRIVY_APP_SECRET, and PRIVY_SIGNING_KEY to candidate-a secrets.
 3. Provision or resolve the Privy-managed operator wallet.
 4. Update .cogni/repo-spec.yaml with operator_wallet.address.
@@ -145,9 +145,9 @@ Activation PR: ${input.activationPrUrl ?? "open the node repo and find the payme
 Goal: merge the activation PR, promote the resulting node build to production, and verify the production /version build serves the activated repo-spec.
 
 Read first:
-- docs/guides/payments-setup.md
+- https://node-template.cognidao.org/knowledge/set-up-usdc-topups
 - .claude/skills/deploy-node/SKILL.md (POST /api/v1/deploy/workloads)
-- docs/runbooks/dolthub-remote-bootstrap.md if DoltHub or knowledge mirror config appears in the diff
+- https://cognidao.org/knowledge/dolthub-mirror-bootstrap if DoltHub or knowledge mirror config appears in the diff
 
 Do:
 1. Review the activation PR and confirm .cogni/repo-spec.yaml contains the Split receiving address and operator wallet.

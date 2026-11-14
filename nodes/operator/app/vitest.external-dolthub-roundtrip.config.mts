@@ -14,7 +14,7 @@
  *   - Resolves @cogni/* workspace packages from src (via tsconfig.e2e-roundtrip.json)
  *     so it does NOT depend on a prior `pnpm build`.
  * Side-effects: Docker containers; durable repo creation under the test owner.
- * Links: docs/runbooks/dolthub-remote-bootstrap.md, .context/dolthub-e2e-roundtrip-plan.md
+ * Links: https://cognidao.org/knowledge/dolthub-mirror-bootstrap, .context/dolthub-e2e-roundtrip-plan.md
  * @public
  */
 

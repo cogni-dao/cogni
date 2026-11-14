@@ -18,7 +18,7 @@
  *   - GOAL_ON_MAIN: the facade files via `edoCapability` (direct-to-main) so the
  *     workflow can load the row immediately.
  * Side-effects: IO (Doltgres write; starts a Temporal workflow)
- * Links: docs/design/knowledge-goal-loop.md § MVP checklist (Start surface)
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design § MVP checklist (Start surface)
  * @public
  */
 

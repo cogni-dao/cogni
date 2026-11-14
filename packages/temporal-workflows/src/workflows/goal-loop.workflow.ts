@@ -26,7 +26,7 @@
  *     `${hypothesisId}/${iteration}`; the outcome write is keyed on
  *     `${hypothesisId}`.
  * Side-effects: none (deterministic orchestration only)
- * Links: docs/design/knowledge-goal-loop.md § Pareto MVP, https://cognidao.org/knowledge/temporal-workflow-rules
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design § Pareto MVP, https://cognidao.org/knowledge/temporal-workflow-rules
  * @public
  */
 

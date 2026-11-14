@@ -7,7 +7,7 @@
  * Scope: Read-only public Data API + CLOB lookups. Does not authenticate, does not place orders.
  * Invariants: Category-filtered leaderboard; CLOB backoff on 429/503; concurrency bounded.
  * Side-effects: IO (HTTPS to data-api.polymarket.com + clob.polymarket.com; writes JSON fixture and markdown ranking).
- * Links: work/items/spike.0323.poly-copy-trade-candidate-identification.md, docs/research/polymarket-copy-trade-candidates.md
+ * Links: https://poly.cognidao.org/knowledge/poly-category-edge-scorecard
  * @internal — spike research, not production code.
  */
 

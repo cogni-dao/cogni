@@ -11,7 +11,7 @@
  * Moves (story.0033): create and patch accept `moves` (new ids are resolved and baselined by the store). A single-item read, a create response and a patch response add each move's baseline, current reading and verdict from the goal-metric observations (at most 3 moves); list reads return the stored moves only.
  * Envelope (task.0118): `getWorkItem` is the one single-item read; each move also carries its metric, KPI and goal (`composeItemEnvelope`, the call the agent tool's capability makes), and `includeLinks` adds the first page of citation links. List and summary reads stay summary-sized. An unknown or deprecated metric id is `EntryUnresolvedError` (field `moves`); a non-empty write with no metric wiring is `MovesUnsupportedError`; a bad list is `MovesInvalidError`; a failed baseline read is `MetricBaselineUnavailableError`.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port; goal-metric reads for moves)
- * Links: contracts/work.items.{list,get,create,patch}.v1.contract, work/items/task.0423.doltgres-work-items-source-of-truth.md
+ * Links: contracts/work.items.{list, get, create, patch}.v1.contract
  * @internal
  */
 

@@ -14,7 +14,7 @@
  *   /validate-candidate scorecard on the PR for the head SHA is the only
  *   validation signal; no work-item flag gates or branches the text.
  * Side-effects: none
- * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007, task.5292
+ * Links: https://cognidao.org/knowledge/validation-hold-design, task.5007, task.5292
  * @public
  */
 

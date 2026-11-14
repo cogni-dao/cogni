@@ -7,7 +7,7 @@
  * Scope: Pure service tests with a fake contribution port. Does not call Doltgres or HTTP.
  * Invariants: CONTRIBUTION_AUTHOR_IS_ATTRIBUTION_NOT_APPEND_GATE (bug.5619), CONTRIBUTION_OWNER_CAN_CLOSE.
  * Side-effects: none
- * Links: docs/design/knowledge-contribution-api.md, packages/knowledge-store/src/service/contribution-service.ts
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-branch-design, packages/knowledge-store/src/service/contribution-service.ts
  * @internal
  */
 

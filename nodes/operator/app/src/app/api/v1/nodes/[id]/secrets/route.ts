@@ -48,7 +48,7 @@
  *     narrowest authority expressible today — stated here, not implied.
  *   - NO_SECRETS_IN_LOG: the value never enters a log line; only key + env + KV version.
  * Side-effects: IO (node registry read, OpenBao HTTP write via OperatorSecretsPlanePort).
- * Links: docs/design/node-self-serve-secrets.md (Phase 3 Port alignment),
+ * Links: https://cognidao.org/knowledge/node-secret-write-design (Phase 3 Port alignment)
  *   src/app/api/v1/vcs/flight/route.ts, src/app/api/v1/nodes/[id]/observability/logs/route.ts
  * @public
  */

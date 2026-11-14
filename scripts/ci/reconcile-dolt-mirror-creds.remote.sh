@@ -14,7 +14,7 @@
 #   (the ALWAYS-run lane, https://cognidao.org/knowledge/operator-pipeline-contract Axiom 22) invokes this helper on every flight/
 #   promote — the same shape bug.5041 used to fold the Alloy config re-push into the
 #   always-on lane. See https://cognidao.org/knowledge/secrets-management (Sequencing wrinkle) +
-#   docs/runbooks/dolthub-remote-bootstrap.md.
+#   https://cognidao.org/knowledge/dolthub-mirror-bootstrap.
 #
 # SECURITY / INVARIANTS:
 #   - Values arrive base64-encoded (env DOLT_CREDS_JWK_B64 / DOLT_CREDS_KEYID_B64 /

@@ -7,7 +7,7 @@
  * Scope: Couples to `@assistant-ui/react` types via peer dep. Pure presentation otherwise — does not own runtime state, does not register any per-tool UI, does not fetch data.
  * Invariants: STATUS_DRIVES_ICON — icon/tone come from `MessagePartStatus`, not `result`.
  * Side-effects: none
- * Links: docs/guides/assistant-ui-tool-rendering.md
+ * Links: https://node-template.cognidao.org/knowledge/custom-tool-call-renderer
  * @public
  */
 

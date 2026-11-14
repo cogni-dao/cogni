@@ -12,7 +12,7 @@
  *     with a UUID `node_id`; submodule pins are external identities.
  * Side-effects: IO (reads infra/catalog/*.yaml and nodes/<name>/.cogni/repo-spec.yaml)
  * Links: scripts/ci/lib/image-tags.sh, infra/catalog/_schema.json, https://cognidao.org/knowledge/operator-pipeline-contract (axiom 16),
- *        https://node-template.cognidao.org/knowledge/credit-pricing-billing, ROADMAP.md ("Repo-Spec Authority")
+ *        https://node-template.cognidao.org/knowledge/credit-pricing-billing
  * @public
  */
 

@@ -8,7 +8,7 @@
  *   the loop drives toward `metric >= target` until proven or budget-exhausted.
  * Scope: Pure types + the `metric:` resolution-strategy convention. Does NOT
  *   implement the Temporal workflow, the langgraph step, or the KPI reader —
- *   those land in a follow-up `/implement` (see docs/design/knowledge-goal-loop.md).
+ *   those land in a follow-up `/implement` (see https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design).
  * Invariants:
  *   - GOAL_IS_HYPOTHESIS — a goal reuses `entry_type='hypothesis'`; no new entry_type, no new table.
  *   - KPI_VIA_RESOLUTION_STRATEGY — the KPI binding rides the existing
@@ -21,7 +21,7 @@
  *     held-out check) reads the KPI. A loop that grades itself by its own
  *     `confidence_pct` is a smoke-test only — never a real goal's KPI.
  * Side-effects: none
- * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path, docs/design/knowledge-goal-loop.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path, https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design
  * @public
  */
 
@@ -70,7 +70,7 @@ export function kpiIdFromStrategy(strategy: string | null): string | null {
 // This is NOT a new persisted shape. It is a read projection the loop
 // controller computes from a `hypothesis` row: the goal's identity is the row
 // id, its KPI is parsed from `resolution_strategy`, its threshold + budget live
-// in `tags` (see docs/design/knowledge-goal-loop.md § Goal representation).
+// in `tags` (see https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design § Goal representation).
 // ---------------------------------------------------------------------------
 
 export const GoalSchema = z.object({

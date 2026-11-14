@@ -7,7 +7,7 @@
  * Scope: Orchestrates port calls. Uses TargetedDnsPort when available, falls back to full replacement. Does NOT import adapter implementations.
  * Invariants: Never calls setDnsRecords without reading first. Domain layer — no adapter imports.
  * Side-effects: none (delegates I/O to ports)
- * Links: packages/dns-ops/docs/cloudflare-dns-setup.md
+ * Links: https://cognidao.org/knowledge/node-dns-operations
  * @public
  */
 

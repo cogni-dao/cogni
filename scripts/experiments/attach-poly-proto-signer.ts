@@ -7,7 +7,7 @@
  * Scope: Derives the P-256 public key from POLY_PROTO_PRIVY_SIGNING_KEY locally (no Privy call), POSTs /v1/key_quorums, then PATCHes the wallet to add the new quorum as an additional_signer. Does not move funds.
  * Invariants: Quorum creation is the real product; wallet update may 401 for dashboard-owned wallets and is treated as non-fatal.
  * Side-effects: IO (reads .env.local; one POST /v1/key_quorums; up to two PATCH /v1/wallets/{id}).
- * Links: work/items/task.0315.poly-copy-trade-prototype.md, docs/guides/polymarket-account-setup.md
+ * Links: https://poly.cognidao.org/knowledge/poly-wallet-trading-lessons
  * @internal — experiment code, not shipped to production
  */
 

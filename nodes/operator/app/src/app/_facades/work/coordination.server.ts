@@ -10,7 +10,7 @@
  * Invariants: DOLT_IS_SOURCE_OF_TRUTH, PORT_VIA_CONTAINER, SYSTEM_WRITER_FIXED_REASON (the PR link patch sends `Link PR #<n>`
  *   or `Link work item branch`, a code-owned history reason, never model-written; task.0086).
  * Side-effects: IO through injected ports and work-item facade.
- * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
+ * Links: https://cognidao.org/knowledge/validation-hold-design, task.5007
  * @internal
  */
 

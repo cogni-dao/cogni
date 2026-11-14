@@ -13,7 +13,7 @@ Immutable VM provisioning with SSH deploy key management, Docker/Docker Compose 
 
 ## Pointers
 
-- [INFRASTRUCTURE_SETUP.md](../../../../docs/runbooks/INFRASTRUCTURE_SETUP.md): Setup guide
+- [INFRASTRUCTURE_SETUP.md](https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/runbooks/INFRASTRUCTURE_SETUP.md): Setup guide
 
 ## Boundaries
 

@@ -9,7 +9,7 @@
  * Invariants:
  *   - TOKENS_NEVER_LOGGED: No credentials in logs
  * Side-effects: IO (HTTP request to OpenAI)
- * Links: docs/research/openai-oauth-byo-ai.md
+ * Links: https://node-template.cognidao.org/knowledge/codex-device-auth-byo
  * @public
  */
 

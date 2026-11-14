@@ -7,7 +7,7 @@
  * Scope: Pure gate tests against the exported shapeGate; covers every rejection branch + the happy-path canonical-trim sanitization. Does not call any port, Doltgres, or HTTP layer.
  * Invariants: SHAPE_IS_THE_FLOOR
  * Side-effects: none
- * Links: packages/knowledge-store/src/domain/gates/shape.gate.ts, work/projects/proj.knowledge-syntropy.md
+ * Links: packages/knowledge-store/src/domain/gates/shape.gate.ts, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/work/projects/proj.knowledge-syntropy.md
  * @internal
  */
 

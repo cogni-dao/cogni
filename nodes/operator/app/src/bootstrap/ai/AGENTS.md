@@ -14,7 +14,7 @@ AI tool bindings and tool source factory. Wires tool implementations with inject
 ## Pointers
 
 - [Tool Use Spec](https://node-template.cognidao.org/knowledge/tool-use-contract)
-- [Tools Authoring](../../../../../docs/guides/tools-authoring.md)
+- [Tools Authoring](https://node-template.cognidao.org/knowledge/add-an-ai-tool)
 
 ## Boundaries
 

@@ -18,7 +18,7 @@
  *   - INVARIANT_DEVIATION: TOOLS_VIA_TOOLRUNNER — Codex calls MCP tools directly via config.toml,
  *     bypassing toolRunner.exec(). Mitigated by server-level scoping + $0 billing (user-funded).
  * Side-effects: IO (spawns subprocess, writes temp auth.json + config.toml, cleans up)
- * Links: docs/research/openai-oauth-byo-ai.md, bug.0232
+ * Links: https://node-template.cognidao.org/knowledge/codex-device-auth-byo, bug.0232
  * @internal
  */
 

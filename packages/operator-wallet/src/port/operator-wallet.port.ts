@@ -9,7 +9,7 @@
  *   - NO_GENERIC_SIGNING — the port has no `signTransaction(calldata)` / `signMessage(bytes)` surface.
  *   - KEY_NEVER_IN_APP — no raw key material.
  * Side-effects: none (interface definition only)
- * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary, work/items/task.0315.poly-copy-trade-prototype.md
+ * Links: https://node-template.cognidao.org/knowledge/operator-wallet-custody-boundary
  * @public
  */
 

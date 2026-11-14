@@ -13,7 +13,7 @@
  *     writes to is a SMOKE TEST only — never a real goal's KPI.
  *   - KPI_RANGE_0_100 — `read` returns 0–100, same scale as `target`/`confidence_pct`.
  * Side-effects: none (implementations do I/O; the port does not)
- * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path, docs/design/knowledge-goal-loop.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-recall-path, https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design
  * @public
  */
 

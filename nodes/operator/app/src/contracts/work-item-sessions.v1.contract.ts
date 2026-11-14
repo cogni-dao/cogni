@@ -9,7 +9,7 @@
  * Invariants: OPERATOR_COORDINATION_LOCAL — these shapes belong to the
  *   operator node until another sovereign node proves the same API surface.
  * Side-effects: none
- * Links: docs/design/operator-dev-lifecycle-coordinator.md, task.5007
+ * Links: https://cognidao.org/knowledge/validation-hold-design, task.5007
  * @public
  */
 

@@ -9,7 +9,7 @@
  * - INPUTS_HASH_DETERMINISTIC: Same inputs → same hash, regardless of receipt order.
  * - INPUTS_HASH_EXTENSIBLE: Extensions are additive, sorted by canonicalJsonStringify.
  * Side-effects: none
- * Links: work/items/task.0113.epoch-artifact-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-plugin-pipeline
  * @public
  */
 

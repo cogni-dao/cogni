@@ -11,7 +11,7 @@ Use this with the bundled Conductor app skill when a human asks how to run Cogni
 
 - `conductor.json` wires Conductor setup to `bash scripts/conductor-worktree-setup.sh`.
 - `scripts/conductor-worktree-setup.sh` is the canonical setup script.
-- `docs/guides/new-worktree-setup.md` is the human-facing worktree guide.
+- `https://cognidao.org/knowledge/operator-worktree-setup` is the human-facing worktree guide.
 - `.claude/skills/node-wizard-expert/SKILL.md` and `nodes/operator/app/src/features/nodes/launch-pack.ts` are the launch-handoff references.
 
 ## Human Flow
@@ -36,4 +36,4 @@ The setup script also fetches `origin/main` and fast-forwards the primary checko
 - Keep the fleet-standard `pnpm install --offline --frozen-lockfile || pnpm install --frozen-lockfile`, `pnpm packages:build`, and `pnpm worktree:check` in the setup path. The first attempt is cache-only; the fallback fetches newly pinned tarballs and also retries transient filesystem failures once.
 - Local setup (`CONDUCTOR_IS_LOCAL=1`, including the local default) must reconcile the stable user-level Codex cognition hook. Cloud setup must not modify a user-level Codex home.
 - Codex still requires one explicit `/hooks` trust for that stable user-level hook; automatic reconciliation does not bypass trust.
-- If the setup contract changes, update the script, this skill, `docs/guides/new-worktree-setup.md`, and launch-pack wording together.
+- If the setup contract changes, update the script, this skill, `https://cognidao.org/knowledge/operator-worktree-setup`, and launch-pack wording together.

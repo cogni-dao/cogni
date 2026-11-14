@@ -15,7 +15,7 @@
  *   markdown corpus below 5000, so its allocator must clear it. Nodes booting an
  *   empty store take the package default and start at 1.
  * Side-effects: IO (database connection on first access).
- * Links: https://node-template.cognidao.org/knowledge/work-items-port-contract, docs/guides/agent-api-validation.md
+ * Links: https://node-template.cognidao.org/knowledge/work-items-port-contract, https://cognidao.org/knowledge/prove-node-agent-api
  * @internal
  */
 

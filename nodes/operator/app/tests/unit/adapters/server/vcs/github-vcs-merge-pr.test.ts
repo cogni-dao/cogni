@@ -8,7 +8,7 @@
  * Scope: Mocked Octokit (`request` + `graphql`) + `fetch`; no real GitHub I/O.
  * Invariants: MERGED_XOR_ENQUEUED — exactly one of `merged` | `enqueued` is set.
  * Side-effects: none
- * Links: src/adapters/server/vcs/github-vcs.adapter.ts, docs/spec/merge-authority.md
+ * Links: src/adapters/server/vcs/github-vcs.adapter.ts
  * @internal
  */
 

@@ -3,7 +3,7 @@
 #
 # Argo CD Image Updater — continuous reconciler that keeps main's overlay
 # digest seeds eventually-consistent with the preview-* tag class in GHCR.
-# See bug.0344 and docs/runbooks/image-updater-bootstrap.md.
+# See bug.0344 and https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/runbooks/image-updater-bootstrap.md.
 #
 # Pin: v0.15.2 — last upstream release explicitly tested against Argo CD v2.13.x
 # (which is the version pinned in ../kustomization.yaml). Moving to v0.18+ or
@@ -13,7 +13,7 @@
 # are NOT GitOps-managed — ksops was retired (see infra/provision/cherry/base/
 # bootstrap.yaml, task.0284). They are created imperatively via
 # `kubectl create secret generic --dry-run=client -o yaml | kubectl apply -f -`.
-# See docs/runbooks/image-updater-bootstrap.md §1.
+# See https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/runbooks/image-updater-bootstrap.md §1.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

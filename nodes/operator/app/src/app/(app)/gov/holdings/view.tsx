@@ -15,7 +15,7 @@
  *   - BALANCE_IS_NOT_PROVENANCE: current wallet balance is not decomposed by inferred origin.
  *   - CLAIM_UNCHANGED: the Claim affordance is CumulativeClaimPanel (embedded bare via YourPositionPanel) — chrome only; no claim-math changes.
  * Side-effects: IO (useHoldings), blockchain read (via child panels)
- * Links: docs/spec/epoch-ledger.md, src/features/governance/types.ts
+ * Links: src/features/governance/types.ts
  * @public
  */
 

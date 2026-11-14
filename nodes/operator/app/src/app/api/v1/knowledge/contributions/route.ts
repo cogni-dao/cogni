@@ -7,7 +7,7 @@
  * Scope: Auth-protected POST (create new contrib branch + commit) and GET (list).
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, EXTERNAL_CONTRIB_VIA_BRANCH.
  * Side-effects: IO (HTTP response, Doltgres branch + write via container service)
- * Links: docs/design/knowledge-contribution-api.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-branch-design
  * @public
  */
 

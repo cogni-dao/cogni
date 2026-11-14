@@ -7,7 +7,7 @@
  * Scope: Auth-protected POST/GET wrappers. Delegates contribution policy and Dolt I/O to the shared service.
  * Invariants: VALIDATE_IO, AUTH_VIA_GETSESSIONUSER, CONTRIBUTION_AUTHOR_IS_ATTRIBUTION_NOT_APPEND_GATE (bug.5619: the author is attribution, not a gate; any authenticated principal may append to an open contribution).
  * Side-effects: IO (HTTP response, Doltgres branch writes via container service)
- * Links: docs/design/knowledge-contribution-api.md
+ * Links: https://node-template.cognidao.org/knowledge/knowledge-branch-design
  * @public
  */
 

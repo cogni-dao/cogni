@@ -7,7 +7,7 @@
  * Scope: Live DoltHub API only; creates a unique repo and does not delete it because no delete endpoint is documented.
  * Invariants: Requires DOLTHUB_API_TOKEN and explicit DOLTHUB_EXTERNAL_TEST_OWNER; skips without them.
  * Side-effects: IO (DoltHub API) and durable repo creation under the configured test owner.
- * Links: docs/runbooks/dolthub-remote-bootstrap.md, https://docs.dolthub.com/products/dolthub/api/database
+ * Links: https://cognidao.org/knowledge/dolthub-mirror-bootstrap, https://docs.dolthub.com/products/dolthub/api/database
  * @internal
  */
 

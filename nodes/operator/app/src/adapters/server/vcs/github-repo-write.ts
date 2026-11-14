@@ -3087,7 +3087,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       // inherits its template flag) + the `merge_queue` ruleset copied verbatim
       // from the monorepo. The queue is admin-opt-in on the monorepo, so when it
       // is not yet enabled there this is a clean skip (the node mirrors the
-      // monorepo: born queue-less). See docs/spec/merge-authority.md.
+      // monorepo: born queue-less). See https://cognidao.org/knowledge/vcs-merge-gate.
       await this.replicateMergeQueue(
         sourceOctokit,
         input.mergeQueueSourceOwner,
@@ -3580,7 +3580,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * as `<slug>` scoped to `env` here.
    *
    * vNext: enable DNS_REVERSE_RECONCILE + reconcile-node-dns.sh prune — story.5020 W3b, see
-   * docs/design/operator-fleet-safety.md. When ON, this path constructs a CloudflareAdapter and calls
+   * https://cognidao.org/knowledge/fleet-capacity-design. When ON, this path constructs a CloudflareAdapter and calls
    * `@cogni/dns-ops` `removeDnsRecord` / `upsertDnsRecord`; we do NOT wire live Cloudflare creds in this PR.
    */
   private async dnsSeam(
@@ -3607,7 +3607,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
       return;
     }
     // vNext: enable DNS_REVERSE_RECONCILE + reconcile-node-dns.sh prune — story.5020 W3b, see
-    // docs/design/operator-fleet-safety.md. The flag-on path constructs a CloudflareAdapter and calls
+    // https://cognidao.org/knowledge/fleet-capacity-design. The flag-on path constructs a CloudflareAdapter and calls
     // `@cogni/dns-ops` removeDnsRecord/upsertDnsRecord; live creds are deliberately NOT wired in this PR.
     throw deployPlaneError(
       "dns_reconcile_not_wired",
@@ -5099,7 +5099,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
    * ruleset this is a clean SKIP (logged, not an error): the node mirrors the monorepo
    * and is born queue-less. Once an admin enables the queue ruleset on the monorepo,
    * every subsequently-formed node inherits it automatically. Idempotent on the target
-   * (find-by-name → PUT, else POST). See docs/spec/merge-authority.md.
+   * (find-by-name → PUT, else POST). See https://cognidao.org/knowledge/vcs-merge-gate.
    */
   private async replicateMergeQueue(
     sourceOctokit: Octokit,

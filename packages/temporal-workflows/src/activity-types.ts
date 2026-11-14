@@ -191,7 +191,7 @@ export interface SweepActivities {
 }
 
 // ---------------------------------------------------------------------------
-// Goal-loop Activities (AI goal + KPI loop I/O — docs/design/knowledge-goal-loop.md)
+// Goal-loop Activities (AI goal + KPI loop I/O — https://node-template.cognidao.org/knowledge/knowledge-goal-loop-design)
 //
 // All read/write through the owning node's API (EXECUTION_VIA_SERVICE_API); the
 // worker holds no DB creds on this path. `loadGoalStateActivity` projects the

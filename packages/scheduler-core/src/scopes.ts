@@ -14,7 +14,7 @@
  *     minted for node A can never authorize a dispatch to node B.
  *   - SCOPE_SINGLE_MINT (M2): never hand-format a scope string; derive from here.
  * Side-effects: none
- * Links: docs/design/node-temporal-tenant-interface.md (task.5029, M1+M2), execution-grant.port.ts
+ * Links: https://node-template.cognidao.org/knowledge/node-task-principal-design (task.5029, M1+M2), execution-grant.port.ts
  * @public
  */
 

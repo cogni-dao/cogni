@@ -13,8 +13,7 @@ Programmatic DNS management for Cogni multi-node infrastructure. Provides a port
 
 ## Pointers
 
-- [Cloudflare Setup Guide](docs/cloudflare-dns-setup.md)
-- [task.0232](../../work/items/task.0232.dns-ops-node-creation-v0.md)
+- [Cloudflare Setup Guide](https://cognidao.org/knowledge/node-dns-operations)
 - [dns-ops skill](../../.claude/skills/dns-ops/SKILL.md)
 
 ## Boundaries

@@ -7,7 +7,7 @@
  * Scope: Interface definition only. Does NOT contain implementation.
  * Invariants: setDnsRecords is full replacement — callers must read-modify-write.
  * Side-effects: none
- * Links: packages/dns-ops/docs/cloudflare-dns-setup.md
+ * Links: https://cognidao.org/knowledge/node-dns-operations
  * @public
  */
 

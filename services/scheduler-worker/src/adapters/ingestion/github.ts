@@ -16,7 +16,7 @@
  * - Bot authors skipped (no databaseId on Bot/Mannequin actors).
  * - Rate limiting handled by @octokit/plugin-retry + @octokit/plugin-throttling.
  * Side-effects: HTTP (GitHub GraphQL API)
- * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, docs/research/epoch-event-ingestion-pipeline.md
+ * Links: https://node-template.cognidao.org/knowledge/attribution-epoch-ledger, https://node-template.cognidao.org/knowledge/attribution-collection-limits
  * @internal
  */
 
