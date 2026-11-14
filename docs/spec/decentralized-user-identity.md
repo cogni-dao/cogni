@@ -20,16 +20,16 @@ tags: [identity, auth, web3]
 
 ### Key References
 
-|              |                                                                                           |                                            |
-| ------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------ |
-| **Project**  | [proj.decentralized-identity](../../work/projects/proj.decentralized-identity.md)         | Roadmap, phases, work items                |
-| **Research** | [DID-first identity refactor](../research/did-first-identity-refactor.md)                 | Gap analysis, library eval                 |
-| **Spec**     | [Identity Model](https://cognidao.org/knowledge/identity-keys-no-overload)                                                     | Local user, actor, and binding boundaries  |
-| **Spec**     | [Authentication](https://node-template.cognidao.org/knowledge/authentication-session-bearer)                                                     | SIWE flow, wallet-session                  |
-| **Spec**     | [RBAC](https://cognidao.org/knowledge/authz-port-contract)                                                                         | Actor types (will drop wallet from format) |
-| **Spec**     | [User Context](./user-context.md)                                                         | Agent identity injection                   |
-| **Consumer** | [Attribution Pipeline](https://node-template.cognidao.org/knowledge/attribution-pipeline-map)                                | Identity claimant → local claim resolution |
-| **Consumer** | [proj.transparent-credit-payouts](../../work/projects/proj.transparent-credit-payouts.md) | Claimant and future actor migration        |
+|              |                                                                                               |                                            |
+| ------------ | --------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| **Project**  | [proj.decentralized-identity](../../work/projects/proj.decentralized-identity.md)             | Roadmap, phases, work items                |
+| **Research** | [DID-first identity refactor](../research/did-first-identity-refactor.md)                     | Gap analysis, library eval                 |
+| **Spec**     | [Identity Model](https://cognidao.org/knowledge/identity-keys-no-overload)                    | Local user, actor, and binding boundaries  |
+| **Spec**     | [Authentication](https://node-template.cognidao.org/knowledge/authentication-session-bearer)  | SIWE flow, wallet-session                  |
+| **Spec**     | [RBAC](https://cognidao.org/knowledge/authz-port-contract)                                    | Actor types (will drop wallet from format) |
+| **Spec**     | [User Context](./user-context.md)                                                             | Agent identity injection                   |
+| **Consumer** | [Attribution Pipeline](https://node-template.cognidao.org/knowledge/attribution-pipeline-map) | Identity claimant → local claim resolution |
+| **Consumer** | [proj.transparent-credit-payouts](../../work/projects/proj.transparent-credit-payouts.md)     | Claimant and future actor migration        |
 
 ## Design
 

@@ -36,16 +36,16 @@ We are **crawling**: one developer, near-zero external users, MVP. The bar for e
 
 The Feb-2026 "three separate daemons" plan was superseded: review and governance consolidated **in-process** into the Operator app, and the Operator became a first-class node rather than a separate control-plane tier.
 
-| Capability                       | State                                                                                                                                                                                          | Where                                                                                                  |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| **Node formation**               | Live; weekly wizard bootstraps. Wizard forks `node-template`, pins the node repo as a submodule, opens an operator-authored deployment PR (catalog + overlays×3 + AppSets×3 + edge route).     | `nodes/operator/app/src/features/setup/`, `nodes/*`, [node-formation](https://cognidao.org/knowledge/node-formation-contract)     |
-| **AI orchestration (LangGraph)** | ~10 graphs live in-process (pr-review, operator, pr-manager, research, autoresearch, brain, browser, frontend-tester, poet, ponderer). No separate langgraph-server or top-level `evals/` dir. | `packages/langgraph-graphs/src/graphs/`                                                                |
-| **PR review**                    | Live, in-process: gate orchestrator + `pr-review` graph → GitHub check run + comment, gates from `.cogni/repo-spec.yaml`.                                                                      | `nodes/operator/app/src/features/review/`                                                              |
+| Capability                       | State                                                                                                                                                                                          | Where                                                                                                                                    |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Node formation**               | Live; weekly wizard bootstraps. Wizard forks `node-template`, pins the node repo as a submodule, opens an operator-authored deployment PR (catalog + overlays×3 + AppSets×3 + edge route).     | `nodes/operator/app/src/features/setup/`, `nodes/*`, [node-formation](https://cognidao.org/knowledge/node-formation-contract)            |
+| **AI orchestration (LangGraph)** | ~10 graphs live in-process (pr-review, operator, pr-manager, research, autoresearch, brain, browser, frontend-tester, poet, ponderer). No separate langgraph-server or top-level `evals/` dir. | `packages/langgraph-graphs/src/graphs/`                                                                                                  |
+| **PR review**                    | Live, in-process: gate orchestrator + `pr-review` graph → GitHub check run + comment, gates from `.cogni/repo-spec.yaml`.                                                                      | `nodes/operator/app/src/features/review/`                                                                                                |
 | **DAO governance loop**          | Ported in-process: review-fail → on-chain proposal → vote → CogniSignal `CogniAction` → re-verify → GitHub action (merge/grant/revoke).                                                        | `nodes/operator/app/src/features/governance/`, [dao-governance-loop](https://node-template.cognidao.org/knowledge/dao-merge-signal-loop) |
-| **Deploy pipeline**              | `candidate-flight` (slot lease, digest promotion, Argo reconcile, buildSha verify) → preview → prod promote. Per-env node-set gate (deploy ⊆ provisioned).                                     | `.github/workflows/candidate-flight.yml`, [ci-cd](https://cognidao.org/knowledge/operator-pipeline-contract)                                  |
-| **Substrate**                    | OpenBao + ESO secrets SSOT, per-node Postgres roles, OpenFGA authz spine, per-node DNS reconcile.                                                                                              | `infra/k8s/argocd/`, [cicd-secrets-expert]                                                             |
-| **Knowledge hub**                | Dolt + Doltgres + DoltHub mirror; recall→refine write pipeline (v0).                                                                                                                           | `nodes/operator/app` + knowledge skills                                                                |
-| **Poly copy-trading**            | Live in production (a real node fixture exercising the rails).                                                                                                                                 | `nodes/poly/`                                                                                          |
+| **Deploy pipeline**              | `candidate-flight` (slot lease, digest promotion, Argo reconcile, buildSha verify) → preview → prod promote. Per-env node-set gate (deploy ⊆ provisioned).                                     | `.github/workflows/candidate-flight.yml`, [ci-cd](https://cognidao.org/knowledge/operator-pipeline-contract)                             |
+| **Substrate**                    | OpenBao + ESO secrets SSOT, per-node Postgres roles, OpenFGA authz spine, per-node DNS reconcile.                                                                                              | `infra/k8s/argocd/`, [cicd-secrets-expert]                                                                                               |
+| **Knowledge hub**                | Dolt + Doltgres + DoltHub mirror; recall→refine write pipeline (v0).                                                                                                                           | `nodes/operator/app` + knowledge skills                                                                                                  |
+| **Poly copy-trading**            | Live in production (a real node fixture exercising the rails).                                                                                                                                 | `nodes/poly/`                                                                                                                            |
 
 ---
 
@@ -63,10 +63,10 @@ The Feb-2026 "three separate daemons" plan was superseded: review and governance
 ## vNext (not yet — ~next month+)
 
 | Track                                        | Gate                                                                                                                                                             |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | **Transparent credit payouts / attribution** | Epoch ledger: source adapters → enrichers → allocations → admin-finalized, deterministic statements. Operator merges + dev sessions become attribution receipts. | [attribution-ledger](https://node-template.cognidao.org/knowledge/attribution-epoch-ledger) |
-| **VM-capacity-aware placement**              | Operator models VM capacity, slots new nodes, provisions VMs on demand. Replaces the flat node-count ceiling.                                                    | —                                                     |
-| **Operator repo extraction**                 | Extract Operator to its own repo; this repo becomes pure node template. **Gate: one paid customer + one real cred-informed payout.**                             | —                                                     |
+| **VM-capacity-aware placement**              | Operator models VM capacity, slots new nodes, provisions VMs on demand. Replaces the flat node-count ceiling.                                                    | —                                                                                           |
+| **Operator repo extraction**                 | Extract Operator to its own repo; this repo becomes pure node template. **Gate: one paid customer + one real cred-informed payout.**                             | —                                                                                           |
 
 ---
 
@@ -102,16 +102,16 @@ The Feb-2026 "three separate daemons" plan was superseded: review and governance
 
 ## Related Docs
 
-| Doc                                                              | Purpose                                                     |
-| ---------------------------------------------------------------- | ----------------------------------------------------------- |
+| Doc                                                                                                 | Purpose                                                     |
+| --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | [Node vs Operator Contract](https://node-template.cognidao.org/knowledge/node-sovereignty-contract) | Boundaries, invariants, boot seams                          |
 | [Development Lifecycle](https://node-template.cognidao.org/knowledge/work-item-status-machine)      | idea → validated (PR scorecard) status machine + agent loop |
-| [Merge Authority](docs/spec/merge-authority.md)                  | Operator as the network's merge authority                   |
-| [DAO Governance Loop](https://node-template.cognidao.org/knowledge/dao-merge-signal-loop)          | Review → vote → signal → merge override                     |
-| [Node Formation](https://cognidao.org/knowledge/node-formation-contract)                    | DAO formation + node birth                                  |
-| [Attribution Ledger](https://node-template.cognidao.org/knowledge/attribution-epoch-ledger)            | Epoch attribution + payouts (vNext)                         |
-| [CI/CD](https://cognidao.org/knowledge/operator-pipeline-contract)                                      | Environments, deploy branches, candidate-flight             |
-| [Identity Model](https://cognidao.org/knowledge/identity-keys-no-overload)                    | All identity primitives                                     |
+| [Merge Authority](docs/spec/merge-authority.md)                                                     | Operator as the network's merge authority                   |
+| [DAO Governance Loop](https://node-template.cognidao.org/knowledge/dao-merge-signal-loop)           | Review → vote → signal → merge override                     |
+| [Node Formation](https://cognidao.org/knowledge/node-formation-contract)                            | DAO formation + node birth                                  |
+| [Attribution Ledger](https://node-template.cognidao.org/knowledge/attribution-epoch-ledger)         | Epoch attribution + payouts (vNext)                         |
+| [CI/CD](https://cognidao.org/knowledge/operator-pipeline-contract)                                  | Environments, deploy branches, candidate-flight             |
+| [Identity Model](https://cognidao.org/knowledge/identity-keys-no-overload)                          | All identity primitives                                     |
 
 ---
 
