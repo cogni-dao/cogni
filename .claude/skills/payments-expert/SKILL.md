@@ -61,28 +61,28 @@ Human prerequisite for live x402 proof: a Hyperbolic account, API key, and decis
 
 Read the nearest `AGENTS.md` before editing a directory. Then read only the surfaces relevant to the bug:
 
-| Surface                                        | File                                                                                  |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Payment setup guide                            | `docs/guides/payments-setup.md`                                                       |
-| Operator wallet + Split spec                   | `docs/spec/operator-wallet.md`                                                        |
-| x402 direction (hub atom)                      | `node-service-usdc-northstar`                                                         |
-| Node formation payment invariants              | `docs/spec/node-formation.md`                                                         |
-| Root repo-spec payment config                  | `.cogni/repo-spec.yaml`                                                               |
-| Operator repo-spec payment config              | `nodes/operator/.cogni/repo-spec.yaml`                                                |
-| Repo-spec schema/accessors                     | `packages/repo-spec/src/schema.ts`, `packages/repo-spec/src/accessors.ts`             |
-| Split allocation math                          | `packages/operator-wallet/src/domain/split-allocation.ts`                             |
-| Operator wallet adapter                        | `packages/operator-wallet/src/adapters/privy/privy-operator-wallet.adapter.ts`        |
-| Payment rail guard port                        | `nodes/operator/app/src/ports/payment-rail-guard.port.ts`                             |
-| Split guard adapter                            | `nodes/operator/app/src/adapters/server/payments/split-payment-rail-guard.adapter.ts` |
-| Payment intent route                           | `nodes/operator/app/src/app/api/v1/payments/intents/route.ts`                         |
-| Payment service                                | `nodes/operator/app/src/features/payments/services/paymentService.ts`                 |
-| Credit settlement                              | `nodes/operator/app/src/features/payments/services/creditsConfirm.ts`                 |
-| Facade config bridge                           | `nodes/operator/app/src/app/_facades/payments/attempts.server.ts`                     |
-| Container wiring                               | `nodes/operator/app/src/bootstrap/container.ts`                                       |
-| Activation UI                                  | `nodes/operator/app/src/app/(app)/nodes/payments/PaymentActivationPage.client.tsx`    |
-| Payment feature rules                          | `nodes/operator/app/src/features/payments/AGENTS.md`                                  |
-| Operator-wallet package rules                  | `packages/operator-wallet/AGENTS.md`                                                  |
-| Repo-spec package rules                        | `packages/repo-spec/AGENTS.md`                                                        |
+| Surface                           | File                                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------------------- |
+| Payment setup guide               | `docs/guides/payments-setup.md`                                                       |
+| Operator wallet + Split spec      | `docs/spec/operator-wallet.md`                                                        |
+| x402 direction (hub atom)         | `node-service-usdc-northstar`                                                         |
+| Node formation payment invariants | `docs/spec/node-formation.md`                                                         |
+| Root repo-spec payment config     | `.cogni/repo-spec.yaml`                                                               |
+| Operator repo-spec payment config | `nodes/operator/.cogni/repo-spec.yaml`                                                |
+| Repo-spec schema/accessors        | `packages/repo-spec/src/schema.ts`, `packages/repo-spec/src/accessors.ts`             |
+| Split allocation math             | `packages/operator-wallet/src/domain/split-allocation.ts`                             |
+| Operator wallet adapter           | `packages/operator-wallet/src/adapters/privy/privy-operator-wallet.adapter.ts`        |
+| Payment rail guard port           | `nodes/operator/app/src/ports/payment-rail-guard.port.ts`                             |
+| Split guard adapter               | `nodes/operator/app/src/adapters/server/payments/split-payment-rail-guard.adapter.ts` |
+| Payment intent route              | `nodes/operator/app/src/app/api/v1/payments/intents/route.ts`                         |
+| Payment service                   | `nodes/operator/app/src/features/payments/services/paymentService.ts`                 |
+| Credit settlement                 | `nodes/operator/app/src/features/payments/services/creditsConfirm.ts`                 |
+| Facade config bridge              | `nodes/operator/app/src/app/_facades/payments/attempts.server.ts`                     |
+| Container wiring                  | `nodes/operator/app/src/bootstrap/container.ts`                                       |
+| Activation UI                     | `nodes/operator/app/src/app/(app)/nodes/payments/PaymentActivationPage.client.tsx`    |
+| Payment feature rules             | `nodes/operator/app/src/features/payments/AGENTS.md`                                  |
+| Operator-wallet package rules     | `packages/operator-wallet/AGENTS.md`                                                  |
+| Repo-spec package rules           | `packages/repo-spec/AGENTS.md`                                                        |
 
 Recent refactor to understand: PR `cogni-dao/cogni#1823`, `feat(payments): repo-spec at-cost economics plus Split guard`, head `adc2f8ff5b` in the original workspace. Check GitHub for current merge state before relying on branch-local facts.
 
