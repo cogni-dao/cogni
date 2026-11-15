@@ -210,12 +210,12 @@ When a flight fails or dispatch errors, work through this in order:
 
 ## Environment Variables Reference
 
-| Var                                | Where set                                                                             | Purpose                                          |
-| ---------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `GH_REVIEW_APP_ID`                 | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only      | GitHub App ID for VcsCapability                  |
-| `GH_REVIEW_APP_PRIVATE_KEY_BASE64` | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only      | Base64-encoded PEM private key                   |
-| `GH_WEBHOOK_SECRET`                | **OpenBao** `cogni/<env>/operator/*` (ESO); must MATCH the App's webhook-secret field | Webhook signature verification                   |
+| Var                                | Where set                                                                             | Purpose                                   |
+| ---------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `GH_REVIEW_APP_ID`                 | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only      | GitHub App ID for VcsCapability           |
+| `GH_REVIEW_APP_PRIVATE_KEY_BASE64` | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only      | Base64-encoded PEM private key            |
+| `GH_WEBHOOK_SECRET`                | **OpenBao** `cogni/<env>/operator/*` (ESO); must MATCH the App's webhook-secret field | Webhook signature verification            |
 | `GH_REPOS`                         | candidate-a + production GitHub env **vars** (config, not secret)                     | VCS repo scope (review is payload-driven) |
-| `DOMAIN`                           | candidate-a env var: `test.cognidao.org`                                              | Used in smoke + buildSha verify                  |
-| `VM_HOST`                          | candidate-a GitHub env secret                                                         | SSH target for Argo reconcile                    |
-| `SSH_DEPLOY_KEY`                   | candidate-a GitHub env secret                                                         | SSH key for VM access                            |
+| `DOMAIN`                           | candidate-a env var: `test.cognidao.org`                                              | Used in smoke + buildSha verify           |
+| `VM_HOST`                          | candidate-a GitHub env secret                                                         | SSH target for Argo reconcile             |
+| `SSH_DEPLOY_KEY`                   | candidate-a GitHub env secret                                                         | SSH key for VM access                     |
