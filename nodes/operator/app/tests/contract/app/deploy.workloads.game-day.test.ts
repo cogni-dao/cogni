@@ -232,6 +232,17 @@ describe("POST /api/v1/deploy/workloads/game-day", () => {
     expect(store.requestGameDay).not.toHaveBeenCalled();
   });
 
+  it("409 workload_stopped for a stopped workload; no flag is written (task.5491)", async () => {
+    store.getDesired.mockResolvedValue({
+      state: "stopped",
+      releaseId: "rel-1",
+    });
+    const res = await post(valid);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "workload_stopped" });
+    expect(store.requestGameDay).not.toHaveBeenCalled();
+  });
+
   it("409 state_workload_protected for a state workload; no flag is written", async () => {
     store.getRelease.mockResolvedValue({ spec: { kind: "state" } });
     const res = await post({ ...valid, workload: "canary-db" });

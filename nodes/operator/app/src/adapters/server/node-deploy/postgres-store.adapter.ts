@@ -45,6 +45,8 @@ import type {
   HostNotRoutedStrike,
   RecordReleaseInput,
   ReleaseRow,
+  RequestStopResult,
+  StopRecord,
   StorePort,
   SubstrateTransport,
   WorkloadKey,
@@ -130,6 +132,7 @@ function toDesired(r: DesiredDb): DesiredRow {
     releaseId: r.releaseId,
     updatedAt: r.updatedAt,
     gameDayRequestedAt: r.gameDayRequestedAt ?? undefined,
+    stop: r.stop ?? undefined,
   };
 }
 
@@ -168,11 +171,69 @@ export class PostgresNodeDeployStore implements StorePort {
         and(
           eq(nodeWorkloadDesired.nodeId, key.nodeId),
           eq(nodeWorkloadDesired.env, key.env),
-          eq(nodeWorkloadDesired.workload, key.workload)
+          eq(nodeWorkloadDesired.workload, key.workload),
+          // A stopped workload has no lease to kill; the intent would wait and fire after a restart.
+          eq(nodeWorkloadDesired.state, "running")
         )
       )
       .returning({ workload: nodeWorkloadDesired.workload });
     return rows.length > 0;
+  }
+
+  async requestStop(
+    key: WorkloadKey,
+    input: {
+      readonly by: string;
+      readonly releaseId: string;
+      readonly destroyDseq?: string | undefined;
+    }
+  ): Promise<RequestStopResult> {
+    return this.db.transaction(async (tx) => {
+      const [row] = await tx
+        .select()
+        .from(nodeWorkloadDesired)
+        .where(
+          and(
+            eq(nodeWorkloadDesired.nodeId, key.nodeId),
+            eq(nodeWorkloadDesired.env, key.env),
+            eq(nodeWorkloadDesired.workload, key.workload)
+          )
+        )
+        .for("update");
+      if (!row) return { ok: false, reason: "not_found" } as const;
+      // COMPARE_AND_SET: a release recorded after the caller read the row must not be stopped silently.
+      if (row.releaseId !== input.releaseId)
+        return { ok: false, reason: "release_changed" } as const;
+      const at = new Date().toISOString();
+      const prior = row.stop ?? undefined;
+      const stop: StopRecord = {
+        requestedBy: prior?.requestedBy ?? input.by,
+        at: prior?.at ?? at,
+        ...(input.destroyDseq
+          ? { destroy: { dseq: input.destroyDseq, by: input.by, at } }
+          : prior?.destroy
+            ? { destroy: prior.destroy }
+            : {}),
+      };
+      const [updated] = await tx
+        .update(nodeWorkloadDesired)
+        .set({
+          state: "stopped",
+          gameDayRequestedAt: null,
+          stop,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(nodeWorkloadDesired.nodeId, key.nodeId),
+            eq(nodeWorkloadDesired.env, key.env),
+            eq(nodeWorkloadDesired.workload, key.workload)
+          )
+        )
+        .returning();
+      if (!updated) return { ok: false, reason: "not_found" } as const;
+      return { ok: true, desired: toDesired(updated) } as const;
+    });
   }
 
   async clearGameDay(key: WorkloadKey): Promise<void> {
@@ -365,7 +426,15 @@ export class PostgresNodeDeployStore implements StorePort {
             nodeWorkloadDesired.env,
             nodeWorkloadDesired.workload,
           ],
-          set: { state: "running", releaseId: rel.id, updatedAt: sql`now()` },
+          set: {
+            state: "running",
+            releaseId: rel.id,
+            updatedAt: sql`now()`,
+            // task.5491: a workload that runs again carries no stop record. A pending game-day intent is
+            // cleared only when the row was stopped (a deploy POST must not cancel a running one).
+            stop: null,
+            gameDayRequestedAt: sql`CASE WHEN ${nodeWorkloadDesired.state} = 'stopped' THEN NULL ELSE ${nodeWorkloadDesired.gameDayRequestedAt} END`,
+          },
         })
         .returning();
       if (!des) throw new Error("desired upsert returned no row");

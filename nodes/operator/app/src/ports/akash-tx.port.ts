@@ -306,7 +306,12 @@ export interface AkashTxActuatorPort {
     identity: AkashTxWorkloadIdentity;
     spec: ProvisionSpec;
   }): Promise<AkashTxResource>;
-  delete(input: { cogniKey: string; externalName: string }): Promise<void>;
+  delete(input: {
+    cogniKey: string;
+    externalName: string;
+    /** task.5491: explicit destroy of retained storage; see `AkashTxDeleteInputSchema`. */
+    destroyRetainedData?: true | undefined;
+  }): Promise<void>;
   /**
    * ONE bounded pass over receipts stuck mid-transaction, verifying each against Console
    * before settling it. Still no watches, no timers and no retry policy in here: this is a

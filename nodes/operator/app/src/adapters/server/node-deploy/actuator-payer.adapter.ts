@@ -227,10 +227,19 @@ export class ActuatorPayer implements PayerPort {
       : { found: out.found };
   }
 
-  async delete(req: { cogniKey: string; externalName: string }): Promise<void> {
+  async delete(req: {
+    cogniKey: string;
+    externalName: string;
+    destroyRetainedData?: true | undefined;
+  }): Promise<void> {
     await this.post(
       "/v1/akash/delete",
-      { cogniKey: req.cogniKey, externalName: req.externalName },
+      {
+        cogniKey: req.cogniKey,
+        externalName: req.externalName,
+        // Omitted when unset, so an actuator that predates the field still accepts every ordinary delete.
+        ...(req.destroyRetainedData ? { destroyRetainedData: true } : {}),
+      },
       this.cfg.readTimeoutMs ?? 120_000,
       false
     );

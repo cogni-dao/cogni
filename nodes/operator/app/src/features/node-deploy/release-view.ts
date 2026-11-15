@@ -188,7 +188,8 @@ export function deriveReleaseTimeline(input: {
 
 /** One row of `GET /deploy/workloads`: the desired release's state plus its attempt timelines. */
 export function buildWorkloadView(input: {
-  readonly desired: Pick<DesiredRow, "workload" | "state" | "releaseId">;
+  readonly desired: Pick<DesiredRow, "workload" | "state" | "releaseId"> &
+    Partial<Pick<DesiredRow, "stop">>;
   readonly release:
     | (Pick<ReleaseRow, "sourceSha"> & Partial<ReleaseRow>)
     | undefined;
@@ -223,6 +224,7 @@ export function buildWorkloadView(input: {
       activatedAt: t?.activatedAt ?? null,
       leadTimeMs: t?.leadTimeMs ?? null,
       serving: t?.serving ?? false,
+      stop: desired.stop ?? null,
     },
     // The release backing the live lease; differs from `desired.releaseId` while a newer release
     // is deploying, failed or parked (the old one is `superseded` + `serving`).

@@ -449,6 +449,13 @@
       "when": 1794416513978,
       "tag": "0063_wet_midnight",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1794707046986,
+      "tag": "0064_node_workload_stop",
+      "breakpoints": true
     }
   ]
 }

@@ -80,6 +80,10 @@
  *     revoke every terminal attempt's key (expire, then delete its devices; a retiring blue only after it
  *     retires), delete a revoked attempt's Secret one pass later, sweep unstored keys, then the device
  *     check. A failed Headscale call stops every mesh write for that pass and resets the device window.
+ *   - STOPPED_HAS_NO_LEASE (task.5491): a `stopped` desired row is never driven or recreated, and every open
+ *     lease of it is closed and read back from the chain (`stoppedStep`). A retained (`state`) lease closes
+ *     only under a stored, dseq-matched destroy whose audit step was saved first; the janitor never sends
+ *     an unflagged close for retained storage.
  * Side-effects: IO via injected ports
  * @internal
  */
@@ -88,6 +92,7 @@ import type {
   AttemptMesh,
   BuiltImageResolverPort,
   ChainTruthPort,
+  DesiredRow,
   HeadscaleKeyId,
   MeshDevice,
   MeshKeyStorePort,
@@ -122,7 +127,7 @@ import {
 } from "@/ports";
 import { isFleetOwnedRow } from "@/shared/node-registry/fleet-ownership";
 import { selectReleaseBundle } from "./artifact-selection";
-import { forwardedTcpEndpoint, resolveBinding } from "./bindings";
+import { consumersOf, forwardedTcpEndpoint, resolveBinding } from "./bindings";
 import {
   type EdgeRouter,
   HOST_ENVS,
@@ -169,6 +174,7 @@ import {
   validationCode,
 } from "./qualification";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
+import { TERMINAL_ATTEMPT_PHASES } from "./stop-plan";
 
 export interface SequencerConfig {
   /** The Kubernetes namespace the sequencer runs in; part of every cogniKey. */
@@ -330,6 +336,7 @@ export type StepOutcome =
   | "state_protected"
   | "waiting_dependency"
   | "close_pending"
+  | "stopped"
   | "busy";
 
 export type ReconcileOutcome =
@@ -340,6 +347,8 @@ export type ReconcileOutcome =
   | "lost_app"
   | "busy";
 
+/** task.5491: a destroy older than this is not started. A call renews it; a started close runs to the end. */
+const DESTROY_INTENT_TTL_MS = 3_600_000;
 const ALERT_THROTTLE_MS = 600_000;
 const GRACE_LOG_THROTTLE_MS = 60_000;
 /** The operator's own workloads (the canary) take no node-app env: they are not a node app. */
@@ -484,7 +493,11 @@ export class NodeDeploySequencer {
   private async stepLocked(key: WorkloadKey): Promise<StepOutcome> {
     if (key.env !== this.d.config.environment) return "idle";
     const desired = await this.d.store.getDesired(key);
-    if (!desired || desired.state !== "running") return "idle";
+    if (!desired) return "idle";
+    // task.5491 STOPPED_HAS_NO_LEASE: a stopped workload is never driven, but every open lease of it is
+    // closed and read back from the chain. The branch also holds new creates by never creating one.
+    if (desired.state === "stopped") return this.stoppedStep(key, desired);
+    if (desired.state !== "running") return "idle";
     const release = await this.d.store.getRelease(desired.releaseId);
     if (!release) {
       await this.alert(key, undefined, undefined, "desired_release_missing");
@@ -592,8 +605,15 @@ export class NodeDeploySequencer {
       throw error;
     }
 
-    const allocateAttempt = (transport?: SubstrateTransport) =>
-      this.d.store.insertAttempt(
+    // task.5491: the pin and env reads above take time. A stop recorded meanwhile must win before any
+    // attempt row exists: re-read the desired row and allocate only for the same running release.
+    const allocateAttempt = async (
+      transport?: SubstrateTransport
+    ): Promise<AttemptRow | undefined> => {
+      const fresh = await this.d.store.getDesired(key);
+      if (!fresh || fresh.state !== "running" || fresh.releaseId !== release.id)
+        return undefined;
+      return this.d.store.insertAttempt(
         release.id,
         (n) =>
           buildCogniKey({
@@ -605,10 +625,12 @@ export class NodeDeploySequencer {
           }),
         transport ? { transport } : undefined
       );
+    };
     try {
       await this.assertNewAppHost(key, deployable);
     } catch (error) {
       const refused = await allocateAttempt();
+      if (!refused) return "idle";
       await this.emit(key, release, refused, "attempt_planned", "ok", {
         blue: active?.externalName,
       });
@@ -638,6 +660,7 @@ export class NodeDeploySequencer {
     }
 
     const attempt = await allocateAttempt(transport);
+    if (!attempt) return "idle";
     await this.emit(key, release, attempt, "attempt_planned", "ok", {
       blue: active?.externalName,
     });
@@ -2584,6 +2607,15 @@ export class NodeDeploySequencer {
   private async janitor(key: WorkloadKey): Promise<void> {
     const all = await this.d.store.attemptsFor(key);
     for (const a of all) {
+      if (a.phase === "retiring" || a.phase === "closing") {
+        // task.5491: an unflagged close of retained storage is always refused by the actuator, so the
+        // janitor never sends one for a state attempt. It still reads closure and still alerts.
+        const owner = await this.d.store.getRelease(a.releaseId);
+        if (owner?.spec.kind === "state") {
+          await this.settleRetainedClosing(key, owner, a);
+          continue;
+        }
+      }
       if (a.phase === "retiring") {
         const age = this.d.clock.now() - a.updatedAt.getTime();
         if (age < this.d.config.retainMs) continue;
@@ -2619,6 +2651,305 @@ export class NodeDeploySequencer {
         }
       }
     }
+  }
+
+  // ---- stop: STOPPED_HAS_NO_LEASE (task.5491) --------------------------------------------------
+
+  /**
+   * A retained (`state`) attempt in `retiring`/`closing`: read closure, never send a close. The janitor
+   * cannot destroy retained data; only `stopStateAttempt` can, under a stored destroy.
+   */
+  private async settleRetainedClosing(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    a: AttemptRow
+  ): Promise<void> {
+    if (await this.isClosed(a, true)) {
+      const done = await this.d.store.updateAttempt(a.id, {
+        phase: a.phase === "retiring" ? "retired" : "failed",
+      });
+      await this.emit(key, release, done, "old_closed", "ok", {
+        dseq: done.externalName,
+        verified: true,
+      });
+      return;
+    }
+    if (
+      this.d.clock.now() - a.updatedAt.getTime() >=
+      this.d.config.closeAlertMs
+    )
+      await this.alert(key, release, a, "state_close_not_sent_retained", {
+        phase: a.phase,
+      });
+  }
+
+  /**
+   * The stopped branch: close every open lease of a stopped workload and read each close from the chain.
+   * The intent is the desired row, so a restart replays it. It never creates and never alerts for being
+   * stopped. An app lease closes by the ordinary path; a retained lease closes only under a stored,
+   * dseq-matched, audited destroy.
+   */
+  private async stoppedStep(
+    key: WorkloadKey,
+    desired: DesiredRow
+  ): Promise<StepOutcome> {
+    await this.janitor(key);
+    const all = await this.d.store.attemptsFor(key);
+    let pending = false;
+    for (const a of all) {
+      if (TERMINAL_ATTEMPT_PHASES.includes(a.phase)) continue;
+      // The attempt's OWN release decides its kind, never the desired release.
+      const release = await this.d.store.getRelease(a.releaseId);
+      if (!release) {
+        await this.alert(key, undefined, a, "desired_release_missing");
+        pending = true;
+        continue;
+      }
+      const settled =
+        release.spec.kind === "state"
+          ? await this.stopStateAttempt(key, release, a, desired)
+          : await this.stopAppAttempt(key, release, a);
+      if (!settled) pending = true;
+    }
+    return pending ? "close_pending" : "stopped";
+  }
+
+  private async stopAppAttempt(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    a: AttemptRow
+  ): Promise<boolean> {
+    if (a.phase === "closing") return false; // the janitor above owns it
+    if (IN_FLIGHT_PHASES.includes(a.phase)) {
+      // ORPHAN_GUARD, close and chain-confirm all live in failAttempt.
+      const next = await this.failAttempt(key, release, a, "stopped");
+      return next.phase === "failed";
+    }
+    if (await this.closeAndConfirm(a)) {
+      const retired = await this.d.store.updateAttempt(a.id, {
+        phase: "retired",
+      });
+      await this.emit(key, release, retired, "workload_stopped", "ok", {
+        dseq: retired.externalName,
+        verified: true,
+      });
+      return true;
+    }
+    if (this.closeOverdue(a))
+      await this.alert(key, release, a, "close_unconfirmed", {
+        reason: "stopped",
+      });
+    return false;
+  }
+
+  private async stopStateAttempt(
+    key: WorkloadKey,
+    release: ReleaseRow,
+    a: AttemptRow,
+    desired: DesiredRow
+  ): Promise<boolean> {
+    const dseq = a.externalName;
+    if (!dseq) {
+      // No lease id yet: the create may still land. Bind it if it exists. Never send a close from here.
+      try {
+        const obs = await this.d.payer.observe({ cogniKey: a.cogniKey });
+        if (obs.found && obs.resource) {
+          const bound = await this.d.store.updateAttempt(a.id, {
+            unhealthySince: null,
+            externalName: obs.resource.externalName,
+            endpoints: obs.resource.endpoints,
+            ...(obs.resource.providerAccount
+              ? { provider: obs.resource.providerAccount }
+              : {}),
+          });
+          await this.emit(key, release, bound, "orphan_lease", "adopted", {
+            dseq: bound.externalName,
+          });
+          return false; // the next pass destroys it or alerts
+        }
+      } catch {
+        return false;
+      }
+      if (this.createMayStillBeInFlight(a)) return false;
+      const failed = await this.d.store.updateAttempt(a.id, {
+        phase: "failed",
+        error: "stopped",
+        unhealthySince: null,
+      });
+      await this.emit(key, release, failed, "workload_stopped", "no_lease");
+      return true;
+    }
+    if (await this.isClosed(a, true)) {
+      const retired = await this.d.store.updateAttempt(a.id, {
+        phase: "retired",
+      });
+      await this.emit(
+        key,
+        release,
+        retired,
+        "workload_stopped",
+        "already_closed",
+        {
+          dseq,
+          verified: true,
+        }
+      );
+      return true;
+    }
+    const destroy = desired.stop?.destroy;
+    if (destroy?.dseq !== dseq) {
+      await this.alert(key, release, a, "state_stop_without_destroy");
+      return false;
+    }
+    const destroyedAt = Date.parse(destroy.at);
+    const authorized = a.steps.some(
+      (x) => x.step === "retained_destroy" && x.outcome === "authorized"
+    );
+    const refusedAt = a.steps
+      .filter((x) => x.step === "retained_destroy" && x.outcome === "refused")
+      .map((x) => Date.parse(x.at))
+      .sort((x, y) => y - x)[0];
+    if (refusedAt !== undefined && refusedAt >= destroyedAt) {
+      // The actuator refused this destroy. A newer call renews it; nothing is resent until then.
+      await this.alert(key, release, a, "state_destroy_refused");
+      return false;
+    }
+    if (!authorized || refusedAt !== undefined) {
+      // The gate before the first send (or the first send after a refusal): fresh and not in use.
+      if (this.d.clock.now() - destroyedAt > DESTROY_INTENT_TTL_MS) {
+        await this.alert(key, release, a, "state_destroy_expired", {
+          destroyedAt: destroy.at,
+        });
+        return false;
+      }
+      const consumers = await this.retainedConsumers(key, release.workload);
+      if (consumers.length > 0) {
+        await this.alert(key, release, a, "state_in_use_at_destroy", {
+          consumers,
+        });
+        return false;
+      }
+    }
+    if (!authorized) {
+      // DURABLE_AUDIT_BEFORE_EFFECT: the step is saved first. If it cannot be saved this throws and no
+      // close is sent. The actor is in `reason`: AttemptStep has no other field for it.
+      await this.emit(
+        key,
+        release,
+        a,
+        "retained_destroy",
+        "authorized",
+        { dseq, reason: `by ${destroy.by} at ${destroy.at}` },
+        true
+      );
+    }
+    if (!this.closeSentAt.has(a.id))
+      await this.record("warn", "node_deploy_retained_destroy", undefined, {
+        component: "node-deploy-sequencer",
+        nodeId: key.nodeId,
+        env: key.env,
+        workload: key.workload,
+        releaseId: release.id,
+        attempt: a.attempt,
+        dseq,
+        requestedBy: destroy.by,
+        requestedAt: destroy.at,
+      });
+    const result = await this.destroyAndConfirm(a);
+    if (result === "refused") {
+      await this.emit(
+        key,
+        release,
+        a,
+        "retained_destroy",
+        "refused",
+        { dseq, reason: "the actuator refused the destroy" },
+        true
+      );
+      await this.alert(key, release, a, "state_destroy_refused");
+      return false;
+    }
+    if (result === "closed") {
+      const retired = await this.d.store.updateAttempt(a.id, {
+        phase: "retired",
+      });
+      await this.emit(key, release, retired, "workload_stopped", "ok", {
+        dseq,
+        destroyed: true,
+        verified: true,
+      });
+      return true;
+    }
+    if (this.closeOverdue(a))
+      await this.alert(key, release, a, "close_unconfirmed", {
+        reason: "destroy",
+      });
+    return false;
+  }
+
+  /** The running workloads of this node and env that bind `stateName` (the same helper the route uses). */
+  private async retainedConsumers(
+    key: WorkloadKey,
+    stateName: string
+  ): Promise<readonly string[]> {
+    const rows = (await this.d.store.listDesired(key.env)).filter(
+      (d) => d.nodeId === key.nodeId && d.workload !== stateName
+    );
+    const specs = await Promise.all(
+      rows.map(async (d) => ({
+        workload: d.workload,
+        state: d.state,
+        bindings:
+          (await this.d.store.getRelease(d.releaseId))?.spec.bindings ?? [],
+      }))
+    );
+    return consumersOf(stateName, specs);
+  }
+
+  /**
+   * Like `closeAndConfirm`, for a destroy of retained storage: the close carries `destroyRetainedData`,
+   * a refusal (`invalid_request`: an applied database cell, or an actuator that predates the field) is
+   * returned instead of swallowed, and closure still needs observe AND chain truth.
+   */
+  private async destroyAndConfirm(
+    a: AttemptRow
+  ): Promise<"closed" | "pending" | "refused"> {
+    const externalName = a.externalName;
+    if (!externalName) return "pending";
+    const now = this.d.clock.now();
+    const sent = this.closeSentAt.get(a.id);
+    if (!sent || now - sent.lastAt >= this.d.config.closeConfirmMs) {
+      if (!sent && this.closeSentAt.size > 500) this.closeSentAt.clear();
+      this.closeSentAt.set(a.id, {
+        firstAt: sent?.firstAt ?? now,
+        lastAt: now,
+      });
+      try {
+        await this.d.payer.delete({
+          cogniKey: a.cogniKey,
+          externalName,
+          destroyRetainedData: true,
+        });
+      } catch (error) {
+        if (error instanceof PayerError && error.code === "invalid_request") {
+          this.closeSentAt.delete(a.id);
+          return "refused";
+        }
+        if (!(error instanceof PayerError && error.code === "not_found"))
+          this.d.log.warn(
+            {
+              component: "node-deploy-sequencer",
+              cogniKey: a.cogniKey,
+              dseq: externalName,
+              error: errText(error),
+            },
+            "node_deploy_close_delete_failed"
+          );
+      }
+    }
+    if (!(await this.isClosed(a, true))) return "pending";
+    this.closeSentAt.delete(a.id);
+    return "closed";
   }
 
   // -------------------------------------------------------------------------------------------

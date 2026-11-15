@@ -1,0 +1,1 @@
+ALTER TABLE "node_workload_desired" ADD COLUMN "stop" jsonb;

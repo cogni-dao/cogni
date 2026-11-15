@@ -33,9 +33,11 @@ import type {
   ProbePort,
   RecordReleaseInput,
   ReleaseRow,
+  RequestStopResult,
   SecretsPort,
   SequencerClock,
   SequencerLog,
+  StopRecord,
   StorePort,
   SubstrateTransport,
   WorkloadKey,
@@ -117,12 +119,45 @@ export class MemoryStore implements StorePort {
   }
   async requestGameDay(key: WorkloadKey): Promise<boolean> {
     const cur = this.desired.get(keyString(key));
-    if (!cur) return false;
+    if (!cur || cur.state !== "running") return false;
     this.desired.set(keyString(key), {
       ...cur,
       gameDayRequestedAt: new Date(this.clock.now()),
     });
     return true;
+  }
+  async requestStop(
+    key: WorkloadKey,
+    input: {
+      readonly by: string;
+      readonly releaseId: string;
+      readonly destroyDseq?: string | undefined;
+    }
+  ): Promise<RequestStopResult> {
+    const cur = this.desired.get(keyString(key));
+    if (!cur) return { ok: false, reason: "not_found" };
+    if (cur.releaseId !== input.releaseId)
+      return { ok: false, reason: "release_changed" };
+    const at = new Date(this.clock.now()).toISOString();
+    const prior = cur.stop;
+    const stop: StopRecord = {
+      requestedBy: prior?.requestedBy ?? input.by,
+      at: prior?.at ?? at,
+      ...(input.destroyDseq
+        ? { destroy: { dseq: input.destroyDseq, by: input.by, at } }
+        : prior?.destroy
+          ? { destroy: prior.destroy }
+          : {}),
+    };
+    const desired: DesiredRow = {
+      ...cur,
+      state: "stopped",
+      gameDayRequestedAt: undefined,
+      stop,
+      updatedAt: new Date(this.clock.now()),
+    };
+    this.desired.set(keyString(key), desired);
+    return { ok: true, desired };
   }
   async clearGameDay(key: WorkloadKey): Promise<void> {
     const cur = this.desired.get(keyString(key));
@@ -211,6 +246,7 @@ export class MemoryStore implements StorePort {
       createdAt: new Date(this.clock.now()),
     };
     this.releases.set(release.id, release);
+    const prev = this.desired.get(keyString(input));
     const desired: DesiredRow = {
       nodeId: input.nodeId,
       env: input.env,
@@ -218,6 +254,10 @@ export class MemoryStore implements StorePort {
       state: "running",
       releaseId: release.id,
       updatedAt: new Date(this.clock.now()),
+      // Mirrors the Postgres upsert: the stop record is reset, a pending game-day only when it was stopped.
+      ...(prev && prev.state !== "stopped" && prev.gameDayRequestedAt
+        ? { gameDayRequestedAt: prev.gameDayRequestedAt }
+        : {}),
     };
     this.desired.set(keyString(input), desired);
     return { release, desired };
@@ -476,10 +516,36 @@ export class FakePayer implements PayerPort {
     );
     return l ? { found: true, resource: this.resource(l) } : { found: false };
   }
-  async delete(req: { cogniKey: string; externalName: string }): Promise<void> {
+  /** Every delete the sequencer sent, with the destroy flag exactly as it went on the wire. */
+  readonly deleteRequests: {
+    externalName: string;
+    destroyRetainedData?: true | undefined;
+  }[] = [];
+  /** dseqs of retained storage: like the actuator, a delete without the flag is refused. */
+  readonly retained = new Set<string>();
+  /** dseqs the actuator refuses even with the flag (an applied database cell, or an old actuator). */
+  readonly refuseDestroy = new Set<string>();
+  async delete(req: {
+    cogniKey: string;
+    externalName: string;
+    destroyRetainedData?: true | undefined;
+  }): Promise<void> {
+    this.deleteRequests.push({
+      externalName: req.externalName,
+      ...(req.destroyRetainedData ? { destroyRetainedData: true } : {}),
+    });
     this.events.push(`payer.delete:${req.externalName}`);
     if (this.failDelete)
       throw new PayerError("provider_unavailable", "delete failed", false);
+    if (
+      this.retained.has(req.externalName) &&
+      (!req.destroyRetainedData || this.refuseDestroy.has(req.externalName))
+    )
+      throw new PayerError(
+        "invalid_request",
+        "retained storage requires audited retirement; ordinary delete is refused",
+        false
+      );
     this.byDseq(req.externalName).state = "closed";
   }
 }

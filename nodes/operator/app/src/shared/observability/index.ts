@@ -36,6 +36,9 @@ export const EVENT_NAMES = {
   // key names + KV version only, never values.
   NODE_DEPLOY_SECRET_GENERATION: "feature.node_deploy.secret_generation",
   NODE_PREVIEW_PROMOTE_COMPLETE: "feature.node_preview_promote.complete",
+  // task.5491: audit of a destroy of retained state (`DELETE /deploy/workloads` with the confirm fields).
+  // Ids and the dseq only. The durable record is `desired.stop` plus the attempt's `retained_destroy` step.
+  NODE_WORKLOAD_DESTROY_REQUESTED: "feature.node_workload_destroy.requested",
   // Merge-queue push → head review verdict copied onto the queue commit (task.5438). One event per
   // handled queue push; `outcome` is copied_success | copied_failure | not_reviewed | skipped_exists | error.
   REVIEW_QUEUE_VERDICT_COMPLETE: "feature.review_queue_verdict.complete",

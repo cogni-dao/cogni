@@ -317,6 +317,12 @@ export const AkashTxUpdateInputSchema = z.strictObject({
 export const AkashTxDeleteInputSchema = z.strictObject({
   cogniKey: CogniKeySchema,
   externalName: ExternalNameSchema,
+  /**
+   * task.5491: the explicit destroy of retained storage. Only the node-deploy sequencer sends it, only for
+   * a stored, dseq-matched, audited destroy. Absent on every other delete. A database cell with an
+   * applied binding is refused even with it.
+   */
+  destroyRetainedData: z.literal(true).optional(),
 });
 
 /**

@@ -92,13 +92,32 @@ export function withResolvedImage(
 
 export type DesiredState = "running" | "stopped";
 
+/** Who asked to stop a workload and, for retained state, to destroy one lease (task.5491). */
+export interface StopRecord {
+  readonly requestedBy: string;
+  readonly at: string;
+  readonly destroy?:
+    | {
+        readonly dseq: string;
+        readonly by: string;
+        readonly at: string;
+      }
+    | undefined;
+}
+
 export interface DesiredRow extends WorkloadKey {
   readonly state: DesiredState;
   readonly releaseId: string;
   readonly updatedAt: Date;
   /** Durable game-day intent (an operator verb), consumed and cleared by the sequencer. */
   readonly gameDayRequestedAt?: Date | undefined;
+  /** The stop record; undefined while running, and for a row stopped by hand before the verb. */
+  readonly stop?: StopRecord | undefined;
 }
+
+export type RequestStopResult =
+  | { readonly ok: true; readonly desired: DesiredRow }
+  | { readonly ok: false; readonly reason: "not_found" | "release_changed" };
 
 /** Hard cap of persisted steps per attempt; the newest are kept (task.5400 observability). */
 export const MAX_ATTEMPT_STEPS = 100;
@@ -380,6 +399,12 @@ export interface PayerPort {
   delete(req: {
     readonly cogniKey: string;
     readonly externalName: string;
+    /**
+     * task.5491: the explicit destroy of retained storage. Sent only by the sequencer, only for a stored,
+     * dseq-matched, audited destroy. Omitted from the wire when unset. The actuator still refuses a
+     * database cell with an applied binding.
+     */
+    readonly destroyRetainedData?: true | undefined;
   }): Promise<void>;
 }
 
@@ -501,8 +526,26 @@ export interface RecordReleaseInput extends WorkloadKey {
 
 export interface StorePort {
   getDesired(key: WorkloadKey): Promise<DesiredRow | undefined>;
-  /** Record a game-day intent on an existing desired row. False when the workload has no desired row. */
+  /**
+   * Record a game-day intent on a RUNNING desired row. False when the workload has no desired row or
+   * is stopped (a stopped workload has no lease to kill, and the intent would survive a restart).
+   */
   requestGameDay(key: WorkloadKey): Promise<boolean>;
+  /**
+   * The ONE writer of desired state `stopped` (task.5491, CD4). One transaction with a row lock:
+   * compare `releaseId` (else `release_changed`), set `stopped`, clear a pending game-day intent, stamp
+   * `updatedAt` and merge the stop record. The first stopper fills `requestedBy`/`at` (also for a row
+   * stopped by hand with no record); a `destroyDseq` sets or refreshes `destroy`; a repeat never clears
+   * a stored destroy.
+   */
+  requestStop(
+    key: WorkloadKey,
+    input: {
+      readonly by: string;
+      readonly releaseId: string;
+      readonly destroyDseq?: string | undefined;
+    }
+  ): Promise<RequestStopResult>;
   /** Clear a consumed game-day intent. */
   clearGameDay(key: WorkloadKey): Promise<void>;
   /** Desired rows for ONE deployment environment. A sequencer only ever lists its own env (CD4). */

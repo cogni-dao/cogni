@@ -110,6 +110,17 @@ export const nodeWorkloadDesired = pgTable(
     gameDayRequestedAt: timestamp("game_day_requested_at", {
       withTimezone: true,
     }),
+    /**
+     * The stop record (task.5491), written ONLY by `DELETE /deploy/workloads` through `requestStop`:
+     * who first asked to stop and when, and, for a destroy of retained state, who asked, which `dseq`
+     * and when. NULL while `running`; a legacy row stopped by hand also reads NULL. `recordRelease`
+     * resets it to NULL when the workload runs again. Nullable and additive.
+     */
+    stop: jsonb("stop").$type<{
+      requestedBy: string;
+      at: string;
+      destroy?: { dseq: string; by: string; at: string } | undefined;
+    }>(),
   },
   (table) => [
     primaryKey({
@@ -163,7 +174,9 @@ export const nodeWorkloadAttempts = pgTable(
     /**
      * Durable step timeline (oldest first, newest 100 kept), appended by the sequencer's single emit
      * helper next to the `node_deploy_step` log line. Nullable and additive: attempts that predate it
-     * read as an empty timeline. Observability only; no policy reads it.
+     * read as an empty timeline. Observability, with one exception (task.5491): the `retained_destroy`
+     * step is the durable audit the sequencer writes before it closes retained state, and it reads that
+     * step back so the audit is never repeated.
      */
     steps:
       jsonb("steps").$type<

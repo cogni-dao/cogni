@@ -2012,11 +2012,11 @@ describe("crash safety", () => {
     expect(await h.seq.step(APP)).toBe("driven"); // janitor confirmed, a fresh attempt follows
   });
 
-  it("a stopped workload is left alone by both loops", async () => {
+  it("a stopped workload is never driven or recreated (STOPPED_HAS_NO_LEASE closes only an open lease, see sequencer-stop.test.ts)", async () => {
     const h = harness();
     await h.release(canaryDb(), SHA_1);
     h.store.setDesiredState(DB, "stopped");
-    expect(await h.seq.step(DB)).toBe("idle");
+    expect(await h.seq.step(DB)).toBe("stopped");
     expect(await h.seq.reconcile(DB)).toBe("none");
     expect(h.payer.createRequests).toHaveLength(0);
   });
