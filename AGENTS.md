@@ -8,15 +8,16 @@ response format.
 
 ## Native delivery
 
-The gitignored `.cogni/.cognition-cache.md` is a last-known complete bundle. The shared
-loader (`scripts/agent/session-cognition.sh`) validates contract completeness before
-admitting a refresh. An unavailable hub or incomplete response preserves a complete
-cache, so a warm session can work offline.
+Every session start fetches the bundle from the node hub through the shared loader
+(`scripts/agent/session-cognition.sh`), which validates contract completeness before
+admitting it. The gitignored `.cogni/.cognition-cache.md` is the last-known complete
+bundle: an unavailable hub or incomplete response presents it instead.
 
-The contract must already be model-visible before normal work: Claude imports the cache
-through `CLAUDE.md`; Codex receives uncapped SessionStart context; supported OpenCode 1.x
-loads it through `opencode.json.instructions`. Do not manually read the cache merely to
-bootstrap; a missing native import is a delivery failure.
+The contract must already be model-visible before normal work: Claude receives it as
+labelled SessionStart parts (`--claude-part`, each under its context-entry limit); Codex
+receives uncapped SessionStart context; supported OpenCode 1.x refreshes the cache in a
+plugin and loads it through `opencode.json.instructions`. Do not manually read the cache
+merely to bootstrap; a missing native delivery is a delivery failure.
 
 ## Recovery when no complete contract is loaded
 
@@ -31,19 +32,14 @@ without it. Recovery ends only when the native instruction path loads a complete
 
 On first setup, register through `/api/v1/agent/register` and save COGNI_NODE_API_KEY in
 the gitignored `.env.cogni`. Operator CI/CD credentials are not cognition credentials.
-Workspace setup warms the cache before the first agent starts. Claude resolves its
-imports before the SessionStart fetch can finish: after recovery warms the cache,
-restart or resume so the native instruction path loads it before normal work begins.
-The loader may cache a recovery notice for the next import; that notice is never a
-complete contract.
 
 ## Local execution safety
 
 Heavy local commands default to NO. `pnpm check`, `pnpm check:fast` (and `:fix`),
 `pnpm dev`, and the unfiltered `pnpm test` suite require the human's explicit request
 and consent this session. Lightweight targeted checks run freely: Biome / `pnpm lint`
-on touched paths, `pnpm typecheck`, and at most 1–2 specific test files. Default proof
-is CI plus flight.
+on touched paths, `pnpm typecheck`, and at most 1–2 specific test files. Proof is
+defined by the bundle's tooling invariants, never by local tests.
 
 Work against exactly one node and work item. The operator at https://cognidao.org
 coordinates code, CI, flight, validation, and merge. Subdirectory AGENTS.md files extend
@@ -53,4 +49,4 @@ Pointers: [code delivery](.agents/skills/contribute-to-cogni/SKILL.md) ·
 [Node BaaS product model](https://cognidao.org/knowledge/node-baas-substrate-model) ·
 [discovery](https://cognidao.org/.well-known/agent.json)
 
-Local development: follow the [portable startup and agent API guide (review draft)](https://cognidao.org/knowledge/inbox/contrib-flock-leader-conductor-469da024). Use the target node repository, its environment example, and its own startup commands. Current node discovery and schemas take precedence over old operator examples.
+Local development: follow the [local agent development guide](https://cognidao.org/knowledge/local-agent-development). Use the target node repository, its environment example, and its own startup commands. Current node discovery and schemas take precedence over old operator examples.

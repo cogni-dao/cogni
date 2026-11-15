@@ -1,0 +1,5 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = "bash scripts/conductor-worktree-setup.sh"
+run_mode = "concurrent"

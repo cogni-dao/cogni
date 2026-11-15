@@ -26,8 +26,7 @@ cat >"$HOOK_PATH" <<'HOOK'
 set -u
 
 CACHE_FILE=".cogni/.cognition-cache.md"
-REFRESH_TTL_SECONDS=900
-FETCH_TIMEOUT=6
+FETCH_TIMEOUT=4
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -z "$repo_root" ]]; then
@@ -131,43 +130,33 @@ write_cache_atomic() {
   rm -f "$tmp" 2>/dev/null
 }
 
-cache_is_stale() {
-  [[ -f "$CACHE_FILE" ]] || return 0
-  [[ -z "$(find "$CACHE_FILE" -mmin "-$((REFRESH_TTL_SECONDS / 60))" 2>/dev/null)" ]]
-}
-
 # A repository snapshot is not a cache. Trusting one makes every fresh
 # worktree inject the contract from the git commit instead of current Dolt.
 cache_is_repo_tracked() {
   git ls-files --error-unmatch -- "$CACHE_FILE" >/dev/null 2>&1
 }
 
-refresh_in_background() {
-  cache_is_stale || return 0
-  (
-    local fresh
-    fresh="$(fetch_bundle)"
-    [[ -n "$fresh" ]] && write_cache_atomic "$fresh"
-  ) >/dev/null 2>&1 &
+bundle_is_complete() {
+  case "$1" in *"<agent-contract"*"<status-contract"*) return 0 ;; esac
+  return 1
 }
 
 # Codex user hook: raw stdout is the developer-context channel, and the managed
 # config block disables Codex's spill (additionalContextLimit = 0), so the full
-# bundle surfaces at any size. No producer-side byte ceiling (story.5070).
-if [[ -s "$CACHE_FILE" ]] && ! cache_is_repo_tracked; then
-  bundle="$(cat "$CACHE_FILE")"
+# bundle surfaces at any size. Fresh first (story.0001): fetch for this session,
+# else present the last complete cache.
+bundle="$(fetch_bundle)"
+if bundle_is_complete "$bundle"; then
+  write_cache_atomic "$bundle"
   printf '%s\n' "$bundle"
-  refresh_in_background
+  exit 0
+fi
+if [[ -s "$CACHE_FILE" ]] && ! cache_is_repo_tracked && bundle_is_complete "$(cat "$CACHE_FILE")"; then
+  cat "$CACHE_FILE"
   exit 0
 fi
 
-bundle="$(fetch_bundle)"
-
-if [[ -n "$bundle" ]]; then
-  write_cache_atomic "$bundle"
-  printf '%s\n' "$bundle"
-else
-  cat <<EOF
+cat <<EOF
 COGNI COGNITION BOOTSTRAP BLOCKED
 
 The SessionStart hook ran, but it could not fetch the cognition bundle from:
@@ -184,7 +173,6 @@ Most common fixes:
 If the agent received no bootstrap message at all, the hook probably did not run
 (for Codex, missing hook trust is the usual cause).
 EOF
-fi
 HOOK
 
 chmod +x "$HOOK_PATH"
