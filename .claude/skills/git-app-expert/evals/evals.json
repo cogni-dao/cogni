@@ -3,7 +3,7 @@
   "evals": [
     {
       "id": 0,
-      "prompt": "The pr-manager agent is failing to dispatch candidate-a flights. I see it call core__vcs_flight_candidate and get no error back (dispatched: true), but no workflow run ever appears on GitHub. The GH_REVIEW_APP_ID is set to 3062001. Walk me through what's wrong and how to fix it.",
+      "prompt": "The VCS flight tool is failing to dispatch candidate-a flights. I see it call core__vcs_flight_candidate and get no error back (dispatched: true), but no workflow run ever appears on GitHub. The GH_REVIEW_APP_ID is set to 3062001. Walk me through what's wrong and how to fix it.",
       "expected_output": "Identifies that cogni-node-template (3062001) org installation previously had actions:read not actions:write, gives the gh api audit command to verify current permission, explains the app definition vs installation permission divergence gotcha, and points to the GitHub org settings URL for installation 115515535 to approve the upgrade.",
       "assertions": []
     },

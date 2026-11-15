@@ -7,8 +7,8 @@ description: >
   (VcsCapability interface, GitHubVcsAdapter, vcs-flight-candidate tool schema),
   operator flight dispatch debugging (workflow_dispatch permissions,
   Argo sync, buildSha verify), or
-  wiring the pr-manager agent end-to-end. Use proactively whenever the user
-  mentions "flight", "pr-manager dispatch", "workflow permissions", "GH_REVIEW_APP",
+  wiring VCS flight dispatch end-to-end. Use proactively whenever the user
+  mentions "flight", "flight dispatch", "workflow permissions", "GH_REVIEW_APP",
   "VcsCapability not configured", "actions:write", or asks to add a workflowRef /
   VCS tool parameter.
 ---
@@ -123,7 +123,7 @@ createBranch({ owner, repo, branch, fromRef }) → CreateBranchResult
 dispatchCandidateFlight({ owner, repo, prNumber, headSha? }) → DispatchCandidateFlightResult
 ```
 
-`CiStatusResult.allGreen` is the pr-manager's gate: `true` only when all checks are `success`
+`CiStatusResult.allGreen` is the VCS flight gate: `true` only when all checks are `success`
 and none are `pending`.
 
 ### GitHubVcsAdapter
@@ -162,37 +162,8 @@ core__vcs_flight_candidate  — state_change — operator flight (POST /api/v1/v
 ```
 
 **NO_AUTO_FLIGHT invariant**: `core__vcs_flight_candidate` must only be called when a human
-or scheduled run explicitly requests it. Enforced via tool description and pr-manager prompt —
+or scheduled run explicitly requests it. Enforced via tool description —
 not in code. The tool description repeats this to the planner.
-
-## pr-manager Graph
-
-`packages/langgraph-graphs/src/graphs/pr-manager/` — registered in catalog as `langgraph:pr-manager`.
-
-Tool IDs it uses:
-
-```
-core__repo_open          ← reads pr-management-playbook.md at run start
-core__vcs_list_prs
-core__vcs_get_ci_status  ← must be called BEFORE dispatching flight
-core__vcs_merge_pr
-core__vcs_create_branch
-core__vcs_flight_candidate
-core__work_item_query
-```
-
-Invoke via agent API:
-
-```bash
-curl -s -X POST $BASE/api/v1/chat/completions \
-  -H "Authorization: Bearer $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4o-mini","graph_name":"pr-manager","messages":[{"role":"user","content":"..."}]}'
-```
-
-Playbook lives at `https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/guides/pr-management-playbook.md` — the pr-manager reads it on every
-run. Flight-specific debugging guidance (permission errors, slot states, known patterns) belongs
-there, not in agent-api-validation.md (that doc is a per-feature validation checklist).
 
 ## Operator flight anatomy (operator only)
 
@@ -239,12 +210,12 @@ When a flight fails or dispatch errors, work through this in order:
 
 ## Environment Variables Reference
 
-| Var                                | Where set                                                                             | Purpose                                          |
-| ---------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `GH_REVIEW_APP_ID`                 | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only      | GitHub App ID for VcsCapability                  |
-| `GH_REVIEW_APP_PRIVATE_KEY_BASE64` | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only      | Base64-encoded PEM private key                   |
-| `GH_WEBHOOK_SECRET`                | **OpenBao** `cogni/<env>/operator/*` (ESO); must MATCH the App's webhook-secret field | Webhook signature verification                   |
-| `GH_REPOS`                         | candidate-a + production GitHub env **vars** (config, not secret)                     | pr-manager repo scope (review is payload-driven) |
-| `DOMAIN`                           | candidate-a env var: `test.cognidao.org`                                              | Used in smoke + buildSha verify                  |
-| `VM_HOST`                          | candidate-a GitHub env secret                                                         | SSH target for Argo reconcile                    |
-| `SSH_DEPLOY_KEY`                   | candidate-a GitHub env secret                                                         | SSH key for VM access                            |
+| Var                                | Where set                                                                             | Purpose                                   |
+| ---------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `GH_REVIEW_APP_ID`                 | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only      | GitHub App ID for VcsCapability           |
+| `GH_REVIEW_APP_PRIVATE_KEY_BASE64` | **OpenBao** `cogni/<env>/operator/*` (ESO); GH env secret is provision seed only      | Base64-encoded PEM private key            |
+| `GH_WEBHOOK_SECRET`                | **OpenBao** `cogni/<env>/operator/*` (ESO); must MATCH the App's webhook-secret field | Webhook signature verification            |
+| `GH_REPOS`                         | candidate-a + production GitHub env **vars** (config, not secret)                     | VCS repo scope (review is payload-driven) |
+| `DOMAIN`                           | candidate-a env var: `test.cognidao.org`                                              | Used in smoke + buildSha verify           |
+| `VM_HOST`                          | candidate-a GitHub env secret                                                         | SSH target for Argo reconcile             |
+| `SSH_DEPLOY_KEY`                   | candidate-a GitHub env secret                                                         | SSH key for VM access                     |
