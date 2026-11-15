@@ -286,6 +286,26 @@ describe("ActuatorPayer wire", () => {
     );
   });
 
+  it("delete sends destroyRetainedData only when set (an older actuator still accepts every ordinary delete)", async () => {
+    const { calls, fetchImpl } = recorder(() => ({
+      status: 200,
+      body: { deleted: true },
+    }));
+    const payer = payerWith(fetchImpl);
+    const r = request();
+    await payer.delete({ cogniKey: r.cogniKey, externalName: "9" });
+    await payer.delete({
+      cogniKey: r.cogniKey,
+      externalName: "9",
+      destroyRetainedData: true,
+    });
+    expect(calls[0]?.json).not.toHaveProperty("destroyRetainedData");
+    expect(AkashTxDeleteInputSchema.parse(calls[1]?.json)).toMatchObject({
+      externalName: "9",
+      destroyRetainedData: true,
+    });
+  });
+
   it("observe found:false stays found:false", async () => {
     const { fetchImpl } = recorder(() => ({
       status: 200,

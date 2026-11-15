@@ -69,6 +69,12 @@ export const POST = wrapRouteHandlerWithLogging(
           { error: "workload_not_deployed" },
           { status: 404 }
         );
+      // task.5491: a stopped workload has no lease to kill. Refuse before any flag is written.
+      if (desired.state === "stopped")
+        return NextResponse.json(
+          { error: "workload_stopped" },
+          { status: 409 }
+        );
       const release = await store.getRelease(desired.releaseId);
       if (release?.spec.kind === "state")
         return NextResponse.json(

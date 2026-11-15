@@ -99,6 +99,29 @@ export function resolveBinding(
 }
 
 /**
+ * The workloads of one node and env that bind `stateName` (task.5491, CD2). The stop route and the
+ * sequencer's destroy-time re-check both read this, so "is this state in use" has one answer. Only a
+ * RUNNING consumer counts: a stopped workload no longer connects.
+ */
+export function consumersOf(
+  stateName: string,
+  workloads: readonly {
+    readonly workload: string;
+    readonly state: "running" | "stopped";
+    readonly bindings: readonly { readonly workload: string }[];
+  }[]
+): readonly string[] {
+  return workloads
+    .filter(
+      (w) =>
+        w.state === "running" &&
+        w.workload !== stateName &&
+        w.bindings.some((b) => b.workload === stateName)
+    )
+    .map((w) => w.workload);
+}
+
+/**
  * How an attempt reaches the env's shared services (design: node-service-delivery, connectivity decision).
  * `egress`: the env VM host, admitted by the provider's egress address (today). `mesh`: the private
  * `cogni-substrate` companion, admitted by device identity. The sequencer chooses it per attempt.

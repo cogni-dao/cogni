@@ -340,6 +340,8 @@ export class ConsolePayer implements PayerPort {
       : { found: false };
   }
 
+  // task.5491: dev-only payer. It has no retention policy, so `destroyRetainedData` is not part of its
+  // signature and an ordinary delete is all it sends.
   async delete(req: { cogniKey: string; externalName: string }): Promise<void> {
     try {
       await this.http(

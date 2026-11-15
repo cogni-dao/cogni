@@ -1208,15 +1208,24 @@ export class AkashTxActuator implements AkashTxActuatorPort {
   async delete(input: {
     cogniKey: string;
     externalName: string;
+    destroyRetainedData?: true | undefined;
   }): Promise<void> {
     const record = await this.requireStoredHandle(
       input.cogniKey,
       input.externalName,
       "delete"
     );
+    // task.5491: `destroyRetainedData` relaxes ONLY the node-deploy `retain` policy, for the one handle the
+    // caller named (`requireStoredHandle` matched key and dseq). A database cell with an applied binding
+    // is never destroyed through this op, flag or not: its lifecycle has its own audited owner.
+    const destroying =
+      input.destroyRetainedData === true &&
+      record.retentionPolicy === "retain" &&
+      !record.appliedDatabaseCellBinding?.length;
     if (
-      record.retentionPolicy === "retain" ||
-      record.appliedDatabaseCellBinding?.length
+      !destroying &&
+      (record.retentionPolicy === "retain" ||
+        record.appliedDatabaseCellBinding?.length)
     ) {
       this.log.warn(
         { cogniKey: input.cogniKey, receiptId: record.receiptId },
@@ -1227,6 +1236,7 @@ export class AkashTxActuator implements AkashTxActuatorPort {
         "retained storage requires audited retirement; ordinary delete is refused"
       );
     }
+
     await this.observeCost(record, input.externalName).catch(
       (error: unknown) => {
         this.log.warn(
@@ -1256,6 +1266,15 @@ export class AkashTxActuator implements AkashTxActuatorPort {
       }
     }
     await this.ledger.markReleased({ cogniKey: input.cogniKey });
+    if (destroying)
+      this.log.warn(
+        {
+          cogniKey: input.cogniKey,
+          externalName: input.externalName,
+          receiptId: record.receiptId,
+        },
+        "akash_tx_retained_storage_destroyed"
+      );
     await this.observeCost(record, input.externalName).catch(
       (error: unknown) => {
         this.log.warn(

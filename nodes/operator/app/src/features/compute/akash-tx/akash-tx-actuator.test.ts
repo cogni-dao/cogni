@@ -2640,6 +2640,102 @@ describe("AkashTxActuator.update / delete", () => {
     expect(ledger.rows.get("k1")?.state).toBe("released");
   });
 
+  describe("destroy of retained storage (task.5491)", () => {
+    const retainedSpec: ProvisionSpec = { ...SPEC, retentionPolicy: "retain" };
+    const createRetained = async (context: ReturnType<typeof build>) => {
+      await context.actuator.create({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: retainedSpec,
+      });
+      expect(context.ledger.rows.get("k1")?.retentionPolicy).toBe("retain");
+    };
+
+    it("refuses a retained delete without the flag and releases nothing", async () => {
+      const context = build();
+      await createRetained(context);
+      await expect(
+        context.actuator.delete({ cogniKey: "k1", externalName: "7001" })
+      ).rejects.toMatchObject({ code: "invalid_request" });
+      expect(context.api.releaseCalls).toEqual([]);
+      expect(context.log.lines.map((l) => l.marker)).toContain(
+        "akash_tx_retained_storage_delete_refused"
+      );
+    });
+
+    it("destroys retained storage with the flag, settles the key and logs the audit marker", async () => {
+      const context = build();
+      await createRetained(context);
+      await context.actuator.delete({
+        cogniKey: "k1",
+        externalName: "7001",
+        destroyRetainedData: true,
+      });
+      expect(context.api.releaseCalls).toEqual(["7001"]);
+      expect(context.ledger.rows.get("k1")?.state).toBe("released");
+      expect(
+        context.log.lines.find(
+          (l) => l.marker === "akash_tx_retained_storage_destroyed"
+        )?.fields
+      ).toMatchObject({ cogniKey: "k1", externalName: "7001" });
+    });
+
+    it("refuses the flag when the dseq is not the one the receipt binds", async () => {
+      const context = build();
+      await createRetained(context);
+      await expect(
+        context.actuator.delete({
+          cogniKey: "k1",
+          externalName: "7999",
+          destroyRetainedData: true,
+        })
+      ).rejects.toMatchObject({ code: "identity_conflict" });
+      expect(context.api.releaseCalls).toEqual([]);
+    });
+
+    it("refuses an applied database cell even with the flag", async () => {
+      const context = build();
+      await createRetained(context);
+      const row = context.ledger.rows.get("k1");
+      if (!row) throw new Error("fixture allocation absent");
+      context.ledger.rows.set("k1", {
+        ...row,
+        appliedDatabaseCellBinding: [{} as never],
+      });
+      await expect(
+        context.actuator.delete({
+          cogniKey: "k1",
+          externalName: "7001",
+          destroyRetainedData: true,
+        })
+      ).rejects.toMatchObject({ code: "invalid_request" });
+      expect(context.api.releaseCalls).toEqual([]);
+      expect(context.log.lines.map((l) => l.marker)).not.toContain(
+        "akash_tx_retained_storage_destroyed"
+      );
+    });
+
+    it("lets the flag on a non-retained lease take the ordinary delete path", async () => {
+      const context = build();
+      await context.actuator.create({
+        cogniKey: "k1",
+        environment: "candidate-a",
+        identity: IDENTITY,
+        spec: SPEC,
+      });
+      await context.actuator.delete({
+        cogniKey: "k1",
+        externalName: "7001",
+        destroyRetainedData: true,
+      });
+      expect(context.api.releaseCalls).toEqual(["7001"]);
+      expect(context.log.lines.map((l) => l.marker)).not.toContain(
+        "akash_tx_retained_storage_destroyed"
+      );
+    });
+  });
+
   it("treats deleting an already-gone resource as success", async () => {
     const ledger = new FakeLedger();
     const api = new FakeConsole();

@@ -50,6 +50,27 @@ export const DeployWorkloadInputSchema = z.strictObject({
   sourceSha: z.string().regex(/^[0-9a-f]{40}$/, "expected a full 40-hex sha"),
 });
 
+/**
+ * Stop intent (task.5491): `DELETE /api/v1/deploy/workloads`. The same addressing as a release, with no
+ * sha. `destroyRetainedData` and `dseq` are the second confirmation of a destroy of retained state:
+ * both or neither.
+ */
+export const DeployWorkloadStopInputSchema = z
+  .strictObject({
+    nodeId: z.string().min(1).describe("Node UUID or unique slug"),
+    env: DeployWorkloadEnvSchema,
+    workload: DeployWorkloadNameSchema,
+    destroyRetainedData: z.literal(true).optional(),
+    dseq: z
+      .string()
+      .regex(/^[0-9]{1,20}$/, "expected a numeric dseq")
+      .optional(),
+  })
+  .refine((v) => (v.destroyRetainedData === true) === (v.dseq !== undefined), {
+    message: "destroyRetainedData and dseq are sent together or not at all",
+    path: ["dseq"],
+  });
+
 /** Game-day kill intent: the same addressing as a release, with no sha. */
 export const DeployWorkloadGameDayInputSchema = z.strictObject({
   nodeId: z.string().min(1).describe("Node UUID or unique slug"),
@@ -72,6 +93,18 @@ export const DeployWorkloadRecordedSchema = z.object({
   desiredState: z.literal("running"),
 });
 
+export const DeployWorkloadStoppedSchema = z.object({
+  nodeId: z.string().uuid(),
+  env: DeployWorkloadEnvSchema,
+  workload: z.string(),
+  desiredState: z.literal("stopped"),
+  stop: z.literal("requested"),
+});
+
+export type DeployWorkloadStopInput = z.infer<
+  typeof DeployWorkloadStopInputSchema
+>;
+export type DeployWorkloadStopped = z.infer<typeof DeployWorkloadStoppedSchema>;
 export type DeployWorkloadGameDayInput = z.infer<
   typeof DeployWorkloadGameDayInputSchema
 >;
@@ -183,6 +216,17 @@ export const DeployWorkloadViewSchema = z.object({
     activatedAt: z.string().nullable(),
     leadTimeMs: z.number().int().nonnegative().nullable(),
     serving: z.boolean(),
+    /** Who stopped the workload and when; null while running or for a row stopped by hand. */
+    stop: z
+      .object({
+        requestedBy: z.string(),
+        at: z.string(),
+        destroy: z
+          .object({ dseq: z.string(), by: z.string(), at: z.string() })
+          .optional(),
+      })
+      .nullable()
+      .optional(),
   }),
   /** The release whose attempt backs the live lease; differs from `desired.releaseId` mid-rollout. */
   servingReleaseId: z.string().nullable(),
