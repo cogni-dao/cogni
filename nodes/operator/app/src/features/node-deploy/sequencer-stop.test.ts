@@ -378,6 +378,95 @@ describe("stop retained state (destroy)", () => {
     expect(h.payer.deleteRequests).toHaveLength(2);
   });
 
+  it("refused twice within ten minutes: BOTH refusals are saved, and nothing is resent between calls", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.refuseDestroy.add("1001");
+    await stop(h, DB, "1001");
+    expect(await h.seq.step(DB)).toBe("close_pending");
+    h.clock.advance(60_000); // well inside the 10 minute alert throttle
+    await stop(h, DB, "1001"); // a renewal
+    expect(await h.seq.step(DB)).toBe("close_pending");
+    const refused = (await h.store.attemptsFor(DB))[0]?.steps.filter(
+      (x) => x.step === "retained_destroy" && x.outcome === "refused"
+    );
+    expect(refused).toHaveLength(2);
+    expect(new Set(refused?.map((x) => x.reason)).size).toBe(2); // each names its own destroy time
+    expect(h.payer.deleteRequests).toHaveLength(2); // one send per destroy call
+    for (let i = 0; i < 3; i++) {
+      h.clock.advance(h.config.closeConfirmMs);
+      await h.seq.step(DB);
+    }
+    expect(h.payer.deleteRequests).toHaveLength(2);
+  });
+
+  it("a renewal by a second caller saves a new audit step naming that caller BEFORE the send", async () => {
+    const h = harness();
+    await stateUp(h);
+    h.payer.refuseDestroy.add("1001");
+    await stop(h, DB, "1001", "user:first");
+    await h.seq.step(DB); // refused
+    h.payer.refuseDestroy.clear();
+    h.clock.advance(60_000);
+    await stop(h, DB, "1001", "user:second");
+    const real = h.store.appendAttemptStep.bind(h.store);
+    h.store.appendAttemptStep = async (id, step) => {
+      h.events.push(`step:${step.step}:${step.outcome}:${step.reason ?? ""}`);
+      return real(id, step);
+    };
+    h.events.length = 0;
+    expect(await h.seq.step(DB)).toBe("stopped");
+    const authorized = (await h.store.attemptsFor(DB))[0]?.steps.filter(
+      (x) => x.step === "retained_destroy" && x.outcome === "authorized"
+    );
+    expect(authorized).toHaveLength(2);
+    expect(authorized?.[0]?.reason).toContain("user:first");
+    expect(authorized?.[1]?.reason).toContain("user:second");
+    const saved = h.events.findIndex(
+      (e) =>
+        e.startsWith("step:retained_destroy:authorized:") &&
+        e.includes("user:second")
+    );
+    const sent = h.events.indexOf("payer.delete:1001");
+    expect(saved).toBeGreaterThanOrEqual(0);
+    expect(sent).toBeGreaterThan(saved);
+  });
+
+  it("an unreadable destroy time is treated as expired: nothing is sent", async () => {
+    const h = harness();
+    await stateUp(h);
+    await stop(h, DB, "1001");
+    const row = await h.store.getDesired(DB);
+    if (!row?.stop?.destroy) throw new Error("fixture destroy absent");
+    (row as { stop: unknown }).stop = {
+      ...row.stop,
+      destroy: { ...row.stop.destroy, at: "not a time" },
+    };
+    expect(await h.seq.step(DB)).toBe("close_pending");
+    expect(h.log.alerts()).toContain("state_destroy_expired");
+    expect(h.payer.deleteRequests).toEqual([]);
+    expect(await stepsOf(h, DB)).not.toContain("retained_destroy:authorized");
+  });
+
+  it("a state attempt in `created` or `proven` with a lease id is destroyed too, and a restart after the audit step finishes the close", async () => {
+    for (const phase of ["created", "proven"] as const) {
+      const h = harness();
+      await stateUp(h);
+      const [a] = await h.store.attemptsFor(DB);
+      await h.store.updateAttempt(a?.id ?? "", { phase });
+      await stop(h, DB, "1001");
+      h.payer.failDelete = true; // the close is sent but not confirmed
+      expect(await h.seq.step(DB)).toBe("close_pending");
+      expect(await stepsOf(h, DB)).toContain("retained_destroy:authorized");
+      h.payer.failDelete = false;
+      expect(await h.restart().step(DB)).toBe("stopped");
+      const authorized = (await h.store.attemptsFor(DB))[0]?.steps.filter(
+        (x) => x.step === "retained_destroy" && x.outcome === "authorized"
+      );
+      expect(authorized).toHaveLength(1); // the restart did not write the audit again
+    }
+  });
+
   it("a state attempt in `proving` with a lease id is destroyed like an active one", async () => {
     const h = harness();
     await stateUp(h);

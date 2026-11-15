@@ -2801,21 +2801,33 @@ export class NodeDeploySequencer {
       await this.alert(key, release, a, "state_stop_without_destroy");
       return false;
     }
+    // Each destroy call (a new `by`/`at`) is its own audit unit. The step text names it exactly, so a
+    // renewed destroy by another caller writes a new step, and a refusal of one destroy never hides
+    // the refusal of the next (the step dedupe compares text).
+    const mark = `by ${destroy.by} at ${destroy.at}`;
     const destroyedAt = Date.parse(destroy.at);
-    const authorized = a.steps.some(
-      (x) => x.step === "retained_destroy" && x.outcome === "authorized"
-    );
-    const refusedAt = a.steps
-      .filter((x) => x.step === "retained_destroy" && x.outcome === "refused")
-      .map((x) => Date.parse(x.at))
-      .sort((x, y) => y - x)[0];
-    if (refusedAt !== undefined && refusedAt >= destroyedAt) {
+    if (!Number.isFinite(destroyedAt)) {
+      // An unreadable time cannot prove the destroy is recent: treat it as expired.
+      await this.alert(key, release, a, "state_destroy_expired", {
+        destroyedAt: destroy.at,
+      });
+      return false;
+    }
+    const stepFor = (outcome: string) =>
+      a.steps.some(
+        (x) =>
+          x.step === "retained_destroy" &&
+          x.outcome === outcome &&
+          x.reason?.startsWith(mark)
+      );
+    if (stepFor("refused")) {
       // The actuator refused this destroy. A newer call renews it; nothing is resent until then.
       await this.alert(key, release, a, "state_destroy_refused");
       return false;
     }
-    if (!authorized || refusedAt !== undefined) {
-      // The gate before the first send (or the first send after a refusal): fresh and not in use.
+    const authorized = stepFor("authorized");
+    if (!authorized) {
+      // The gate before the first send of THIS destroy: fresh and not in use.
       if (this.d.clock.now() - destroyedAt > DESTROY_INTENT_TTL_MS) {
         await this.alert(key, release, a, "state_destroy_expired", {
           destroyedAt: destroy.at,
@@ -2829,8 +2841,6 @@ export class NodeDeploySequencer {
         });
         return false;
       }
-    }
-    if (!authorized) {
       // DURABLE_AUDIT_BEFORE_EFFECT: the step is saved first. If it cannot be saved this throws and no
       // close is sent. The actor is in `reason`: AttemptStep has no other field for it.
       await this.emit(
@@ -2839,11 +2849,9 @@ export class NodeDeploySequencer {
         a,
         "retained_destroy",
         "authorized",
-        { dseq, reason: `by ${destroy.by} at ${destroy.at}` },
+        { dseq, reason: mark },
         true
       );
-    }
-    if (!this.closeSentAt.has(a.id))
       await this.record("warn", "node_deploy_retained_destroy", undefined, {
         component: "node-deploy-sequencer",
         nodeId: key.nodeId,
@@ -2855,6 +2863,7 @@ export class NodeDeploySequencer {
         requestedBy: destroy.by,
         requestedAt: destroy.at,
       });
+    }
     const result = await this.destroyAndConfirm(a);
     if (result === "refused") {
       await this.emit(
@@ -2863,7 +2872,7 @@ export class NodeDeploySequencer {
         a,
         "retained_destroy",
         "refused",
-        { dseq, reason: "the actuator refused the destroy" },
+        { dseq, reason: `${mark}: the actuator refused the destroy` },
         true
       );
       await this.alert(key, release, a, "state_destroy_refused");

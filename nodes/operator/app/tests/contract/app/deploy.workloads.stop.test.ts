@@ -113,6 +113,7 @@ vi.mock("@/shared/observability", async (importOriginal) => {
 });
 
 import * as appHandler from "@/app/api/v1/deploy/workloads/route";
+import { DeployWorkloadStoppedSchema } from "@/contracts/deploy.workloads.v1.contract";
 
 async function del(body: unknown): Promise<Response> {
   let res!: Response;
@@ -248,7 +249,8 @@ describe("DELETE /api/v1/deploy/workloads", () => {
   it("200 stops an app: ONE writer call with the caller, the release read and no destroy", async () => {
     const res = await del(valid);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
+    const body = await res.json();
+    expect(DeployWorkloadStoppedSchema.parse(body)).toEqual({
       nodeId: NODE_ID,
       env: "production",
       workload: "canary",

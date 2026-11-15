@@ -85,4 +85,4 @@ The operator, the scheduler-worker and the Compose substrate (Postgres, Doltgres
 
 ## Open edges
 
-Check work items before you assume. A second audited provider is needed (task.5075). Every lane reaches the shared substrate over its env mesh; the VM firewall admits no provider egress IP (task.5428). Database migrations before a release serves: task.5408. No stop verb exists. If you need one, open a new work item.
+Check work items before you assume. A second audited provider is needed (task.5075). Every lane reaches the shared substrate over its env mesh; the VM firewall admits no provider egress IP (task.5428). Database migrations before a release serves: task.5408. Stop a workload with `DELETE /api/v1/deploy/workloads` (task.5491, hub `deploy-a-declared-workload` section 7); retained state also needs `destroyRetainedData` and the live `dseq`. It is live only after task.5491 is promoted; until then no stop verb exists. A stop leaves the host record in DNS (bug.5633).
