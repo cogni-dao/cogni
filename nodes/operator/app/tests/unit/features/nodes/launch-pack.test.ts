@@ -181,12 +181,10 @@ describe("buildNodeLaunchPack", () => {
 
     // Branch-push framing present, but the contribution FLOW is delegated to the guide — the launch
     // pack must NOT embed the fork mechanism (it points at cicd-e2e-required-sequence). Self-merge /
-    // pr-manager-graph path stays purged.
+    // the retired graph path stays purged.
     expect(pack.prompt).toContain("branch-push");
     expect(pack.prompt).not.toContain("fork the node repo");
     expect(pack.prompt).not.toContain("merge your own PR");
-    expect(pack.prompt).not.toContain("ask the Cogni PR Manager graph");
-    expect(pack.prompt).not.toContain('graph_name "pr-manager"');
     expect(pack.prompt).not.toContain("/api/v1/chat/completions");
 
     // Node-specific guardrails (the bits that ARE node-scoped, not generic CICD).

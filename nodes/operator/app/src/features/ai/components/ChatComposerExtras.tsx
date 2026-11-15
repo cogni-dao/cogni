@@ -103,11 +103,6 @@ const AVAILABLE_GRAPHS: readonly GraphOption[] = [
     description:
       "Periodic review — triages backlog, flags risks, produces structured briefs",
   },
-  {
-    graphId: "langgraph:pr-manager" satisfies GraphId,
-    name: "PR Manager",
-    description: "VCS flight capability for PRs",
-  },
 ];
 
 /** Default graph ID - exported for page initialization */

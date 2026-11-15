@@ -61,16 +61,6 @@ describe("operator catalog entries", () => {
     expect(entry.graphFactory).toBe(createOperatorGraph);
   });
 
-  it("pr-manager entry exists only in the operator catalog", () => {
-    const entry = OPERATOR_LANGGRAPH_CATALOG["pr-manager"];
-
-    expect(entry).toBeDefined();
-    expect(entry.displayName).toBe("PR Manager");
-    expect(entry.systemPrompt).toBeDefined();
-    expect(entry.graphFactory).toBe(createOperatorGraph);
-    expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
-  });
-
   it("work-prioritizer (mission loop) is operator-only with the exact read allowlist plus the one decision write (core__edo_decide)", () => {
     const entry = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
     expect(entry).toBeDefined();
@@ -121,10 +111,8 @@ describe("operator catalog entries", () => {
   it("node-runtime catalog does not advertise operator lifecycle graphs", () => {
     expect(LANGGRAPH_CATALOG["operating-review"]).toBeUndefined();
     expect(LANGGRAPH_CATALOG["git-reviewer"]).toBeUndefined();
-    expect(LANGGRAPH_CATALOG["pr-manager"]).toBeUndefined();
     expect("operating-review" in LANGGRAPH_GRAPH_IDS).toBe(false);
     expect("git-reviewer" in LANGGRAPH_GRAPH_IDS).toBe(false);
-    expect("pr-manager" in LANGGRAPH_GRAPH_IDS).toBe(false);
   });
 
   it("autoresearch entries exist with evidence tools and graph IDs", () => {

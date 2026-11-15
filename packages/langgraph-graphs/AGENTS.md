@@ -43,7 +43,7 @@ LangGraph graph definitions and runtime utilities for agentic AI execution. Cont
 - **Exports (subpaths):**
   - `@cogni/langgraph-graphs` — Barrel re-export of common types plus:
     - `LANGGRAPH_CATALOG` / `NODE_LANGGRAPH_CATALOG` — Node-safe graph catalog with registered graphs and metadata
-    - `OPERATOR_LANGGRAPH_CATALOG` — Operator-only superset that includes lifecycle/VCS graphs such as PR Manager
+    - `OPERATOR_LANGGRAPH_CATALOG` — Operator-only superset that includes lifecycle/VCS graphs such as PR Review
     - `McpToolSource` — ToolSourcePort implementation for MCP-discovered tools
     - `loadMcpTools()`, `parseMcpConfigFromEnv()` — MCP client connection + config parsing
     - `McpHttpServerConfig`, `McpSseServerConfig`, `McpStdioServerConfig` — Transport config types

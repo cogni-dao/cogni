@@ -57,7 +57,6 @@ curl -s -X POST $BASE/api/v1/vcs/flight \
 | -------------------------- | ----------------------------- |
 | Open a PR                  | `gh pr create` (standard CLI) |
 | Flight a PR to candidate-a | `POST /api/v1/vcs/flight`     |
-| Monitor flight + merge     | `pr-manager` graph            |
 | Review code quality        | `pr-review` graph             |
 | Ask about the repo         | `brain` graph                 |
 

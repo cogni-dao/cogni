@@ -21,7 +21,6 @@ describe("operator agent discovery", () => {
 
     const graphIds = listAgentsForApi().map((agent) => agent.graphId);
 
-    expect(graphIds).toContain("langgraph:pr-manager");
     expect(graphIds).toContain("langgraph:operating-review");
     expect(graphIds).toContain("langgraph:git-reviewer");
   });
