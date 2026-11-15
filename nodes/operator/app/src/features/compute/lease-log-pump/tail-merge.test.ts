@@ -77,7 +77,8 @@ describe("serviceForLogName", () => {
     );
   });
 
-  it("falls back to the raw name when nothing matches", () => {
-    expect(serviceForLogName("mystery-0", ["app"])).toBe("mystery-0");
+  it("returns undefined when nothing matches: the raw provider name is never a label (task.5490)", () => {
+    expect(serviceForLogName("mystery-0", ["app"])).toBeUndefined();
+    expect(serviceForLogName("app-7c9f8-abcde", [])).toBeUndefined();
   });
 });

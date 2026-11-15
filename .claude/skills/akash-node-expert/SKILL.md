@@ -70,7 +70,7 @@ Never use the production actuator account. A manual mint has no `akash_tx_alloca
 - A terminally closed lease's idempotency key is spent. The verb uses a new `releaseId` and attempt for each retry.
 - A `state` workload keeps one long-lived lease and is never auto-replaced. App and worker workloads recover on a chain-confirmed close, on `insufficient_funds`, or after 15 minutes of failed proof.
 - An empty node database shows as a generic `INTERNAL_ERROR` on `/readyz`. The proof fails and the sequencer retries. When one env works and another does not, diff the envs first.
-- Lease logs reach Loki through the lease-log pump (bug.5240) as `{env, node=<uuid>, service=<sdl-service>, source="lease"}`. Read them with `GET /api/v1/nodes/{id}/observability/logs?service=<name>`. On an env with no pump, Loki silence proves nothing.
+- Lease logs reach Loki through the lease-log pump (bug.5240) as `{env, node=<uuid>, workload=<manifest name>, service=<sdl-service = Score container key>, source="lease"}`. Read them with `GET /api/v1/nodes/{id}/observability/logs?service=<name>[&workload=<name>]`. On an env with no pump, Loki silence proves nothing.
 - Fork CI checks out the PR head, not a merge commit. Files that landed on main mid-PR must be copied onto the PR branch (bug.5124).
 
 ## Poly production placement findings, 2026-11-02

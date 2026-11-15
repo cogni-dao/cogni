@@ -15,9 +15,15 @@
  * Invariants:
  *   - EVERY_DEPLOYED_SERVICE_HAS_A_STREAM: the source list and each source's service names
  *     derive from the same records that deployed the workload. No allowlist, no opt-in.
- *   - TRUSTED_LABELS_OPERATOR_SIDE: `env`/`node`/`service`/`source` labels are stamped HERE,
+ *   - TRUSTED_LABELS_OPERATOR_SIDE: `env`/`node`/`workload`/`service`/`source` labels are stamped HERE,
  *     in the control plane, from ledger-derived identity. No push credential and no label
  *     authority ever enters a lease environment (supersedes the bug.5127 app-push lane).
+ *   - LOG_IDENTITY (task.5490, hub `lease-log-forwarding-design`): `workload` is the ledger record's
+ *     workload (manifest `metadata.name`, or a state id); `service` is the SDL service the provider
+ *     emitter belongs to. The pump NEVER writes a provider name it cannot match to a declared
+ *     service: that emitter is skipped for the tick, its cursor is not created or advanced, one
+ *     warning is logged and the tick report counts it. Nothing is lost while the lease backlog stays
+ *     under the tail window, and the same lines ship once when the services appear.
  *   - FAIL_OPEN_PER_SOURCE: one unreachable provider or sick lease skips that source for the
  *     cycle and never wedges the rest. Observability must never block or break a deploy.
  *   - CURSORS_COMMIT_AFTER_PUSH: a stream's tail window advances only after Loki accepted
@@ -32,7 +38,7 @@
  * Side-effects: none directly (IO via injected seams)
  * Links: @ports/akash-tx.port (AkashTxLeaseLogSources), ./tail-merge,
  *   adapters/server/observability/loki-push.adapter, bootstrap/lease-log-pump, bug.5240,
- *   bug.5516, task.5144, https://cognidao.org/knowledge/node-log-proxy-contract
+ *   bug.5516, task.5144, task.5490, https://cognidao.org/knowledge/lease-log-forwarding-design, https://cognidao.org/knowledge/node-log-proxy-contract
  * @internal
  */
 
@@ -103,6 +109,8 @@ export interface LeaseLogPumpTickReport {
   /** Lines of the committed streams only. */
   readonly pushedLines: number;
   readonly skippedSources: number;
+  /** Emitters whose provider name matched no declared service (skipped, cursor held). */
+  readonly skippedEmitters: number;
   /** True when at least one stream shipped this cycle. */
   readonly pushed: boolean;
 }
@@ -213,12 +221,14 @@ export class LeaseLogPump {
         failedStreams: 0,
         pushedLines: 0,
         skippedSources: 0,
+        skippedEmitters: 0,
         pushed: false,
       };
     }
 
     const pending: PendingStream[] = [];
     let skippedSources = 0;
+    let skippedEmitters = 0;
 
     for (const source of snapshot.sources) {
       try {
@@ -231,7 +241,7 @@ export class LeaseLogPump {
           token: snapshot.token,
           tail: this.tailLines,
         });
-        this.collect(source, lines, pending);
+        skippedEmitters += this.collect(source, lines, pending);
       } catch (error) {
         skippedSources += 1;
         this.deps.log.warn(
@@ -258,6 +268,7 @@ export class LeaseLogPump {
       failedStreams: pending.length - shipped.pushedStreams,
       pushedLines: shipped.pushedLines,
       skippedSources,
+      skippedEmitters,
       pushed: shipped.pushedStreams > 0,
     };
     this.deps.log.info({ ...report }, "lease_log_pump_tick");
@@ -268,7 +279,8 @@ export class LeaseLogPump {
     source: AkashTxLeaseLogSource,
     lines: readonly ProviderLeaseLogLine[],
     pending: PendingStream[]
-  ): void {
+  ): number {
+    let skipped = 0;
     const byEmitter = new Map<string, string[]>();
     for (const line of lines) {
       const existing = byEmitter.get(line.name);
@@ -278,6 +290,23 @@ export class LeaseLogPump {
 
     for (const [name, window] of byEmitter) {
       const service = serviceForLogName(name, source.services);
+      if (service === undefined) {
+        // LOG_IDENTITY: never write a provider name we cannot match. No cursor is created or advanced, so
+        // the window re-reads next tick and ships once when the lease reports its services.
+        skipped += 1;
+        this.deps.log.warn(
+          {
+            node: source.nodeId,
+            workload: source.workload,
+            env: source.environment,
+            dseq: source.dseq,
+            emitter: name,
+            declaredServices: source.services.length,
+          },
+          "lease_log_pump_emitter_unmatched"
+        );
+        continue;
+      }
       const key = `${source.dseq}/${name}`;
       const cursor = this.cursors.get(key) ?? {
         tail: [],
@@ -295,6 +324,7 @@ export class LeaseLogPump {
             event: "lease_log_pump_attached",
             dseq: source.dseq,
             emitter: name,
+            workload: source.workload,
             service,
           });
       if (merged.newLines.length === 0 && !attachLine) continue;
@@ -311,9 +341,10 @@ export class LeaseLogPump {
 
       // STABLE_CONTEXT_ENVELOPE: few, low-cardinality, immutable-valued labels only
       // (Grafana Loki label guidance; OTel resource-attribute split). `node` (repo-spec
-      // UUID) is the identity key; the renameable slug is registry-resolvable and
-      // deliberately NOT a label; `service_name` mirrors `service` exactly as the k8s
-      // lane does (container name), never a second identity axis. No `stream` label —
+      // UUID) is the identity key; `workload` is the ledger record's workload (which deployment
+      // of the node); `service` is the program (the SDL service name); the renameable slug is
+      // registry-resolvable and deliberately NOT a label; `service_name` mirrors `service` exactly
+      // as the k8s lane does (container name), never a second identity axis. No `stream` label —
       // the provider merges stdout/stderr and the envelope must not assert otherwise.
       const committedTs = tsNs;
       pending.push({
@@ -322,6 +353,7 @@ export class LeaseLogPump {
             app: "cogni-template",
             env: source.environment,
             node: source.nodeId,
+            workload: source.workload,
             service,
             service_name: service,
             source: "lease",
@@ -340,6 +372,7 @@ export class LeaseLogPump {
         emitter: name,
       });
     }
+    return skipped;
   }
 
   /** Ship every pending stream through a small worker pool. Never throws. */

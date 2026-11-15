@@ -99,8 +99,109 @@ describe("LeaseLogPump.tick", () => {
       // is never a label; no stream label is asserted.
       expect(stream.labels.service_name).toBe(stream.labels.service);
       expect(stream.labels).not.toHaveProperty("stream");
-      expect(Object.values(stream.labels)).not.toContain("poly");
+      // LOG_IDENTITY (task.5490): workload is the ledger record's workload; service is the program.
+      expect(stream.labels.workload).toBe("poly");
+      expect(stream.labels).not.toHaveProperty("slug");
     }
+  });
+
+  it("writes workload and service as separate labels: one program in two workloads is separable (task.5490)", async () => {
+    const lane2: AkashTxLeaseLogSource = {
+      ...POLY_SOURCE,
+      workload: "canary",
+      dseq: "7002",
+      services: ["app"],
+    };
+    const { pump, pushes } = harness({
+      sources: async () =>
+        snapshot([{ ...POLY_SOURCE, services: ["app"] }, lane2]),
+      windows: async () => [{ name: "app-abc12-x", message: "line" }],
+    });
+    await pump.tick();
+    const labels = pushes
+      .flat()
+      .map((s) => [s.labels.workload, s.labels.service]);
+    expect(labels).toEqual([
+      ["poly", "app"],
+      ["canary", "app"],
+    ]);
+  });
+
+  it("skips an emitter that matches no declared service: nothing pushed, cursor held, then ships once with the right labels (task.5490)", async () => {
+    let services: string[] = [];
+    const warnings: { fields: Record<string, unknown>; message: string }[] = [];
+    const pushes: LeaseLogStream[][] = [];
+    const pump = new LeaseLogPump({
+      sources: async () => snapshot([{ ...POLY_SOURCE, services }]),
+      readLogs: async () => [
+        { name: "app-abc12-x", message: "line 1" },
+        { name: "app-abc12-x", message: "line 2" },
+      ],
+      push: async (streams) => {
+        pushes.push([...streams]);
+      },
+      log: {
+        ...silentLog(),
+        warn: (fields, message) => warnings.push({ fields, message }),
+      },
+      now: () => new Date(1_700_000_000_000),
+    });
+
+    // The lease reports `services: []`: the provider name must never become the service label.
+    for (let tick = 0; tick < 2; tick++) {
+      const report = await pump.tick();
+      expect(report).toMatchObject({
+        sources: 1,
+        streams: 0,
+        pushedStreams: 0,
+        skippedEmitters: 1,
+        pushed: false,
+      });
+    }
+    expect(pushes).toHaveLength(0);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]?.message).toBe("lease_log_pump_emitter_unmatched");
+    expect(warnings[0]?.fields).toMatchObject({
+      workload: "poly",
+      emitter: "app-abc12-x",
+      declaredServices: 0,
+    });
+
+    // The services appear: the same lines ship exactly once, labeled by the container key.
+    services = ["app"];
+    const report = await pump.tick();
+    expect(report).toMatchObject({ skippedEmitters: 0, pushedStreams: 1 });
+    expect(shippedLines(pushes)).toEqual([
+      expect.stringContaining("lease_log_pump_attached"),
+      "line 1",
+      "line 2",
+    ]);
+    expect(pushes.flat()[0]?.labels).toMatchObject({
+      workload: "poly",
+      service: "app",
+      service_name: "app",
+    });
+    const attach = JSON.parse(pushes.flat()[0]?.values[0]?.[1] ?? "{}");
+    expect(attach).toMatchObject({ workload: "poly", service: "app" });
+
+    // And never again: a repeat poll of the same window ships nothing.
+    pushes.length = 0;
+    await pump.tick();
+    expect(pushes).toHaveLength(0);
+  });
+
+  it("never writes a pod name as the service, even beside a matched emitter (task.5490)", async () => {
+    const { pump, pushes } = harness({
+      sources: async () => snapshot([POLY_SOURCE]),
+      windows: async () => [
+        { name: "app-abc12-x", message: "matched" },
+        { name: "mystery-0", message: "unmatched" },
+      ],
+    });
+    const report = await pump.tick();
+    expect(report).toMatchObject({ streams: 1, skippedEmitters: 1 });
+    expect(pushes.flat().map((s) => s.labels.service)).toEqual(["app"]);
+    expect(shippedLines(pushes).join("\n")).not.toContain("unmatched");
   });
 
   it("prepends one attach marker per newly seen stream, then never again", async () => {

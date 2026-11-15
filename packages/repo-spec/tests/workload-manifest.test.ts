@@ -101,11 +101,45 @@ describe("the vendored Score v1b1 schema", () => {
   });
 });
 
+describe("the SDL service name is the Score container key (task.5490)", () => {
+  it("names the routed service after its container key when the workload name differs", () => {
+    const [, canary] = lowerWorkloadManifest(parseWorkloadManifest(CANARY));
+    expect(canary).toMatchObject({ name: "canary", serviceName: "app" });
+  });
+
+  it("omits serviceName when the workload name equals the container key: that spec is byte-identical to before", () => {
+    const d = canaryDoc();
+    d.metadata.name = "app";
+    d.resources.db.id = "app-db";
+    const [, lowered] = lowerWorkloadManifest(
+      parseWorkloadManifest(stringify(d))
+    );
+    expect(lowered).toMatchObject({ name: "app" });
+    expect("serviceName" in (lowered as object)).toBe(false);
+  });
+
+  it("keeps the workload name as the release key and names a sandbox container after itself", () => {
+    const d = canaryDoc();
+    d.metadata.name = "red";
+    d.resources.db.id = "red-db";
+    d.containers.sandbox = d.containers.app;
+    delete d.containers.app;
+    const lowered = lowerWorkloadManifest(parseWorkloadManifest(stringify(d)));
+    expect(lowered.map((w) => [w.kind, w.name, w.serviceName])).toEqual([
+      ["state", "red-db", undefined],
+      ["app", "red", "sandbox"],
+    ]);
+  });
+});
+
 describe("the operator canary manifest", () => {
-  it("lowers to a NodeWorkloadSpec pair byte-identical to the pre-manifest deployment.workloads pair", () => {
-    const lowered = lowerWorkloadManifests([
+  it("lowers to a NodeWorkloadSpec pair byte-identical to the pre-manifest deployment.workloads pair, except the SDL service name (task.5490)", () => {
+    const loweredNamed = lowerWorkloadManifests([
       { path: CANARY_PATH, text: CANARY },
     ]);
+    // The canary's workload is `canary` and its container key is `app`: the only change is `serviceName`.
+    const lowered = loweredNamed.map(({ serviceName: _name, ...rest }) => rest);
+    expect(loweredNamed.map((w) => w.serviceName)).toEqual([undefined, "app"]);
     expect(sha256(JSON.stringify(JSON.parse(GOLDEN_TEXT)))).toBe(GOLDEN_SHA256);
     expect(sha256(JSON.stringify(lowered))).toBe(GOLDEN_SHA256);
     expect(JSON.stringify(lowered)).toBe(
@@ -515,6 +549,13 @@ describe("pass 2: Cogni policy refuses before any paid create", () => {
       "data_resource_id_is_workload_name",
     ],
     [
+      "a data-bearing id equal to a container key",
+      (d) => {
+        d.resources.db.id = "app";
+      },
+      "data_resource_id_is_container_key",
+    ],
+    [
       "a resource placeholder inside a larger variables value",
       (d) => {
         app(d).variables.DATABASE_URL = "${resources.db.url}?x=1";
@@ -866,6 +907,17 @@ describe("cross-manifest rules (one node's whole .cogni/workloads/ at one sha)",
         }),
       ])
     ).toContain("data_resource_id_is_workload_name");
+  });
+
+  it("refuses a data-bearing id that equals another manifest's container key", () => {
+    expect(
+      crossFileRefusals([
+        canary,
+        other("second", (d) => {
+          d.resources.db.id = "app";
+        }),
+      ])
+    ).toContain("data_resource_id_is_container_key");
   });
 
   it("refuses a file whose name is not <metadata.name>.yaml", () => {

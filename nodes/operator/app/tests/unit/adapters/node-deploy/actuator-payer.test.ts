@@ -204,6 +204,28 @@ describe("ActuatorPayer wire", () => {
     expect(parsed.spec.services[0]?.args).toEqual(["sh", "-c", "echo app"]);
   });
 
+  it("a spec with serviceName keeps the workload as the release key and names the SDL service after the container key (task.5490)", async () => {
+    const { calls, fetchImpl } = recorder(() => ({
+      status: 200,
+      body: {
+        externalName: "1",
+        state: "pending",
+        endpoints: [],
+        replayed: false,
+        recovered: false,
+      },
+    }));
+    await payerWith(fetchImpl).create({
+      ...request(),
+      spec: toPayerSpec(canaryApp({ serviceName: "app" }), {
+        RELEASE_SHA: SHA_1,
+      }),
+    });
+    const parsed = AkashTxCreateInputSchema.parse(calls[0]?.json);
+    expect(parsed.spec.name).toBe("canary");
+    expect(parsed.spec.services.map((s) => s.name)).toEqual(["app"]);
+  });
+
   it("a state workload spec (persistent volume, tcp expose) also passes the strict wire", async () => {
     const { calls, fetchImpl } = recorder(() => ({
       status: 200,
