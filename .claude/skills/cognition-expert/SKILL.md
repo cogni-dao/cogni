@@ -7,7 +7,7 @@ description: "Session-bootstrap + cognition-delivery expert for Cogni nodes — 
 
 > How an agent's operating contract reaches its context at session start — the most load-bearing, most-silently-broken part of the node substrate. A fresh agent that never receives its contract is an invalid agent that looks fine.
 
-This file is a **discovery adapter**, not a second maintained map. The complete, authoritative cognition-expert content — the two-axis mental model, the per-harness delivery table, and the hard-won gotchas — lives on the hub and reaches every session through the cognition cache. Do not re-add that content here; refine it in place on the hub.
+This file is a **discovery adapter**, not a second maintained map. The complete, authoritative cognition-expert content — the two-axis mental model, the per-harness delivery table, and the hard-won gotchas — lives on the hub and reaches every session through a bundle fetched for that session (the cognition cache is only the offline fallback). Do not re-add that content here; refine it in place on the hub.
 
 Read, in order:
 
@@ -15,4 +15,4 @@ Read, in order:
 - **[cognition-substrate-bootstrap](https://cognidao.org/knowledge/cognition-substrate-bootstrap)** — the owning two-axis design: ownership, delivery, distribution, acceptance.
 - **[cognition-substrate-visual](https://cognidao.org/knowledge/cognition-substrate-visual)** — the human-readable visual of the same design.
 
-The current tree is the source of truth for the code paths (`scripts/agent/session-cognition.sh`, `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`, `CLAUDE.md`, `.codex/config.toml`, `opencode.json`, the output style, and the warn-only detector); inspect it before editing.
+The current tree is the source of truth for the code paths (`scripts/agent/session-cognition.sh`, `nodes/operator/app/src/app/api/v1/cognition/{route,_bundle}.ts`, `CLAUDE.md`, the eight `--claude-part` SessionStart hooks in `.claude/settings.json`, `.codex/config.toml`, `.opencode/plugin/cogni-cognition.js` with `opencode.json`, the output style, and the warn-only detector); inspect it before editing.

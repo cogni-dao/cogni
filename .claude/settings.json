@@ -1,5 +1,9 @@
 {
   "outputStyle": "Cogni Contract",
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
   "permissions": {
     "ask": [
       "Bash(pnpm check)",
@@ -34,7 +38,35 @@
           },
           {
             "type": "command",
-            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh\""
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh\" --claude-part 1"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh\" --claude-part 2"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh\" --claude-part 3"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh\" --claude-part 4"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh\" --claude-part 5"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh\" --claude-part 6"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh\" --claude-part 7"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/scripts/agent/session-cognition.sh\" --claude-part 8"
           }
         ]
       }
