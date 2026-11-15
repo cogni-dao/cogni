@@ -16,7 +16,7 @@ metadata:
     # Secret it references (envFrom: node-app-config / node-app-secrets) changes.
     # This is what carries a day-2 OpenBao secret write through ESO into a
     # running pod — pods read `envFrom: secretRef` once, at container start.
-    # See infra/k8s/argocd/reloader/ + secrets-management.md Invariant 11.
+    # See infra/k8s/argocd/reloader/ + https://cognidao.org/knowledge/secrets-management Invariant 11.
     reloader.stakater.com/auto: "true"
 spec:
   replicas: 1
@@ -106,7 +106,7 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
           # Tier 0 sizing: 512Mi container, 384MB V8 heap. See
-          # docs/research/nextjs-node-memory-sizing.md for the full tier table.
+          # https://cognidao.org/knowledge/nextjs-memory-sizing for the full tier table.
           # Overlays bumping memory MUST also patch NODE_OPTIONS to the matching
           # tier; otherwise V8 auto-sizes to ~50% of cgroup, ignoring the bump.
           env:
