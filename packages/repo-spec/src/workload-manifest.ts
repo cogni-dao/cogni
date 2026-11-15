@@ -25,7 +25,8 @@
  *   - OPERATOR_OWNS_URLS: a dependency output is used only as a whole `variables` value,
  *     `${resources.<key>.url}`; a manifest never builds a URL from parts.
  *   - DATA_HAS_AN_ID: a data-bearing dependency (`postgres`, `knowledge`, `volume`) names an explicit
- *     `id`. Ids are unique across the node's manifests and differ from every workload name.
+ *     `id`. Ids are unique across the node's manifests and differ from every workload name and every
+ *     container key (a state and a program share the `service` log label, task.5490).
  *   - SIZE_PER_FIELD: cpu = `limits.cpu ?? requests.cpu`, memory = `limits.memory ?? requests.memory`,
  *     each field on its own (Akash rents one size); storage = `cogni.dev/ephemeral-storage` or 256Mi.
  *   - PLACEMENT_IS_THE_NODES (story.5141): `cogni.dev/placement-countries` (every env) and
@@ -79,6 +80,7 @@ export type WorkloadManifestIssueCode =
   | "data_resource_id_required"
   | "duplicate_data_resource_id"
   | "data_resource_id_is_workload_name"
+  | "data_resource_id_is_container_key"
   | "placeholder_not_whole_value"
   | "unsupported_placeholder"
   | "probe_port_mismatch"
@@ -493,6 +495,14 @@ function placeholderIssue(
   };
 }
 
+/** Own-key test that never reads the prototype chain (a container key such as `constructor` is a key too). */
+function hasKey(
+  record: Readonly<Record<string, unknown>>,
+  key: string
+): boolean {
+  return Object.keys(record).includes(key);
+}
+
 function checkPolicy(m: ScoreWorkload): WorkloadManifestIssue[] {
   const issues: WorkloadManifestIssue[] = [];
   const add = (i: WorkloadManifestIssue) => issues.push(i);
@@ -612,6 +622,14 @@ function checkPolicy(m: ScoreWorkload): WorkloadManifestIssue[] {
           path: `${path}.id`,
           message:
             "a data-bearing dependency id must differ from every workload name",
+        });
+      // A state workload and a container share the `service` log label; a database must never read as a program.
+      if (r.id !== undefined && hasKey(m.containers, r.id))
+        add({
+          code: "data_resource_id_is_container_key",
+          path: `${path}.id`,
+          message:
+            "a data-bearing dependency id must differ from every container key",
         });
       if (r.params !== undefined) add(unmapped(`${path}.params`));
     }
@@ -1085,8 +1103,16 @@ function lowerValidated(
         env: { ...c.variables },
       };
     });
+  // The routed SDL service is named after its Score container key, so a log stream's `service` is the
+  // program, never the workload (task.5490, hub `lease-log-forwarding-design`). The workload and release
+  // key stay `metadata.name`. The field is set when the key differs from the name, or when the
+  // manifest has companions or a qualification path (as before). It is omitted only for a plain manifest
+  // whose name equals its key: the deploy spec reads `serviceName ?? name`, so that spec lowers
+  // byte-identically to before.
   const completeApp =
-    companions.length || annotations[ANNOTATION.qualificationPath]
+    companions.length ||
+    annotations[ANNOTATION.qualificationPath] ||
+    containerName !== m.metadata.name
       ? {
           ...app,
           serviceName: containerName,
@@ -1236,6 +1262,17 @@ export function lowerWorkloadManifests(
           code: "data_resource_id_is_workload_name",
           path: `resources.${key}.id`,
           message: `data-bearing id ${r.id} equals a workload name; they share one key space`,
+          file: file.path,
+        });
+      // Pass 2 refuses this manifest's own container keys; this catches the other manifests' keys.
+      if (
+        !hasKey(m.containers, r.id) &&
+        checked.some(([, other]) => hasKey(other.containers, r.id as string))
+      )
+        issues.push({
+          code: "data_resource_id_is_container_key",
+          path: `resources.${key}.id`,
+          message: `data-bearing id ${r.id} equals a container key; a state and a program share the log service label`,
           file: file.path,
         });
     }

@@ -16,7 +16,7 @@
  *   - BOUNDED_MEMORY: the retained tail is capped at `maxTail` lines per stream; the merge
  *     never grows state proportional to log volume.
  * Side-effects: none
- * Links: ./lease-log-pump, bug.5240, task.5144
+ * Links: ./lease-log-pump, bug.5240, task.5144, task.5490
  * @internal
  */
 
@@ -65,19 +65,20 @@ export function mergeTail(
 /**
  * Map a provider log-entry `name` (pod name, `<service>-<replicaset>-<pod>` on k8s-backed
  * providers) to its SDL service. Longest declared-service prefix wins so `paper-trader-…`
- * never mis-attributes to a hypothetical `paper` service; an unmatched name falls back to
- * itself, which keeps the line shipped (never dropped) and visibly mislabeled rather than
- * silently absent.
+ * never mis-attributes to a hypothetical `paper` service. An unmatched name returns
+ * `undefined`: the pump never writes a provider name it cannot match, because a pod hash as the
+ * `service` label starts a new stream per pod (task.5490, hub `lease-log-forwarding-design`). The
+ * caller skips that emitter for the tick and keeps its cursor.
  */
 export function serviceForLogName(
   name: string,
   services: readonly string[]
-): string {
+): string | undefined {
   let best: string | undefined;
   for (const service of services) {
     if (name === service || name.startsWith(`${service}-`)) {
       if (!best || service.length > best.length) best = service;
     }
   }
-  return best ?? name;
+  return best;
 }

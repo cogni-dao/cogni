@@ -240,6 +240,102 @@ describe("scopeNodeLogQL with ?service= (PER_SERVICE_ENVELOPE, bug.5240)", () =>
   });
 });
 
+describe("scopeNodeLogQL with ?workload= (WORKLOAD_FILTER_NARROWS, task.5490)", () => {
+  it("returns every workload of the service by default (no workload matcher)", () => {
+    expect(
+      scopeNodeLogQL({ env: "candidate-a", nodeId: NODE, service: "app" })
+    ).toBe(`{env="candidate-a", service="app", node="${NODE}"}`);
+    expect(scopeNodeLogQL({ env: "candidate-a", nodeId: NODE })).not.toContain(
+      "workload"
+    );
+  });
+
+  it("adds the workload as ONE narrowing matcher on the default app scope", () => {
+    expect(
+      scopeNodeLogQL({
+        env: "candidate-a",
+        nodeId: NODE,
+        workload: "canary",
+      })
+    ).toBe(
+      `{env="candidate-a", service="app", node="${NODE}", workload="canary"}`
+    );
+  });
+
+  it("keeps source forced for a non-app service and narrows by workload after it", () => {
+    expect(
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        service: "sandbox",
+        workload: "red",
+      })
+    ).toBe(
+      `{env="production", service="sandbox", node="${NODE}", source="lease", workload="red"}`
+    );
+  });
+
+  it("narrows through a bare pipeline and a full selector, keeping the pipeline", () => {
+    expect(
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        workload: "poly",
+        query: '| json | level="error"',
+      })
+    ).toBe(
+      `{env="production", service="app", node="${NODE}", workload="poly"} | json | level="error"`
+    );
+    expect(
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        workload: "poly",
+        query: `{env="production", service="app", node="${NODE}"} | json`,
+      })
+    ).toBe(
+      `{env="production", service="app", node="${NODE}", workload="poly"} | json`
+    );
+  });
+
+  it("is not a forced label: a caller workload matcher in the selector stays a narrowing matcher", () => {
+    expect(
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        query: '{workload="poly"} | json',
+      })
+    ).toBe(
+      `{env="production", service="app", node="${NODE}", workload="poly"} | json`
+    );
+  });
+
+  it.each([
+    "Poly",
+    "9poly",
+    "po ly",
+    'poly"}',
+    "x-mesh-y",
+    "a".repeat(64),
+    "",
+  ])("REJECTS a malformed workload %j before it reaches a selector", (workload) => {
+    expect(() =>
+      scopeNodeLogQL({ env: "production", nodeId: NODE, workload })
+    ).toThrow(ObservabilityQueryError);
+  });
+
+  it("REJECTS a workload on service=deploy (sequencer events carry no workload label)", () => {
+    expect(() =>
+      scopeNodeLogQL({
+        env: "production",
+        nodeId: NODE,
+        service: "deploy",
+        workload: "poly",
+      })
+    ).toThrow(ObservabilityQueryError);
+  });
+});
+
 describe("isFlightEnv (canonical env envelope, reused — not a local copy)", () => {
   it("accepts the deploy envs, rejects others", () => {
     expect(isFlightEnv("production")).toBe(true);

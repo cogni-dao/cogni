@@ -283,6 +283,68 @@ describe("AkashComputeAdapter.status", () => {
   });
 });
 
+describe("AkashComputeAdapter.leaseLogDescriptor (task.5490)", () => {
+  const activeLease = (services: Record<string, unknown>) => ({
+    id: { provider: "akash1provider", gseq: 1, oseq: 1 },
+    state: "active",
+    status: { services },
+  });
+  /** Serves one deployment detail per call from `details`, and a fixed provider host. */
+  function descriptorFetch(details: unknown[]) {
+    let deploymentGets = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      if (String(url).includes("/v1/providers/"))
+        return jsonResponse({
+          data: { hostUri: "https://provider.example.com:8443" },
+        });
+      const detail = details[Math.min(deploymentGets, details.length - 1)];
+      deploymentGets += 1;
+      return jsonResponse({ data: detail });
+    });
+    return { fetchImpl, deploymentGets: () => deploymentGets };
+  }
+
+  it("never caches an active descriptor that lists no services; it caches once services appear", async () => {
+    const h = descriptorFetch([
+      {
+        deployment: { state: "active" },
+        leases: [activeLease({})],
+      },
+      {
+        deployment: { state: "active" },
+        leases: [activeLease({ app: {} })],
+      },
+    ]);
+    const adapter = makeAdapter(h.fetchImpl);
+
+    const empty = await adapter.leaseLogDescriptor({ leaseId: "7001" });
+    expect(empty).toMatchObject({ state: "active", services: [] });
+    expect(h.deploymentGets()).toBe(1);
+
+    // The next poll re-reads: the empty answer was not cached.
+    const settled = await adapter.leaseLogDescriptor({ leaseId: "7001" });
+    expect(settled).toMatchObject({ state: "active", services: ["app"] });
+    expect(h.deploymentGets()).toBe(2);
+
+    // A descriptor with services IS cached: no third deployment read.
+    await adapter.leaseLogDescriptor({ leaseId: "7001" });
+    expect(h.deploymentGets()).toBe(2);
+  });
+
+  it("still caches a closed lease (terminal: it never gains a log source)", async () => {
+    const h = descriptorFetch([
+      {
+        deployment: { state: "closed" },
+        leases: [{ ...activeLease({}), state: "closed" }],
+      },
+    ]);
+    const adapter = makeAdapter(h.fetchImpl);
+    await adapter.leaseLogDescriptor({ leaseId: "7002" });
+    await adapter.leaseLogDescriptor({ leaseId: "7002" });
+    expect(h.deploymentGets()).toBe(1);
+  });
+});
+
 describe("AkashComputeAdapter.readManagedDefinition", () => {
   const version = Buffer.alloc(32, 1).toString("base64");
   const provider = `akash1${"a".repeat(38)}`;

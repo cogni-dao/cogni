@@ -28,6 +28,11 @@
  *     `app` (actuator, scheduler-worker, …) stay out of reach exactly as before. Shared-infra
  *     services are still NOT node-attributable; the Phase 1 generic route remains their path.
  *     See https://cognidao.org/knowledge/node-log-proxy-contract §"Node-dev log scope envelope".
+ *   - WORKLOAD_FILTER_NARROWS (task.5490): the optional `workload` parameter is ONE more narrowing
+ *     matcher (`workload="<name>"`), never forced and not a protected label. Without it, a `service`
+ *     read returns EVERY workload of that service: `service` names the program (the Score container
+ *     key, a state id or an operator companion); `workload` names the deployment of the node. The value
+ *     must match the manifest name regex; `service=deploy` has no workload label and refuses it.
  *   - DEPLOY_EVENTS_PIN_BY_LINE (task.5400): `service=deploy` is the one exception to the stream pin.
  *     The sequencer is operator-side, so its streams carry no trustworthy per-node label; the node pin
  *     is a FORCED pipeline stage `|= "node_deploy" | json | nodeId="<id>"` placed between the selector
@@ -48,6 +53,7 @@
  * @public
  */
 
+import { WORKLOAD_NAME_RE } from "@cogni/repo-spec";
 import type { FlightEnv } from "@/ports";
 import { FLIGHT_ENVS, isFlightEnv } from "./flight-status";
 
@@ -81,6 +87,14 @@ const SERVICE_NAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 /** True when `value` is a well-formed SDL service name a caller may select. */
 export function isValidServiceName(value: string): boolean {
   return SERVICE_NAME_RE.test(value);
+}
+
+/**
+ * True when `value` is a well-formed workload name (the manifest `metadata.name` / state id regex), the
+ * only shape the lease-log pump writes in the `workload` label (task.5490).
+ */
+export function isValidWorkloadName(value: string): boolean {
+  return WORKLOAD_NAME_RE.test(value);
 }
 
 export type ObservabilityQueryErrorCode =
@@ -126,6 +140,8 @@ export function scopeNodeLogQL(input: {
   readonly nodeId: string;
   readonly query?: string | undefined;
   readonly service?: string | undefined;
+  /** Optional narrowing: only streams of this workload (WORKLOAD_FILTER_NARROWS). */
+  readonly workload?: string | undefined;
 }): string {
   const service = input.service ?? NODE_SCOPED_SERVICE;
   if (!isValidServiceName(service)) {
@@ -135,6 +151,20 @@ export function scopeNodeLogQL(input: {
     );
   }
   const deploy = service === DEPLOY_LOG_SERVICE;
+  if (input.workload !== undefined && !isValidWorkloadName(input.workload)) {
+    throw new ObservabilityQueryError(
+      "invalid_query",
+      "'workload' must be a workload name: a lowercase DNS label (no '-mesh-')"
+    );
+  }
+  if (input.workload !== undefined && deploy) {
+    throw new ObservabilityQueryError(
+      "invalid_query",
+      "'workload' cannot narrow service=deploy: sequencer events carry no workload label"
+    );
+  }
+  const workloadMatcher =
+    input.workload === undefined ? [] : [`workload=${quote(input.workload)}`];
   // What the selector is re-emitted with, and which caller values for a forced label are accepted
   // (the virtual `deploy` also accepts its stream name; both are the same, narrow-only scope).
   const forcedValues: Record<string, string> = deploy
@@ -164,7 +194,8 @@ export function scopeNodeLogQL(input: {
   // only ever narrow what the first pin admitted. Only emitted when the caller added stages.
   const tail = deploy ? ` | nodeId=${quote(input.nodeId)}` : "";
   const raw = (input.query ?? "").trim();
-  if (raw === "") return `{${forced.join(", ")}}${pin}`;
+  if (raw === "")
+    return `{${[...forced, ...workloadMatcher].join(", ")}}${pin}`;
 
   if (raw.length > MAX_QUERY_LENGTH) {
     throw new ObservabilityQueryError(
@@ -181,7 +212,7 @@ export function scopeNodeLogQL(input: {
         "query must begin with a stream selector {…} or be a bare LogQL pipeline"
       );
     }
-    return `{${forced.join(", ")}}${pin} ${validateCallerStages(raw)}${tail}`;
+    return `{${[...forced, ...workloadMatcher].join(", ")}}${pin} ${validateCallerStages(raw)}${tail}`;
   }
 
   // Full LogQL: split the leading stream selector from the trailing pipeline.
@@ -196,7 +227,7 @@ export function scopeNodeLogQL(input: {
   const matchersRaw = selectorMatch[1] ?? "";
   const pipelineRaw = selectorMatch[2] ?? "";
 
-  const narrowing: string[] = [];
+  const narrowing: string[] = [...workloadMatcher];
   for (const m of parseMatchers(matchersRaw)) {
     const allowed = accepted(m.label);
     if (allowed === undefined) {

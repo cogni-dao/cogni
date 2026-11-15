@@ -15,6 +15,8 @@
  * Invariants:
  *   - COGNI_TOKEN_ONLY (Bearer-first); DEVELOPER_GATED (`node.flight`); fail-closed without a store.
  *   - NEVER_ISSUES_A_TOKEN: returns log lines, never a Grafana credential.
+ *   - WORKLOAD_FILTER_NARROWS (task.5490): `?workload=` is one optional narrowing matcher; the default read
+ *     of a service returns every workload of it.
  *   - NODE_PIN_IS_FORCED: env/service/node are re-emitted server-side; a caller matcher may only narrow
  *     (see scopeNodeLogQL). Out-of-scope selectors → 400, never a widened query.
  *   - GRACEFUL_UNWIRED: 503 `observability_unwired` until the operator's read token is ESO-wired.
@@ -201,6 +203,8 @@ export async function GET(
       query: params.get("query") ?? undefined,
       // Explicitly empty degrades to the default app scope, like the other params.
       service: params.get("service")?.trim() || undefined,
+      // Optional narrowing to one workload of the service (task.5490); empty means every workload.
+      workload: params.get("workload")?.trim() || undefined,
     });
   } catch (err) {
     if (err instanceof ObservabilityQueryError) {

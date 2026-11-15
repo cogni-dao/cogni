@@ -893,9 +893,15 @@ export class AkashComputeAdapter
       services: Object.keys(lease?.status?.services ?? {}),
       state: mapState(detail?.deployment?.state, leases),
     };
-    // Cache only a settled answer: an active lease, or a closed one (terminal). A pending lease
-    // is booting; caching it would hide its boot logs for the whole TTL.
-    if (descriptor.state === "active" || descriptor.state === "closed") {
+    // Cache only a settled answer: an active lease that lists its services, or a closed one
+    // (terminal: it never gains a log source). A pending lease is booting; caching it would hide its
+    // boot logs for the whole TTL. An active lease whose status lists no services yet is the same
+    // boot window: the pump has nothing to label its logs with, so caching `services: []` would keep
+    // every emitter unmatched for the whole TTL (task.5490, hub `lease-log-forwarding-design`).
+    if (
+      (descriptor.state === "active" && descriptor.services.length > 0) ||
+      descriptor.state === "closed"
+    ) {
       this.descriptorCache.set(p.leaseId, {
         value: descriptor,
         expiresAtMs: this.now().getTime() + DESCRIPTOR_CACHE_TTL_MS,
