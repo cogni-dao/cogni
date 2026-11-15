@@ -82,6 +82,8 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
   let baseUrl: string;
   let temp: string;
   let pre63: string;
+  /** The image folder as it stood at the 0063 authority: the scenarios' default, so 0063 is the ledger tip. */
+  let through63: string;
   let journal: { entries: Entry[]; version: string; dialect: string };
   const nativeChunks: string[] = [];
   let nativeBytes = 0;
@@ -102,13 +104,17 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
 
   beforeAll(async () => {
     temp = await mkdtemp(join(tmpdir(), "story5156-runner-"));
-    journal = JSON.parse(
+    const real = JSON.parse(
       await readFile(join(FOLDER, "meta/_journal.json"), "utf8")
-    );
+    ) as typeof journal;
+    // The scenarios model the world through the 0063 authority and append their own fixture sentinels
+    // after it. Real migrations after 0063 (0064 node_workload_stop and later) are outside them.
+    journal = { ...real, entries: real.entries.filter((e) => e.when <= WHEN) };
     pre63 = await copyFolder(
       "pre63",
       journal.entries.filter((e) => e.when < WHEN)
     );
+    through63 = await copyFolder("through63");
     container = await new PostgreSqlContainer("postgres:15-alpine")
       .withCommand([
         "postgres",
@@ -367,7 +373,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       : [
           ...(options.inspect ? ["--inspect-brk=127.0.0.1:0"] : []),
           RUNNER,
-          options.folder ?? FOLDER,
+          options.folder ?? through63,
         ];
     const child = spawn(process.execPath, args, {
       cwd: ROOT,
@@ -407,7 +413,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     return { child, label, done, output: () => output };
   }
 
-  async function run(f: Fixture, folder = FOLDER, node = "operator") {
+  async function run(f: Fixture, folder = through63, node = "operator") {
     return start(f, { folder, node }).done;
   }
 
