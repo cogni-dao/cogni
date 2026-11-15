@@ -22,7 +22,7 @@
  *     workload (manifest `metadata.name`, or a state id); `service` is the SDL service the provider
  *     emitter belongs to. The pump NEVER writes a provider name it cannot match to a declared
  *     service: that emitter is skipped for the tick, its cursor is not created or advanced, one
- *     warning is logged and the tick report counts it. Nothing is lost while the lease backlog stays
+ *     warning is logged (once per emitter per lease) and the tick report counts it every tick. Nothing is lost while the lease backlog stays
  *     under the tail window, and the same lines ship once when the services appear.
  *   - FAIL_OPEN_PER_SOURCE: one unreachable provider or sick lease skips that source for the
  *     cycle and never wedges the rest. Observability must never block or break a deploy.
@@ -180,6 +180,8 @@ function describePushError(error: unknown): Record<string, unknown> {
 
 export class LeaseLogPump {
   private readonly cursors = new Map<string, StreamCursor>();
+  /** `dseq/emitter` keys already warned as unmatched: one warning per emitter per lease, not per tick. */
+  private readonly warnedUnmatched = new Set<string>();
   private tick_ = 0;
   private readonly now: () => Date;
   private readonly tailLines: number;
@@ -294,19 +296,24 @@ export class LeaseLogPump {
         // LOG_IDENTITY: never write a provider name we cannot match. No cursor is created or advanced, so
         // the window re-reads next tick and ships once when the lease reports its services.
         skipped += 1;
-        this.deps.log.warn(
-          {
-            node: source.nodeId,
-            workload: source.workload,
-            env: source.environment,
-            dseq: source.dseq,
-            emitter: name,
-            declaredServices: source.services.length,
-          },
-          "lease_log_pump_emitter_unmatched"
-        );
+        const warnKey = `${source.dseq}/${name}`;
+        if (!this.warnedUnmatched.has(warnKey)) {
+          this.warnedUnmatched.add(warnKey);
+          this.deps.log.warn(
+            {
+              node: source.nodeId,
+              workload: source.workload,
+              env: source.environment,
+              dseq: source.dseq,
+              emitter: name,
+              declaredServices: source.services.length,
+            },
+            "lease_log_pump_emitter_unmatched"
+          );
+        }
         continue;
       }
+      this.warnedUnmatched.delete(`${source.dseq}/${name}`);
       const key = `${source.dseq}/${name}`;
       const cursor = this.cursors.get(key) ?? {
         tail: [],
@@ -436,6 +443,10 @@ export class LeaseLogPump {
    */
   private pruneCursors(sources: readonly AkashTxLeaseLogSource[]): void {
     const live = new Set(sources.map((s) => s.dseq));
+    for (const key of this.warnedUnmatched) {
+      if (!live.has(key.slice(0, key.indexOf("/"))))
+        this.warnedUnmatched.delete(key);
+    }
     for (const [key, cursor] of this.cursors) {
       const dseq = key.slice(0, key.indexOf("/"));
       if (

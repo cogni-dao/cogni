@@ -509,7 +509,11 @@ const workloadCompanionSchema = z
 
 export const nodeWorkloadSpecSchema = z
   .object({
-    /** Present only for the explicit Score/repo-spec companion bridge. */
+    /**
+     * The SDL service name of the routed container (the Score container key), when it is not the
+     * workload `name`. Set by the manifest lowering for a differing key, for companions and for
+     * qualification (task.5490); readers use `serviceName ?? name`.
+     */
     serviceName: serviceNameSchema.optional(),
     companions: z.array(workloadCompanionSchema).min(1).max(7).optional(),
     artifactPlan: z

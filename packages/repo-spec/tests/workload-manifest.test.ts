@@ -909,15 +909,28 @@ describe("cross-manifest rules (one node's whole .cogni/workloads/ at one sha)",
     ).toContain("data_resource_id_is_workload_name");
   });
 
-  it("refuses a data-bearing id that equals another manifest's container key", () => {
-    expect(
-      crossFileRefusals([
-        canary,
-        other("second", (d) => {
-          d.resources.db.id = "app";
-        }),
-      ])
-    ).toContain("data_resource_id_is_container_key");
+  it("refuses a data-bearing id that equals ANOTHER manifest's container key (cross-file branch)", () => {
+    // The second manifest's own container is `web`, so the single-manifest check cannot fire: its db
+    // id `app` equals only the canary's container key.
+    const second = other("second", (d) => {
+      d.containers.web = d.containers.app;
+      delete d.containers.app;
+      d.resources.db.id = "app";
+    });
+    expect(() => parseWorkloadManifest(second.text)).not.toThrow();
+    let issues: { code: string; file?: string }[] = [];
+    try {
+      lowerWorkloadManifests([canary, second]);
+      expect.unreachable("must refuse");
+    } catch (error) {
+      issues = (error as WorkloadManifestError).issues;
+    }
+    expect(issues).toEqual([
+      expect.objectContaining({
+        code: "data_resource_id_is_container_key",
+        file: second.path,
+      }),
+    ]);
   });
 
   it("refuses a file whose name is not <metadata.name>.yaml", () => {

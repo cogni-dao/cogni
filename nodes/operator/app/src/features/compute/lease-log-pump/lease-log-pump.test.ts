@@ -159,7 +159,8 @@ describe("LeaseLogPump.tick", () => {
       });
     }
     expect(pushes).toHaveLength(0);
-    expect(warnings).toHaveLength(2);
+    // Throttled: two ticks, one warning per emitter per lease. The tick counter above stays per tick.
+    expect(warnings).toHaveLength(1);
     expect(warnings[0]?.message).toBe("lease_log_pump_emitter_unmatched");
     expect(warnings[0]?.fields).toMatchObject({
       workload: "poly",

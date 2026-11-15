@@ -1105,8 +1105,10 @@ function lowerValidated(
     });
   // The routed SDL service is named after its Score container key, so a log stream's `service` is the
   // program, never the workload (task.5490, hub `lease-log-forwarding-design`). The workload and release
-  // key stay `metadata.name`. When the two are equal the field is omitted: the deploy spec reads
-  // `serviceName ?? name`, so that manifest lowers byte-identically to before.
+  // key stay `metadata.name`. The field is set when the key differs from the name, or when the
+  // manifest has companions or a qualification path (as before). It is omitted only for a plain manifest
+  // whose name equals its key: the deploy spec reads `serviceName ?? name`, so that spec lowers
+  // byte-identically to before.
   const completeApp =
     companions.length ||
     annotations[ANNOTATION.qualificationPath] ||
