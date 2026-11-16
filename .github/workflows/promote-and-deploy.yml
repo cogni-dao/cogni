@@ -126,7 +126,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout (for image-tags lib)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.env.outputs.head_sha }}
           fetch-depth: 1
@@ -194,7 +194,7 @@ jobs:
       # Checkout the head ref — the per-node AppSet YAML is catalog-derived CI
       # control plane (CATALOG_IS_SSOT), and a node ADDED in this promote carries
       # its own AppSet file at head.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
 
@@ -278,7 +278,7 @@ jobs:
       # Promote head, so a node ADDED in this promote carries its catalog entry +
       # the reconcile script (CATALOG_IS_SSOT).
       - name: Checkout app source (catalog + scripts)
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
 
@@ -345,12 +345,12 @@ jobs:
       DEPLOYMENT_PROVIDER: ${{ fromJSON(needs.decide.outputs.deployment_provider_by_target_json)[matrix.node] }}
     steps:
       - name: Checkout workflow tooling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: ci-src
 
       - name: Checkout app source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           fetch-depth: 1
@@ -369,7 +369,7 @@ jobs:
 
       - name: Checkout per-node preview branch (preview-forward mode)
         if: fromJSON(needs.decide.outputs.preview_forward_by_target_json)[matrix.node]
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: deploy/preview-${{ matrix.node }}
           fetch-depth: 1
@@ -599,12 +599,12 @@ jobs:
       # app SHA executes stale substrate logic and cannot be repaired by a
       # workflow-only fix on main.
       - name: Checkout workflow tooling
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           path: ci-src
 
       - name: Checkout app source
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           fetch-depth: 0
@@ -773,7 +773,7 @@ jobs:
       # promoted — an infra-only fix could not reach prod on its own. github.sha = the
       # dispatched workflow ref, so tooling fixes apply on the next deploy regardless of
       # which app sha is promoted (consistent with the existing `--ref main` compose source).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
 
@@ -888,18 +888,18 @@ jobs:
       DEPLOY_ENVIRONMENT: ${{ needs.decide.outputs.environment }}
     steps:
       - name: Checkout (workspace root for composite actions)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
 
       - name: Checkout app source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
           path: app-src
 
       - name: Checkout per-node deploy branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: deploy/${{ needs.decide.outputs.environment }}-${{ matrix.node }}
           path: deploy-branch
@@ -997,7 +997,7 @@ jobs:
       K8S_NAMESPACE: cogni-${{ needs.decide.outputs.environment }}
       PROMOTED_APPS: ${{ join(fromJson(needs.decide.outputs.node_targets_json), ',') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
 
@@ -1060,7 +1060,7 @@ jobs:
 
       - name: Checkout
         if: steps.gate.outputs.skip != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.decide.outputs.head_sha }}
 
@@ -1133,7 +1133,7 @@ jobs:
       group: aggregate-preview
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -1194,7 +1194,7 @@ jobs:
       # workflow_dispatch from any other ref cannot inject scripts that
       # write to deploy/production. Branch protection on main is the
       # gate; the dispatched workflow YAML can call only what main ships.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 1

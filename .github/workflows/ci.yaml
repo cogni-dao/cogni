@@ -52,7 +52,7 @@ jobs:
       claimed: ${{ steps.classify.outputs.claimed }}
       reason: ${{ steps.classify.outputs.reason }}
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 0
 
@@ -121,7 +121,7 @@ jobs:
       POSTHOG_HOST: http://localhost:18000
 
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Enforce env-manager classifier result
         env:
@@ -186,7 +186,7 @@ jobs:
   single-node-scope:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 0 # required so paths-filter can resolve base...HEAD on fork PRs
 
@@ -369,7 +369,7 @@ jobs:
       POSTHOG_HOST: http://localhost:18000
 
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           # fetch-depth: 0 — scripts/db/check-migrations-immutable.mjs runs
           # `git merge-base origin/main HEAD`; the default shallow clone (depth=1)
@@ -532,7 +532,7 @@ jobs:
       POSTHOG_HOST: http://localhost:18000
 
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Enforce env-manager classifier result
         env:
