@@ -15,7 +15,9 @@ import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
+// toks5: a canonical node-deploy node of this fleet (its catalog cells hand every env to the verb).
+// The operator is not a node of this verb: its canary is retired (task.5491).
+const NODE_ID = "f66b260b-4633-41e2-8711-b7c1b8449cc1";
 
 const plane = vi.hoisted(() => ({ fetchFileText: vi.fn() }));
 const store = vi.hoisted(() => ({
@@ -33,7 +35,7 @@ const dbState = vi.hoisted(() => ({
   call: 0,
 }));
 const envState = vi.hoisted(() => ({
-  NODE_SUBMODULE_PARENT_OWNER: "test-owner" as string | undefined,
+  NODE_SUBMODULE_PARENT_OWNER: "cogni-dao" as string | undefined,
   NODE_SUBMODULE_PARENT_REPO: "test-repo" as string | undefined,
   DEPLOY_ENVIRONMENT: "production" as string | undefined,
   NODE_DEPLOY_WORKLOAD_ZONE: "cognidao.org",
@@ -141,7 +143,7 @@ const attempt = (phase: string, externalName?: string) => ({
 describe("DELETE /api/v1/deploy/workloads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    dbState.node = { id: NODE_ID, slug: "operator" };
+    dbState.node = { id: NODE_ID, slug: "toks5" };
     dbState.billing = { id: "billing-1" };
     dbState.call = 0;
     authz.present = true;

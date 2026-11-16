@@ -37,7 +37,10 @@ const ROOT_SPEC = readFileSync(
 );
 const CANARY = {
   path: ".cogni/workloads/canary.yaml",
-  text: readFileSync(path.join(ROOT, ".cogni/workloads/canary.yaml"), "utf8"),
+  text: readFileSync(
+    path.join(ROOT, "packages/repo-spec/tests/fixtures/canary.workload.yaml"),
+    "utf8"
+  ),
 };
 
 const resolve = (
@@ -45,7 +48,7 @@ const resolve = (
 ) =>
   resolveWorkloadDeclaration({
     workloadZone: WORKLOAD_ZONE,
-    nodeSlug: "operator",
+    nodeSlug: "node-deploy-canary", // the fixture's host label stands in for a node slug
     repoSpecText: ROOT_SPEC,
     manifests: [CANARY],
     nodeId: NODE_ID,
@@ -54,7 +57,7 @@ const resolve = (
     ...over,
   });
 
-describe("the operator's checked-in canary workload manifest", () => {
+describe("the canary fixture workload manifest", () => {
   it("repo-spec no longer declares workloads and is not an app-tier deployment", () => {
     const spec = parseRepoSpec(ROOT_SPEC);
     expect(hasDeclaredNodeDeployment(spec)).toBe(false);

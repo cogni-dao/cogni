@@ -11,7 +11,7 @@
  *   - SERVED_ENV_SET (CD4 a): `env` must be one of the envs this deployment's sequencer serves
  *     (`NODE_DEPLOY_ENVS`, default: only DEPLOY_ENVIRONMENT). A release for any other env would never be
  *     executed here (or, worse, by a differently-wired sequencer).
- *   - NODE_IS_THIS_FLEETS (CD4 b): a node other than the operator's own canary must belong to this fleet
+ *   - NODE_IS_THIS_FLEETS (CD4 b): every node, the operator included, must belong to this fleet
  *     (`isFleetOwnedRow`: its `source_repo` org equals NODE_SUBMODULE_PARENT_OWNER, case-insensitive) AND
  *     its lane's control env (`controlEnvFor(env, provider, FLEET_CONTROL_ENV)`) must be the fleet control
  *     env. The test operator therefore refuses canonical toks5 even though the canonical catalog is baked
@@ -19,8 +19,9 @@
  *   - ONE_WRITER_PER_NODE_LANE (CD4 c): a release is recorded only when the node's catalog
  *     `compute_api[env]` is `node-deploy` (image-baked catalog, the source the sequencer reads), so the verb
  *     never races a Crossplane/legacy writer.
- *   - OPERATOR_CANARY_UNCHANGED: the operator node (in-repo) is served only in DEPLOY_ENVIRONMENT, as before,
- *     and is exempt from the fleet and cell checks.
+ *   - NO_OPERATOR_EXEMPTION (task.5491): the operator node deploys through `vcs/flight` and `deploy/promote`,
+ *     never through this verb. Its canary, the one workload that was exempt here, is retired, so the
+ *     operator is judged like any other node (its catalog row has no `node-deploy` cell).
  *   - VERB_CELL_IS_AKASH: a `compute_api[env]=node-deploy` cell is by definition Akash-placed, whatever
  *     `deployment_provider` says, so it resolves its control env as an Akash lane. Reuses `controlEnvFor`
  *     (the TS twin of `control_env_for` in scripts/ci/lib/appset-paths.sh).
@@ -32,7 +33,6 @@
 
 import { NextResponse } from "next/server";
 import { isNodeOnDeployVerb } from "@/features/compute/node-compute-api";
-import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { isFleetOwnedRow } from "@/shared/node-registry/fleet-ownership";
 import {
@@ -122,15 +122,6 @@ export function laneRefusal(
   });
   if (served.length === 0)
     return refuse(503, { error: "deploy_environment_not_configured" });
-  if (nodeId === getNodeId()) {
-    // OPERATOR_CANARY_UNCHANGED: only its own env.
-    if (env !== config.DEPLOY_ENVIRONMENT)
-      return refuse(409, {
-        error: "env_not_served",
-        served: [config.DEPLOY_ENVIRONMENT],
-      });
-    return undefined;
-  }
   if (!served.includes(env))
     return refuse(409, { error: "env_not_served", served });
   if (!isFleetOwnedRow(catalogRow, config.NODE_SUBMODULE_PARENT_OWNER))
@@ -156,14 +147,13 @@ export function envNotServed(
 
 /**
  * CD4 (c) ONE_WRITER_PER_NODE_LANE: refuse to record unless the node's cell hands this lane to the verb.
- * The operator's own canary (in-repo, no `compute_api` row) is exempt.
+ * No node is exempt. The operator has no `compute_api` row, so it is refused here.
  */
 export function nodeNotOnDeployVerb(
   env: Env,
-  nodeId: string,
+  _nodeId: string,
   catalogRow: unknown
 ): NextResponse | undefined {
-  if (nodeId === getNodeId()) return undefined;
   if (onDeployVerb(catalogRow, env)) return undefined;
   return NextResponse.json(
     {

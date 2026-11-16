@@ -20,7 +20,7 @@ import {
   workerHostRefusal,
 } from "./edge";
 import { ingressHostOf } from "./spec";
-import { FakeDns, WORKLOAD_ZONE } from "./testing";
+import { FakeDns, FIXTURE_EDGE_HOSTS, WORKLOAD_ZONE } from "./testing";
 
 const DEFAULT_EDGE_HOST_REGEX = edgeHostRegexFor([], WORKLOAD_ZONE);
 
@@ -67,32 +67,30 @@ describe("resolveBinding", () => {
 describe("EdgeRouter guards", () => {
   const HOST = "node-deploy-canary.cognidao.org";
 
-  it("default regex admits the canary hosts and nothing else", () => {
-    for (const ok of [
+  it("default regex admits nothing: the operator canary host is retired (task.5491)", () => {
+    for (const bad of [
       "node-deploy-canary.cognidao.org",
       "node-deploy-canary-test.cognidao.org",
-      "node-deploy-canary-preview.cognidao.org",
-      "node-deploy-canary-dev.cognidao.org",
-    ])
-      expect(DEFAULT_EDGE_HOST_REGEX.test(ok)).toBe(true);
-    for (const bad of [
       "cognidao.org",
       "www.cognidao.org",
       "poly.cognidao.org",
-      "node-deploy-canary.cognidao.org.evil.com",
-      "evil-node-deploy-canary.cognidao.org",
-      "node-deploy-canary-x1.cognidao.org",
+      "operator.cognidao.org",
     ])
-      expect(DEFAULT_EDGE_HOST_REGEX.test(bad)).toBe(false);
+      expect(DEFAULT_EDGE_HOST_REGEX.test(bad), bad).toBe(false);
+    // the operator slug alone adds no name either
+    expect(
+      edgeHostRegexFor(["operator"], WORKLOAD_ZONE).test(
+        "operator.cognidao.org"
+      )
+    ).toBe(false);
   });
 
-  it("a catalog-built regex admits the canary and each listed node (with env suffixes) and nothing else", () => {
+  it("a catalog-built regex admits each listed node (with env suffixes) and nothing else, never the operator", () => {
     const re = edgeHostRegexFor(
       ["poly", "node-template", "toks5", "operator"],
       WORKLOAD_ZONE
     );
     for (const ok of [
-      "node-deploy-canary.cognidao.org",
       "poly.cognidao.org",
       "poly-test.cognidao.org",
       "node-template.cognidao.org",
@@ -101,6 +99,7 @@ describe("EdgeRouter guards", () => {
     ])
       expect(re.test(ok), ok).toBe(true);
     for (const bad of [
+      "node-deploy-canary.cognidao.org", // the retired operator canary host
       "cognidao.org",
       "preview.cognidao.org",
       "test.cognidao.org",
@@ -223,7 +222,7 @@ describe("EdgeRouter guards", () => {
     ).toBe(false);
   });
 
-  it("hostOwnedBy: a node owns exactly its own host in each env; the operator owns the canary", () => {
+  it("hostOwnedBy: a node owns exactly its own host in each env; the operator owns nothing", () => {
     expect(
       hostOwnedBy(WORKLOAD_ZONE, "poly.cognidao.org", "production", "poly")
     ).toBe(true);
@@ -238,14 +237,14 @@ describe("EdgeRouter guards", () => {
     expect(
       hostOwnedBy(WORKLOAD_ZONE, "poly-preview.cognidao.org", "preview", "poly")
     ).toBe(true);
-    expect(
-      hostOwnedBy(
-        WORKLOAD_ZONE,
-        "node-deploy-canary.cognidao.org",
-        "production",
-        "operator"
-      )
-    ).toBe(true);
+    for (const host of [
+      "node-deploy-canary.cognidao.org",
+      "operator.cognidao.org",
+    ])
+      expect(
+        hostOwnedBy(WORKLOAD_ZONE, host, "production", "operator"),
+        host
+      ).toBe(false);
     // node A cannot claim node B's host, or another env's host for itself
     expect(
       hostOwnedBy(WORKLOAD_ZONE, "toks5.cognidao.org", "production", "poly")
@@ -310,7 +309,6 @@ describe("EdgeRouter guards", () => {
     for (const ok of [
       "spawny-boi.cogni-testing.org",
       "spawny-boi-test.cogni-testing.org",
-      "node-deploy-canary-test.cogni-testing.org",
     ])
       expect(re.test(ok), ok).toBe(true);
     for (const bad of [
@@ -370,7 +368,7 @@ describe("EdgeRouter guards", () => {
 
   it("refuses an unguarded host before any request is made", async () => {
     const dns = new FakeDns([]);
-    const edge = new EdgeRouter(dns, WORKLOAD_ZONE);
+    const edge = new EdgeRouter(dns, WORKLOAD_ZONE, FIXTURE_EDGE_HOSTS);
     await expect(
       edge.point("poly.cognidao.org", "x.example")
     ).rejects.toBeInstanceOf(EdgeGuardError);
@@ -382,10 +380,11 @@ describe("EdgeRouter guards", () => {
 
   it("creates a proxied CNAME and reads it back", async () => {
     const dns = new FakeDns([]);
-    const rec = await new EdgeRouter(dns, WORKLOAD_ZONE).point(
-      HOST,
-      "Ingress.Provider.Example."
-    );
+    const rec = await new EdgeRouter(
+      dns,
+      WORKLOAD_ZONE,
+      FIXTURE_EDGE_HOSTS
+    ).point(HOST, "Ingress.Provider.Example.");
     expect(rec).toMatchObject({
       name: HOST,
       type: "CNAME",
@@ -403,10 +402,11 @@ describe("EdgeRouter guards", () => {
       content: "203.0.113.9",
       proxied: false,
     });
-    const rec = await new EdgeRouter(dns, WORKLOAD_ZONE).point(
-      HOST,
-      "ingress.provider.example"
-    );
+    const rec = await new EdgeRouter(
+      dns,
+      WORKLOAD_ZONE,
+      FIXTURE_EDGE_HOSTS
+    ).point(HOST, "ingress.provider.example");
     expect(rec.id).toBe(seeded.id);
     expect(rec.type).toBe("CNAME");
     expect(rec.proxied).toBe(true);
@@ -424,13 +424,19 @@ describe("EdgeRouter guards", () => {
       proxied: true,
     });
     await expect(
-      new EdgeRouter(dns, WORKLOAD_ZONE).point(HOST, "y.example")
+      new EdgeRouter(dns, WORKLOAD_ZONE, FIXTURE_EDGE_HOSTS).point(
+        HOST,
+        "y.example"
+      )
     ).rejects.toThrow(/refusing to choose/);
   });
 
   it("never points a host at itself", async () => {
     await expect(
-      new EdgeRouter(new FakeDns([]), WORKLOAD_ZONE).point(HOST, HOST)
+      new EdgeRouter(new FakeDns([]), WORKLOAD_ZONE, FIXTURE_EDGE_HOSTS).point(
+        HOST,
+        HOST
+      )
     ).rejects.toThrow(/itself/);
   });
 
@@ -438,7 +444,10 @@ describe("EdgeRouter guards", () => {
     const dns = new FakeDns([]);
     dns.corruptReadback = true;
     await expect(
-      new EdgeRouter(dns, WORKLOAD_ZONE).point(HOST, "y.example")
+      new EdgeRouter(dns, WORKLOAD_ZONE, FIXTURE_EDGE_HOSTS).point(
+        HOST,
+        "y.example"
+      )
     ).rejects.toThrow(/readback mismatch/);
   });
 

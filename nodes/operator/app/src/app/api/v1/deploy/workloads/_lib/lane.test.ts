@@ -152,13 +152,18 @@ describe("envNotServed: the served env set and the fleet (CD4 a, b)", () => {
     expect(envNotServed("preview", TOKS5_ID, AKASH_NODE)).toBeUndefined();
   });
 
-  it("the operator's own canary is served only in its own DEPLOY_ENVIRONMENT, as before", () => {
+  it("the operator has no exemption (its canary is retired): the generic served-env rule applies, and the verb refuses it (task.5491)", () => {
+    // An in-repo row (no source_repo) is fleet-owned, so only the served-env rule decides here ...
     expect(
       envNotServed("production", OPERATOR_ID, OPERATOR_ROW)
     ).toBeUndefined();
     expect(envNotServed("candidate-a", OPERATOR_ID, OPERATOR_ROW)?.status).toBe(
       409
     );
+    // ... and with no `compute_api` cell, `nodeNotOnDeployVerb` refuses it in every env.
+    expect(
+      nodeNotOnDeployVerb("production", OPERATOR_ID, OPERATOR_ROW)?.status
+    ).toBe(409);
   });
 
   it("is a 503 when the deployment serves no env at all", async () => {
@@ -185,9 +190,6 @@ describe("the test operator never serves canonical nodes (CD4 b)", () => {
       source_repo: "https://github.com/cogni-test-org/own",
     };
     expect(envNotServed("candidate-a", TOKS5_ID, own)).toBeUndefined();
-    expect(
-      envNotServed("candidate-a", OPERATOR_ID, OPERATOR_ROW)
-    ).toBeUndefined();
     expect(
       await bodyOf(envNotServed("candidate-a", TOKS5_ID, AKASH_NODE))
     ).toEqual({ error: "node_not_in_fleet" });
@@ -243,9 +245,11 @@ describe("nodeNotOnDeployVerb: ONE_WRITER_PER_NODE_LANE (CD4 c)", () => {
     expect(nodeNotOnDeployVerb("preview", TOKS5_ID, bad)?.status).toBe(409);
   });
 
-  it("exempts the operator's own canary (in-repo, no compute_api row)", () => {
-    expect(
-      nodeNotOnDeployVerb("production", OPERATOR_ID, OPERATOR_ROW)
-    ).toBeUndefined();
+  it("exempts no node: the operator has no compute_api row and is refused (task.5491)", async () => {
+    const res = nodeNotOnDeployVerb("production", OPERATOR_ID, OPERATOR_ROW);
+    expect(res?.status).toBe(409);
+    expect(await bodyOf(res)).toMatchObject({
+      error: "node_not_on_deploy_verb",
+    });
   });
 });

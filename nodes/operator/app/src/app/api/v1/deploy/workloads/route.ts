@@ -24,7 +24,7 @@
  *     `source_repo` org != NODE_SUBMODULE_PARENT_OWNER) or a lane whose control env is not the fleet control
  *     env. The sequencer applies the same org filter to its slug set.
  *   - ONE_WRITER_PER_NODE_LANE (CD4 c): POST records only when the node's catalog `compute_api[env]` is
- *     `node-deploy` (409 `node_not_on_deploy_verb`); the operator's own canary is exempt.
+ *     `node-deploy` (409 `node_not_on_deploy_verb`); no node is exempt (the operator canary is retired, task.5491).
  *   - STOP_IS_INTENT_ONLY (task.5491): `DELETE` sets desired `stopped` through the ONE store writer
  *     `requestStop` and never touches a lease. A `state` workload with an open lease needs
  *     `destroyRetainedData: true` plus the `dseq` of one of its open leases (`planStop`), else 409. The

@@ -1,3 +1,5 @@
+# TEST FIXTURE (task.5491). This was the operator's node-deploy canary declaration, `.cogni/workloads/canary.yaml`,
+# retired once its leases were closed. Tests read it as a realistic state + app manifest pair; nothing deploys it.
 # Workload manifest (story.5137, hub `workload-manifest`): the operator's node-deploy CANARY.
 # Format: Score v1b1 (https://docs.score.dev); Cogni policy is checked on top of the pinned schema by
 # packages/repo-spec/src/workload-manifest.ts, which lowers this file to the NodeWorkloadSpec pair the

@@ -948,20 +948,6 @@ describe("node app runtime env (task.5405)", () => {
     expect("allowProviders" in (req ?? {})).toBe(false);
     expect(req?.spec.placement).toBeUndefined();
   });
-
-  it("the operator's own workload gets RELEASE_SHA and bindings only, no node env, no placement", async () => {
-    const h = harness();
-    await stateUp(h, OPERATOR_NODE_ID);
-    expect(await releaseApp(h, OPERATOR_NODE_ID)).toBe("driven");
-    const req = appCreates(h)[0];
-    const env = req?.spec.services[0]?.env ?? {};
-    expect(env.RELEASE_SHA).toBe(SHA_1);
-    expect(env).not.toHaveProperty("COGNI_NODE_ID");
-    expect(env).not.toHaveProperty("NODE_NAME");
-    expect(req?.spec.placement).toBeUndefined();
-    expect(req?.spec.services[0]?.command).toEqual(["sh", "-c", "echo app"]);
-    expect(h.runtimeSecrets.reads).toHaveLength(0);
-  });
 });
 
 describe("the node owns its placement countries (story.5141)", () => {
@@ -1179,12 +1165,6 @@ describe("an app may claim only its own node's host (task.5405)", () => {
       const [a] = await attemptsOf(h, POLY_ID);
       expect(a?.error, host).toContain("edge_host_refused");
     }
-  });
-
-  it("the operator's own canary still deploys at its canary host", async () => {
-    const h = harness();
-    await stateUp(h, OPERATOR_NODE_ID);
-    expect(await releaseApp(h, OPERATOR_NODE_ID)).toBe("driven");
   });
 });
 

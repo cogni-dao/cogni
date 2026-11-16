@@ -351,8 +351,6 @@ export type ReconcileOutcome =
 const DESTROY_INTENT_TTL_MS = 3_600_000;
 const ALERT_THROTTLE_MS = 600_000;
 const GRACE_LOG_THROTTLE_MS = 60_000;
-/** The operator's own workloads (the canary) take no node-app env: they are not a node app. */
-const OPERATOR_NODE_SLUG = "operator";
 /** The actuator wire accepts at most 16 `excludeProviders`. */
 const MAX_EXCLUDED_PROVIDERS = 16;
 /** LANE_MEMORY (story.5137): strikes on one lane within this window, across releases, are remembered. */
@@ -1048,7 +1046,7 @@ export class NodeDeploySequencer {
     const refusal = this.d.httpAdmissionRefusal;
     if (w.kind === "app" && refusal) throw new DependencyNotReady(refusal);
     const env: Record<string, string> = {};
-    // The release pins the node's manifest set (CD3); a non-node app (the operator's own) uses it as is.
+    // The release pins the node's manifest set (CD3).
     let requiredCountryCodes: readonly string[] =
       w.kind === "app" ? (w.placement?.requiredCountryCodes ?? []) : [];
     let nodeApp = false;
@@ -1130,7 +1128,8 @@ export class NodeDeploySequencer {
       throw new DependencyNotReady(
         `node ${key.nodeId} is not in this operator image's catalog; its runtime env and placement cannot be resolved`
       );
-    if (entry.slug === OPERATOR_NODE_SLUG) return undefined;
+    // task.5491: no node is exempt. The operator's own canary, the one app that took no node-app env,
+    // is retired; the operator deploys through flight and promote, never through this sequencer.
     const publicHost = publicHostOf(w);
     if (!publicHost)
       throw new DependencyNotReady(

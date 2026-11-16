@@ -36,7 +36,7 @@ const OPERATOR_REPO_SPEC = readFileSync(
 // toks5's own repo-spec names toks5, not the operator.
 const REPO_SPEC = OPERATOR_REPO_SPEC.replaceAll(NODE_ID, TOKS5_ID);
 const OPERATOR_CANARY = readFileSync(
-  path.join(ROOT, ".cogni/workloads/canary.yaml"),
+  path.join(ROOT, "packages/repo-spec/tests/fixtures/canary.workload.yaml"),
   "utf8"
 );
 const CANARY = OPERATOR_CANARY.replaceAll(
@@ -452,7 +452,7 @@ describe("POST /api/v1/deploy/workloads: one front door, a node deploys from its
     expect(recorded().spec.imagePending).toBeUndefined();
   });
 
-  it("keeps an in-repo node (the operator) on the parent repo and refuses an image of '.' (no image repository to defer to)", async () => {
+  it("keeps an in-repo node (the operator) on the parent repo, refuses an image of '.' (no image repository to defer to) and owns no host", async () => {
     gate.mockResolvedValue({
       ok: true,
       node: { id: NODE_ID, slug: "operator" },
@@ -471,8 +471,11 @@ describe("POST /api/v1/deploy/workloads: one front door, a node deploys from its
     });
     expect(recordRelease).not.toHaveBeenCalled();
 
+    // The operator owns no workload host any more (its canary is retired, task.5491): even a digest-pinned
+    // manifest at the old canary host is refused.
     repoServes(OPERATOR_CANARY, OPERATOR_REPO_SPEC);
-    expect((await post()).status).toBe(200);
+    expect((await post()).status).toBe(422);
+    expect(recordRelease).not.toHaveBeenCalled();
   });
 
   it("refuses a repo-spec that names another node (node_mismatch) before any write", async () => {

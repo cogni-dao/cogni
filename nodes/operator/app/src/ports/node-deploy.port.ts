@@ -5,16 +5,16 @@
  * Module: `@ports/node-deploy.port`
  * Purpose: The node-deploy sequencer's domain types and seams — workload keys, releases, attempts,
  *   the attempt phase machine, and the payer / edge DNS / probe / store / secrets / chain / clock
- *   ports — so the REAL state machine runs unchanged over fakes in tests, over the Akash Console in
- *   local dev (ConsolePayer) and over the private actuator in production (ActuatorPayer). task.5400.
+ *   ports — so the REAL state machine runs unchanged over fakes in tests and over the private actuator in
+ *   production (ActuatorPayer). task.5400. The local-dev Console payer was retired with its harness (task.5491).
  * Scope: Types, interfaces, one error class and tiny pure helpers. No IO.
  * Invariants:
  *   - PHASES: planned -> created -> proving -> proven -> active -> retiring -> retired. A failure
  *     before cutover goes planned|created|proving|proven -> closing -> failed. A live lease that
  *     chain truth (or a 15-minute failed proof) says is gone goes active -> lost.
  *   - KEY_IS_NEVER_REUSED: `cogniKey` embeds `(release, attempt)`; every create takes the next ordinal.
- *   - ONE_PAYER_PORT: `PayerPort` has exactly two implementations (ActuatorPayer in prod, ConsolePayer
- *     in dev). The sequencer never knows which.
+ *   - ONE_PAYER_PORT: `PayerPort` has one production implementation (ActuatorPayer) and a test fake.
+ *     The sequencer never knows which.
  *   - NO_DNS_DELETE: `DnsRecordsPort` has no delete. The edge can never be withdrawn by construction
  *     (bug.5301); only node removal, which is not this component, deletes a record.
  * Side-effects: none
@@ -326,17 +326,15 @@ export interface PayerCreateRequest {
   readonly spec: PayerSpec;
   /**
    * Providers that must NOT win this create: the provider currently serving blue, because two leases
-   * on one provider ingress cannot both claim one host. Both payers honor it (ConsolePayer filters its
-   * bids; ActuatorPayer sends it on the v1 wire, where the actuator UNIONS it into its tried-provider
-   * set so it can only narrow the eligible bids). The sequencer's post-hoc `same_provider_as_blue`
-   * proof refusal stays as the backstop.
+   * on one provider ingress cannot both claim one host. ActuatorPayer sends it on the v1 wire, where the
+   * actuator UNIONS it into its tried-provider set so it can only narrow the eligible bids. The
+   * sequencer's post-hoc `same_provider_as_blue` proof refusal stays as the backstop.
    */
   readonly excludeProviders?: readonly string[];
   /**
    * Providers this create MAY win (task.5405): the interim set whose egress is admitted to the
    * shared substrate. The actuator INTERSECTS it with its own configured allowlist (never widens it)
-   * and refuses with a clear reason when the intersection is empty. Only ActuatorPayer sends it;
-   * the dev ConsolePayer ignores it. Absent = no caller allowlist.
+   * and refuses with a clear reason when the intersection is empty. Absent = no caller allowlist.
    */
   readonly allowProviders?: readonly string[];
 }
