@@ -156,7 +156,7 @@ jobs:
         run: pnpm packages:build
 
       - name: Install ripgrep
-        uses: taiki-e/install-action@735e5933943122c5ac182670a935f54a949265c1 # v2
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: ripgrep
 
