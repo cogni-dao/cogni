@@ -443,8 +443,11 @@ log_info "VM/SSH-key prefix: ${VM_NAME_PREFIX} (from \$GH_REPO=${GH_REPO})"
 # every Akash lane in every env; on the 6GB shared VPS it swapped its databases out
 # (Doltgres/Temporal major faults, 10-65% iowait for 60 days). Production gets a 16GB
 # dedicated-core Cloud VDS; other envs keep the 6GB VPS. VM_PLAN overrides for one run.
+# bug.5608 — candidate-a (k3s + every candidate flight + the candidate substrate) swapped on the
+# 6GB VPS too: scheduler-worker could not restart and Postgres crash-recovered under swap I/O.
+# It moved to the same 16GB VDS on 2026-11-17.
 case "$DEPLOY_ENV" in
-  production) VM_PLAN_DEFAULT="G1-4-16gb-100nv-ded" ;;
+  production | candidate-a) VM_PLAN_DEFAULT="G1-4-16gb-100nv-ded" ;;
   *) VM_PLAN_DEFAULT="B1-6-6gb-100s-shared" ;;
 esac
 VM_PLAN="${VM_PLAN:-$VM_PLAN_DEFAULT}"
