@@ -117,7 +117,9 @@ export function planDatabaseCellKits(input: unknown) {
       (service.port || "5432") !== "5432" ||
       service.pathname !== app.pathname
     )
-      throw new Error("source DSNs disagree with observed local residency");
+      throw new Error(
+        `source DSNs disagree with observed local residency: slot=${slot.nodeSlug}/${slot.environment} appHost=${app.hostname} serviceHost=${service.hostname} expectedHost=${value.expectedSourceHost} appPort=${app.port || "5432"} servicePort=${service.port || "5432"} samePath=${service.pathname === app.pathname}`
+      );
     const suffix = db.slice("cogni_".length);
     if (
       !value.nativeSource.databases.includes(db) ||
@@ -126,7 +128,9 @@ export function planDatabaseCellKits(input: unknown) {
       appRole !== `app_${suffix}` ||
       serviceRole !== `service_${suffix}`
     )
-      throw new Error("source native database/role identity differs");
+      throw new Error(
+        `source native database/role identity differs: slot=${slot.nodeSlug}/${slot.environment} db=${db} dbPresent=${value.nativeSource.databases.includes(db)} appRole=${appRole} appRolePresent=${value.nativeSource.roles.includes(appRole)} serviceRole=${serviceRole} serviceRolePresent=${value.nativeSource.roles.includes(serviceRole)} namesCanonical=${appRole === `app_${suffix}` && serviceRole === `service_${suffix}`}`
+      );
     const identity = `${slot.nodeId}/${slot.physicalEnvironment}`;
     let plan = grouped.get(identity);
     if (!plan) {
@@ -353,6 +357,25 @@ export function materializeDatabaseCellKits(input: unknown): {
   };
 }
 
+/**
+ * Why a plan or mint was refused, for the CI log. Never echoes input values: a
+ * zod failure reports only issue path, code and message, and every Error thrown
+ * above carries names, hosts and booleans, never a DSN, password or key.
+ */
+export function describeRefusal(error: unknown): string {
+  if (error instanceof z.ZodError)
+    return `${error.name}: ${error.issues
+      .slice(0, 8)
+      .map(
+        (issue) =>
+          `${issue.path.join(".") || "<root>"} ${issue.code} ${issue.message}`
+      )
+      .join("; ")}`;
+  if (error instanceof SyntaxError) return `${error.name}: stdin is not JSON`;
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return "unknown failure";
+}
+
 if (process.argv[1]?.endsWith("materialize-database-cell-kits.ts")) {
   try {
     process.stdout.write(
@@ -362,9 +385,9 @@ if (process.argv[1]?.endsWith("materialize-database-cell-kits.ts")) {
           : materializeDatabaseCellKits)(JSON.parse(readFileSync(0, "utf8")))
       )
     );
-  } catch {
+  } catch (error) {
     process.stderr.write(
-      "cell kit generation refused invalid catalog/private identity\n"
+      `cell kit generation refused invalid catalog/private identity: ${describeRefusal(error)}\n`
     );
     process.exitCode = 1;
   }

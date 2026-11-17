@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  describeRefusal,
   materializeDatabaseCellKits,
   planDatabaseCellKits,
 } from "../../../../../../scripts/lib/materialize-database-cell-kits";
@@ -66,6 +67,32 @@ describe("canonical private database cells", () => {
         nativeSource: { ...source.nativeSource, roles: [] },
       })
     ).toThrow("identity");
+  });
+
+  it("names the refusal reason without echoing DSN secrets (bug.5635)", () => {
+    const reason = (input: unknown) => {
+      try {
+        planDatabaseCellKits(input);
+      } catch (error) {
+        return describeRefusal(error);
+      }
+      throw new Error("plan was not refused");
+    };
+    expect(reason({ ...source, expectedSourceHost: "10.0.0.2" })).toContain(
+      "slot=alpha/production appHost=10.0.0.1 serviceHost=10.0.0.1 expectedHost=10.0.0.2"
+    );
+    expect(
+      reason({ ...source, nativeSource: { ...source.nativeSource, roles: [] } })
+    ).toContain("appRolePresent=false serviceRolePresent=false");
+    const empty = reason({
+      ...source,
+      slots: [{ ...source.slots[0], appDsn: "" }],
+    });
+    expect(empty).toContain("ZodError");
+    expect(empty).toContain("slots.0.appDsn");
+    expect(
+      `${empty}${reason({ ...source, expectedSourceHost: "x" })}`
+    ).not.toContain("fixture");
   });
 
   it("mints distinct lane credentials and a writer-only CA, then preserves exact material on retry", () => {
