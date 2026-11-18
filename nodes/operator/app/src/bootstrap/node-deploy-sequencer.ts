@@ -133,12 +133,15 @@ const readCredential = (name: string): Promise<string> =>
     .then((value) => value.trim())
     .catch(() => "");
 
-const [actuatorToken, databaseUrl, cfToken, cfZone] = await Promise.all([
-  readCredential("AKASH_TX_ACTUATOR_TOKEN"),
-  readCredential("DATABASE_URL"),
-  readCredential("CLOUDFLARE_API_TOKEN"),
-  readCredential("CLOUDFLARE_ZONE_ID"),
-]);
+const [actuatorToken, databaseUrl, cfToken, cfZone, metricsTokenRoot] =
+  await Promise.all([
+    readCredential("AKASH_TX_ACTUATOR_TOKEN"),
+    readCredential("DATABASE_URL"),
+    readCredential("CLOUDFLARE_API_TOKEN"),
+    readCredential("CLOUDFLARE_ZONE_ID"),
+    // OPTIONAL (bug.5641): the operator's METRICS_TOKEN, the root of every lane's derived scrape token.
+    readCredential("METRICS_TOKEN"),
+  ]);
 
 if (!actuatorToken) {
   log.fatal(
@@ -325,6 +328,7 @@ const composed = await composeNodeDeployLanes({
         catalog,
         substrateHost: lane.substrateHost,
         operatorDomain: lane.operatorDomain,
+        ...(metricsTokenRoot ? { metricsTokenRoot } : {}),
       },
       ...(chain ? { chain } : {}),
       clock: {

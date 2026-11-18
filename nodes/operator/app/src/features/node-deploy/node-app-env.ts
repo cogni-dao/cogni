@@ -14,7 +14,7 @@
  *   - COMPOSITION_PARITY: the key set, the values and the precedence match the composition, in this
  *     order (later wins): HOST/HOSTNAME/PORT, APP_ENV, DEPLOY_ENVIRONMENT, COGNI_REPO_SHA, substrate
  *     topology (only with a substrate host), secrets, COGNI_NODE_ID, database pool maxes, Loki push
- *     (opt-in), then the identity block (NODE_NAME, COGNI_REPO_PATH, AUTH_TRUST_HOST, NEXTAUTH_URL,
+ *     (opt-in), the derived METRICS_TOKEN (bug.5641, opt-in), then the identity block (NODE_NAME, COGNI_REPO_PATH, AUTH_TRUST_HOST, NEXTAUTH_URL,
  *     APP_BASE_URL) which wins over everything above. `node-app-env.test.ts` pins this key by key.
  *   - MIGRATION_DSN (task.5408): DATABASE_MIGRATION_URL is read from the bucket for every node app, unless
  *     its DATABASE_URL is bound to its own state lease; then the binding supplies it (bindings.ts
@@ -117,6 +117,12 @@ export interface NodeAppEnvInput {
   readonly databasePoolLimits?: NodeAppPoolLimits | undefined;
   readonly lokiPush?: NodeAppLokiPush | undefined;
   /**
+   * The per-lane scrape token the operator derives (`deriveLeaseMetricsToken`, bug.5641), delivered as
+   * `METRICS_TOKEN`. Absent = the lease gets no token (the app answers `/api/metrics` with 500 until a release
+   * made with one). It wins over every bucket value.
+   */
+  readonly metricsToken?: string | undefined;
+  /**
    * The release's declared secret KEY names (`NodeWorkloadSpec.secretKeys`); absent = the profile keys
    * only. Only these keys are ever injected.
    */
@@ -218,6 +224,10 @@ const LOKI_FIELDS = {
   LOKI_PUSH_PASSWORD: (i: NodeAppLokiPush) => i.password,
   LOKI_PUSH_SOURCE: () => "lease",
 };
+/** The operator-derived scrape credential (bug.5641). The key stays reserved: no node declares or sets it. */
+const METRICS_FIELDS = {
+  METRICS_TOKEN: (token: string) => token,
+};
 const APP_IDENTITY_FIELDS = {
   DOMAIN: (i: NodeAppEnvInput) => i.operatorDomain,
   COGNI_NODE_ID: (i: NodeAppEnvInput) => i.nodeId,
@@ -259,6 +269,7 @@ export function runtimeOwnedEnvKeys(
           SUBSTRATE_FIELDS,
           POOL_FIELDS,
           LOKI_FIELDS,
+          METRICS_FIELDS,
           APP_IDENTITY_FIELDS,
           RELEASE_FIELDS,
         ]
@@ -427,6 +438,8 @@ export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
     Object.assign(e, fieldValues(POOL_FIELDS, input.databasePoolLimits));
   if (input.lokiPush)
     Object.assign(e, fieldValues(LOKI_FIELDS, input.lokiPush));
+  if (input.metricsToken)
+    Object.assign(e, fieldValues(METRICS_FIELDS, input.metricsToken));
   // The operator issuer (sign-in origin binding, #3029) is platform identity: it wins over every key above.
   if (!input.operatorDomain)
     throw new Error("operator issuer domain is required");
