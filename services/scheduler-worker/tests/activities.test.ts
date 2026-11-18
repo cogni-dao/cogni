@@ -133,7 +133,8 @@ describe("validateGrantActivity", () => {
       SYSTEM_ACTOR,
       "operator",
       FIXED_IDS.grantId,
-      FIXED_IDS.graphId
+      FIXED_IDS.graphId,
+      undefined // no instance: the node's main copy
     );
   });
 
@@ -208,7 +209,8 @@ describe("createGraphRunActivity", () => {
         triggerSource: "temporal_schedule",
         scheduleId: FIXED_IDS.scheduleId,
         scheduledFor: new Date(scheduledFor),
-      }
+      },
+      undefined // no instance: the node's main copy
     );
   });
 });
@@ -245,7 +247,8 @@ describe("updateGraphRunActivity", () => {
       SYSTEM_ACTOR,
       "operator",
       FIXED_IDS.runId,
-      "trace-123"
+      "trace-123",
+      undefined // no instance: the node's main copy
     );
   });
 
@@ -281,7 +284,8 @@ describe("updateGraphRunActivity", () => {
       FIXED_IDS.runId,
       "success",
       undefined,
-      undefined
+      undefined,
+      undefined // no instance: the node's main copy
     );
   });
 
@@ -318,7 +322,8 @@ describe("updateGraphRunActivity", () => {
       FIXED_IDS.runId,
       "error",
       "Something went wrong",
-      undefined
+      undefined,
+      undefined // no instance: the node's main copy
     );
   });
 });

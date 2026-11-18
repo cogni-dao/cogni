@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/scheduler-worker-service/ports`
  * Purpose: Port barrel — interface contracts + typed error classes for worker HTTP-delegated persistence (task.0280).
- * Scope: Interfaces + throwable error classes only. No framework deps, no concrete adapters, no runtime I/O. Error classes live here (not adapters/) so activities/ can import them without violating the clean-architecture boundary.
+ * Scope: Interfaces + throwable error classes + the pure main-instance predicate only. No framework deps, no concrete adapters, no runtime I/O. Error classes live here (not adapters/) so activities/ can import them without violating the clean-architecture boundary.
  * Invariants: Named exports only; activities/ imports only from this module; adapter impl lives in adapters/run-http.ts.
  * Side-effects: none
  * Links: Consumed by activities/, workflows/, bootstrap/, and adapters/run-http.ts
@@ -56,14 +56,17 @@ export interface GraphRunHttpWriter {
       scheduleId?: string;
       scheduledFor?: Date;
       stateKey?: string;
-    }
+    },
+    /** The copy of the node the run belongs to; absent or `main` = the node's main copy. */
+    instance?: string
   ) => Promise<void>;
 
   markRunStarted: (
     actorId: ActorId,
     nodeId: string,
     runId: string,
-    traceId?: string
+    traceId?: string,
+    instance?: string
   ) => Promise<void>;
 
   markRunCompleted: (
@@ -72,7 +75,8 @@ export interface GraphRunHttpWriter {
     runId: string,
     status: "success" | "error" | "timeout" | "skipped" | "cancelled",
     errorMessage?: string,
-    errorCode?: string
+    errorCode?: string,
+    instance?: string
   ) => Promise<void>;
 }
 
@@ -132,7 +136,8 @@ export interface ExecutionGrantHttpValidator {
     actorId: ActorId,
     nodeId: string,
     grantId: string,
-    scope: string
+    scope: string,
+    instance?: string
   ) => Promise<ExecutionGrant>;
 
   /** Back-compat: validate a grant for `graph:execute:<graphId>`. */
@@ -140,8 +145,44 @@ export interface ExecutionGrantHttpValidator {
     actorId: ActorId,
     nodeId: string,
     grantId: string,
-    graphId: string
+    graphId: string,
+    instance?: string
   ) => Promise<ExecutionGrant>;
+}
+
+/**
+ * Resolves the base URL of ONE NON-MAIN instance of a node (story.5159 step 1, design hub
+ * `candidate-pr-lanes`). The main copy never goes through this port: it resolves from COGNI_NODE_ENDPOINTS
+ * exactly as before. An instance is named by identity, never by a URL taken from run input.
+ */
+export interface InstanceUrlResolver {
+  /** @throws InstanceUnresolvedError when the instance is unknown, closed, or the directory cannot say. */
+  resolve: (nodeId: string, instance: string) => Promise<string>;
+}
+
+/** The instance name of a node's main copy. It resolves from COGNI_NODE_ENDPOINTS, never the directory. */
+export const MAIN_INSTANCE = "main";
+
+/** True when a run names the node's main copy: no instance at all, or `main`. */
+export function isMainInstance(instance: string | undefined): boolean {
+  return instance === undefined || instance === MAIN_INSTANCE;
+}
+
+/**
+ * Thrown when a non-main instance has no host to call. `retryable` is false when the directory said the
+ * instance is absent or closed (or the worker has no directory): the answer will not change on retry, and
+ * NO request has been sent to any host. It is true only when the operator could not be reached and no
+ * last-good copy exists. The worker never falls back to the main copy.
+ */
+export class InstanceUnresolvedError extends Error {
+  readonly code = "UNKNOWN_INSTANCE" as const;
+  constructor(
+    message: string,
+    readonly retryable: boolean
+  ) {
+    super(message);
+    this.name = "InstanceUnresolvedError";
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

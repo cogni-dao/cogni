@@ -547,6 +547,7 @@ describe("node app runtime env (task.5405)", () => {
       slug: "poly",
       nodeId: POLY_ID,
       sourceSha: SHA_1,
+      workload: "canary",
       publicHost: POLY_HOST,
       operatorDomain: "operator.example",
       port: 8080,
@@ -554,6 +555,8 @@ describe("node app runtime env (task.5405)", () => {
       secrets: PROFILE_BUCKET,
       boundEnvNames: ["DATABASE_URL"],
     });
+    // the sequencer stamps the copy it renders for (story.5159): a `canary` workload is instance `canary`
+    expect(env.COGNI_INSTANCE).toBe("canary");
     // every composition key is present with the composition's value, except what a binding supplies
     for (const [k, v] of Object.entries(expected)) {
       if (k === "DATABASE_URL") continue;

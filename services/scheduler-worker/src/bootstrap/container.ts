@@ -38,6 +38,10 @@ import {
   GitHubAppTokenProvider,
   GitHubSourceAdapter,
 } from "../adapters/ingestion/index.js";
+import {
+  createInstanceDirectory,
+  deployEnvOfNamespace,
+} from "../adapters/instance-directory.js";
 import { createSharedTokenNodePrincipalResolver } from "../adapters/node-principal.js";
 import { createReviewHttpClient } from "../adapters/review-http.js";
 import {
@@ -52,6 +56,7 @@ import type {
   DataSourceRegistration,
   ExecutionGrantHttpValidator,
   GraphRunHttpWriter,
+  InstanceUrlResolver,
   NodePrincipalResolver,
   ReviewHttpClient,
 } from "../ports/index.js";
@@ -71,6 +76,8 @@ export interface ServiceContainer {
   config: {
     nodeEndpoints: Map<string, string>;
     schedulerApiToken: string;
+    /** Resolves non-main instances from the operator directory; absent when none is configured (story.5159). */
+    instanceResolver?: InstanceUrlResolver | undefined;
   };
   logger: Logger;
 }
@@ -177,7 +184,8 @@ export interface AttributionContainer {
 export function createContainer(
   config: Env,
   logger: Logger,
-  nodeEndpointsRaw = config.COGNI_NODE_ENDPOINTS
+  nodeEndpointsRaw = config.COGNI_NODE_ENDPOINTS,
+  namespace = config.TEMPORAL_NAMESPACE
 ): ServiceContainer {
   // Per task.0280: the scheduler path holds no DB credentials. Grant validation,
   // graph_runs create/update all flow through the owning node's internal API,
@@ -193,10 +201,12 @@ export function createContainer(
     nodeCount: nodeEndpoints.size,
     nodeEndpoints: Object.fromEntries(nodeEndpoints),
   });
+  const instanceResolver = createInstanceResolver(config, logger, namespace);
   const deps = {
     nodeEndpoints,
     schedulerApiToken: config.SCHEDULER_API_TOKEN,
     logger: logger.child?.({ component: "run-http" }) ?? logger,
+    instanceResolver,
   };
   return {
     grantAdapter: createHttpExecutionGrantValidator(deps),
@@ -220,9 +230,44 @@ export function createContainer(
     config: {
       nodeEndpoints,
       schedulerApiToken: config.SCHEDULER_API_TOKEN,
+      instanceResolver,
     },
     logger,
   };
+}
+
+/**
+ * The operator instance directory for ONE Temporal namespace (story.5159), or undefined when this worker
+ * has none. It needs the URL, its own read token and a namespace that names a deploy env; a partial
+ * configuration is logged and treated as no directory, so a non-main instance is refused, never guessed.
+ */
+function createInstanceResolver(
+  config: Env,
+  logger: Logger,
+  namespace: string
+): InstanceUrlResolver | undefined {
+  const url = config.OPERATOR_DIRECTORY_URL;
+  const token = config.OPERATOR_DIRECTORY_TOKEN;
+  if (!url && !token) return undefined;
+  const env = deployEnvOfNamespace(namespace);
+  if (!url || !token || !env) {
+    logger.warn(
+      {
+        namespace,
+        hasUrl: Boolean(url),
+        hasToken: Boolean(token),
+        deployEnv: env,
+      },
+      "instance directory not configured: need OPERATOR_DIRECTORY_URL, OPERATOR_DIRECTORY_TOKEN and a cogni-<env> namespace; non-main instances will be refused"
+    );
+    return undefined;
+  }
+  return createInstanceDirectory({
+    baseUrl: url,
+    token,
+    env,
+    logger: logger.child?.({ component: "instance-directory" }) ?? logger,
+  });
 }
 
 /**

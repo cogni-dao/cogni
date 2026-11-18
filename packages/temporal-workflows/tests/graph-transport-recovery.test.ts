@@ -21,6 +21,7 @@ import {
 import {
   graphActivityFailureStatus,
   isDefinitiveGraphActivityFailure,
+  isUnknownInstanceFailure,
 } from "../src/workflows/graph-run.workflow.js";
 
 type ActivityRetryState = ConstructorParameters<typeof ActivityFailure>[3];
@@ -93,6 +94,20 @@ describe("graph execution transport policy", () => {
 
     expect(isDefinitiveGraphActivityFailure(failure)).toBe(false);
     expect(graphActivityFailureStatus(true, failure)).toBe("timeout");
+  });
+
+  it("recognizes an unresolvable instance so it is not recorded as an invalid grant (story.5159)", () => {
+    const unknownInstance = activityFailure(
+      ApplicationFailure.nonRetryable("no such instance", "UNKNOWN_INSTANCE"),
+      "NON_RETRYABLE_FAILURE"
+    );
+    const invalidGrant = activityFailure(
+      ApplicationFailure.nonRetryable("grant expired", "grant_expired"),
+      "NON_RETRYABLE_FAILURE"
+    );
+    expect(isUnknownInstanceFailure(unknownInstance)).toBe(true);
+    expect(isUnknownInstanceFailure(invalidGrant)).toBe(false);
+    expect(isUnknownInstanceFailure(new Error("network"))).toBe(false);
   });
 
   it("preserves legacy workflow failure behavior for replay", () => {

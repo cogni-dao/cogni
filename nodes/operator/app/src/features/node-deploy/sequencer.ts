@@ -1216,6 +1216,7 @@ export class NodeDeploySequencer {
           slug: entry.slug,
           nodeId: key.nodeId,
           sourceSha: release.sourceSha,
+          workload: w.name,
           publicHost,
           operatorDomain: rt.operatorDomain,
           port: w.port,

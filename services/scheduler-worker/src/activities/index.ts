@@ -37,6 +37,9 @@ import {
   GrantRevokedError,
   GrantScopeMismatchError,
   type GraphRunHttpWriter,
+  InstanceUnresolvedError,
+  type InstanceUrlResolver,
+  isMainInstance,
   type NodePrincipalResolver,
   NodePrincipalUnprovisionedError,
   RunHttpClientError,
@@ -58,6 +61,12 @@ export function translateHttpError(err: unknown, where: string): never {
     err instanceof GrantNodeMismatchError
   ) {
     throw ApplicationFailure.nonRetryable(`${where}: ${err.message}`, err.code);
+  }
+  if (err instanceof InstanceUnresolvedError) {
+    // story.5159: the instance is unknown, closed or unresolvable; nothing was sent to any host.
+    throw err.retryable
+      ? ApplicationFailure.retryable(`${where}: ${err.message}`, err.code)
+      : ApplicationFailure.nonRetryable(`${where}: ${err.message}`, err.code);
   }
   if (err instanceof RunHttpClientError && !err.retryable) {
     throw ApplicationFailure.nonRetryable(
@@ -81,6 +90,11 @@ export interface ActivityDeps {
   config: {
     nodeEndpoints: Map<string, string>;
     schedulerApiToken: string;
+    /**
+     * Resolves a NON-MAIN instance from the operator directory (story.5159). Absent = this worker has no
+     * directory and refuses every non-main instance. `main` never uses it.
+     */
+    instanceResolver?: InstanceUrlResolver | undefined;
   };
   logger: Logger;
 }
@@ -92,6 +106,8 @@ export interface ValidateGrantInput {
   nodeId: string;
   grantId: string;
   graphId: string;
+  /** The copy of the node the run belongs to (story.5159); absent or `main` = the main copy. */
+  instance?: string;
 }
 
 /**
@@ -112,6 +128,8 @@ export interface CreateGraphRunInput {
   scheduledFor?: string;
   /** Thread state key for conversation correlation */
   stateKey?: string;
+  /** The copy of the node the run belongs to (story.5159); absent or `main` = the main copy. */
+  instance?: string;
 }
 
 /**
@@ -125,6 +143,8 @@ export interface ExecuteGraphInput {
   input: Record<string, unknown>;
   scheduledFor: string; // ISO string - used for idempotency key
   runId: string; // Canonical runId shared with graph_runs and charge_receipts
+  /** The copy of the node the run belongs to (story.5159); absent or `main` = the main copy. */
+  instance?: string;
 }
 
 /**
@@ -151,6 +171,8 @@ export interface UpdateGraphRunInput {
   traceId?: string | null;
   errorMessage?: string;
   errorCode?: string;
+  /** The copy of the node the run belongs to (story.5159); absent or `main` = the main copy. */
+  instance?: string;
 }
 
 /**
@@ -185,6 +207,42 @@ export function createActivities(deps: ActivityDeps) {
     deps;
 
   /**
+   * The base URL a graph call goes to. No instance or `main`: the COGNI_NODE_ENDPOINTS map, exactly as
+   * before. Any other instance: the operator directory only (story.5159). An unknown, closed or
+   * unresolvable instance fails BEFORE any request, so no token is sent, and it never falls back to the
+   * main copy. Non-retryable unless the operator was unreachable with no last-good copy.
+   */
+  async function resolveGraphNodeUrl(
+    nodeId: string,
+    instance: string | undefined
+  ): Promise<string> {
+    if (instance === undefined || isMainInstance(instance)) {
+      const nodeUrl = config.nodeEndpoints.get(nodeId);
+      if (!nodeUrl) {
+        throw ApplicationFailure.nonRetryable(
+          `Unknown nodeId "${nodeId}" — not in COGNI_NODE_ENDPOINTS`,
+          "UNKNOWN_NODE"
+        );
+      }
+      return nodeUrl;
+    }
+    if (!config.instanceResolver)
+      throw ApplicationFailure.nonRetryable(
+        `Instance "${instance}" of node "${nodeId}" cannot be resolved: this worker has no instance directory (OPERATOR_DIRECTORY_URL); no request was sent`,
+        "UNKNOWN_INSTANCE"
+      );
+    try {
+      return await config.instanceResolver.resolve(nodeId, instance);
+    } catch (err) {
+      if (err instanceof InstanceUnresolvedError)
+        throw err.retryable
+          ? ApplicationFailure.retryable(err.message, err.code)
+          : ApplicationFailure.nonRetryable(err.message, err.code);
+      throw err;
+    }
+  }
+
+  /**
    * Validates grant before execution (fail-fast).
    * Per GRANT_VALIDATED_TWICE: Defense-in-depth, API re-validates.
    * @throws Error if grant invalid/expired/revoked/scope mismatch
@@ -192,7 +250,7 @@ export function createActivities(deps: ActivityDeps) {
   async function validateGrantActivity(
     input: ValidateGrantInput
   ): Promise<void> {
-    const { nodeId, grantId, graphId } = input;
+    const { nodeId, grantId, graphId, instance } = input;
     const correlation = getWorkflowCorrelation();
     const start = performance.now();
 
@@ -209,7 +267,8 @@ export function createActivities(deps: ActivityDeps) {
         SYSTEM_ACTOR,
         nodeId,
         grantId,
-        graphId
+        graphId,
+        instance
       );
 
       const durationMs = performance.now() - start;
@@ -266,23 +325,30 @@ export function createActivities(deps: ActivityDeps) {
     });
 
     try {
-      await runAdapter.createRun(SYSTEM_ACTOR, nodeId, {
-        runId,
-        ...(input.graphId !== undefined && { graphId: input.graphId }),
-        ...(input.runKind !== undefined && { runKind: input.runKind }),
-        ...(input.triggerSource !== undefined && {
-          triggerSource: input.triggerSource,
-        }),
-        ...(input.triggerRef !== undefined && { triggerRef: input.triggerRef }),
-        ...(input.requestedBy !== undefined && {
-          requestedBy: input.requestedBy,
-        }),
-        ...(dbScheduleId !== undefined && { scheduleId: dbScheduleId }),
-        ...(scheduledFor !== undefined && {
-          scheduledFor: new Date(scheduledFor),
-        }),
-        ...(input.stateKey !== undefined && { stateKey: input.stateKey }),
-      });
+      await runAdapter.createRun(
+        SYSTEM_ACTOR,
+        nodeId,
+        {
+          runId,
+          ...(input.graphId !== undefined && { graphId: input.graphId }),
+          ...(input.runKind !== undefined && { runKind: input.runKind }),
+          ...(input.triggerSource !== undefined && {
+            triggerSource: input.triggerSource,
+          }),
+          ...(input.triggerRef !== undefined && {
+            triggerRef: input.triggerRef,
+          }),
+          ...(input.requestedBy !== undefined && {
+            requestedBy: input.requestedBy,
+          }),
+          ...(dbScheduleId !== undefined && { scheduleId: dbScheduleId }),
+          ...(scheduledFor !== undefined && {
+            scheduledFor: new Date(scheduledFor),
+          }),
+          ...(input.stateKey !== undefined && { stateKey: input.stateKey }),
+        },
+        input.instance
+      );
 
       const durationMs = performance.now() - start;
       activityDurationMs
@@ -328,6 +394,7 @@ export function createActivities(deps: ActivityDeps) {
       input: graphInput,
       scheduledFor,
       runId,
+      instance,
     } = input;
     const correlation = getWorkflowCorrelation();
     const start = performance.now();
@@ -336,13 +403,7 @@ export function createActivities(deps: ActivityDeps) {
       ? `${temporalScheduleId}:${scheduledFor}`
       : `api:${runId}`;
 
-    const nodeUrl = config.nodeEndpoints.get(nodeId);
-    if (!nodeUrl) {
-      throw ApplicationFailure.nonRetryable(
-        `Unknown nodeId "${nodeId}" — not in COGNI_NODE_ENDPOINTS`,
-        "UNKNOWN_NODE"
-      );
-    }
+    const nodeUrl = await resolveGraphNodeUrl(nodeId, instance);
     const url = `${nodeUrl}/api/internal/graphs/${graphId}/runs`;
 
     logWorkerEvent(logger, WORKER_EVENT_NAMES.ACTIVITY_GRAPH_EXECUTING, {
@@ -567,7 +628,15 @@ export function createActivities(deps: ActivityDeps) {
   async function updateGraphRunActivity(
     input: UpdateGraphRunInput
   ): Promise<void> {
-    const { nodeId, runId, status, traceId, errorMessage, errorCode } = input;
+    const {
+      nodeId,
+      runId,
+      status,
+      traceId,
+      errorMessage,
+      errorCode,
+      instance,
+    } = input;
     const correlation = getWorkflowCorrelation();
     const start = performance.now();
 
@@ -585,7 +654,8 @@ export function createActivities(deps: ActivityDeps) {
           SYSTEM_ACTOR,
           nodeId,
           runId,
-          traceId ?? undefined
+          traceId ?? undefined,
+          instance
         );
       } else {
         await runAdapter.markRunCompleted(
@@ -594,7 +664,8 @@ export function createActivities(deps: ActivityDeps) {
           runId,
           status,
           errorMessage,
-          errorCode
+          errorCode,
+          instance
         );
       }
 

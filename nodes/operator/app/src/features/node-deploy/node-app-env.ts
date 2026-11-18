@@ -31,6 +31,9 @@
  *   - LITELLM_KEY_RENAME: the node-scoped `LITELLM_VIRTUAL_KEY` is delivered as `LITELLM_MASTER_KEY`
  *     and is NOT also passed under its own name (byte-identical to the composition). The fleet master
  *     key is on the denylist and can never arrive through the bucket.
+ *   - INSTANCE_STAMP (story.5159): `COGNI_INSTANCE` names the copy this env is rendered for (`app` -> `main`,
+ *     any other workload -> its own name) through `instanceOfWorkload`, the function the instance directory
+ *     reads. It is platform identity: a secret or declared key can never set it.
  *   - NO_NODE_NAMES: nothing here names a node.
  *   - ONE_SUBSTRATE_BINDING (task.5432, CD2): the substrate block and the Doltgres endpoint come from
  *     `nodeAppSubstrateBinding`, the same output the sequencer gives the mesh grant and the companion
@@ -70,6 +73,7 @@ import {
   type SubstrateBinding,
   type SubstrateTransport,
 } from "./bindings";
+import { instanceOfWorkload } from "./instance-directory";
 import { SUBSTRATE_PORTS, type SubstrateType } from "./substrate-ports";
 
 /** Database pool maxes from the node's catalog `database.<env>.runtimePoolLimits` (public policy). */
@@ -95,6 +99,11 @@ export interface NodeAppEnvInput {
   readonly nodeId: string;
   /** The release's source sha (`COGNI_REPO_SHA`). */
   readonly sourceSha: string;
+  /**
+   * The workload this env is rendered for (`COGNI_INSTANCE`: `app` is `main`, any other name is its own
+   * instance, story.5159). Absent = the main copy.
+   */
+  readonly workload?: string | undefined;
   /** Public host of the app (no scheme). */
   readonly publicHost: string;
   /** Trusted public operator issuer host for this workload lane. */
@@ -221,6 +230,7 @@ const LOKI_FIELDS = {
 const APP_IDENTITY_FIELDS = {
   DOMAIN: (i: NodeAppEnvInput) => i.operatorDomain,
   COGNI_NODE_ID: (i: NodeAppEnvInput) => i.nodeId,
+  COGNI_INSTANCE: (i: NodeAppEnvInput) => instanceOfWorkload(i.workload),
   NODE_NAME: (i: NodeAppEnvInput) => i.slug,
   COGNI_REPO_PATH: () => "/app",
   AUTH_TRUST_HOST: () => "true",

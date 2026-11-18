@@ -382,7 +382,12 @@ export async function startSchedulerWorker(
   }
   const routeActivities = routes.map((route) => {
     if (route.isPrimary) return { route, activities: allActivities };
-    const routeContainer = createContainer(env, logger, route.endpointsRaw);
+    const routeContainer = createContainer(
+      env,
+      logger,
+      route.endpointsRaw,
+      route.namespace
+    );
     return {
       route,
       // Foreign-custodied lanes serve node-owned GraphRunWorkflow only. Review,

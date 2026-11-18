@@ -15,6 +15,8 @@
  *     another node is refused, so a caller can never deploy another node's workloads.
  *   - WHOLE_SET_CHECKED: all of the node's manifests are checked together (ids unique, ids differ from
  *     workload names) before any one workload resolves, so a refused sibling refuses the release.
+ *   - MAIN_IS_THE_APP (story.5159): no workload is named `main`, the instance name of the `app` workload, so
+ *     the instance directory and `COGNI_INSTANCE` can never name a second copy `main`.
  *   - EXCLUSIVE_IS_REFUSED (CD6): the manifest check refuses `cogni.dev/exclusive: "true"`, because
  *     blue and green overlap and the fenced lock that makes that safe is not built yet.
  *   - BUILT_IMAGE_IS_DIGEST_PINNED: an image of `.` lowers to the `builtImage` digest the caller resolved
@@ -179,6 +181,13 @@ export function resolveWorkloadDeclaration(input: {
     throw new DeclarationError(
       "workload_not_declared",
       `workload ${input.workload} is not declared by any .cogni/workloads/*.yaml manifest`
+    );
+  // MAIN_IS_THE_APP (story.5159): `main` is the instance name of the `app` workload, so no other workload
+  // may carry it. Refused like any manifest refusal: a refused sibling refuses the release.
+  if (workloads.some((w) => w.name === "main"))
+    throw new DeclarationError(
+      "workload_manifest_refused",
+      'a workload may not be named "main": it is the instance name of the app workload'
     );
   // Validate the complete Score/declaration bridge BEFORE the environment cascade.
   for (const workload of workloads) {

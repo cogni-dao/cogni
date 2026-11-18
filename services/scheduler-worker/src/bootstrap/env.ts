@@ -50,6 +50,30 @@ const EnvSchema = z.object({
    * Format: "operator=http://operator-app:3000,poly=http://poly-app:3000,resy=http://resy-app:3000" */
   COGNI_NODE_ENDPOINTS: z.string().min(1, "COGNI_NODE_ENDPOINTS is required"),
 
+  /**
+   * Operator instance directory (story.5159, design hub `candidate-pr-lanes`): where a run's non-main
+   * `instance` (`canary`, `pr-<n>`) resolves to a host. Both unset = no directory: `main` still resolves
+   * from COGNI_NODE_ENDPOINTS and any other instance is refused with no request sent.
+   * Base URL of the operator, no path (`https://cognidao.org`).
+   */
+  OPERATOR_DIRECTORY_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+
+  /**
+   * Credential for `OPERATOR_DIRECTORY_URL` (secret — never log). NOT `SCHEDULER_API_TOKEN`. It is NOT
+   * read-only today: the route needs a principal the per-env deploy gate allows (`node.flight`,
+   * `node.manage_envs` or `node.promote_production`). A scoped read credential is a follow-up (story.5159);
+   * no overlay may set this or `OPERATOR_DIRECTORY_URL` until it exists.
+   */
+  OPERATOR_DIRECTORY_TOKEN: z
+    .string()
+    .min(1)
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+
   /** GitHub App ID (optional — required only when GitHub ingestion is enabled) */
   GH_REVIEW_APP_ID: z
     .string()

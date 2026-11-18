@@ -25,6 +25,8 @@ export interface SchedulerActivities {
     nodeId: string;
     grantId: string;
     graphId: string;
+    /** The copy of the node the run belongs to (story.5159); absent or `main` = the main copy. */
+    instance?: string;
   }): Promise<void>;
 
   createGraphRunActivity(input: {
@@ -38,6 +40,7 @@ export interface SchedulerActivities {
     dbScheduleId?: string;
     scheduledFor?: string;
     stateKey?: string;
+    instance?: string;
   }): Promise<void>;
 
   executeGraphActivity(input: {
@@ -48,6 +51,7 @@ export interface SchedulerActivities {
     input: Record<string, unknown>;
     scheduledFor: string;
     runId: string;
+    instance?: string;
   }): Promise<{
     ok: boolean;
     runId: string;
@@ -69,6 +73,7 @@ export interface SchedulerActivities {
     traceId?: string | null;
     errorMessage?: string;
     errorCode?: string;
+    instance?: string;
   }): Promise<void>;
 
   // ── NodeTask activities (generic non-graph HTTP dispatch — task.5029) ──
