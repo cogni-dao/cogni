@@ -32,7 +32,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 
 logger = logging.getLogger("cogni.callbacks")
@@ -322,7 +321,7 @@ def _text(value: Any) -> str:
 
 def _build() -> CustomLogger:
     if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
-        verbose_logger.warning("Langfuse credentials unset; Langfuse tracing disabled")
+        logger.warning("Langfuse credentials unset; Langfuse tracing disabled")
         return CustomLogger()
 
     from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
@@ -366,7 +365,7 @@ def _build() -> CustomLogger:
             try:
                 CogniLangfuseOtel._set_gateway_identity(span, kwargs, response_obj)
             except Exception:
-                verbose_logger.exception("Cogni Langfuse OTel identity attributes failed")
+                logger.exception("Cogni Langfuse OTel identity attributes failed")
 
         def set_attributes(self, span: Any, kwargs: dict, response_obj: Any) -> None:
             CogniLangfuseOtel.set_langfuse_otel_attributes(span, kwargs, response_obj)
