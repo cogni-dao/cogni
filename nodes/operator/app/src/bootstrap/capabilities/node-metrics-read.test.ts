@@ -3,10 +3,10 @@
 
 /**
  * Module: `@bootstrap/capabilities/node-metrics-read` (test)
- * Purpose: Pin the upstream call of the node metrics read proxy (story.5169): it dials the Grafana datasource proxy
+ * Purpose: Pin the upstream call of the node metrics read proxy (story.5169): it dials the governed datasource proxy
  *   with the operator's service-account bearer, relays status and body unchanged, refuses a body over the cap, maps a
  *   deadline to `timeout`, and retries discovery after a failure.
- * Scope: Unit tests over a stubbed `fetch` and env. No IO.
+ * Scope: Unit tests over a stubbed discovery, `fetch` and env. No IO. Discovery itself is pinned in `grafana-mimir.test.ts`.
  * Side-effects: none
  * @public
  */
@@ -20,30 +20,23 @@ const env: {
   GRAFANA_URL: "https://ops.grafana.net",
   GRAFANA_SERVICE_ACCOUNT_TOKEN: "sa-token",
 };
+const discover = vi.fn();
 vi.mock("@/shared/env", () => ({ serverEnv: () => env }));
-// The adapter barrel loads every adapter; the discovery under test is the one real function.
-vi.mock("@/adapters/server", async () => ({
-  discoverGrafanaMimirSource: (
-    await import("@/adapters/server/metrics/grafana-mimir.adapter")
-  ).discoverGrafanaMimirSource,
+vi.mock("@/adapters/server", () => ({
+  discoverGrafanaMimirSource: (input: unknown) => discover(input),
 }));
 
 const SOURCE =
   "https://ops.grafana.net/api/datasources/proxy/uid/grafanacloud-prom";
-const datasources = () =>
-  Response.json([
-    {
-      uid: "grafanacloud-prom",
-      type: "prometheus",
-      url: "https://prometheus-prod-01.grafana.net/api/prom",
-    },
-  ]);
+const source = { url: SOURCE, bearerToken: "sa-token" };
 
 const fetchMock = vi.fn();
 
 beforeEach(() => {
   vi.resetModules();
   fetchMock.mockReset();
+  discover.mockReset();
+  discover.mockResolvedValue(source);
   env.GRAFANA_URL = "https://ops.grafana.net";
   env.GRAFANA_SERVICE_ACCOUNT_TOKEN = "sa-token";
   vi.stubGlobal("fetch", fetchMock);
@@ -61,11 +54,12 @@ describe("forwardNodeMetricsRead", () => {
       ok: false,
       reason: "not_configured",
     });
+    expect(discover).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("calls the governed datasource proxy with the service-account bearer and relays the answer unchanged", async () => {
-    fetchMock.mockResolvedValueOnce(datasources()).mockResolvedValueOnce(
+    fetchMock.mockResolvedValueOnce(
       new Response('{"status":"error","errorType":"bad_data"}', {
         status: 422,
         headers: { "content-type": "application/json; charset=utf-8" },
@@ -79,7 +73,13 @@ describe("forwardNodeMetricsRead", () => {
       body: '{"status":"error","errorType":"bad_data"}',
       contentType: "application/json; charset=utf-8",
     });
-    const [url, init] = fetchMock.mock.calls[1] as [URL, RequestInit];
+    expect(discover).toHaveBeenCalledWith(
+      expect.objectContaining({
+        grafanaUrl: "https://ops.grafana.net",
+        bearerToken: "sa-token",
+      })
+    );
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect(url.origin + url.pathname).toBe(`${SOURCE}/api/v1/query_range`);
     expect(url.searchParams.get("query")).toBe(`up{node="n",env="e"}`);
     expect((init.headers as Record<string, string>).authorization).toBe(
@@ -88,11 +88,10 @@ describe("forwardNodeMetricsRead", () => {
     expect(init.redirect).toBe("error");
   });
 
-  it("refuses a body over the cap, and reuses discovery on the next read", async () => {
+  it("refuses a body over the cap, and discovers once across reads", async () => {
     const { forwardNodeMetricsRead, NODE_METRICS_READ_MAX_BYTES } =
       await load();
     fetchMock
-      .mockResolvedValueOnce(datasources())
       .mockResolvedValueOnce(
         new Response("x".repeat(NODE_METRICS_READ_MAX_BYTES + 1))
       )
@@ -102,28 +101,31 @@ describe("forwardNodeMetricsRead", () => {
       reason: "too_large",
     });
     expect((await forwardNodeMetricsRead("query", params)).ok).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(discover).toHaveBeenCalledTimes(1);
   });
 
   it("is upstream_unavailable on a network or discovery failure, and retries discovery next time", async () => {
-    fetchMock
-      .mockRejectedValueOnce(new TypeError("fetch failed"))
-      .mockResolvedValueOnce(datasources())
-      .mockResolvedValueOnce(new Response("{}"));
+    discover.mockRejectedValueOnce(new Error("grafana down"));
+    fetchMock.mockResolvedValueOnce(new Response("{}"));
     const { forwardNodeMetricsRead } = await load();
     expect(await forwardNodeMetricsRead("query", params)).toEqual({
       ok: false,
       reason: "upstream_unavailable",
     });
     expect((await forwardNodeMetricsRead("query", params)).ok).toBe(true);
+    expect(discover).toHaveBeenCalledTimes(2);
+
+    fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+    expect(await forwardNodeMetricsRead("query", params)).toEqual({
+      ok: false,
+      reason: "upstream_unavailable",
+    });
   });
 
   it("maps a deadline to timeout", async () => {
-    fetchMock
-      .mockResolvedValueOnce(datasources())
-      .mockRejectedValueOnce(
-        Object.assign(new Error("timed out"), { name: "TimeoutError" })
-      );
+    fetchMock.mockRejectedValueOnce(
+      Object.assign(new Error("timed out"), { name: "TimeoutError" })
+    );
     const { forwardNodeMetricsRead } = await load();
     expect(await forwardNodeMetricsRead("query", params)).toEqual({
       ok: false,
