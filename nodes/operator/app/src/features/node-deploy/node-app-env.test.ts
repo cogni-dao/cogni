@@ -123,6 +123,92 @@ describe("derived scrape token (bug.5641)", () => {
   });
 });
 
+describe("node metrics read credentials (story.5169)", () => {
+  const READ_KEYS = [
+    "PROMETHEUS_QUERY_URL",
+    "PROMETHEUS_READ_USERNAME",
+    "PROMETHEUS_READ_PASSWORD",
+  ] as const;
+
+  it("projects exactly the three adapter keys, pointed at the releasing operator, with the lane token", () => {
+    const env = nodeAppEnv({
+      ...base,
+      secrets: profileBucket(),
+      metricsToken: "lane-token",
+      metricsReadDomain: "cognidao.org",
+    });
+    expect(env.PROMETHEUS_QUERY_URL).toBe(
+      "https://cognidao.org/api/metrics/read"
+    );
+    expect(env.PROMETHEUS_READ_USERNAME).toBe(NODE_ID);
+    expect(env.PROMETHEUS_READ_PASSWORD).toBe("lane-token");
+    expect(env.METRICS_TOKEN).toBe("lane-token");
+    // only the keys the node's MimirMetricsAdapter reads were added to the token's slot
+    const without = nodeAppEnv({
+      ...base,
+      secrets: profileBucket(),
+      metricsToken: "lane-token",
+    });
+    expect(
+      Object.keys(env)
+        .filter((k) => !(k in without))
+        .sort()
+    ).toEqual([...READ_KEYS].sort());
+  });
+
+  it("is the releasing operator's host, not the lane's DOMAIN (a candidate-a lane keeps the test issuer)", () => {
+    const env = nodeAppEnv({
+      ...base,
+      operatorDomain: "test.cognidao.org",
+      secrets: profileBucket(),
+      metricsToken: "lane-token",
+      metricsReadDomain: "cognidao.org",
+    });
+    expect(env.DOMAIN).toBe("test.cognidao.org");
+    expect(env.PROMETHEUS_QUERY_URL).toBe(
+      "https://cognidao.org/api/metrics/read"
+    );
+  });
+
+  it("adds nothing without a token or without the releasing operator's host, and beats a bucket value", () => {
+    for (const input of [
+      { metricsReadDomain: "cognidao.org" },
+      { metricsToken: "lane-token" },
+      {},
+    ])
+      for (const key of READ_KEYS)
+        expect(
+          nodeAppEnv({ ...base, secrets: profileBucket(), ...input })[key]
+        ).toBeUndefined();
+    const env = nodeAppEnv({
+      ...base,
+      secretKeys: [...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS, ...READ_KEYS],
+      secrets: {
+        ...profileBucket(),
+        PROMETHEUS_QUERY_URL: "https://evil.example",
+        PROMETHEUS_READ_USERNAME: "bucket-user",
+        PROMETHEUS_READ_PASSWORD: "bucket-password",
+      },
+      metricsToken: "lane-token",
+      metricsReadDomain: "cognidao.org",
+    });
+    expect(env.PROMETHEUS_QUERY_URL).toBe(
+      "https://cognidao.org/api/metrics/read"
+    );
+    expect(env.PROMETHEUS_READ_PASSWORD).toBe("lane-token");
+  });
+
+  it("makes the keys runtime-owned, so a sibling binding cannot name them", () => {
+    const owned = runtimeOwnedEnvKeys("app", [
+      ...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+    ]);
+    for (const key of READ_KEYS) expect(owned.has(key)).toBe(true);
+    expect(runtimeOwnedEnvKeys("worker", []).has("PROMETHEUS_QUERY_URL")).toBe(
+      false
+    );
+  });
+});
+
 describe("operator issuer lane configuration", () => {
   const config = {
     deployEnvironment: "production",

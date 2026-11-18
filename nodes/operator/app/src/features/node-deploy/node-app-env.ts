@@ -14,7 +14,8 @@
  *   - COMPOSITION_PARITY: the key set, the values and the precedence match the composition, in this
  *     order (later wins): HOST/HOSTNAME/PORT, APP_ENV, DEPLOY_ENVIRONMENT, COGNI_REPO_SHA, substrate
  *     topology (only with a substrate host), secrets, COGNI_NODE_ID, database pool maxes, Loki push
- *     (opt-in), the derived METRICS_TOKEN (bug.5641, opt-in), then the identity block (NODE_NAME, COGNI_REPO_PATH, AUTH_TRUST_HOST, NEXTAUTH_URL,
+ *     (opt-in), the derived METRICS_TOKEN (bug.5641, opt-in) with the node's own-series metrics read credentials
+ *     PROMETHEUS_QUERY_URL/READ_USERNAME/READ_PASSWORD (story.5169, opt-in), then the identity block (NODE_NAME, COGNI_REPO_PATH, AUTH_TRUST_HOST, NEXTAUTH_URL,
  *     APP_BASE_URL) which wins over everything above. `node-app-env.test.ts` pins this key by key.
  *   - MIGRATION_DSN (task.5408): DATABASE_MIGRATION_URL is read from the bucket for every node app, unless
  *     its DATABASE_URL is bound to its own state lease; then the binding supplies it (bindings.ts
@@ -70,6 +71,7 @@ import {
   type SubstrateBinding,
   type SubstrateTransport,
 } from "./bindings";
+import { NODE_METRICS_READ_PREFIX } from "./lease-metrics-read";
 import { SUBSTRATE_PORTS, type SubstrateType } from "./substrate-ports";
 
 /** Database pool maxes from the node's catalog `database.<env>.runtimePoolLimits` (public policy). */
@@ -122,6 +124,13 @@ export interface NodeAppEnvInput {
    * made with one). It wins over every bucket value.
    */
   readonly metricsToken?: string | undefined;
+  /**
+   * The public host of the operator that RELEASED this lane and holds the root `metricsToken` derives from
+   * (story.5169). With `metricsToken` it projects the node's metrics READ credentials, so the node queries its own
+   * series through that operator. It is the sequencer's own issuer, NOT `operatorDomain`: a candidate-a lane the
+   * production sequencer releases carries the test operator's `DOMAIN`, an operator with a different root.
+   */
+  readonly metricsReadDomain?: string | undefined;
   /**
    * The release's declared secret KEY names (`NodeWorkloadSpec.secretKeys`); absent = the profile keys
    * only. Only these keys are ever injected.
@@ -228,6 +237,21 @@ const LOKI_FIELDS = {
 const METRICS_FIELDS = {
   METRICS_TOKEN: (token: string) => token,
 };
+interface NodeAppMetricsRead {
+  readonly domain: string;
+  readonly nodeId: string;
+  readonly token: string;
+}
+/**
+ * The node's own-series metrics READ credentials (story.5169): the `MimirMetricsAdapter` env, pointed at the releasing
+ * operator's node-scoped proxy with the same per-lane token (basic auth: node UUID and token). Reserved like the token.
+ */
+const METRICS_READ_FIELDS = {
+  PROMETHEUS_QUERY_URL: (i: NodeAppMetricsRead) =>
+    `https://${i.domain}${NODE_METRICS_READ_PREFIX}`,
+  PROMETHEUS_READ_USERNAME: (i: NodeAppMetricsRead) => i.nodeId,
+  PROMETHEUS_READ_PASSWORD: (i: NodeAppMetricsRead) => i.token,
+};
 const APP_IDENTITY_FIELDS = {
   DOMAIN: (i: NodeAppEnvInput) => i.operatorDomain,
   COGNI_NODE_ID: (i: NodeAppEnvInput) => i.nodeId,
@@ -270,6 +294,7 @@ export function runtimeOwnedEnvKeys(
           POOL_FIELDS,
           LOKI_FIELDS,
           METRICS_FIELDS,
+          METRICS_READ_FIELDS,
           APP_IDENTITY_FIELDS,
           RELEASE_FIELDS,
         ]
@@ -440,6 +465,15 @@ export function nodeAppEnv(input: NodeAppEnvInput): Record<string, string> {
     Object.assign(e, fieldValues(LOKI_FIELDS, input.lokiPush));
   if (input.metricsToken)
     Object.assign(e, fieldValues(METRICS_FIELDS, input.metricsToken));
+  if (input.metricsToken && input.metricsReadDomain)
+    Object.assign(
+      e,
+      fieldValues(METRICS_READ_FIELDS, {
+        domain: input.metricsReadDomain,
+        nodeId: input.nodeId,
+        token: input.metricsToken,
+      })
+    );
   // The operator issuer (sign-in origin binding, #3029) is platform identity: it wins over every key above.
   if (!input.operatorDomain)
     throw new Error("operator issuer domain is required");

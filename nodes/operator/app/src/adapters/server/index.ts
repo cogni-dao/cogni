@@ -166,7 +166,11 @@ export {
   GITHUB_ADAPTER_VERSION,
   GitHubWebhookNormalizer,
 } from "./ingestion/github-webhook";
-export { createGrafanaMimirAdapter } from "./metrics/grafana-mimir.adapter";
+export {
+  createGrafanaMimirAdapter,
+  discoverGrafanaMimirSource,
+  type GrafanaMimirSource,
+} from "./metrics/grafana-mimir.adapter";
 export {
   buildReliabilityReadinessQuery,
   type MimirAdapterConfig,

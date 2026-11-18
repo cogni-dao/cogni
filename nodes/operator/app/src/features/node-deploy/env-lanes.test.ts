@@ -17,6 +17,7 @@ import { EdgeRouter, edgeHostRegexFor } from "./edge";
 import {
   EnvLaneConfigError,
   EnvLaneSequencers,
+  operatorDomainFor,
   parseSubstrateHosts,
   parseSubstrateTransports,
   resolveEnvLanes,
@@ -77,6 +78,24 @@ describe("resolveEnvLanes", () => {
         meshTailnet: "production",
       },
     ]);
+  });
+
+  it("names the operator a process IS by its own env, apart from the issuer of any other lane it releases (story.5169)", () => {
+    const lanes = resolveEnvLanes(MULTI);
+    const candidate = lanes.find((l) => l.environment === "candidate-a");
+    // the production sequencer releases candidate-a lanes whose DOMAIN is the test operator...
+    expect(candidate?.operatorDomain).toBe("test.cognidao.org");
+    // ...but the metrics root, and so the read host, is the production operator's
+    expect(operatorDomainFor("production", "cognidao.org")).toBe(
+      "cognidao.org"
+    );
+    expect(operatorDomainFor("candidate-a", "cognidao.org")).toBe(
+      "test.cognidao.org"
+    );
+    expect(operatorDomainFor("production", "not a domain")).toBe("");
+    expect(() => operatorDomainFor("staging", "cognidao.org")).toThrow(
+      EnvLaneConfigError
+    );
   });
 
   it("gives every listed env its own cogni-node-deploy-<env> namespace and substrate host", () => {
