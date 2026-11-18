@@ -571,11 +571,17 @@ render_shared_db_provision_config() {
     esac
     profile="$(yq -er ".database.\"${DEPLOY_ENVIRONMENT}\".budget_profile" "$REPO_ROOT/infra/catalog/$node.yaml")" || return 1
     [[ "$profile" =~ ^[a-z0-9-]+$ ]] || return 1
-    budget="$(yq -o=json ".\"${profile}\"" "$REPO_ROOT/infra/database-budget-profiles.yaml" | jq -ce --arg profile "$profile" '{
+    # bug.5637 — catalog database.<env>.copies scales the profile caps (profile copies = base).
+    copies="$(yq -r ".database.\"${DEPLOY_ENVIRONMENT}\".copies // 0" "$REPO_ROOT/infra/catalog/$node.yaml")" || return 1
+    [[ "$copies" =~ ^[0-9]+$ ]] || return 1
+    budget="$(yq -o=json ".\"${profile}\"" "$REPO_ROOT/infra/database-budget-profiles.yaml" | jq -ce --arg profile "$profile" --argjson copies "$copies" '
+      (if $copies > 0 then (if (.copies // 0) > 0 and $copies >= .copies then {n: $copies, d: .copies} else error("database copies invalid for profile") end) else {n: 1, d: 1} end) as $r |
+      def scaled(v): ((v * $r.n + $r.d - 1) / $r.d | floor);
+      {
       DB_BUDGET_PROFILE: $profile,
-      DB_APP_CONNECTION_LIMIT: .roles.app.connection_limit,
+      DB_APP_CONNECTION_LIMIT: scaled(.roles.app.connection_limit),
       DB_APP_STATEMENT_TIMEOUT_MS: .roles.app.statement_timeout_ms,
-      DB_SERVICE_CONNECTION_LIMIT: .roles.service.connection_limit,
+      DB_SERVICE_CONNECTION_LIMIT: scaled(.roles.service.connection_limit),
       DB_SERVICE_STATEMENT_TIMEOUT_MS: .roles.service.statement_timeout_ms,
       DB_LOCK_TIMEOUT_MS: .common.lock_timeout_ms,
       DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: .common.idle_in_transaction_session_timeout_ms,
