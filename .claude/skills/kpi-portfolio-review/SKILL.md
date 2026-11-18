@@ -8,6 +8,7 @@ description: Review the whole measurement and autonomy portfolio critically. Use
 This file is only the trigger. The node-template hub hosts the authoritative, refinable method.
 
 Read these node-template-owned entries with `COGNI_NODE_TEMPLATE_API_KEY` (on node-template itself, `COGNI_NODE_API_KEY`), then follow them:
+
 - `GET https://node-template.cognidao.org/api/v1/knowledge/kpi-portfolio-review`
 - `GET https://node-template.cognidao.org/api/v1/knowledge/metrics-expert`
 
