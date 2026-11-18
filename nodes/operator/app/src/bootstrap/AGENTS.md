@@ -54,6 +54,8 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `runGovernanceSchedulesSyncJob()` - Job: advisory lock + governance schedule sync via container
   - `runCatalogNodeRegistryReconcileJob()` - Job: App-read catalog projection into env-local Postgres + OpenFGA
   - `startCatalogRegistryReconcileOnBoot()`, `triggerCatalogRegistryReconcile()` - Immediate/poll registry trigger lifecycle
+  - `runNodeAdminSyncJob()`, `syncNodeAdmins()` - Node-admin sync (task.5494): repo-spec approvers to OpenFGA `node:<id>#admin`, report-only unless `NODE_ADMIN_SYNC_WRITE`; own advisory lock, App-only read
+  - `startNodeAdminSyncOnBoot()`, `triggerNodeAdminSync()` - Own 2-min tick, never part of the reconcile's first-success barrier, test-inert
   - `createStreamRedisClient(url)` - Lazy stream Redis client with a native error listener
   - `getContainer()` - Singleton DI container with logger and config
   - `getWorkItemSessionPort()` - Cached existing PostgreSQL session adapter without other providers

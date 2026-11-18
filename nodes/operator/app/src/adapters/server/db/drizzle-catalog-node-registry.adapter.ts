@@ -11,6 +11,8 @@
  *     edit that must reach the registry the address resolver reads, including back to `{}` (k3s).
  *   - OWNER_WALLET_IS_STABLE_BINDING: never imports a users.id from another environment.
  *   - NODE_ID_IS_DEPLOYMENT_IDENTITY: an existing slug with another ID fails loud.
+ *   - INSERT_ONLY_OWNER: `owner_user_id` is set on insert and never overwritten (task.5494).
+ *   - REPO_SPEC_PATH_IS_PROJECTED: `repo_spec_path` is projected from the catalog row on every reconcile.
  *   - STATUS_NEVER_REGRESSES: status is `published` only on first insert and is omitted on update.
  *   - TRANSACTIONAL_PROJECTION: all catalog rows project atomically in one environment.
  * Side-effects: IO (PostgreSQL writes through the injected service-role database).
@@ -56,6 +58,7 @@ export class DrizzleCatalogNodeRegistryAdapter
             repoOwner: definition.repoOwner,
             repoName: definition.repoName,
             repoVisibility: "public",
+            repoSpecPath: definition.repoSpecPath,
             ownerUserId,
             deployEnvs: [...definition.deployEnvs],
             activityEnv: definition.activityEnv,
@@ -64,12 +67,14 @@ export class DrizzleCatalogNodeRegistryAdapter
           })
           .onConflictDoUpdate({
             target: nodes.slug,
+            // INSERT_ONLY_OWNER (task.5494): `ownerUserId` is deliberately absent. It records who
+            // spawned the node; node admins come from repo-spec approvers, not this column.
             set: {
               repoUrl: definition.repoUrl,
               repoOwner: definition.repoOwner,
               repoName: definition.repoName,
               repoVisibility: "public",
-              ownerUserId,
+              repoSpecPath: definition.repoSpecPath,
               deployEnvs: [...definition.deployEnvs],
               activityEnv: definition.activityEnv,
               deploymentProviders: { ...definition.deploymentProviders },

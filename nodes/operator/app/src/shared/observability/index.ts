@@ -87,6 +87,10 @@ export const EVENT_NAMES = {
   IDENTITY_BROKER_AUTHENTICATED: "feature.identity_broker.authenticated",
   IDENTITY_BROKER_COMPLETE: "feature.identity_broker.complete",
   IDENTITY_BROKER_REJECTED: "feature.identity_broker.rejected",
+  // Node-admin sync (task.5494): one event per node per 2-min tick. `outcome` is
+  // ok | unavailable | empty | refused, `mode` is report | write, with adds/deletes counts.
+  // User ids only, never wallet addresses.
+  IDENTITY_NODE_ADMIN_SYNC: "identity.node_admin_sync",
   DNS_REVERSE_RECONCILE_SKIPPED: "dns.reverse_reconcile.skipped",
   DNS_FORWARD_RECONCILE_SKIPPED: "dns.forward_reconcile.skipped",
   // Goal metrics (@cogni-dao/metrics, story.0021): one refresh tick and one goals read.

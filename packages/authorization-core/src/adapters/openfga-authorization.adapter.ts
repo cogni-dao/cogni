@@ -65,8 +65,10 @@ export interface OpenFgaReadRequest {
   readonly object?: string;
 }
 
-/** Structural subset of the SDK's `ReadResponse` (`tuples[].key`). */
+/** Structural subset of the SDK's `ReadResponse` (`tuples[].key`, `continuation_token`). */
 export interface OpenFgaReadResponse {
+  /** Empty or absent when the page is the last one. */
+  readonly continuation_token?: string;
   readonly tuples?: ReadonlyArray<{
     readonly key?: {
       readonly user?: string;
@@ -132,6 +134,10 @@ interface PlannedSubcheck {
 }
 
 const DEFAULT_TIMEOUT_MS = 1_500;
+// listRelationsByObject paging: a node holds a handful of admins, so one page is the norm. The cap
+// is a runaway guard, not a limit callers should hit.
+const LIST_BY_OBJECT_PAGE_SIZE = 100;
+const LIST_BY_OBJECT_MAX_PAGES = 50;
 // Writes get a LONGER per-attempt deadline than checks. 1500ms is tuned for the
 // hot-path check, which runs on nearly every request against a warm connection. A
 // write is the opposite: rare, so it routinely pays cold-connection cost (new pool
@@ -573,6 +579,70 @@ export class OpenFgaAuthorizationAdapter implements AuthorizationPort {
         }));
 
       return { decision: "success", code: "authz_list_success", tuples };
+    } catch (error) {
+      return {
+        decision: "failure",
+        code: "authz_list_unavailable",
+        reason: `OpenFGA read unavailable: ${errorMessage(error)}`,
+      };
+    }
+  }
+
+  async listRelationsByObject(
+    object: string,
+    relation?: string
+  ): Promise<AuthzListDecision> {
+    const client = this.client;
+    if (!isOpenFgaReadClient(client)) {
+      return {
+        decision: "failure",
+        code: "authz_list_unavailable",
+        reason: "OpenFGA read client unavailable",
+      };
+    }
+
+    try {
+      // Read every tuple on one object (optionally one relation), following the continuation
+      // token. A partial list is NEVER returned as success: a caller that diffs against it would
+      // delete admins it simply did not see. Any page failure, or a runaway token chain, fails
+      // closed as `authz_list_unavailable`.
+      const tuples: AuthzRelationTuple[] = [];
+      let continuationToken: string | undefined;
+      for (let page = 0; page < LIST_BY_OBJECT_MAX_PAGES; page += 1) {
+        const response = await withTimeout(
+          client.read(
+            relation === undefined ? { object } : { object, relation },
+            { pageSize: LIST_BY_OBJECT_PAGE_SIZE, continuationToken }
+          ),
+          this.timeoutMs,
+          "read"
+        );
+        for (const entry of response.tuples ?? []) {
+          const key = entry.key;
+          if (
+            key !== undefined &&
+            typeof key.user === "string" &&
+            typeof key.relation === "string" &&
+            typeof key.object === "string"
+          ) {
+            tuples.push({
+              user: key.user,
+              relation: key.relation,
+              object: key.object,
+            });
+          }
+        }
+        const next = response.continuation_token;
+        if (typeof next !== "string" || next === "") {
+          return { decision: "success", code: "authz_list_success", tuples };
+        }
+        continuationToken = next;
+      }
+      return {
+        decision: "failure",
+        code: "authz_list_unavailable",
+        reason: `OpenFGA read exceeded ${LIST_BY_OBJECT_MAX_PAGES} pages`,
+      };
     } catch (error) {
       return {
         decision: "failure",

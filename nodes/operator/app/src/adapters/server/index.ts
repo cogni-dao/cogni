@@ -152,6 +152,12 @@ export {
   type OperatorIdentityAttestationRepositoryConfig,
 } from "./identity/identity-attestation.adapter";
 export {
+  drizzleUsersForWallets,
+  extractRepoSpecApprovers,
+  RepoSpecNodeApproverReader,
+  type RepoSpecNodeApproverReaderDeps,
+} from "./identity/repo-spec-node-approver-reader.adapter";
+export {
   ALCHEMY_ADAPTER_VERSION,
   AlchemyWebhookNormalizer,
 } from "./ingestion/alchemy-webhook";

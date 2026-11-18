@@ -364,6 +364,8 @@ describe("POST /api/v1/nodes/[id]/publish", () => {
       // Born protected: standard PR/check policy + deployment repo merge queue.
       mergeQueueSourceOwner: "cogni-test-org",
       mergeQueueSourceRepo: "cogni-monorepo",
+      // task.5494: the spawner's wallet is the node's first approver.
+      approvers: ["0x070075F1389Ae1182aBac722B36CA12285d0c949"],
     });
     expect(mockOpenNodeSubmodulePr).toHaveBeenCalledWith({
       owner: "cogni-test-org",

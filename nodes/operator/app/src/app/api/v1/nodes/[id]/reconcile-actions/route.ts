@@ -12,9 +12,8 @@
  *   checks never report → operator merge fail-closes `not_green`). This verb heals that
  *   without reformation or a hand-run admin script.
  * Scope: Session auth + a single `node.administer` authz-gate on the resolved node — the
- *   node-administrator (`admin`) role, which is now grantable through the standard
- *   request→approve flow (`NODE_ACCESS_ROLES` + CHECK), so an agent requests it and the
- *   owner approves the single tuple. Deliberately ABOVE env_manager: flipping a repo's
+ *   node-administrator (`admin`) relation. Nobody requests or approves it (task.5494): the
+ *   node-admin sync writes it for each node's repo-spec approvers. Deliberately ABOVE env_manager: flipping a repo's
  *   Actions permissions is node-admin authority. Resolves the node's own repo from catalog
  *   `source_repo` via `resolveNodeRepo`, then delegates to
  *   `GitHubRepoWriter.reconcileNodeActionsPermissions`.

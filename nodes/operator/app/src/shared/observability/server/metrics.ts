@@ -211,6 +211,12 @@ export function setBuildInfo(version: string, commitSha: string) {
   appBuildInfo.labels({ version, commit_sha: commitSha }).set(1);
 }
 
+/** Unix seconds of the last node-admin sync tick that finished (task.5494). Unlabelled: tick-level liveness. */
+export const nodeAdminSyncLastSuccessSeconds = getOrCreateGauge(
+  "node_admin_sync_last_success_timestamp_seconds",
+  "Unix time of the last node-admin sync tick that ran to completion"
+);
+
 // =============================================================================
 // BYO-AI Auth Metrics (alertable — critical auth path)
 // =============================================================================

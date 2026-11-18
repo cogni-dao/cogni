@@ -180,6 +180,16 @@ export const serverSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
 
+  // Node-admin sync (task.5494, ONE_ADMIN_ANSWER): false = REPORT-ONLY. The sync reads every
+  // node's repo-spec approvers and logs the OpenFGA `node:<id>#admin` diff, writing nothing, and
+  // the legacy boot-time owner writer keeps running. true = the sync writes the diff and the
+  // legacy writer is skipped, so exactly one admin writer runs in each mode.
+  // Default: false. The change that flips it in production also deletes the legacy writer.
+  NODE_ADMIN_SYNC_WRITE: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+
   // GitHub webhook secret - HMAC-SHA256 verification for incoming GitHub webhook payloads.
   // Required when GitHub webhook ingestion is enabled. Per WEBHOOK_SECRET_NOT_IN_CODE.
   GH_WEBHOOK_SECRET: optionalString,

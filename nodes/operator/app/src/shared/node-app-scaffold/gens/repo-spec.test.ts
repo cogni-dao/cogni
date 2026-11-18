@@ -33,11 +33,15 @@ const TEMPLATE_RULE_FILES = [
   "repo-goal-alignment.yaml",
 ];
 
+const SPAWNER_WALLET = "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01";
+const TEMPLATE_DEFAULT_APPROVER = "0x070075F1389Ae1182aBac722B36CA12285d0c949";
+
 const rendered = renderRepoSpec({
   slug: "my-node",
   repoOwner: "cogni-dao-test",
   nodeId: "11111111-2222-4333-8444-555555555555",
   chainId: 8453,
+  approvers: [SPAWNER_WALLET],
   daoContract: "0x1111111111111111111111111111111111111111",
   pluginContract: "0x2222222222222222222222222222222222222222",
   signalContract: "0x3333333333333333333333333333333333333333",
@@ -106,6 +110,7 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
         repoOwner: "cogni-dao-test",
         nodeId: "11111111-2222-4333-8444-555555555555",
         chainId: 8453,
+        approvers: [SPAWNER_WALLET],
         mission: "Mirror Polymarket copy-trades for the DAO.",
       })
     ) as ParsedSpec;
@@ -124,9 +129,8 @@ describe("renderRepoSpec — BORN_REVIEWABLE", () => {
         },
       },
     });
-    expect(spec.activity_ledger?.approvers).toContain(
-      "0x070075F1389Ae1182aBac722B36CA12285d0c949"
-    );
+    // Approvers are the spawner's wallet, not the template default (task.5494).
+    expect(spec.activity_ledger?.approvers).toEqual([SPAWNER_WALLET]);
   });
 
   it("emits the default review gates so minted nodes are born-reviewable", () => {
@@ -187,5 +191,49 @@ describe("renderRepoSpec — NO_LEGACY_DEPLOYMENT_BLOCK (task.5411)", () => {
     expect(() =>
       parseRepoSpec(`${rendered}\nsecret_refs:\n  - key: EXTRA_KEY\n`)
     ).toThrow(RETIRED_SECRET_REFS_MESSAGE);
+  });
+});
+
+describe("renderRepoSpec — SPAWNER_IS_FIRST_APPROVER (task.5494)", () => {
+  const spec = parseYaml(rendered) as ParsedSpec;
+
+  it("writes the given approvers and not the template default", () => {
+    expect(spec.activity_ledger?.approvers).toEqual([SPAWNER_WALLET]);
+    expect(rendered).not.toContain(TEMPLATE_DEFAULT_APPROVER);
+  });
+
+  it("writes every approver in order", () => {
+    const second = "0x2222222222222222222222222222222222222222";
+    const two = parseYaml(
+      renderRepoSpec({
+        slug: "my-node",
+        repoOwner: "cogni-dao-test",
+        nodeId: "11111111-2222-4333-8444-555555555555",
+        chainId: 8453,
+        approvers: [SPAWNER_WALLET, second],
+      })
+    ) as ParsedSpec;
+    expect(two.activity_ledger?.approvers).toEqual([SPAWNER_WALLET, second]);
+  });
+
+  it("round-trips through the real repo-spec parser", () => {
+    expect(parseRepoSpec(rendered).activity_ledger?.approvers).toEqual([
+      SPAWNER_WALLET,
+    ]);
+  });
+
+  it("refuses to mint a node nobody can administer, or a non-address approver", () => {
+    const base = {
+      slug: "my-node",
+      repoOwner: "cogni-dao-test",
+      nodeId: "11111111-2222-4333-8444-555555555555",
+      chainId: 8453,
+    };
+    expect(() => renderRepoSpec({ ...base, approvers: [] })).toThrow(
+      /at least one approver/
+    );
+    expect(() =>
+      renderRepoSpec({ ...base, approvers: ['0x1"\nevil: true'] })
+    ).toThrow(/not an EVM address/);
   });
 });

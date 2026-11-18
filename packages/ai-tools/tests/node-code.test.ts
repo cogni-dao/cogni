@@ -65,6 +65,7 @@ describe("immutable node code authority", () => {
           writeRelation: vi.fn(),
           deleteRelation: vi.fn(),
           listRelations: vi.fn(),
+          listRelationsByObject: vi.fn(),
         }
       : undefined;
     return {

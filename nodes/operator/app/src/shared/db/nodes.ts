@@ -67,6 +67,14 @@ export const nodes = pgTable(
     repoOwner: text("repo_owner").notNull(),
     repoName: text("repo_name").notNull(),
     repoVisibility: text("repo_visibility").notNull().default("public"),
+    // REPO_SPEC_PATH_IS_PROJECTED (task.5494) — where the node's `.cogni/repo-spec.yaml` lives,
+    // inside the repo named by `repo_owner`/`repo_name` (for source_repo nodes that IS the node's
+    // own repo; for in-repo nodes like the operator it is the parent). The catalog reconcile writes
+    // it; the node-admin sync reads it. Null = not yet projected (wizard-born rows before listing):
+    // the sync skips such a row as `unavailable`.
+    repoSpecPath: text("repo_spec_path"),
+    // INSERT_ONLY_OWNER (task.5494) — records who spawned the node. The catalog reconcile sets it
+    // on insert and never overwrites it; node admins come from repo-spec approvers.
     ownerUserId: text("owner_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),

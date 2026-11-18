@@ -44,6 +44,27 @@ export interface RenderRepoSpecInput {
    * yet, so a starter seed is emitted by default for the launch agent to refine.
    */
   readonly mission?: string | undefined;
+  /**
+   * `activity_ledger.approvers`: the wallets that administer this node (task.5494). The node-admin
+   * sync turns them into OpenFGA `node:<id>#admin`. The mint passes the spawner's wallet. At least
+   * one valid EVM address is required: an empty list would mint a node nobody can administer.
+   */
+  readonly approvers: readonly string[];
+}
+
+const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+
+function renderApprovers(approvers: readonly string[]): string {
+  if (approvers.length === 0) {
+    throw new Error("renderRepoSpec requires at least one approver wallet");
+  }
+  for (const wallet of approvers) {
+    // Also keeps the YAML scalar safe: only `0x` + 40 hex chars reach the template.
+    if (!EVM_ADDRESS.test(wallet)) {
+      throw new Error("renderRepoSpec approver is not an EVM address");
+    }
+  }
+  return approvers.map((wallet) => `    - "${wallet}"`).join("\n");
 }
 
 /** uuidv5 of the scope key under the node_id namespace — matches `repo-spec-builder`'s derivation. */
@@ -132,12 +153,12 @@ state:
 
 # Activity ledger ingestion + approver allowlist.
 # \`approvers\` gates the \`(admin)/\` route group and write routes under
-# \`/api/v1/attribution/*\`. Replace with the fork's DAO-owner wallet(s) when
-# spinning up a new node from this template.
+# \`/api/v1/attribution/*\`, and they are the node's admins in the operator
+# (the node-admin sync). Minted with the spawner's wallet.
 activity_ledger:
   epoch_length_days: 7
   approvers:
-    - "0x070075F1389Ae1182aBac722B36CA12285d0c949" # derekg1729.eth (template default)
+${renderApprovers(input.approvers)}
   activity_sources:
     github:
       attribution_pipeline: cogni-v0.0

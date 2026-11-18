@@ -231,6 +231,12 @@ export interface CatalogNodeDefinition {
   readonly repoUrl: string;
   readonly repoOwner: string;
   readonly repoName: string;
+  /**
+   * Path of the node's `.cogni/repo-spec.yaml` inside `repoOwner/repoName` (task.5494): a
+   * `source_repo` node keeps it at the repo root, an in-repo node (the operator) under its
+   * `path_prefix` in the parent. The node-admin sync reads it; see `deriveCatalogRepoSpecPath`.
+   */
+  readonly repoSpecPath: string;
   readonly deployEnvs: readonly ("candidate-a" | "preview" | "production")[];
   readonly activityEnv: "candidate-a" | "preview" | "production";
   readonly ownerWallet: string;
