@@ -26,6 +26,7 @@ type GraphqlHandler = (
 let onRequest: RequestHandler;
 let onGraphql: GraphqlHandler;
 const requestRoutes: string[] = [];
+const requestParams: Record<string, unknown>[] = [];
 const graphqlQueries: string[] = [];
 
 vi.mock("@octokit/auth-app", () => ({
@@ -36,6 +37,7 @@ vi.mock("@octokit/core", () => ({
   Octokit: class MockOctokit {
     async request(route: string, params: Record<string, unknown>) {
       requestRoutes.push(route);
+      requestParams.push(params);
       return { data: await onRequest(route, params) };
     }
     async graphql(query: string, vars: Record<string, unknown>) {
@@ -63,6 +65,7 @@ const ACTIVE_BRANCH_RULES_ROUTE =
 
 beforeEach(() => {
   requestRoutes.length = 0;
+  requestParams.length = 0;
   graphqlQueries.length = 0;
   // Installation lookup goes through global fetch.
   vi.stubGlobal(
@@ -100,12 +103,17 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       repo: "r",
       prNumber: 7,
       method: "squash",
+      expectedHeadSha: "verified-head-sha",
     });
 
     expect(result.merged).toBe(true);
     expect(result.enqueued).toBe(false);
     expect(result.sha).toBe("deadbeef");
     expect(requestRoutes).toContain(MERGE_ROUTE);
+    expect(requestParams.at(-1)).toMatchObject({
+      merge_method: "squash",
+      sha: "verified-head-sha",
+    });
   });
 
   it("enqueues via auto-merge (no sha) when the base branch requires a queue", async () => {
@@ -132,6 +140,7 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       repo: "r",
       prNumber: 7,
       method: "squash",
+      expectedHeadSha: "verified-head-sha",
     });
 
     expect(result.enqueued).toBe(true);
@@ -158,6 +167,7 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       repo: "r",
       prNumber: 7,
       method: "squash",
+      expectedHeadSha: "verified-head-sha",
       bypassQueue: true,
     });
 
@@ -167,6 +177,7 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       sha: "fast-path",
     });
     expect(requestRoutes).toContain(MERGE_ROUTE);
+    expect(requestParams.at(-1)).toMatchObject({ sha: "verified-head-sha" });
     expect(graphqlQueries).toEqual([]);
   });
 
@@ -187,11 +198,42 @@ describe("GitHubVcsAdapter.mergePr — queue-tolerant", () => {
       repo: "r",
       prNumber: 7,
       method: "squash",
+      expectedHeadSha: "verified-head-sha",
     });
 
     expect(result.merged).toBe(false);
     expect(result.enqueued).toBe(false);
     expect(result.status).toBe(405);
+  });
+
+  it("fails closed when GitHub rejects a changed head SHA", async () => {
+    onRequest = (route, params) => {
+      if (route === PR_GET_ROUTE) {
+        return { base: { ref: "main" }, node_id: "PR_node_1" };
+      }
+      if (route === MERGE_ROUTE) {
+        expect(params).toMatchObject({ sha: "verified-head-sha" });
+        throw Object.assign(new Error("Head branch was modified"), {
+          status: 409,
+        });
+      }
+      throw new Error(`Unhandled request route: ${route}`);
+    };
+
+    const result = await adapter().mergePr({
+      owner: "o",
+      repo: "r",
+      prNumber: 7,
+      method: "squash",
+      expectedHeadSha: "verified-head-sha",
+      bypassQueue: true,
+    });
+
+    expect(result).toMatchObject({
+      merged: false,
+      enqueued: false,
+      status: 409,
+    });
   });
 });
 
