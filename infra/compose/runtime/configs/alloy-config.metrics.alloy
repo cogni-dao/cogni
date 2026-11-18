@@ -322,6 +322,67 @@ prometheus.relabel "app_metrics" {
 }
 
 // =============================================================================
+// Prometheus Metrics: Node App Lease Scraping (bug.5641)
+// =============================================================================
+// Akash node apps have no Alloy, no daemonset and no write credential. The operator lists every serving lane as
+// Prometheus HTTP SD (/api/metrics/leases) and relays each lane's /api/metrics with that lane's derived token
+// (/api/metrics/leases/<node>/<env>/<workload>). Each lane is its OWN scrape target here, so every lane gets
+// native `up`, timeout, sample and body limits. A new node needs no config: deployed => discovered => scraped.
+//
+//   - The SD target is the lane's public host; it becomes `instance`, then `__address__` points at the operator.
+//   - honor_labels = false: node / env / workload / service / app come from the operator's release store as
+//     target labels. A tenant copy becomes exported_<name>; a tenant cannot claim another node.
+//   - up{job="node-lanes"} = 0 for a dead, unauthorised or not-yet-released lane; the node-lane-metrics-down
+//     alert reads it. Design: https://cognidao.org/knowledge/lease-metrics-forwarding-design
+
+discovery.http "node_lanes" {
+  url              = "http://host.docker.internal:30000/api/metrics/leases"
+  refresh_interval = "60s"
+  bearer_token     = sys.env("METRICS_TOKEN")
+}
+
+discovery.relabel "node_lanes" {
+  targets = discovery.http.node_lanes.targets
+
+  rule {
+    source_labels = ["__address__"]
+    target_label  = "instance"
+  }
+
+  rule {
+    target_label = "__address__"
+    replacement  = "host.docker.internal:30000"
+  }
+}
+
+prometheus.scrape "node_lanes" {
+  targets                  = discovery.relabel.node_lanes.output
+  job_name                 = "node-lanes"
+  forward_to               = [prometheus.relabel.node_lanes.receiver]
+  scrape_interval          = "30s"
+  scrape_timeout           = "15s"
+  bearer_token             = sys.env("METRICS_TOKEN")
+  honor_labels             = false
+  sample_limit             = 20000
+  body_size_limit          = "2MB"
+  label_limit              = 32
+  label_name_length_limit  = 128
+  label_value_length_limit = 1024
+}
+
+// A lane is tenant code. Drop tenant series named like platform series: host, probe and database health
+// rules read those names by `env`, and a lane's target labels carry a real env.
+prometheus.relabel "node_lanes" {
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "(ALERTS.*|node_.*|container_.*|kube_.*|kubelet_.*|probe_.*|pg_.*|postgres_.*|substrate_.*|cogni_lease_.*)"
+    action        = "drop"
+  }
+}
+
+// =============================================================================
 // Prometheus Metrics: Scheduler-Worker Scraping
 // =============================================================================
 // Scrapes /metrics from the scheduler-worker health server (no auth).

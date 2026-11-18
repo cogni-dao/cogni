@@ -101,6 +101,28 @@ describe("operator issuer", () => {
   });
 });
 
+describe("derived scrape token (bug.5641)", () => {
+  it("delivers METRICS_TOKEN only when the operator derived one, and it wins over the bucket", () => {
+    const none = nodeAppEnv({ ...base, secrets: profileBucket() });
+    expect(none.METRICS_TOKEN).toBeUndefined();
+    const env = nodeAppEnv({
+      ...base,
+      secretKeys: [...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS, "METRICS_TOKEN"],
+      secrets: { ...profileBucket(), METRICS_TOKEN: "from-the-bucket" },
+      metricsToken: "derived-by-the-operator",
+    });
+    expect(env.METRICS_TOKEN).toBe("derived-by-the-operator");
+  });
+
+  it("makes METRICS_TOKEN a runtime-owned key a node cannot declare", () => {
+    expect(
+      runtimeOwnedEnvKeys("app", [
+        ...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS,
+      ]).has("METRICS_TOKEN")
+    ).toBe(true);
+  });
+});
+
 describe("operator issuer lane configuration", () => {
   const config = {
     deployEnvironment: "production",

@@ -255,6 +255,7 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
     readonly timeoutMs: number;
     readonly maxBytes: number;
     readonly signal: AbortSignal;
+    readonly headers?: Readonly<Record<string, string>> | undefined;
   }): Promise<DeliveryProbeResult> {
     input.signal.throwIfAborted();
     if (!HOST_RE.test(input.host) || !input.path.startsWith("/"))
@@ -266,7 +267,11 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
         redirect: "manual",
         cache: "no-store",
         // With the caller's `cb=` query, keeps an edge cache from answering for the lane.
-        headers: { accept: "application/json", "cache-control": "no-cache" },
+        headers: {
+          accept: "application/json",
+          "cache-control": "no-cache",
+          ...input.headers,
+        },
         signal: AbortSignal.any([input.signal, timeout]),
       });
       return {

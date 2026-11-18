@@ -105,6 +105,9 @@ export const EVENT_NAMES = {
   // Edge catch-all counter (story.5148, `edge.caught@1`): ONE terminal event per host and 300 s window, a number or
   // unknown with a stable `reason`. A Grafana alert reads it from Loki. Fields: env, host, outcome, caught, reason.
   EDGE_CAUGHT_WINDOW: "edge_caught_window",
+  // Lease metrics scrape (bug.5641): ONE terminal event per `/api/metrics/leases` pass. Fields: lanes, scraped, failed,
+  // truncated, reasons (bounded enum counts), durationMs. Never a token, a host or a body.
+  LEASE_METRICS_SCRAPE: "lease_metrics_scrape",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

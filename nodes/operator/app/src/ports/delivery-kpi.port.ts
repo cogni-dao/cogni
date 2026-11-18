@@ -130,5 +130,7 @@ export interface DeliveryKpiSourcePort {
     readonly timeoutMs: number;
     readonly maxBytes: number;
     readonly signal: AbortSignal;
+    /** Extra request headers (the lease metrics scrape sends its bearer). Never logged. */
+    readonly headers?: Readonly<Record<string, string>> | undefined;
   }): Promise<DeliveryProbeResult>;
 }
