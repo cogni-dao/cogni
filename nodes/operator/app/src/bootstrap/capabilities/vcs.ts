@@ -76,7 +76,7 @@ export function createVcsCapability(env: ServerEnv): VcsCapability {
   return new GitHubVcsAdapter({ appId, privateKey });
 }
 
-/** Mints a one-repo push token through the operator GitHub App (POST /api/v1/vcs/push-token). */
+/** Mints a one-repo push token through the node dev App (POST /api/v1/vcs/push-token). */
 export interface RepoPushTokenMinter {
   mintRepoPushToken(params: {
     owner: string;
@@ -84,16 +84,28 @@ export interface RepoPushTokenMinter {
   }): Promise<{ token: string; expiresAt: string }>;
 }
 
+let pushTokenMinter: { key: string; minter: RepoPushTokenMinter } | null = null;
+
 /**
- * Create the push-token minter from the same App credentials as VcsCapability.
- * Returns null when they are not configured; the route answers 503 `vcs_not_configured`.
+ * The push-token minter, built from the node dev App's credentials — never the operator App, whose identity
+ * carries admin, workflow and merge-queue bypass that a minted token would inherit. One instance per
+ * credential, so the installation-id and token caches survive across requests. Null when unset (route → 503).
  */
 export function createRepoPushTokenMinter(
   env: ServerEnv
 ): RepoPushTokenMinter | null {
-  const appId = env.GH_REVIEW_APP_ID;
-  const privateKeyBase64 = env.GH_REVIEW_APP_PRIVATE_KEY_BASE64;
+  const appId = env.GH_NODE_DEV_APP_ID;
+  const privateKeyBase64 = env.GH_NODE_DEV_APP_PRIVATE_KEY_BASE64;
   if (!appId || !privateKeyBase64) return null;
-  const privateKey = Buffer.from(privateKeyBase64, "base64").toString("utf-8");
-  return new GitHubVcsAdapter({ appId, privateKey });
+  const key = `${appId}:${privateKeyBase64.length}`;
+  if (pushTokenMinter?.key !== key) {
+    const privateKey = Buffer.from(privateKeyBase64, "base64").toString(
+      "utf-8"
+    );
+    pushTokenMinter = {
+      key,
+      minter: new GitHubVcsAdapter({ appId, privateKey }),
+    };
+  }
+  return pushTokenMinter.minter;
 }

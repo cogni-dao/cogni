@@ -5,8 +5,8 @@
  * Module: `@app/api/v1/vcs/push-token`
  * Purpose: Node-scoped, operator-minted push token. An agent with no GitHub account (a node's AI sandbox)
  *   gets a short-lived installation token for ONE node repo, limited to contents + pull_requests write, so it
- *   can push a branch and open a PR. The operator GitHub App stays the sole GitHub-privilege bridge; no
- *   per-node App, machine user or long-lived token exists.
+ *   can push a branch and open a PR. The token comes from the unprivileged node dev App, never the operator
+ *   App; only the operator holds either key. No per-node App, machine user or long-lived token exists.
  * Scope: Auth → RBAC (node-scoped) → resolve repo → refuse the monorepo → mint. Adds no deploy-brain logic.
  * Invariants:
  *   - AUTH_REQUIRED: Bearer token (machine agents) or SIWE session.
@@ -17,7 +17,9 @@
  *     carries secrets; it is refused (403 `in_repo_node_unsupported`).
  *   - FIXED_PERMISSIONS: exactly PUSH_TOKEN_PERMISSIONS on exactly one repo. Without `workflows`, GitHub
  *     refuses any push that changes `.github/workflows`. Merge stays at POST /vcs/merge.
- *   - TOKEN_NEVER_LOGGED: logs carry slug, repo and expiry only. The response is `no-store`.
+ *   - DEV_APP_NOT_OPERATOR_APP: a minted token acts as the node dev App, which has no ruleset bypass, so it
+ *     never inherits the operator App's admin, workflow or merge-queue bypass.
+ *   - TOKEN_NEVER_LOGGED: logs carry slug, principal, repo and expiry only. The response is `no-store`.
  *   - CONTRACTS_ARE_TRUTH: input/output parsed through `pushTokenOperation`.
  * Side-effects: IO (catalog read + GitHub installation-token mint via the App).
  * Links: packages/node-contracts/src/vcs.push-token.v1.contract.ts, nodes/operator/app/src/app/_lib/node-rbac.ts,
@@ -35,7 +37,6 @@ import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { createRepoPushTokenMinter } from "@/bootstrap/capabilities/vcs";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { classifyGithubOpError } from "@/features/vcs/github-op-error";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
@@ -71,7 +72,9 @@ export const POST = wrapRouteHandlerWithLogging(
     };
 
     // 1. Validate input. owner/repo are NOT accepted from the agent.
-    const parsed = pushTokenOperation.input.safeParse(await request.json());
+    const parsed = pushTokenOperation.input.safeParse(
+      await request.json().catch(() => null)
+    );
     if (!parsed.success) {
       return fail(400, "validation_error", "Invalid request");
     }
@@ -135,7 +138,10 @@ export const POST = wrapRouteHandlerWithLogging(
         { slug }
       );
     }
-    if (owner === parentOwner && repo === parentRepo) {
+    if (
+      owner.toLowerCase() === parentOwner.toLowerCase() &&
+      repo.toLowerCase() === parentRepo.toLowerCase()
+    ) {
       return fail(
         403,
         "in_repo_node_unsupported",
@@ -151,8 +157,21 @@ export const POST = wrapRouteHandlerWithLogging(
     try {
       minted = await minter.mintRepoPushToken({ owner, repo });
     } catch (error) {
-      const g = classifyGithubOpError(error);
-      return fail(g.status, g.errorCode, g.error, { slug });
+      const status = (error as { status?: number })?.status;
+      const notInstalled =
+        error instanceof Error &&
+        error.message.startsWith("GitHub App not installed");
+      if (notInstalled || status === 404) {
+        return fail(
+          502,
+          "app_not_installed",
+          "node dev App not installed on the node repo",
+          {
+            slug,
+          }
+        );
+      }
+      return fail(502, "mint_failed", "push token mint failed", { slug });
     }
 
     logEvent(
@@ -164,6 +183,7 @@ export const POST = wrapRouteHandlerWithLogging(
         outcome: "success",
         status: 200,
         slug,
+        principalId: sessionUser.id,
         repo: `${owner}/${repo}`,
         expiresAt: minted.expiresAt,
         durationMs: durationMs(),
