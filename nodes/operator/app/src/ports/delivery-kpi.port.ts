@@ -17,7 +17,11 @@
  * @public
  */
 
-/** Optional filter: one node, one env, or both. Absent fields mean every node / env. */
+/**
+ * Optional filter: one node, one env, or both. Absent fields mean every node / env.
+ * `testEnvs` (story.5159): ABSENT = test-env workloads (`te<6 letters>`) are EXCLUDED, so every existing
+ * reading keeps its meaning; `"only"` selects only them; `"include"` selects both.
+ */
 export interface DeliveryScope {
   readonly nodeId?: string | undefined;
   readonly env?: string | undefined;
@@ -27,6 +31,7 @@ export interface DeliveryScope {
    * must not depend on a lookback window (task.5498).
    */
   readonly sourceShas?: readonly string[] | undefined;
+  readonly testEnvs?: "only" | "include" | undefined;
 }
 
 /** One release, aggregated over its attempts. All instants come from durable rows. */

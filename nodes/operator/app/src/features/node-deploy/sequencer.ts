@@ -175,6 +175,7 @@ import {
 } from "./qualification";
 import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
 import { TERMINAL_ATTEMPT_PHASES } from "./stop-plan";
+import { expiredTestEnvs } from "./test-env";
 
 export interface SequencerConfig {
   /** The Kubernetes namespace the sequencer runs in; part of every cogniKey. */
@@ -450,12 +451,43 @@ export class NodeDeploySequencer {
   /** One pass over every desired workload; runs workloads concurrently, never one twice. */
   async tick(): Promise<void> {
     const desired = await this.d.store.listDesired(this.d.config.environment);
+    await this.expireTestEnvs(desired);
     await Promise.all(
       desired.map((row) =>
         this.step(row).catch((error: unknown) =>
           this.loopError(row, "step", error)
         )
       )
+    );
+  }
+
+  /**
+   * TTL_STOPS_ONLY_TEST_ENVS (story.5159): a test env closes `TEST_ENV_TTL_MS` after it was requested. The stop
+   * goes through the ONE writer of `stopped` (`requestStop`, CD4); the `step` below then closes the lease
+   * (`stoppedStep`). `expiredTestEnvs` selects only `te<6 letters>` rows, so no other row is touched.
+   */
+  private async expireTestEnvs(rows: readonly DesiredRow[]): Promise<void> {
+    await Promise.all(
+      expiredTestEnvs(rows, this.d.clock.now()).map(async (row) => {
+        try {
+          const stopped = await this.d.store.requestStop(row, {
+            by: "system:test-env-ttl",
+            releaseId: row.releaseId,
+          });
+          if (stopped.ok)
+            this.d.log.info(
+              {
+                nodeId: row.nodeId,
+                env: row.env,
+                workload: row.workload,
+                reason: "ttl",
+              },
+              "test_env_ttl_stop"
+            );
+        } catch (error) {
+          this.loopError(row, "step", error);
+        }
+      })
     );
   }
 

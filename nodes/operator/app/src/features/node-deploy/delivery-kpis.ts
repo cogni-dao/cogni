@@ -84,6 +84,9 @@ const scopeShape = {
     .string()
     .regex(/^[a-z0-9-]{1,40}$/)
     .optional(),
+  // story.5159: NO default, so stored definition params and binding identity stay byte-stable. Absent =
+  // test-env workloads (`te<6 letters>`) are excluded; "only" reads just them; "include" reads both.
+  testEnvs: z.enum(["only", "include"]).optional(),
 };
 const daysSchema = z.number().int().min(1).max(28).default(7);
 
@@ -330,13 +333,16 @@ const unknownSample = (
 const scopeOf = (p: {
   nodeId?: string | undefined;
   env?: string | undefined;
+  testEnvs?: "only" | "include" | undefined;
 }): DeliveryScope => ({
   ...(p.nodeId ? { nodeId: p.nodeId } : {}),
   ...(p.env ? { env: p.env } : {}),
+  ...(p.testEnvs ? { testEnvs: p.testEnvs } : {}),
 });
 
+// The default (test envs excluded) keeps the exact pre-story.5159 evidence text.
 const scopeRef = (s: DeliveryScope) =>
-  `scope:node=${s.nodeId ?? "*"},env=${s.env ?? "*"}`;
+  `scope:node=${s.nodeId ?? "*"},env=${s.env ?? "*"}${s.testEnvs ? `,testEnvs=${s.testEnvs}` : ""}`;
 
 export interface DeliveryCalculatorOptions {
   /**

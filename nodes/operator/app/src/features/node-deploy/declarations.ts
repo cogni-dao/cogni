@@ -9,6 +9,7 @@
  * Scope: Pure checks; does not perform IO. The GitHub reads and the image-digest lookup live in the route; the release write lives in the store; the
  *   two-pass manifest check and the lowering live in `@cogni/repo-spec` (workload-manifest).
  * Invariants:
+ *   - RESERVED_NAMES (story.5159): no manifest declares `main` or a test env key (`te<6 letters>`).
  *   - DECLARED_AT_THE_SHA: every manifest and the repo-spec come from the tree AT `sourceSha`, never
  *     from a mutable branch, and the resolved spec is frozen into the release row.
  *   - SPEC_IS_THE_NODES_OWN: the repo-spec `node_id` must equal the requested node; a tree that names
@@ -64,7 +65,7 @@ import {
 
 import { parse as parseYaml } from "yaml";
 
-import type { NodeWorkloadSpec } from "@/ports";
+import { isTestEnvKey, type NodeWorkloadSpec } from "@/ports";
 import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 import {
   inheritedKeyOwner,
@@ -174,6 +175,17 @@ export function resolveWorkloadDeclaration(input: {
       );
     throw error;
   }
+  // RESERVED_NAMES (story.5159): `te<6 letters>` is the key shape of a test env and `main` is the instance name
+  // of the app. A manifest may declare neither, so a v1 POST can never record a test env and a node cannot
+  // spoof one. The whole set is refused, like any other manifest refusal.
+  const reserved = workloads.find(
+    (w) => isTestEnvKey(w.name) || w.name === "main"
+  );
+  if (reserved)
+    throw new DeclarationError(
+      "workload_manifest_refused",
+      `a workload may not be named "${reserved.name}": te<6 letters> is the key of a test env and "main" is the instance name of the app`
+    );
   const declared = workloads.find((w) => w.name === input.workload);
   if (!declared)
     throw new DeclarationError(

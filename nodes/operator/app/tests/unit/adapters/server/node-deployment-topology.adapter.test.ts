@@ -95,6 +95,52 @@ describe("GitHubNodeDeploymentTopologyAdapter", () => {
     );
   });
 
+  it("a test env is not a service of the node: te rows are left out of the topology (story.5159)", async () => {
+    const view = releaseView();
+    const listDesired = view.listDesired.getMockImplementation();
+    view.listDesired.mockImplementation(async (env: string) => [
+      ...((await listDesired?.(env)) ?? []),
+      {
+        nodeId: POLY_ID,
+        env: "candidate-a",
+        workload: "teqwkzmx",
+        releaseId: "r-te",
+      },
+    ]);
+    const getRelease = view.getRelease.getMockImplementation();
+    view.getRelease.mockImplementation(async (id: string) =>
+      id === "r-te" ? { spec: spec("teqwkzmx", true) } : getRelease?.(id)
+    );
+    const adapter = new GitHubNodeDeploymentTopologyAdapter(
+      { fetchFileText: vi.fn() },
+      { owner: "cogni-dao", repo: "cogni" },
+      // biome-ignore lint/suspicious/noExplicitAny: test double for the store read half
+      () => view as any
+    );
+    const result = await adapter.listServices({
+      nodeId: POLY_ID,
+      slug: "poly",
+      environment: "candidate-a",
+    });
+    expect(result.map((s) => s.name)).toEqual(["app", "db"]);
+    // a lane that has ONLY test envs has no topology, as if it had no desired release
+    view.listDesired.mockImplementation(async () => [
+      {
+        nodeId: POLY_ID,
+        env: "candidate-a",
+        workload: "teqwkzmx",
+        releaseId: "r-te",
+      },
+    ]);
+    await expect(
+      adapter.listServices({
+        nodeId: POLY_ID,
+        slug: "poly",
+        environment: "candidate-a",
+      })
+    ).rejects.toThrow("deployed service topology is unavailable");
+  });
+
   it("a node lane with no desired release is unavailable, not a stale deploy-branch read", async () => {
     const fetchFileText = vi.fn();
     const view = releaseView();

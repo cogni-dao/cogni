@@ -198,6 +198,8 @@ export function createCandidateBacklogCalculators(
                   nodeId: p.nodeId,
                   env: CANDIDATE_ENV,
                   sourceShas: heads,
+                  // A PR served on its own test env was served (story.5159).
+                  testEnvs: "include",
                 },
                 maxRows: budget.maxRows,
                 signal,

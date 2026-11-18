@@ -27,12 +27,13 @@
  */
 
 import type { PendingQuery, Row, Sql } from "postgres";
-import type {
-  DeliveryKpiSourcePort,
-  DeliveryLaneFacts,
-  DeliveryProbeResult,
-  DeliveryReleaseFacts,
-  DeliveryScope,
+import {
+  type DeliveryKpiSourcePort,
+  type DeliveryLaneFacts,
+  type DeliveryProbeResult,
+  type DeliveryReleaseFacts,
+  type DeliveryScope,
+  TEST_ENV_KEY_PATTERN,
 } from "@/ports";
 
 /**
@@ -70,7 +71,7 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
     private readonly clock: () => Date = () => new Date()
   ) {}
 
-  /** `AND <alias>.node_id = … AND <alias>.env = …` for the set scope fields only. */
+  /** `AND <alias>.node_id = … AND <alias>.env = … AND <alias>.workload [!]~ te-key` per the scope. */
   private scopeSql(alias: "r" | "d", scope: DeliveryScope) {
     const s = this.sql;
     const node = scope.nodeId
@@ -87,7 +88,19 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
       alias === "r" && scope.sourceShas && scope.sourceShas.length > 0
         ? s`AND r.source_sha IN ${s(scope.sourceShas as string[])}`
         : s``;
-    return s`${node} ${env} ${shas}`;
+    // TEST_ENVS_EXCLUDED_BY_DEFAULT (story.5159): a test env is a desired row of the node, but it is not a
+    // lane of the node's own delivery. Absent = excluded; "only" selects them; "include" selects both.
+    const te =
+      scope.testEnvs === "include"
+        ? s``
+        : scope.testEnvs === "only"
+          ? alias === "r"
+            ? s`AND r.workload ~ ${TEST_ENV_KEY_PATTERN}`
+            : s`AND d.workload ~ ${TEST_ENV_KEY_PATTERN}`
+          : alias === "r"
+            ? s`AND r.workload !~ ${TEST_ENV_KEY_PATTERN}`
+            : s`AND d.workload !~ ${TEST_ENV_KEY_PATTERN}`;
+    return s`${node} ${env} ${shas} ${te}`;
   }
 
   async releases(input: {

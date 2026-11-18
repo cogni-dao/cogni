@@ -25,7 +25,10 @@ production_branch: deploy/production-spawny-boi
 # candidate-a only: the test operator's self-test lane, billed to the TEST Console account.
 envs: [candidate-a]
 database:
-  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
+  # story.5159 — the app lane (live + spare = 2 copies) plus 2 test envs (POST /api/v2/test-envs). The operator
+  # reads this value as the test env cap (copies - 2, features/node-deploy/test-env.ts testEnvCap). The role caps
+  # it sizes (app 4, service 8) are applied by provisioning (reconcile-node-substrate.sh), not by the operator.
+  candidate-a: { tier: shared, budget_profile: shared-default-v1, copies: 4 }
 deployment_provider:
   candidate-a: akash
 # story.5137 — ONE_WRITER_PER_NODE_LANE: deployed only by POST /api/v1/deploy/workloads.

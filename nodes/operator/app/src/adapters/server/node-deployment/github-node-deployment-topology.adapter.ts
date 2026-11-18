@@ -13,10 +13,11 @@ import { LEGACY_DEFAULT_NODE_DEPLOYMENT } from "@cogni/repo-spec";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
-import type {
-  NodeDeployedService,
-  NodeDeploymentTopologyPort,
-  StorePort,
+import {
+  isTestEnvKey,
+  type NodeDeployedService,
+  type NodeDeploymentTopologyPort,
+  type StorePort,
 } from "@/ports";
 
 /** The read half of the node-deploy store this adapter needs (the release view). */
@@ -168,8 +169,12 @@ export class GitHubNodeDeploymentTopologyAdapter
       throw new Error("deployed service topology is unavailable");
     }
     const store = this.releases();
+    // A test env (story.5159) is a throwaway copy of the app, not a service of the node's topology.
     const desired = (await store.listDesired(environment)).filter(
-      (row) => row.nodeId === nodeId && row.env === environment
+      (row) =>
+        row.nodeId === nodeId &&
+        row.env === environment &&
+        !isTestEnvKey(row.workload)
     );
     const services: NodeDeployedService[] = [];
     for (const row of desired) {
