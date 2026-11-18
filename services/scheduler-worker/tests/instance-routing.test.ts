@@ -71,11 +71,15 @@ let requests: { url: string; auth: string | undefined }[];
 let fetchMock: ReturnType<typeof vi.fn>;
 let clock: number;
 
+/** Compare parsed origins, never URL prefixes. */
+const isOperator = (url: string) => new URL(url).origin === OPERATOR;
 const directoryReads = () =>
-  requests.filter((r) =>
-    r.url.startsWith(`${OPERATOR}/api/v1/deploy/instances`)
+  requests.filter(
+    (r) =>
+      isOperator(r.url) &&
+      new URL(r.url).pathname === "/api/v1/deploy/instances"
   );
-const nodeCalls = () => requests.filter((r) => !r.url.startsWith(OPERATOR));
+const nodeCalls = () => requests.filter((r) => !isOperator(r.url));
 
 beforeEach(() => {
   operator.listing = [{ instance: "canary", host: CANARY_HOST }];
@@ -88,7 +92,7 @@ beforeEach(() => {
     const auth = (init?.headers as Record<string, string> | undefined)
       ?.Authorization;
     requests.push({ url, auth });
-    if (url.startsWith(OPERATOR)) {
+    if (isOperator(url)) {
       if (operator.down) throw new TypeError("fetch failed");
       if (operator.status !== 200)
         return new Response("{}", { status: operator.status });
