@@ -77,6 +77,7 @@ const IMAGE_TAGS_LIB_FILE = path.resolve(
 
 interface AlertData {
   readonly refId: string;
+  readonly datasourceUid?: string;
   readonly model: {
     readonly expr?: string;
     readonly conditions?: ReadonlyArray<{
@@ -431,6 +432,26 @@ describe("fleet Serve alert contract (bug.5459)", () => {
     expect(syntheticMain).toMatch(
       /notification_settings\s*{\s*contact_point\s*=\s*grafana_contact_point\.query_only\.name\s*mute_timings\s*=\s*\[grafana_mute_timing\.query_only\.name\]\s*}/
     );
+  });
+
+  it("alerts when the edge catch-all answers 5+ requests for one host in 5 minutes (story.5148)", () => {
+    const edgeRule = rules.find((rule) => rule.uid === "fleet-edge-caught");
+    expect(edgeRule).toBeDefined();
+    expect(rules.at(-1)?.uid).toBe("fleet-edge-caught");
+    const expr = edgeRule?.data[0]?.model.expr ?? "";
+    expect(expr).toContain("sum by (env, request_host)");
+    expect(expr).toContain('{env="__ENVIRONMENT__",service="caddy"}');
+    expect(expr).toContain('"\\"X-Cogni-Edge\\":[\\"caught\\"]"');
+    expect(expr).toContain("/-/edge-probe|/__edge/caught");
+    expect(expr).toContain("[5m]");
+    expect(edgeRule?.data[0]?.datasourceUid).toBe("grafanacloud-logs");
+    expect(edgeRule?.data[1]?.model.conditions?.[0]?.evaluator).toEqual({
+      type: "gt",
+      params: [4],
+    });
+    // No catches means no log lines: no data is healthy. Errors still surface.
+    expect(edgeRule?.noDataState).toBe("OK");
+    expect(edgeRule?.execErrState).toBe("Error");
   });
 
   it("records one versioned percent contract consumed by alerts and dashboard", () => {
