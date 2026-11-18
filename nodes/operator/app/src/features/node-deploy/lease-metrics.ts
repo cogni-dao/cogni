@@ -40,6 +40,8 @@ export const LEASE_SCRAPE_TIMEOUT_MS = 4_000;
 export const LEASE_SCRAPE_MAX_BYTES = 2_000_000;
 /** Most samples one lane may contribute. More reads as too large: one tenant cannot flood the fleet's series quota. */
 export const LEASE_SCRAPE_MAX_SAMPLES = 20_000;
+/** Most samples one merged pass may hold. A lane that would pass it reads as too large. */
+export const LEASE_SCRAPE_MAX_TOTAL_SAMPLES = 200_000;
 
 const TOKEN_MESSAGE_PREFIX = "metrics-scrape:v1";
 
@@ -215,11 +217,16 @@ const OPERATOR_LABELS: ReadonlySet<string> = new Set([
   "env",
   "workload",
   "service",
+  // `app` is a platform namespace: operator analytics sum `http_requests_total{app="cogni-template",env=...}`
+  // with no node filter, so a tenant-written (or default) `app` would join the operator's own traffic.
+  "app",
   // Target identity labels. Alloy keeps tenant labels (`honor_labels`), so a tenant `job` or `instance` would
   // re-label its series as another scrape job (for example the deadman's `integrations/unix`).
   "job",
   "instance",
 ]);
+/** The `app` value stamped on every lane series. */
+export const LEASE_APP_LABEL = "cogni-node";
 const SYNTHETIC_PREFIX = "cogni_lease_scrape_";
 /**
  * Metric names the platform's own health rules read. A tenant sample under one is dropped: its series would carry
@@ -257,7 +264,10 @@ const SAMPLE_SPECIAL = /^(?:NaN|[+-]?Inf)$/;
 const SAMPLE_TIMESTAMP = /^-?\d{1,20}$/;
 const LABEL_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
-/** `<value>[ <timestamp>]` after the labels, rebuilt from validated tokens. Undefined when it is not a sample tail. */
+/**
+ * ` <value>` after the labels, rebuilt from the validated value token. A tenant timestamp is checked and then
+ * dropped: Prometheus stamps the scrape time, so a tenant cannot write into the past or future.
+ */
 function sampleTail(rest: string): string | undefined {
   if (!/^\s/.test(rest)) return undefined;
   const tokens = rest.trim().split(/\s+/);
@@ -269,7 +279,7 @@ function sampleTail(rest: string): string | undefined {
     (timestamp !== undefined && !SAMPLE_TIMESTAMP.test(timestamp))
   )
     return undefined;
-  return timestamp === undefined ? ` ${value}` : ` ${value} ${timestamp}`;
+  return ` ${value}`;
 }
 
 /** Escape a label value for the text exposition format. */
@@ -403,6 +413,47 @@ interface Family {
   readonly lines: string[];
 }
 
+/** Metadata lines one lane may carry; more are ignored. */
+const MAX_METADATA_LINES = 2_000;
+const METRIC_NAME = /^[a-zA-Z_:][a-zA-Z0-9_:]*$/;
+
+/** Whitespace as the text format means it (and the Unicode spaces `\s` would add are NOT whitespace here). */
+const isBlank = (ch: string | undefined): boolean =>
+  ch === " " || ch === "\t" || ch === "\r";
+
+/** The next blank-separated token of `line` at or after `from`, and where it ends. Linear in the line. */
+function nextToken(
+  line: string,
+  from: number
+): { readonly token: string; readonly end: number } {
+  let start = from;
+  while (start < line.length && isBlank(line[start])) start += 1;
+  let end = start;
+  while (end < line.length && !isBlank(line[end])) end += 1;
+  return { token: line.slice(start, end), end };
+}
+
+/** `# HELP name text` or `# TYPE name type`, parsed without backtracking. Undefined for any other comment. */
+function parseMetadata(
+  line: string
+):
+  | {
+      readonly kind: "HELP" | "TYPE";
+      readonly name: string;
+      readonly value: string;
+    }
+  | undefined {
+  const kind = nextToken(line, 1);
+  if (kind.token !== "HELP" && kind.token !== "TYPE") return undefined;
+  const name = nextToken(line, kind.end);
+  if (!METRIC_NAME.test(name.token)) return undefined;
+  return {
+    kind: kind.token,
+    name: name.token,
+    value: line.slice(name.end).trim(),
+  };
+}
+
 /** A merged exposition: families keep one HELP/TYPE and every lane's stamped samples grouped together. */
 class Exposition {
   private readonly families = new Map<string, Family>();
@@ -418,39 +469,36 @@ class Exposition {
 
   /** Add one lane's exposition text under the operator's labels. Returns how many samples it contributed. */
   addLane(text: string, stamp: Readonly<Record<string, string>>): number {
+    // Metadata is held per lane and applied only when the family receives a sample, so metadata alone never
+    // creates a family or grows the output.
+    const meta = new Map<string, { help?: string; type?: string }>();
+    let metadataLines = 0;
     let current: string | undefined;
     let added = 0;
     for (const raw of text.split("\n")) {
       const line = raw.trimEnd();
       if (line === "" || line.length > MAX_LINE_CHARS) continue;
       if (line.startsWith("#")) {
-        const m =
-          /^#\s+(HELP|TYPE)\s+([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\s+(.*))?$/.exec(
-            line
-          );
+        if (metadataLines >= MAX_METADATA_LINES) continue;
+        const m = parseMetadata(line);
         if (!m) continue;
-        const [, kind, name, value] = m as unknown as [
-          string,
-          "HELP" | "TYPE",
-          string,
-          string | undefined,
-        ];
-        if (isReservedName(name)) {
+        metadataLines += 1;
+        if (isReservedName(m.name)) {
           current = undefined;
           continue;
         }
-        const family = this.family(name);
-        if (kind === "HELP" && family.help === undefined)
-          family.help = sanitizeHelp(value ?? "");
+        const entry = meta.get(m.name) ?? {};
+        meta.set(m.name, entry);
+        if (m.kind === "HELP" && entry.help === undefined)
+          entry.help = sanitizeHelp(m.value);
         // Tenant metadata is validated like its samples: one bad TYPE line must not fail the whole merged scrape.
-        const type = (value ?? "").trim();
         if (
-          kind === "TYPE" &&
-          family.type === undefined &&
-          METRIC_TYPES.has(type)
+          m.kind === "TYPE" &&
+          entry.type === undefined &&
+          METRIC_TYPES.has(m.value)
         )
-          family.type = type;
-        current = name;
+          entry.type = m.value;
+        current = m.name;
         continue;
       }
       const stamped = stampSample(line, stamp);
@@ -461,7 +509,15 @@ class Exposition {
         (sampleName === current || sampleName.startsWith(`${current}_`))
           ? current
           : sampleName;
-      this.family(key).lines.push(stamped);
+      const family = this.family(key);
+      const entry = meta.get(key);
+      if (entry) {
+        if (family.help === undefined && entry.help !== undefined)
+          family.help = entry.help;
+        if (family.type === undefined && entry.type !== undefined)
+          family.type = entry.type;
+      }
+      family.lines.push(stamped);
       added += 1;
     }
     return added;
@@ -486,6 +542,8 @@ export function laneStamp(lane: LeaseScrapeLane): Record<string, string> {
     env: lane.env,
     workload: lane.workload,
     service: "app",
+    // Distinct from the operator's own `app="cogni-template"` series, so platform queries never absorb a lane.
+    app: LEASE_APP_LABEL,
   };
 }
 
@@ -514,6 +572,7 @@ export function renderLeaseMetrics(
   cut.lines.push(`cogni_lease_scrape_lanes_truncated ${truncated ? 1 : 0}`);
 
   let scraped = 0;
+  let totalSamples = 0;
   for (const outcome of outcomes) {
     const stamp = laneStamp(outcome.lane);
     const labels = Object.entries({
@@ -524,9 +583,18 @@ export function renderLeaseMetrics(
       .map(([k, v]) => `${k}="${escapeLabelValue(v as string)}"`)
       .join(",");
     let reason = outcome.reason;
+    if (
+      reason === "ok" &&
+      outcome.body !== undefined &&
+      totalSamples + countSampleLines(outcome.body) >
+        LEASE_SCRAPE_MAX_TOTAL_SAMPLES
+    )
+      reason = "too_large";
     if (reason === "ok" && outcome.body !== undefined) {
       // ABSENCE_IS_VISIBLE: up is 1 only when the lane really contributed samples (a 200 HTML page is not metrics).
-      if (exposition.addLane(outcome.body, stamp) > 0) scraped += 1;
+      const added = exposition.addLane(outcome.body, stamp);
+      totalSamples += added;
+      if (added > 0) scraped += 1;
       else reason = "empty";
     }
     reasons[reason] = (reasons[reason] ?? 0) + 1;

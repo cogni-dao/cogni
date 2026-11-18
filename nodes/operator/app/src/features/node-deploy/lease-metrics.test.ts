@@ -84,7 +84,7 @@ describe("stampSample", () => {
       `requests_up{node="${NODE_A}",env="production",workload="app",service="app"} 1`
     );
     expect(stampSample('m{p="a\\"}b"} 2 1700000000', stamp)).toBe(
-      `m{p="a\\"}b",node="${NODE_A}",env="production",workload="app",service="app"} 2 1700000000`
+      `m{p="a\\"}b",node="${NODE_A}",env="production",workload="app",service="app"} 2`
     );
   });
 
@@ -256,7 +256,7 @@ describe("collectLeaseMetrics", () => {
     expect(report.text).not.toContain("__name__");
     expect(report.text).not.toContain('route="y"');
     expect(report.text).toContain(
-      `http_requests_total{app="cogni-template",node_id="n",route="x",status="2xx",node="${NODE_B}"`
+      `http_requests_total{node_id="n",route="x",status="2xx",node="${NODE_B}"`
     );
   });
 
@@ -287,6 +287,63 @@ describe("collectLeaseMetrics", () => {
     );
   });
 
+  it("owns the app label, so a lane never joins the operator's own analytics series", async () => {
+    const body = [
+      "# TYPE http_requests_total counter",
+      'http_requests_total{app="cogni-template",status="5xx"} 1000000000',
+      "",
+    ].join("\n");
+    const report = await collectLeaseMetrics(
+      {
+        root: ROOT,
+        lanes: [laneA],
+        truncated: false,
+        signal: new AbortController().signal,
+      },
+      { fetchLane: async () => ok(body) }
+    );
+    expect(report.text).not.toContain('app="cogni-template"');
+    expect(report.text).toContain('app="cogni-node"');
+  });
+
+  it("parses metadata in linear time and lets metadata alone create nothing", async () => {
+    const hostile = `# HELP a${" ".repeat(4000)}x\ry`;
+    const body = `${Array.from({ length: 489 }, () => hostile).join("\n")}\n# TYPE ghost counter\n# HELP ghost never sampled\n`;
+    const started = Date.now();
+    const report = await collectLeaseMetrics(
+      {
+        root: ROOT,
+        lanes: [laneA],
+        truncated: false,
+        signal: new AbortController().signal,
+      },
+      { fetchLane: async () => ok(body) }
+    );
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(report.reasons).toEqual({ empty: 1 });
+    expect(report.text).not.toContain("ghost");
+  });
+
+  it("refuses a lane that would pass the whole-pass sample cap", async () => {
+    const lane = (i: number) => ({
+      ...laneA,
+      nodeId: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    });
+    const big = Array.from({ length: 19_000 }, (_, i) => `m_${i} 1`).join("\n");
+    const lanes = Array.from({ length: 11 }, (_, i) => lane(i));
+    const report = await collectLeaseMetrics(
+      {
+        root: ROOT,
+        lanes,
+        truncated: false,
+        signal: new AbortController().signal,
+      },
+      { fetchLane: async () => ok(big) }
+    );
+    expect(report.scraped).toBe(10);
+    expect(report.reasons).toEqual({ ok: 10, too_large: 1 });
+  });
+
   it("bounds the cost of an adversarial line and drops it", () => {
     const stamp = { node: NODE_A, env: "production" };
     const started = Date.now();
@@ -299,10 +356,10 @@ describe("collectLeaseMetrics", () => {
     expect(Date.now() - started).toBeLessThan(500);
   });
 
-  it("rebuilds the value and timestamp from validated tokens", () => {
+  it("rebuilds the value, dropping the timestamp, from validated tokens", () => {
     const stamp = { node: NODE_A };
     expect(stampSample("m\t 1.5e3 \t 1700000000", stamp)).toBe(
-      `m{node="${NODE_A}"} 1.5e3 1700000000`
+      `m{node="${NODE_A}"} 1.5e3`
     );
     expect(stampSample("m +Inf", stamp)).toBe(`m{node="${NODE_A}"} +Inf`);
     expect(stampSample("m 1 2 3", stamp)).toBeUndefined();
