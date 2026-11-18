@@ -7,7 +7,7 @@
  * Scope: Binds this node's id and registers the operator's node-local calculators: delivery
  *   (`deploy.serving-drift@1`, `deploy.release-success@1`, `deploy.first-try@1`, `deploy.lead-time@1`, task.5442, bug.5617) over the
  *   node-deploy release store, fleet uptime (`fleet.lanes-down@1`, `fleet.substrate-reach@1`,
- *   `fleet.uptime@1`, task.5457) over the same lane probes and the stored lanes-down readings, and PR review (`review.merge-coverage@1`, `review.fail-fix-rate@1`,
+ *   `fleet.uptime@1`, task.5457) over the same lane probes and the stored lanes-down readings, and PR review (`review.merge-coverage@1`, `review.fail-fix-rate@1`, `review.duration@1`,
  *   task.5450) over the review App's check runs on the parent repo, and shared-substrate host pressure
  *   (`substrate.host-pressure@1`, bug.5613) over per-host node_exporter and k3s-kine series in Grafana Cloud Mimir. Package calculators, budgets
  *   enforcement and the engine live in `@cogni-dao/metrics/knowledge`; nothing here re-implements them.
@@ -38,6 +38,7 @@ import {
   createGoalSource,
   createGoalMetrics as createPublishedGoalMetrics,
 } from "@cogni-dao/metrics/knowledge";
+import type { WorkflowClient } from "@temporalio/client";
 import type { Sql } from "postgres";
 import {
   DeliveryKpiSource,
@@ -64,12 +65,14 @@ export function createGoalMetrics(deps: {
   controlHost: string | undefined;
   /**
    * The operator's parent repo (`NODE_SUBMODULE_PARENT_OWNER/REPO`) and the review App that writes
-   * the `Cogni Git PR Review` check there (`GH_REVIEW_APP_*`). Absent parts make review readings unavailable.
+   * the `Cogni Git PR Review` check there (`GH_REVIEW_APP_*`). Duration also uses the existing
+   * env-local Temporal client for durable head discovery. Absent parts make readings unavailable.
    */
   review: {
     repo: { owner: string; repo: string } | undefined;
     appId: string | undefined;
     privateKeyBase64: string | undefined;
+    workflowClient?: () => Promise<WorkflowClient>;
   };
   /** The Mimir instant reader for `substrate.host-pressure@1`; absent makes substrate readings unavailable. */
   prometheus?: Pick<MetricsQueryPort, "queryInstant"> | null;
@@ -80,6 +83,16 @@ export function createGoalMetrics(deps: {
   const reviewRepo =
     review.appId && review.privateKeyBase64 ? review.repo : undefined;
   const deliverySource = new DeliveryKpiSource(releaseStoreSql);
+  const reviewSource = new GitHubReviewKpiSource(
+    {
+      appId: review.appId ?? "",
+      privateKeyBase64: review.privateKeyBase64 ?? "",
+      checkName: REVIEW_CHECK_RUN_NAME,
+    },
+    undefined,
+    undefined,
+    review.workflowClient
+  );
   // ONE_PROBE_SNAPSHOT: drift and the fleet calculators classify the same per-tick probes.
   const snapshots = createFleetProbeSnapshots(deliverySource, { controlHost });
   return createPublishedGoalMetrics({
@@ -95,14 +108,10 @@ export function createGoalMetrics(deps: {
           `${getNodeId()}/${rest.environment}/`
         ),
       }),
-      ...createReviewCalculators(
-        new GitHubReviewKpiSource({
-          appId: review.appId ?? "",
-          privateKeyBase64: review.privateKeyBase64 ?? "",
-          checkName: REVIEW_CHECK_RUN_NAME,
-        }),
-        { repo: reviewRepo }
-      ),
+      ...createReviewCalculators(reviewSource, {
+        repo: reviewRepo,
+        durationSource: reviewSource,
+      }),
       ...createSubstrateCalculators({ prometheus }),
     ],
   });

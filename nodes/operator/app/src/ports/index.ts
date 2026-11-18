@@ -463,6 +463,7 @@ export type {
 } from "./receipt-delivery.port";
 export type {
   ReviewCheckFacts,
+  ReviewDurationSourcePort,
   ReviewKpiRepo,
   ReviewKpiSourcePort,
   ReviewPrFacts,
