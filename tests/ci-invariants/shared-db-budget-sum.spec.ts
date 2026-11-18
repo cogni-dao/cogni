@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@tests/ci-invariants/shared-db-budget-sum`
  * Purpose: Keep the sum of every shared-tier node's role caps under each env's Postgres ceiling.
- * Scope: Declarative catalog + budget-profile arithmetic; mirrors reconcile-node-substrate.sh scaling.
+ * Scope: Declarative catalog + budget-profile arithmetic; mirrors reconcile-node-substrate.sh scaling. Does not read live Postgres or prove admission.
  * Invariants: Caps scale by catalog `copies` / profile `copies`; per env sum <= max_connections - reserve.
  * Side-effects: IO (reads infra/catalog and infra/database-budget-profiles.yaml)
  * Links: bug.5637, database-expert axiom 3, noisy-neighbor-database-architecture
