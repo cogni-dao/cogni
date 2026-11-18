@@ -12,8 +12,9 @@
  *     the reading is unavailable, never 0.
  *   - BOUNDED: the PR list is one page of 100 (`truncated` when GitHub reports a next page); a head's suites are
  *     one page of 100 (`incomplete` when `total_count` exceeds it).
- *   - GREEN_IS_ALL_SUITES_DONE: a head is green only when it has at least one suite and every suite is completed
- *     with `success`, `neutral` or `skipped`. Its green instant is the latest suite `updated_at`.
+ *   - GREEN_IS_ALL_SUITES_DONE: a head is green only when it has at least one suite WITH CHECK RUNS and every such
+ *     suite is completed with `success`, `neutral` or `skipped`. A suite with `latest_check_runs_count === 0` (a
+ *     subscribed App that never reported) is ignored. Its green instant is the latest suite `updated_at`.
  *   - NO_HARDCODED_IDENTITY: the repo comes from the caller and the App id from operator env.
  * Side-effects: IO (outbound HTTPS to api.github.com)
  * Links: ports/candidate-backlog.port.ts, adapters/server/review/github-auth.ts, task.5498
@@ -41,6 +42,8 @@ interface PullNode {
   head?: { sha?: string };
 }
 interface SuiteNode {
+  /** Check runs in the suite; 0 = a subscribed App that never reported (the suite stays `queued`). */
+  latest_check_runs_count?: number;
   status?: string | null;
   conclusion?: string | null;
   updated_at?: string | null;
@@ -62,7 +65,12 @@ export function mapOpenPulls(nodes: readonly PullNode[]): CandidateOpenPr[] {
 }
 
 /** The green instant of a head from its check suites (see GREEN_IS_ALL_SUITES_DONE). */
-export function greenInstant(suites: readonly SuiteNode[]): Date | undefined {
+export function greenInstant(
+  allSuites: readonly SuiteNode[]
+): Date | undefined {
+  // GitHub creates a suite for every subscribed App; one that never got a run stays `queued` with no
+  // conclusion forever. It is not CI, so it neither blocks nor times the green.
+  const suites = allSuites.filter((s) => s.latest_check_runs_count !== 0);
   if (suites.length === 0) return undefined;
   let latest = 0;
   for (const s of suites) {

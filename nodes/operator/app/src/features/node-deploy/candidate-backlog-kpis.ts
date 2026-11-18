@@ -25,7 +25,11 @@
  *   - OPERATOR_IS_UNAVAILABLE: the operator's own candidate flights are GitHub workflow runs; no store records
  *     the SHAs it flighted. Its reading is unavailable (`operator_flights_not_recorded`) and does not block node
  *     lanes. TODO(task.5498): read the operator's flight history once the sequencer or the flight route records it.
- *   - SNAPSHOT: the reading is "now"; `days` is how far back releases are read (default 28).
+ *   - SERVED_HAS_NO_WINDOW: served-ness is looked up by the open head SHAs themselves (`scope.sourceShas`) from the
+ *     epoch, so a long-open PR whose head served long ago is not backlog. `days` (default 28) bounds only the WAIT
+ *     samples: a served head whose first activation is older than `days` is left out of them (`outside_window`).
+ *     Unserved heads are always sampled.
+ *   - SNAPSHOT: the reading is "now".
  *   - IDS_USE_DASHES: the id matches `MetricSpecSchema.calculatorId`.
  * Side-effects: none (calculators call the injected sources)
  * Links: ports/candidate-backlog.port.ts, features/node-deploy/delivery-kpis.ts, bootstrap/capabilities/goal-metrics.ts
@@ -60,7 +64,7 @@ const MAX_RELEASES = 5000;
 const params = z.strictObject({
   nodeId: z.uuid(),
   output: z.enum(["backlog", "wait_p90_hours"]),
-  /** How far back releases are read; a head served earlier than this reads as never served. */
+  /** Wait-sample window only: a head first served longer ago than this is not a wait sample. */
   days: z.number().int().min(1).max(28).default(28),
 });
 
@@ -181,15 +185,24 @@ export function createCandidateBacklogCalculators(
         );
 
       const nowMs = now();
-      const read = await ctx.read((signal, budget) =>
-        releases.releases({
-          recordedFrom: new Date(nowMs - p.days * DAY_MS),
-          to: new Date(nowMs + 1000),
-          scope: { nodeId: p.nodeId, env: CANDIDATE_ENV },
-          maxRows: budget.maxRows,
-          signal,
-        })
-      );
+      // SERVED_HAS_NO_WINDOW: look the heads up by sha, from the epoch. No heads: nothing to look up.
+      const heads = [...new Set(open.prs.map((pr) => pr.headSha))];
+      const read =
+        heads.length === 0
+          ? { rows: [], truncated: false, asOf: open.asOf }
+          : await ctx.read((signal, budget) =>
+              releases.releases({
+                recordedFrom: new Date(0),
+                to: new Date(nowMs + 1000),
+                scope: {
+                  nodeId: p.nodeId,
+                  env: CANDIDATE_ENV,
+                  sourceShas: heads,
+                },
+                maxRows: budget.maxRows,
+                signal,
+              })
+            );
       const watermarks = [
         { source: "github_pulls", asOf: open.asOf.toISOString() },
         { source: "node_workload_releases", asOf: read.asOf.toISOString() },
@@ -210,7 +223,7 @@ export function createCandidateBacklogCalculators(
       const evidence = [
         ...head,
         repoRef,
-        `candidate:open_prs=${open.prs.length},unserved=${unserved.length},lookback_days=${p.days}`,
+        `candidate:open_prs=${open.prs.length},unserved=${unserved.length}`,
         ...unserved
           .slice(0, MAX_EVIDENCE)
           .map(
@@ -231,6 +244,7 @@ export function createCandidateBacklogCalculators(
       const waits: number[] = [];
       let notGreen = 0;
       let untimed = 0;
+      let outsideWindow = 0;
       let incomplete = 0;
       for (const pr of open.prs as readonly CandidateOpenPr[]) {
         const ci = await ctx.read((signal) =>
@@ -249,12 +263,16 @@ export function createCandidateBacklogCalculators(
           untimed++;
           continue;
         }
+        if (firstServe && nowMs - firstServe.getTime() > p.days * DAY_MS) {
+          outsideWindow++;
+          continue;
+        }
         const end = firstServe ? firstServe.getTime() : nowMs;
         waits.push(Math.max(0, end - ci.green.getTime()) / HOUR_MS);
       }
       const waitEvidence = [
         ...evidence,
-        `candidate:wait_samples=${waits.length},ci_not_green=${notGreen},untimed=${untimed},ci_incomplete=${incomplete}`,
+        `candidate:wait_samples=${waits.length},ci_not_green=${notGreen},untimed=${untimed},outside_window=${outsideWindow},ci_incomplete=${incomplete}`,
       ];
       if (incomplete > 0)
         return {

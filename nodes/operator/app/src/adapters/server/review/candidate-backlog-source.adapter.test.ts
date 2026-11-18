@@ -78,6 +78,36 @@ describe("greenInstant", () => {
       ])?.toISOString()
     ).toBe("2026-11-18T11:00:00.000Z");
   });
+  it("ignores a suite with no check runs: a subscribed App that never reported stays queued forever", () => {
+    const never = {
+      latest_check_runs_count: 0,
+      status: "queued",
+      conclusion: null,
+      updated_at: "2026-11-18T09:00:00Z",
+    };
+    const ci = {
+      latest_check_runs_count: 12,
+      status: "completed",
+      conclusion: "success",
+      updated_at: "2026-11-18T10:00:00Z",
+    };
+    expect(greenInstant([never, ci, never])?.toISOString()).toBe(
+      "2026-11-18T10:00:00.000Z"
+    );
+    // the ignored suite does not time the green either, even when it is the latest
+    expect(
+      greenInstant([
+        ci,
+        { ...never, updated_at: "2026-11-18T23:00:00Z" },
+      ])?.toISOString()
+    ).toBe("2026-11-18T10:00:00.000Z");
+    // a head whose ONLY suites never reported has no CI
+    expect(greenInstant([never])).toBeUndefined();
+    // a suite with runs that is still pending still blocks
+    expect(
+      greenInstant([ci, { ...ci, status: "in_progress", conclusion: null }])
+    ).toBeUndefined();
+  });
   it("is undefined with no suites, a pending suite, or any failing conclusion", () => {
     expect(greenInstant([])).toBeUndefined();
     expect(

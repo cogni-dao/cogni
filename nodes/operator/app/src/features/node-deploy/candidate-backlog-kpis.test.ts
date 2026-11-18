@@ -87,6 +87,7 @@ function fakes(f: Fakes) {
     suites: [] as string[],
     releases: 0,
     scopes: [] as object[],
+    recordedFrom: [] as Date[],
   };
   const github: CandidateBacklogSourcePort = {
     openPullRequests: async () => {
@@ -108,11 +109,18 @@ function fakes(f: Fakes) {
     },
   };
   const store: DeliveryKpiSourcePort = {
-    releases: async ({ scope }) => {
+    releases: async ({ scope, recordedFrom }) => {
       calls.releases++;
       calls.scopes.push(scope);
+      calls.recordedFrom.push(recordedFrom);
+      // honor the filters the way the SQL does: a time bound or a sha list changes what is returned
+      const rows = (f.releases ?? []).filter(
+        (r) =>
+          r.createdAt.getTime() >= recordedFrom.getTime() &&
+          (!scope.sourceShas || scope.sourceShas.includes(r.sourceSha))
+      );
       return {
-        rows: f.releases ?? [],
+        rows,
         truncated: f.releasesTruncated ?? false,
         asOf: new Date(NOW),
       };
@@ -236,9 +244,7 @@ describe("backlog", () => {
       backlog
     );
     expect(sample).toMatchObject({ value: 2, unit: "prs", complete: true });
-    expect(sample.evidenceRefs).toContain(
-      "candidate:open_prs=4,unserved=2,lookback_days=28"
-    );
+    expect(sample.evidenceRefs).toContain("candidate:open_prs=4,unserved=2");
     expect(sample.evidenceRefs).toContain(
       `candidate:unserved=pr2@${"b".repeat(7)}`
     );
@@ -249,9 +255,43 @@ describe("backlog", () => {
     expect(calls).toMatchObject({ list: 1, releases: 1, suites: [] });
   });
 
-  it("reads the node's candidate-a releases only", async () => {
-    const { calls } = await run({ prs: [pr(1, "a")] }, backlog);
-    expect(calls.scopes).toEqual([{ nodeId: NODE, env: "candidate-a" }]);
+  it("looks the open heads up by sha on the node's candidate-a releases, from the epoch (no window)", async () => {
+    const { calls } = await run(
+      { prs: [pr(1, "a"), pr(2, "b"), pr(3, "a")] },
+      backlog
+    );
+    expect(calls.scopes).toEqual([
+      { nodeId: NODE, env: "candidate-a", sourceShas: [sha("a"), sha("b")] },
+    ]);
+    expect(calls.recordedFrom[0]?.getTime()).toBe(0);
+  });
+
+  it("a head that served 35 days ago is NOT backlog, however old the lookback `days` is", async () => {
+    const { sample } = await run(
+      {
+        prs: [pr(1, "a"), pr(2, "b")],
+        releases: [
+          release("a", {
+            createdAt: ago(35 * 24),
+            activatedAt: ago(35 * 24 - 1),
+            served: true,
+          }),
+        ],
+      },
+      { ...backlog, days: 7 }
+    );
+    expect(sample.value).toBe(1); // only b
+    expect(sample.evidenceRefs).toContain(
+      `candidate:unserved=pr2@${"b".repeat(7)}`
+    );
+    expect(sample.evidenceRefs).not.toContain(
+      `candidate:unserved=pr1@${"a".repeat(7)}`
+    );
+  });
+
+  it("no open PRs: no release read at all", async () => {
+    const { calls } = await run({ prs: [] }, backlog);
+    expect(calls.releases).toBe(0);
   });
 
   it("a service of a test env or a canary counts as served (any workload)", async () => {
@@ -326,7 +366,44 @@ describe("wait_p90_hours", () => {
       reason: "zero_denominator",
     });
     expect(sample.evidenceRefs).toContain(
-      "candidate:wait_samples=0,ci_not_green=1,untimed=0,ci_incomplete=0"
+      "candidate:wait_samples=0,ci_not_green=1,untimed=0,outside_window=0,ci_incomplete=0"
+    );
+  });
+
+  it("`days` bounds the wait samples only: a head first served longer ago is left out, an unserved one never is", async () => {
+    const { sample } = await run(
+      {
+        prs: [pr(1, "a"), pr(2, "b")],
+        green: { a: 35 * 24 + 2, b: 30 },
+        releases: [
+          release("a", {
+            createdAt: ago(35 * 24),
+            activatedAt: ago(35 * 24 - 1),
+          }),
+        ],
+      },
+      { ...wait, days: 7 }
+    );
+    expect(sample.value).toBe(30); // b only: unserved, green 30h ago
+    expect(sample.evidenceRefs).toContain(
+      "candidate:wait_samples=1,ci_not_green=0,untimed=0,outside_window=1,ci_incomplete=0"
+    );
+    // with a wide enough window the old head is sampled (its wait was 1h)
+    const wide = await run(
+      {
+        prs: [pr(1, "a"), pr(2, "b")],
+        green: { a: 35 * 24 + 2, b: 30 },
+        releases: [
+          release("a", {
+            createdAt: ago(35 * 24),
+            activatedAt: ago(35 * 24 - 1),
+          }),
+        ],
+      },
+      { ...wait, days: 28 }
+    );
+    expect(wide.sample.evidenceRefs).toContain(
+      "candidate:wait_samples=1,ci_not_green=0,untimed=0,outside_window=1,ci_incomplete=0"
     );
   });
 
@@ -341,7 +418,7 @@ describe("wait_p90_hours", () => {
     );
     expect(sample.value).toBe(20); // only b (unserved, green 20h ago)
     expect(sample.evidenceRefs).toContain(
-      "candidate:wait_samples=1,ci_not_green=0,untimed=1,ci_incomplete=0"
+      "candidate:wait_samples=1,ci_not_green=0,untimed=1,outside_window=0,ci_incomplete=0"
     );
   });
 
