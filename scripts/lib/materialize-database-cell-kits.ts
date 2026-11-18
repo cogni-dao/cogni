@@ -88,6 +88,9 @@ export function planDatabaseCellKits(input: unknown) {
       operatorSourceSha: sha,
       environment,
       expectedSourceHost: z.string().min(1),
+      // The env VM alias (cogni-<env>.vm.<root>). A lane DSN may name it instead of the VM
+      // address, as lane_db_assert_agreement accepts; the alias survives a VM move (bug.5636).
+      expectedSourceAlias: z.string().min(1).optional(),
       nativeSource: z
         .object({
           systemIdentifier: z.string().regex(/^[0-9]+$/),
@@ -111,7 +114,9 @@ export function planDatabaseCellKits(input: unknown) {
     if (
       !["postgres:", "postgresql:"].includes(app.protocol) ||
       !["postgres:", "postgresql:"].includes(service.protocol) ||
-      app.hostname !== value.expectedSourceHost ||
+      ![value.expectedSourceHost, value.expectedSourceAlias].includes(
+        app.hostname
+      ) ||
       service.hostname !== app.hostname ||
       (app.port || "5432") !== "5432" ||
       (service.port || "5432") !== "5432" ||

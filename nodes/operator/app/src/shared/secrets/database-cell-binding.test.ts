@@ -60,6 +60,30 @@ describe("canonical private database cells", () => {
     expect(() =>
       planDatabaseCellKits({ ...source, expectedSourceHost: "10.0.0.2" })
     ).toThrow("residency");
+    // bug.5636: a lane DSN that names the env VM alias is the same residency.
+    const aliased = {
+      ...source,
+      expectedSourceHost: "10.0.0.2",
+      expectedSourceAlias: "cogni-production.vm.example.org",
+      slots: source.slots.map((slot) => ({
+        ...slot,
+        appDsn: slot.appDsn.replace(
+          "10.0.0.1",
+          "cogni-production.vm.example.org"
+        ),
+        serviceDsn: slot.serviceDsn.replace(
+          "10.0.0.1",
+          "cogni-production.vm.example.org"
+        ),
+      })),
+    };
+    expect(planDatabaseCellKits(aliased)).toHaveLength(1);
+    expect(() =>
+      planDatabaseCellKits({
+        ...aliased,
+        expectedSourceAlias: "other.example.org",
+      })
+    ).toThrow("residency");
     expect(() =>
       planDatabaseCellKits({
         ...source,
