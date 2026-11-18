@@ -75,7 +75,7 @@ export const reviewedHostRebindPlans: readonly HostRebindPlan[] = [
   },
   {
     // bug.5638: candidate-a moved to a new Cherry VM on 2026-11-17 (VPS -> VDS). Same probe-only
-    // reattestation as the production rehost above; the receipt is the CEO authorization on the PR.
+    // reattestation as the production rehost above; the receipt quotes the CEO heal instruction.
     id: "operator-candidate-a-16gb-rehost-20261117",
     operation: "hostname-only-probe-reattestation",
     nodeId: "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d",
@@ -84,7 +84,13 @@ export const reviewedHostRebindPlans: readonly HostRebindPlan[] = [
     transition: "existing-same-identity-to-canonical-host",
     newHost: "84.32.83.170",
     machineId: "48837aa82fdb4eb0aeb1a74123b0c201",
-    authorization: { state: "unarmed", receipt: null },
+    authorization: {
+      state: "armed",
+      receipt: {
+        reference:
+          "https://github.com/cogni-dao/cogni/pull/3178#issuecomment-6971233184",
+      },
+    },
   },
 ];
 
