@@ -62,7 +62,12 @@ const EnvSchema = z.object({
     .optional()
     .or(z.literal("").transform(() => undefined)),
 
-  /** Read-only directory credential for `OPERATOR_DIRECTORY_URL` (secret — never log). NOT `SCHEDULER_API_TOKEN`. */
+  /**
+   * Credential for `OPERATOR_DIRECTORY_URL` (secret — never log). NOT `SCHEDULER_API_TOKEN`. It is NOT
+   * read-only today: the route needs a principal the per-env deploy gate allows (`node.flight`,
+   * `node.manage_envs` or `node.promote_production`). A scoped read credential is a follow-up (story.5159);
+   * no overlay may set this or `OPERATOR_DIRECTORY_URL` until it exists.
+   */
   OPERATOR_DIRECTORY_TOKEN: z
     .string()
     .min(1)

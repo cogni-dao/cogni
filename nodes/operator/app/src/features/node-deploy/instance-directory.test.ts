@@ -243,6 +243,36 @@ describe("buildInstanceDirectory", () => {
     expect(await directory(store)).toEqual([]);
   });
 
+  it("drops a non-app workload that declares the node's main host, so canary callbacks never reach main", async () => {
+    const withMain = seeded([
+      {
+        key: key("app"),
+        releaseId: REL(1),
+        host: "red-test.cognidao.org",
+        phase: "active",
+      },
+      {
+        key: key("canary"),
+        releaseId: REL(2),
+        host: "red-test.cognidao.org",
+        phase: "active",
+      },
+    ]);
+    expect((await directory(withMain)).map((i) => i.instance)).toEqual([
+      "main",
+    ]);
+    // and with no app row at all: the canary still must not hold the main host
+    const alone = seeded([
+      {
+        key: key("canary"),
+        releaseId: REL(3),
+        host: "red-test.cognidao.org",
+        phase: "active",
+      },
+    ]);
+    expect(await directory(alone)).toEqual([]);
+  });
+
   it("never lists a worker workload, nor a non-app workload named main", async () => {
     const store = seeded([
       {

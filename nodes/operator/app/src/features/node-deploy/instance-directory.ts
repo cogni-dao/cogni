@@ -21,6 +21,11 @@
  *   - HOST_IS_THE_NODES_OWN: the host is the serving release's declared public host and must pass
  *     `hostOwnedBy` for this node, env and workload, so a release can never put another node's host in the
  *     directory. A host that fails the check drops the instance.
+ *   - INSTANCE_HOST_IS_ITS_OWN: a non-main instance must hold its OWN sibling host (`siblingLabel` names its
+ *     workload), never the node's main host and never a host another instance holds. A non-app workload that
+ *     declares the main host would otherwise send its callbacks to main (bug.0050 again), so it is dropped.
+ *     The operator's own canary (the `operator` slug) serves the node's own host by design, so only the
+ *     host-collision rule guards it.
  *   - MAIN_IS_THE_APP: only the `app` workload is `main`. A worker workload (a sibling service) is never an
  *     instance, and a non-app workload named `main` is dropped, never listed as `main`.
  * Side-effects: IO (read-only store port)
@@ -38,6 +43,8 @@ import { publicHostOf } from "./spec";
 
 /** The workload every node ships its main copy as. */
 export const APP_WORKLOAD = "app";
+/** The operator node's slug; its canary is its own host (`edge.ts` CANARY_LABEL). */
+const OPERATOR_SLUG = "operator";
 /** The instance name of the main copy. */
 export const MAIN_INSTANCE = "main";
 
@@ -65,7 +72,7 @@ export async function buildInstanceDirectory(
   const rows = (await store.listDesired(env)).filter(
     (d) => d.nodeId === nodeId && d.env === env && d.state === "running"
   );
-  const out: DeployInstance[] = [];
+  const found: DeployInstance[] = [];
   for (const desired of rows) {
     const instance = instanceOfWorkload(desired.workload);
     if (instance === MAIN_INSTANCE && desired.workload !== APP_WORKLOAD)
@@ -87,7 +94,14 @@ export async function buildInstanceDirectory(
       worker: false,
     });
     if (!hostOwnedBy(binding, host, env, slug, label)) continue;
-    out.push({
+    // INSTANCE_HOST_IS_ITS_OWN: a non-main instance must hold the sibling host named for its workload.
+    if (
+      instance !== MAIN_INSTANCE &&
+      slug !== OPERATOR_SLUG &&
+      label !== desired.workload
+    )
+      continue;
+    found.push({
       instance,
       workload: desired.workload,
       host,
@@ -95,5 +109,16 @@ export async function buildInstanceDirectory(
       sourceSha: release.sourceSha,
     });
   }
+  // No two instances may share a host: a collision is ambiguous, so every non-main holder is dropped
+  // (the main instance keeps its host; a copy that declares it never reaches main through another name).
+  const mainHost = found.find((i) => i.instance === MAIN_INSTANCE)?.host;
+  const hostCount = new Map<string, number>();
+  for (const i of found)
+    hostCount.set(i.host, (hostCount.get(i.host) ?? 0) + 1);
+  const out = found.filter(
+    (i) =>
+      i.instance === MAIN_INSTANCE ||
+      (i.host !== mainHost && hostCount.get(i.host) === 1)
+  );
   return out.sort((a, b) => a.instance.localeCompare(b.instance));
 }

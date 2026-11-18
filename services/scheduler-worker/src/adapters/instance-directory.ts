@@ -16,14 +16,19 @@
  *   - ABSENT_IS_FINAL: an instance the directory did not list is refused (non-retryable). A cached or
  *     last-good answer never turns an absent instance into a host.
  *   - LAST_GOOD_ONLY_WHEN_UNREACHABLE: the last successful response is used only when the operator cannot
- *     be reached (network error, timeout, 5xx, 408, 429, 404) and only for an instance that response
- *     listed. Any other operator answer (401, 403, 400, 409, a malformed body) is final, never masked.
+ *     be reached (network error, timeout, 5xx, 408, 429, or a 404 with no JSON `error` body), only for an
+ *     instance that response listed, and only while it is at most `lastGoodMaxAgeMs` (10 min) old. Any other
+ *     operator answer (401, 403, 400, 409, a 404 carrying a JSON `error` such as `node_not_found`, a
+ *     malformed body) is final, never masked.
  *   - BOUNDED_CACHE: an answer is reused for `ttlMs` (60 s). A miss re-reads the directory unless it was
  *     read less than `missRefreshMs` ago, so a freshly proven instance is found within seconds while an
  *     unknown name cannot make the worker hammer the operator.
  *   - HOST_IS_A_BARE_HOSTNAME: a directory host that is not a plain DNS hostname is dropped as absent.
- *   - READ_ONLY_CREDENTIAL: the bearer is the directory credential (`OPERATOR_DIRECTORY_TOKEN`), never
- *     `SCHEDULER_API_TOKEN`.
+ *   - CREDENTIAL_IS_NOT_THE_SCHEDULER_TOKEN: the bearer is `OPERATOR_DIRECTORY_TOKEN`, never
+ *     `SCHEDULER_API_TOKEN`. TODAY it is NOT a read-only credential: the operator route sits behind the
+ *     per-env deploy gate, which needs `node.flight`, `node.manage_envs` or `node.promote_production` for
+ *     the principal. A scoped, read-only directory credential is a follow-up (story.5159), and no overlay may
+ *     set OPERATOR_DIRECTORY_URL or OPERATOR_DIRECTORY_TOKEN until one exists.
  * Side-effects: IO (HTTP to the operator)
  * Links: nodes/operator/app/src/contracts/deploy.instances.v1.contract.ts, ../ports/index.ts
  * @internal
@@ -42,6 +47,8 @@ export const DIRECTORY_TTL_MS = 60_000;
 /** A miss re-reads the directory unless the cached answer is younger than this. */
 export const DIRECTORY_MISS_REFRESH_MS = 5_000;
 const DIRECTORY_TIMEOUT_MS = 5_000;
+/** The last good copy stops serving once it is older than this (operator outage cap). */
+export const DIRECTORY_LAST_GOOD_MAX_AGE_MS = 600_000;
 
 const INSTANCE_NAME = /^[a-z][a-z0-9-]{0,62}$/;
 const HOSTNAME =
@@ -76,6 +83,7 @@ export interface InstanceDirectoryOptions {
   readonly logger: Logger;
   readonly ttlMs?: number;
   readonly missRefreshMs?: number;
+  readonly lastGoodMaxAgeMs?: number;
   readonly timeoutMs?: number;
   /** Test seams. */
   readonly now?: () => number;
@@ -92,6 +100,20 @@ class DirectoryUnreachable extends Error {}
 
 const UNREACHABLE_STATUSES = new Set([404, 408, 429]);
 
+/** True when a response body is a JSON `{error: string}`: the operator's own refusal, not a missing route. */
+async function carriesJsonError(response: Response): Promise<boolean> {
+  try {
+    const body: unknown = await response.clone().json();
+    return (
+      typeof body === "object" &&
+      body !== null &&
+      typeof (body as { error?: unknown }).error === "string"
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function createInstanceDirectory(
   options: InstanceDirectoryOptions
 ): InstanceUrlResolver {
@@ -102,6 +124,7 @@ export function createInstanceDirectory(
     logger,
     ttlMs = DIRECTORY_TTL_MS,
     missRefreshMs = DIRECTORY_MISS_REFRESH_MS,
+    lastGoodMaxAgeMs = DIRECTORY_LAST_GOOD_MAX_AGE_MS,
     timeoutMs = DIRECTORY_TIMEOUT_MS,
     now = Date.now,
     fetchImpl = fetch,
@@ -134,7 +157,13 @@ export function createInstanceDirectory(
         `instance directory unreachable: ${(err as Error).message}`
       );
     }
-    if (response.status >= 500 || UNREACHABLE_STATUSES.has(response.status))
+    // A 404 that carries a JSON `{error}` is the operator's own gate refusal (`node_not_found`): final.
+    // A bare 404 is a route not rolled out yet, the same as an unreachable operator.
+    if (
+      response.status >= 500 ||
+      (UNREACHABLE_STATUSES.has(response.status) &&
+        !(response.status === 404 && (await carriesJsonError(response))))
+    )
       throw new DirectoryUnreachable(
         `instance directory answered ${response.status}`
       );
@@ -200,7 +229,7 @@ export function createInstanceDirectory(
       } catch (err) {
         if (!(err instanceof DirectoryUnreachable)) throw err;
         // LAST_GOOD_ONLY_WHEN_UNREACHABLE: only an instance the last good read listed.
-        if (cached) {
+        if (cached && now() - cached.fetchedAt <= lastGoodMaxAgeMs) {
           const host = cached.hosts.get(instance);
           if (!host)
             throw refuse(nodeId, instance, "not in the instance directory");
@@ -216,7 +245,7 @@ export function createInstanceDirectory(
           return urlOf(host);
         }
         throw new InstanceUnresolvedError(
-          `${err.message}; no last good copy for node "${nodeId}"`,
+          `${err.message}; no usable last good copy (none, or older than ${lastGoodMaxAgeMs} ms) for node "${nodeId}"`,
           true
         );
       }

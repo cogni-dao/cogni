@@ -32,6 +32,7 @@ vi.mock("@temporalio/activity", () => ({
 import { createActivities } from "../src/activities/index.js";
 import {
   createInstanceDirectory,
+  DIRECTORY_LAST_GOOD_MAX_AGE_MS,
   DIRECTORY_MISS_REFRESH_MS,
   DIRECTORY_TTL_MS,
   deployEnvOfNamespace,
@@ -64,6 +65,8 @@ const operator = {
   listing: [] as Listing,
   down: false,
   status: 200,
+  /** Body of a non-200 answer. */
+  errorBody: "{}",
   env: "candidate-a",
 };
 
@@ -85,6 +88,7 @@ beforeEach(() => {
   operator.listing = [{ instance: "canary", host: CANARY_HOST }];
   operator.down = false;
   operator.status = 200;
+  operator.errorBody = "{}";
   operator.env = "candidate-a";
   requests = [];
   clock = 1_000_000;
@@ -95,7 +99,7 @@ beforeEach(() => {
     if (isOperator(url)) {
       if (operator.down) throw new TypeError("fetch failed");
       if (operator.status !== 200)
-        return new Response("{}", { status: operator.status });
+        return new Response(operator.errorBody, { status: operator.status });
       return new Response(
         JSON.stringify({
           nodeId: NODE_ID,
@@ -305,7 +309,10 @@ describe("an unknown or closed instance sends nothing to any node host", () => {
         { runId: FIXED_IDS.runId },
         "pr-999"
       )
-    ).rejects.toMatchObject({ name: "RunHttpClientError", retryable: false });
+    ).rejects.toMatchObject({
+      name: "InstanceUnresolvedError",
+      retryable: false,
+    });
     expect(nodeCalls()).toEqual([]);
   });
 
@@ -422,6 +429,44 @@ describe("operator outage", () => {
       nonRetryable: true,
     });
     expect(nodeCalls()).toHaveLength(1);
+  });
+
+  it("stops serving the last good copy once it is older than 10 minutes", async () => {
+    const { activities } = build();
+    await execute(activities, "canary");
+    operator.down = true;
+    clock += DIRECTORY_LAST_GOOD_MAX_AGE_MS; // exactly at the cap: still served
+    await execute(activities, "canary");
+    expect(nodeCalls()).toHaveLength(2);
+    clock += 1; // past the cap
+    await expect(execute(activities, "canary")).rejects.toMatchObject({
+      type: "UNKNOWN_INSTANCE",
+      nonRetryable: false,
+    });
+    expect(nodeCalls()).toHaveLength(2);
+  });
+
+  it("a 404 with a JSON error body is the operator's own refusal: final, last good not used", async () => {
+    const { activities } = build();
+    await execute(activities, "canary");
+    operator.status = 404;
+    operator.errorBody = JSON.stringify({ error: "node_not_found" });
+    clock += DIRECTORY_TTL_MS + 1;
+    await expect(execute(activities, "canary")).rejects.toMatchObject({
+      type: "UNKNOWN_INSTANCE",
+      nonRetryable: true,
+    });
+    expect(nodeCalls()).toHaveLength(1);
+  });
+
+  it("a bare 404 (route not rolled out) still counts as unreachable and serves the last good copy", async () => {
+    const { activities } = build();
+    await execute(activities, "canary");
+    operator.status = 404;
+    operator.errorBody = "<html>not found</html>";
+    clock += DIRECTORY_TTL_MS + 1;
+    await execute(activities, "canary");
+    expect(nodeCalls()).toHaveLength(2);
   });
 
   it("a directory answering another env is refused", async () => {

@@ -87,6 +87,14 @@ export function isDefinitiveGraphActivityFailure(error: unknown): boolean {
   return cause instanceof ApplicationFailure && cause.nonRetryable === true;
 }
 
+/** @internal True when the worker could not resolve the run's `instance` (unknown, closed, no directory). */
+export function isUnknownInstanceFailure(error: unknown): boolean {
+  const cause = error instanceof ActivityFailure ? error.cause : error;
+  return (
+    cause instanceof ApplicationFailure && cause.type === "UNKNOWN_INSTANCE"
+  );
+}
+
 /** @internal Maps a failed Activity to the user-visible run ledger status. */
 export function graphActivityFailureStatus(
   transportRecoveryEnabled: boolean,
@@ -201,7 +209,10 @@ export async function GraphRunWorkflow(
         graphId,
         instance,
       });
-    } catch {
+    } catch (error) {
+      // An instance the worker cannot resolve is not an invalid grant: say so and fail the run, never
+      // record it as a skipped grant (story.5159).
+      if (isUnknownInstanceFailure(error)) throw error;
       // Grant invalid — create record and mark skipped (CONVERGED_FINALIZE)
       await createGraphRunActivity({
         nodeId,

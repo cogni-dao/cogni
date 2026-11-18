@@ -78,7 +78,7 @@ function resolveNodeUrl(
 /**
  * The base URL a call goes to. No instance or `main`: the COGNI_NODE_ENDPOINTS map, exactly as before.
  * Any other instance: the directory only. An unresolvable instance throws a NON-retryable
- * `RunHttpClientError` (retryable only when the operator was unreachable and nothing is cached) BEFORE any
+ * `InstanceUnresolvedError` (retryable only when the operator was unreachable and nothing is cached) BEFORE any
  * request, so no token is sent and the call never falls back to the main copy.
  */
 async function resolveBase(
@@ -89,19 +89,13 @@ async function resolveBase(
   if (instance === undefined || isMainInstance(instance))
     return resolveNodeUrl(deps.nodeEndpoints, nodeId);
   if (!deps.instanceResolver)
-    throw new RunHttpClientError(
+    throw new InstanceUnresolvedError(
       `Instance "${instance}" of node "${nodeId}" cannot be resolved: this worker has no instance directory (OPERATOR_DIRECTORY_URL); no request was sent`,
-      0,
       false
     );
-  try {
-    const url = await deps.instanceResolver.resolve(nodeId, instance);
-    return url.replace(/\/$/, "");
-  } catch (err) {
-    if (err instanceof InstanceUnresolvedError)
-      throw new RunHttpClientError(err.message, 0, err.retryable);
-    throw err;
-  }
+  // InstanceUnresolvedError passes through unchanged: the activities map it to UNKNOWN_INSTANCE.
+  const url = await deps.instanceResolver.resolve(nodeId, instance);
+  return url.replace(/\/$/, "");
 }
 
 /**

@@ -62,6 +62,12 @@ export function translateHttpError(err: unknown, where: string): never {
   ) {
     throw ApplicationFailure.nonRetryable(`${where}: ${err.message}`, err.code);
   }
+  if (err instanceof InstanceUnresolvedError) {
+    // story.5159: the instance is unknown, closed or unresolvable; nothing was sent to any host.
+    throw err.retryable
+      ? ApplicationFailure.retryable(`${where}: ${err.message}`, err.code)
+      : ApplicationFailure.nonRetryable(`${where}: ${err.message}`, err.code);
+  }
   if (err instanceof RunHttpClientError && !err.retryable) {
     throw ApplicationFailure.nonRetryable(
       `${where}: ${err.message}`,

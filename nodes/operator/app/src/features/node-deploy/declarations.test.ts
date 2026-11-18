@@ -105,6 +105,37 @@ describe("the operator's checked-in canary workload manifest", () => {
     );
   });
 
+  it('refuses a workload named "main", the instance name of the app (story.5159)', () => {
+    const text = CANARY.text.replace(/^ {2}name: canary$/m, "  name: main");
+    expect(text).not.toBe(CANARY.text);
+    expect(() =>
+      resolve({
+        manifests: [{ path: ".cogni/workloads/main.yaml", text }],
+        workload: "main",
+      })
+    ).toThrow(
+      expect.objectContaining({
+        code: "workload_manifest_refused",
+        message: expect.stringContaining('"main"'),
+      })
+    );
+  });
+
+  it('refuses a workload named "main" when another workload is the one requested', () => {
+    const text = CANARY.text.replace(/^ {2}name: canary$/m, "  name: main");
+    expect(() =>
+      resolve({
+        manifests: [{ path: ".cogni/workloads/main.yaml", text }],
+        workload: "canary-db",
+      })
+    ).toThrow(
+      expect.objectContaining({
+        code: "workload_manifest_refused",
+        message: expect.stringContaining('"main"'),
+      })
+    );
+  });
+
   it('refuses a manifest with cogni.dev/exclusive: "true" and returns the issue (CD6)', () => {
     const text = CANARY.text.replace(
       'cogni.dev/exclusive: "false"',
