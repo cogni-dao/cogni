@@ -17,7 +17,6 @@ import { TEST_ENV_TTL_MS } from "./test-env";
 import {
   canaryApp,
   canaryDb,
-  ENV,
   FakeChain,
   FakeClock,
   FakeDns,
@@ -31,7 +30,7 @@ import {
   WORKLOAD_ZONE,
 } from "./testing";
 
-function harness() {
+function harness(environment = "candidate-a") {
   const events: string[] = [];
   const clock = new FakeClock();
   const store = new MemoryStore(clock);
@@ -50,20 +49,30 @@ function harness() {
     config: {
       ...DEFAULT_SEQUENCER_CONFIG,
       namespace: "cogni-production",
-      environment: ENV,
+      environment,
     },
   });
-  const record = (workload: string, spec = canaryApp({ name: workload })) =>
+  const record = (
+    workload: string,
+    spec = canaryApp({
+      name: workload,
+      // a test env release carries the marker `testEnvSpec` sets
+      ...(/^te[a-z]{6}$/.test(workload) && workload !== "template"
+        ? { env: { COGNI_TEST_ENV: "1" } }
+        : {}),
+    })
+  ) =>
     store.recordRelease({
       nodeId: NODE_ID,
-      env: ENV,
+      env: environment,
       workload,
       sourceSha: SHA_1,
       spec,
       createdBy: "test",
     });
   const stateOf = async (workload: string) =>
-    (await store.getDesired({ nodeId: NODE_ID, env: ENV, workload }))?.state;
+    (await store.getDesired({ nodeId: NODE_ID, env: environment, workload }))
+      ?.state;
   return { clock, store, seq, log, record, stateOf };
 }
 
@@ -81,7 +90,7 @@ describe("TTL pre-pass of tick (story.5159)", () => {
     const stop = (
       await h.store.getDesired({
         nodeId: NODE_ID,
-        env: ENV,
+        env: "candidate-a",
         workload: "teoldold",
       })
     )?.stop;
@@ -92,6 +101,27 @@ describe("TTL pre-pass of tick (story.5159)", () => {
     expect(await h.stateOf("canary")).toBe("running");
     // and a fresh test env keeps running
     expect(await h.stateOf("tefresh")).toBe("running");
+  });
+
+  it("ignores a te-shaped real workload with no test env marker, however old", async () => {
+    const h = harness();
+    await h.record("template"); // te + 6 letters, but not a test env
+    await h.record("teoldold");
+    h.clock.advance(TEST_ENV_TTL_MS + 1);
+    await h.seq.tick();
+    expect(await h.stateOf("teoldold")).toBe("stopped");
+    expect(await h.stateOf("template")).toBe("running");
+  });
+
+  it("never runs the TTL in an env other than candidate-a, even for a marked te row", async () => {
+    const h = harness("production");
+    await h.record("teoldold");
+    await h.record("template");
+    h.clock.advance(TEST_ENV_TTL_MS + 1);
+    await h.seq.tick();
+    expect(await h.stateOf("teoldold")).toBe("running");
+    expect(await h.stateOf("template")).toBe("running");
+    expect(h.log.lines.some((l) => l.msg === "test_env_ttl_stop")).toBe(false);
   });
 
   it("a row exactly at the TTL is not yet stopped", async () => {
@@ -110,7 +140,7 @@ describe("TTL pre-pass of tick (story.5159)", () => {
     const first = (
       await h.store.getDesired({
         nodeId: NODE_ID,
-        env: ENV,
+        env: "candidate-a",
         workload: "teoldold",
       })
     )?.stop;
@@ -118,7 +148,7 @@ describe("TTL pre-pass of tick (story.5159)", () => {
     const second = (
       await h.store.getDesired({
         nodeId: NODE_ID,
-        env: ENV,
+        env: "candidate-a",
         workload: "teoldold",
       })
     )?.stop;

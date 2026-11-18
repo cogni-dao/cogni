@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AttemptRow, DesiredRow, WorkloadKey } from "@/ports";
-import { isTestEnvKey } from "@/ports";
+import { isTestEnvKey, isTestEnvSpec } from "@/ports";
 import { hostOwnedBy, siblingLabel } from "./edge";
 import {
   expiredTestEnvs,
@@ -90,6 +90,13 @@ describe("testEnvSpec", () => {
       http: { host: `red-${KEY}-test.cognidao.org` },
     });
     expect(spec.env[TEST_ENV_LABEL_ENV]).toBe("pr-42");
+    // the marker that makes the row exactly a test env (not just a te-shaped name)
+    expect(spec.env.COGNI_TEST_ENV).toBe("1");
+    expect(isTestEnvSpec(spec)).toBe(true);
+    expect(isTestEnvSpec({ ...spec, env: {} })).toBe(false);
+    expect(isTestEnvSpec({ name: "app", env: { COGNI_TEST_ENV: "1" } })).toBe(
+      false
+    );
     // everything else is the app's: image, port, health, resources
     expect(spec.image).toBe(app().image);
     expect(spec.port).toBe(app().port);
@@ -157,13 +164,17 @@ describe("slots, TTL and state", () => {
       state: "running" | "stopped",
       ageMin: number,
       attempts: AttemptRow["phase"][] = [],
-      nodeId = NODE_ID
+      nodeId = NODE_ID,
+      marked = false
     ) => {
       const key: WorkloadKey = { nodeId, env: "candidate-a", workload };
       const { release } = await store.recordRelease({
         ...key,
         sourceSha: "a".repeat(40),
-        spec: app({ name: workload }),
+        spec: app({
+          name: workload,
+          env: marked ? { COGNI_TEST_ENV: "1" } : {},
+        }),
         createdBy: "t",
       });
       const row = store.desired.get(
@@ -206,18 +217,26 @@ describe("slots, TTL and state", () => {
   it("expiredTestEnvs selects only running te rows older than the TTL, never any other row", async () => {
     const { store, put } = seeded();
     const old = TEST_ENV_TTL_MS / MIN + 1;
-    await put("teoldold", "running", old);
-    await put("tefresh", "running", 1);
-    await put("tefreshx", "running", TEST_ENV_TTL_MS / MIN - 1);
-    await put("testopps", "stopped", old);
+    await put("teoldold", "running", old, [], NODE_ID, true);
+    await put("tefresh", "running", 1, [], NODE_ID, true);
+    await put(
+      "tefreshx",
+      "running",
+      TEST_ENV_TTL_MS / MIN - 1,
+      [],
+      NODE_ID,
+      true
+    );
+    await put("testopps", "stopped", old, [], NODE_ID, true);
+    await put("template", "running", old * 10); // te-shaped real word, no marker
     await put("app", "running", old * 10);
     await put("canary", "running", old * 10);
     await put("canary-db", "running", old * 10);
     const rows = await store.listDesired("candidate-a");
-    expect(expiredTestEnvs(rows, clock.now()).map((d) => d.workload)).toEqual([
-      "teoldold",
-    ]);
-    expect(expiredTestEnvs([], clock.now())).toEqual([]);
+    expect(
+      (await expiredTestEnvs(store, rows, clock.now())).map((d) => d.workload)
+    ).toEqual(["teoldold"]);
+    expect(await expiredTestEnvs(store, [], clock.now())).toEqual([]);
   });
 
   it("maps the release view to the v2 states", () => {

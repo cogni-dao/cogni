@@ -14,7 +14,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
 import {
-  isTestEnvKey,
+  isTestEnvSpec,
   type NodeDeployedService,
   type NodeDeploymentTopologyPort,
   type StorePort,
@@ -169,17 +169,16 @@ export class GitHubNodeDeploymentTopologyAdapter
       throw new Error("deployed service topology is unavailable");
     }
     const store = this.releases();
-    // A test env (story.5159) is a throwaway copy of the app, not a service of the node's topology.
     const desired = (await store.listDesired(environment)).filter(
-      (row) =>
-        row.nodeId === nodeId &&
-        row.env === environment &&
-        !isTestEnvKey(row.workload)
+      (row) => row.nodeId === nodeId && row.env === environment
     );
     const services: NodeDeployedService[] = [];
     for (const row of desired) {
       const release = await store.getRelease(row.releaseId);
       if (!release) continue;
+      // A test env (story.5159) is a throwaway copy of the app, not a service of the node's topology. Only a
+      // te key whose spec carries the marker is one: a real workload named `template` stays.
+      if (isTestEnvSpec(release.spec)) continue;
       services.push({
         name: release.spec.name,
         visibility: "http" in release.spec.expose ? "public" : "private",

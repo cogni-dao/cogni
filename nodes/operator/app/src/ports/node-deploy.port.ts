@@ -62,6 +62,17 @@ export const keyString = (k: WorkloadKey): string =>
 export const TEST_ENV_KEY_RE = /^te[a-z]{6}$/;
 export const isTestEnvKey = (workload: string): boolean =>
   TEST_ENV_KEY_RE.test(workload);
+/**
+ * The env var `testEnvSpec` sets on every test env release spec. The key shape alone also matches real words
+ * (`template`, `terminal`, `telegram`, `temporal`), so anything that ACTS on a row (TTL stop, topology filter)
+ * needs the key shape AND this marker in the stored spec.
+ */
+export const TEST_ENV_MARKER_ENV = "COGNI_TEST_ENV";
+export const isTestEnvSpec = (spec: {
+  readonly name: string;
+  readonly env?: Readonly<Record<string, string>> | undefined;
+}): boolean =>
+  isTestEnvKey(spec.name) && spec.env?.[TEST_ENV_MARKER_ENV] === "1";
 
 export interface ReleaseRow extends WorkloadKey {
   readonly id: string;

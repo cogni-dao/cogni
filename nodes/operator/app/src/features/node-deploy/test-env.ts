@@ -20,7 +20,8 @@
  *     must cover them are provisioned by hand (break-glass), not read here.
  *   - SLOTS_COUNT_OPEN_LEASES: a running te row counts, and so does a stopped one while an attempt of it is not
  *     terminal, because its lease still holds database connections.
- *   - TTL_STOPS_ONLY_TEST_ENVS: `expiredTestEnvs` never selects a row that is not a te key.
+ *   - TTL_STOPS_ONLY_TEST_ENVS: `expiredTestEnvs` selects only a te key row whose stored spec carries
+ *     `COGNI_TEST_ENV=1` (`testEnvSpec` sets it), and the sequencer runs it on candidate-a only.
  * Side-effects: IO (read-only store port, in `testEnvSlots`)
  * Links: contracts/test-envs.v2.contract.ts, app/api/v2/test-envs/route.ts, edge.ts, stop-plan.ts
  * @public
@@ -33,8 +34,10 @@ import {
   type AttemptRow,
   type DesiredRow,
   isTestEnvKey,
+  isTestEnvSpec,
   type NodeWorkloadSpec,
   type StorePort,
+  TEST_ENV_MARKER_ENV,
 } from "@/ports";
 import type { WorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 
@@ -146,6 +149,7 @@ export function testEnvSpec(
     expose: { http: { host } },
     env: {
       ...app.env,
+      [TEST_ENV_MARKER_ENV]: "1",
       ...(label !== undefined ? { [TEST_ENV_LABEL_ENV]: label } : {}),
     },
   };
@@ -177,18 +181,28 @@ export async function testEnvSlots(
   );
 }
 
-/** Running te rows past their TTL. Never selects a row that is not a te key (TTL_STOPS_ONLY_TEST_ENVS). */
-export function expiredTestEnvs(
+/**
+ * Running test env rows past their TTL (TTL_STOPS_ONLY_TEST_ENVS). A row qualifies only when its key is a te key
+ * AND its stored release spec carries the test env marker, so a real workload named `template` is never selected.
+ */
+export async function expiredTestEnvs(
+  store: Pick<StorePort, "getRelease">,
   rows: readonly DesiredRow[],
   nowMs: number,
   ttlMs: number = TEST_ENV_TTL_MS
-): DesiredRow[] {
-  return rows.filter(
+): Promise<DesiredRow[]> {
+  const due = rows.filter(
     (d) =>
       isTestEnvKey(d.workload) &&
       d.state === "running" &&
       nowMs - d.updatedAt.getTime() > ttlMs
   );
+  const out: DesiredRow[] = [];
+  for (const row of due) {
+    const release = await store.getRelease(row.releaseId);
+    if (release && isTestEnvSpec(release.spec)) out.push(row);
+  }
+  return out;
 }
 
 export type TestEnvState =
