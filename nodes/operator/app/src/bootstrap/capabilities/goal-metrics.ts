@@ -6,7 +6,8 @@
  * Purpose: Operator composition of the published @cogni-dao/metrics 0.9.0 goal-metric service.
  * Scope: Binds this node's id and registers the operator's node-local calculators: delivery
  *   (`deploy.serving-drift@1`, `deploy.release-success@1`, `deploy.first-try@1`, `deploy.lead-time@1`, task.5442, bug.5617) over the
- *   node-deploy release store, fleet uptime (`fleet.lanes-down@1`, `fleet.substrate-reach@1`,
+ *   node-deploy release store, the candidate queue (`delivery.candidate-backlog@1`, task.5498: open PRs from the review App's
+ *   GitHub read against the release store's served SHAs), fleet uptime (`fleet.lanes-down@1`, `fleet.substrate-reach@1`,
  *   `fleet.uptime@1`, task.5457) over the same lane probes and the stored lanes-down readings, and PR review (`review.merge-coverage@1`, `review.fail-fix-rate@1`,
  *   task.5450) over the review App's check runs on the parent repo, and shared-substrate host pressure
  *   (`substrate.host-pressure@1`, bug.5613) over per-host node_exporter and k3s-kine series in Grafana Cloud Mimir. Package calculators, budgets
@@ -45,11 +46,19 @@ import type { Sql } from "postgres";
 import {
   DeliveryKpiSource,
   FleetObservationReader,
+  GitHubCandidateBacklogSource,
   GitHubReviewKpiSource,
   REVIEW_CHECK_RUN_NAME,
 } from "@/adapters/server";
-import { createEdgeHostCatalog } from "@/bootstrap/capabilities/node-catalog";
+import {
+  createEdgeHostCatalog,
+  createNodeCatalog,
+} from "@/bootstrap/capabilities/node-catalog";
 import { createLokiMetricReader } from "@/bootstrap/observability.factory";
+import {
+  createCandidateBacklogCalculators,
+  parseSourceRepo,
+} from "@/features/node-deploy/candidate-backlog-kpis";
 import { createDeliveryCalculators } from "@/features/node-deploy/delivery-kpis";
 import {
   createEdgeCaughtCalculators,
@@ -105,6 +114,26 @@ export function createGoalMetrics(deps: {
     node: getNodeId(),
     nodeCalculators: [
       ...createDeliveryCalculators(deliverySource, { controlHost, snapshots }),
+      // task.5498: the candidate queue (`delivery.candidate-backlog@1`). The node repo is its catalog
+      // `source_repo`; GitHub is read through the same review App as the review KPIs (no new credential).
+      ...createCandidateBacklogCalculators(deliverySource, {
+        repoOf: async (nodeId) =>
+          parseSourceRepo(
+            (
+              (await createNodeCatalog().entryFor(nodeId))?.row as
+                | { source_repo?: unknown }
+                | undefined
+            )?.source_repo
+          ),
+        operatorNodeId: getNodeId(),
+        github:
+          review.appId && review.privateKeyBase64
+            ? new GitHubCandidateBacklogSource({
+                appId: review.appId,
+                privateKeyBase64: review.privateKeyBase64,
+              })
+            : undefined,
+      }),
       ...createFleetCalculators({
         snapshots,
         // The package's scope key is `<node>/<environment>/<dataScope>`; read this node + environment only.

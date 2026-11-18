@@ -225,6 +225,7 @@ export {
   RipgrepAdapter,
   type RipgrepAdapterConfig,
 } from "./repo";
+export { GitHubCandidateBacklogSource } from "./review/candidate-backlog-source.adapter";
 // Review GitHub plane (worker-delegated PR review — bug.5000)
 export {
   CHECK_RUN_NAME as REVIEW_CHECK_RUN_NAME,
