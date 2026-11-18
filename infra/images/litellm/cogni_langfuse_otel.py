@@ -103,7 +103,14 @@ def _build() -> CustomLogger:
 
         @staticmethod
         def set_langfuse_otel_attributes(span: Any, kwargs: dict, response_obj: Any) -> None:
-            LangfuseOtelLogger.set_langfuse_otel_attributes(span, kwargs, response_obj)
+            # The stock logger copies `langfuse_<key>` request headers into the live
+            # litellm_params.metadata dict. Give it a copy so a caller header can never
+            # overwrite the gateway-stamped identity read below or by the billing router.
+            stock_params = dict(kwargs.get("litellm_params") or {})
+            stock_params["metadata"] = dict(stock_params.get("metadata") or {})
+            LangfuseOtelLogger.set_langfuse_otel_attributes(
+                span, {**kwargs, "litellm_params": stock_params}, response_obj
+            )
             try:
                 CogniLangfuseOtel._set_gateway_identity(span, kwargs, response_obj)
             except Exception:
