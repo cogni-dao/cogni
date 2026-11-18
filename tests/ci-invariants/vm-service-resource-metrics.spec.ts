@@ -238,9 +238,10 @@ describe("VM service resource attribution (story.5084)", () => {
 
   it("keeps VM capacity alerts free of duplicate warning tiers", () => {
     const uids = alertRules.map((rule) => rule.uid);
-    expect(uids.slice(-2)).toEqual([
+    expect(uids.slice(-3)).toEqual([
       "fleet-serve-down",
       "fleet-db-major-faults",
+      "fleet-edge-caught",
     ]);
     // reliability-memory-warning / reliability-disk-warning own these tiers.
     expect(uids).not.toContain("fleet-vm-memory-25");

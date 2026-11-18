@@ -83,7 +83,11 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
         ? s`AND r.env = ${scope.env}`
         : s`AND d.env = ${scope.env}`
       : s``;
-    return s`${node} ${env}`;
+    const shas =
+      alias === "r" && scope.sourceShas && scope.sourceShas.length > 0
+        ? s`AND r.source_sha IN ${s(scope.sourceShas as string[])}`
+        : s``;
+    return s`${node} ${env} ${shas}`;
   }
 
   async releases(input: {

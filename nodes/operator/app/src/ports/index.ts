@@ -103,6 +103,11 @@ export type {
 export type { BuiltImageResolverPort } from "./built-image.port";
 export { BuiltImageRegistryError } from "./built-image.port";
 export type {
+  CandidateBacklogSourcePort,
+  CandidateOpenPr,
+  CandidateRepo,
+} from "./candidate-backlog.port";
+export type {
   CatalogNodeOwnerProjection,
   CatalogNodeRegistryPort,
   CatalogNodeRegistryReconcileSummary,
