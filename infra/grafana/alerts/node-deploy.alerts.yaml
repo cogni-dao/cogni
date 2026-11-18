@@ -174,3 +174,37 @@ groups:
         labels: { severity: critical, plane: node-deploy }
         noDataState: OK
         execErrState: Alerting
+
+      # A serving lane's request metrics are dark (bug.5641). The operator scrapes every serving lane's
+      # /api/metrics and publishes cogni_lease_scrape_up{node,env,workload} (1 only when the lane
+      # contributed samples). 0 means unauthorised (token not yet delivered by a release), a lane without
+      # METRICS_TOKEN (500), an empty body, a timeout or too many samples; read cogni_lease_scrape_info
+      # {reason} for which. A lane released before the derived token shipped reads 0 until its next
+      # release, which is the truth: its metrics are dark. Missing evidence is critical: if the series
+      # disappear (route down, Alloy job gone) the rule fires, so an absent scraper never reads green.
+      - uid: node-lease-scrape-down
+        title: Node lease metrics scrape DOWN — a serving lane's request metrics are dark
+        condition: THRESHOLD
+        for: 15m
+        data:
+          - refId: UP
+            datasourceUid: grafanacloud-prom
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              datasource: { type: prometheus, uid: grafanacloud-prom }
+              expr: 'min by (node, env, workload) (cogni_lease_scrape_up{env="production"})'
+              instant: true
+              refId: UP
+          - refId: THRESHOLD
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: UP
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+              refId: THRESHOLD
+        annotations:
+          summary: "Node {{ $labels.node }} workload {{ $labels.workload }} ({{ $labels.env }}): the operator cannot scrape its /api/metrics, so http_requests_total and the AI histograms are dark. Read cogni_lease_scrape_info for the reason (unauthorized or not_configured: the lane needs a release made after the derived token shipped; timeout or network: the lane is unreachable; empty or too_large: the app output is wrong)."
+        labels: { severity: critical, plane: node-deploy }
+        noDataState: Alerting
+        execErrState: Alerting

@@ -331,30 +331,21 @@ prometheus.relabel "app_metrics" {
 //   - honor_labels = true: the operator stamps node / env / workload / service from its release store and
 //     removes any copy the tenant wrote. Alloy must keep them, and must NOT apply the operator's own env
 //     (that rule belongs to app_metrics only).
-//   - cogni_lease_scrape_up{node,env,workload,reason} reads 0 for a dead, unauthorised or not-yet-released
-//     lane, so absence is detectable. Design: https://cognidao.org/knowledge/lease-metrics-forwarding-design
+//   - cogni_lease_scrape_up{node,env,workload} reads 0 for a dead, unauthorised or not-yet-released lane
+//     (cogni_lease_scrape_info{reason} says why), so absence is detectable; the node-lease-scrape-down alert
+//     reads it. Design: https://cognidao.org/knowledge/lease-metrics-forwarding-design
 //   - scrape_timeout (25s) exceeds the route's own 20s pass deadline.
 
 prometheus.scrape "lease_metrics" {
   targets = [
     {"__address__" = "host.docker.internal:30000"},
   ]
-  forward_to      = [prometheus.relabel.lease_metrics.receiver]
+  forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
   scrape_interval = "30s"
   scrape_timeout  = "25s"
   metrics_path    = "/api/metrics/leases"
   bearer_token    = sys.env("METRICS_TOKEN")
   honor_labels    = true
-}
-
-prometheus.relabel "lease_metrics" {
-  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
-
-  // Distinguish this job's own up series from app_metrics' (both target the operator pod).
-  rule {
-    target_label = "job"
-    replacement  = "lease_metrics"
-  }
 }
 
 // =============================================================================
