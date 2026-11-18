@@ -18,7 +18,7 @@
  *     reported `set: Required` — the confusing 400 that got bug.5242 misfiled as a drift.
  *   - OPTIONAL_CAS: top-level `expectedRevision` (the item's `revision` as read) is compare-and-set —
  *     the write lands only if the row is still at that revision, else 409 `revision_conflict` and
- *     nothing is written. Omitted ⇒ unconditioned patch (unchanged). No transition state-machine.
+ *     nothing is written. Omitted ⇒ unconditioned patch (unchanged). A status move is gated (task.0122): the shared store answers 409 `gate_unmet` or 503 `gate_facts_unavailable`; the status enum is the package's ladder.
  *   - REASON_REQUIRED (task.0086): top-level `reason` is required: one line (line breaks become spaces), 1-240 chars,
  *     at most 25 words, stored in Dolt history and read back at GET /api/v1/work/items/{id}/history, never in the item
  *     (task.0052, story.0023). The package schema owns the rule; the adapter applies it again.
@@ -34,6 +34,7 @@ import {
   ChangeReasonSchema,
   WorkItemMovesInputSchema,
   WorkItemPatchInputSchema,
+  WorkItemPatchStatusSchema,
 } from "@cogni/work-items";
 import { z } from "zod";
 
@@ -41,18 +42,6 @@ import {
   WorkItemDtoSchema,
   WorkItemScoresInputSchema,
 } from "./work.items.list.v1.contract";
-
-const WorkItemStatusSchema = z.enum([
-  "needs_triage",
-  "needs_research",
-  "needs_design",
-  "needs_implement",
-  "needs_closeout",
-  "needs_merge",
-  "done",
-  "blocked",
-  "cancelled",
-]);
 
 export const workItemsPatchOperation = {
   id: "work.items.patch.v1",
@@ -67,7 +56,7 @@ export const workItemsPatchOperation = {
     "`currentRevision` and nothing is written. Required `reason` (one line, at most 25 words and 240 chars) says why; " +
     "a PATCH without it is a 400. It is stored in history (GET /api/v1/work/items/{id}/history), not in the item. " +
     "Optional `cites` (at most 8, each { id } or { id, contribution }) name hub atoms you read; each is pinned to its " +
-    "commit in history, and an unknown id is a 400.",
+    "commit in history, and an unknown id is a 400. A status move goes forward one ladder stage only with the exit artifact or fact of the stage it leaves (artifacts: POST /work/items/{id}/artifacts); a jump, an exit from done or cancelled, or a missing artifact or fact is a 409 `gate_unmet` with `from`, `to` and `missing`, and nothing is written. A failed gate fact read (PR, inbox or children) is a 503 `gate_facts_unavailable`.",
   input: z.strictObject({
     id: z.string(),
     expectedRevision: z.number().int().min(0).optional(),
@@ -78,7 +67,7 @@ export const workItemsPatchOperation = {
         title: z.string().min(1).max(500).optional(),
         summary: z.string().optional(),
         outcome: z.string().optional(),
-        status: WorkItemStatusSchema.optional(),
+        status: WorkItemPatchStatusSchema.optional(),
         priority: z.number().int().optional(),
         rank: z.number().int().optional(),
         estimate: z.number().int().optional(),

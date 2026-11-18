@@ -122,38 +122,37 @@ describe("work-item session policy", () => {
   // Legacy field: the PR scorecard for the head SHA is the only validation signal.
   const LEGACY_VALIDATION_FLAG = /deploy_?verified/i;
 
-  it("orders needs_merge as review, flight, validate, PATCH needs_closeout, then operator merge", () => {
-    const text = linked({ status: "needs_merge" });
-    const review = text.indexOf("/review-implementation");
-    const flight = text.indexOf("/api/v1/vcs/flight");
-    const validate = text.indexOf("/validate-candidate");
-    const closeout = text.indexOf("PATCH status needs_closeout");
-    const merge = text.indexOf("/api/v1/vcs/merge");
+  it("orders the ladder: review, flight, validate, then operator merge, then closeout", () => {
+    const review = linked({ status: "needs_implementation_review" });
+    const validation = linked({ status: "needs_validation" });
+    const merge = linked({ status: "needs_merge" });
 
-    expect(text).toContain("PR #1204");
-    expect(review).toBeGreaterThanOrEqual(0);
-    expect(review).toBeLessThan(flight);
-    expect(flight).toBeLessThan(validate);
-    expect(validate).toBeLessThan(closeout);
-    expect(closeout).toBeLessThan(merge);
+    expect(review).toContain("PR #1204");
+    expect(review).toContain("/review-implementation");
+    expect(review).toContain("needs_validation");
+    expect(validation.indexOf("/api/v1/vcs/flight")).toBeGreaterThanOrEqual(0);
+    expect(validation.indexOf("/api/v1/vcs/flight")).toBeLessThan(
+      validation.indexOf("/validate-candidate")
+    );
+    expect(validation).toContain("needs_merge");
+    expect(merge).toContain("/api/v1/vcs/merge");
+    expect(merge).toContain("needs_closeout");
   });
 
-  it("asks /closeout to verify CI, review and scorecard at one head SHA before merging", () => {
+  it("moves needs_closeout to done only with the closeout artifact, and never asks it to merge", () => {
     const text = linked({ status: "needs_closeout" });
-    const verify = text.indexOf("one head SHA");
-    const merge = text.indexOf("/api/v1/vcs/merge");
-    const done = text.indexOf("set done");
 
     expect(text).toContain("/closeout");
-    expect(text).toContain("/validate-candidate scorecard");
-    expect(verify).toBeGreaterThanOrEqual(0);
-    expect(verify).toBeLessThan(merge);
-    expect(merge).toBeLessThan(done);
+    expect(text).toContain("closeout artifact");
+    expect(text).toContain("status done");
+    expect(text).not.toContain("/api/v1/vcs/merge");
   });
 
   it("never names the legacy validation flag in any linked-PR next action", () => {
     for (const status of [
       "needs_implement",
+      "needs_implementation_review",
+      "needs_validation",
       "needs_merge",
       "needs_closeout",
       "done",
@@ -171,10 +170,11 @@ describe("work-item session policy", () => {
     expect(text).not.toContain("/validate-candidate");
   });
 
-  it("hands needs_implement to needs_merge, not closeout", () => {
+  it("hands needs_implement to needs_implementation_review, not merge or closeout", () => {
     const text = linked({ status: "needs_implement" });
 
-    expect(text).toContain("needs_merge");
+    expect(text).toContain("needs_implementation_review");
+    expect(text).not.toContain("needs_merge");
     expect(text).not.toContain("closeout");
   });
 });

@@ -8,6 +8,8 @@
  * Scope: Builds the injected Dolt content adapter; does not construct PostgreSQL coordination sessions.
  * Invariants: One writer; reader width two and generation budget four; lazy construction.
  *   CITE_READS_OFF_THE_WRITER (task.0086): cited atoms resolve on a separate lazy width-one pool.
+ *   GATE_FACTS_ARE_INJECTED (task.0122): the status gates read a PR's head and merge state through the caller's `prFacts` port, and an
+ *   inbox's head and merge state locally on the lock-free read pool (never the writer, whose width is one and whose lock the gate already holds).
  *   MOVES_BASELINE_IS_INJECTED (story.0033): the metric baseline port comes from the caller (the container binds it
  *   to the goal-metric service); this module never imports the metrics package.
  *   Missing DOLTGRES_URL throws DoltgresNotConfiguredError.
@@ -20,8 +22,11 @@
  */
 
 import { buildDoltgresClient } from "@cogni/knowledge-store/adapters/doltgres";
-import { createDoltgresEntryResolver } from "@cogni/shared-knowledge-store/adapters/doltgres";
-import type { MetricBaselinePort } from "@cogni/work-items";
+import {
+  createDoltgresEntryResolver,
+  createDoltgresInboxStates,
+} from "@cogni/shared-knowledge-store/adapters/doltgres";
+import type { MetricBaselinePort, PrFactsPort } from "@cogni/work-items";
 import {
   DoltgresWorkItemAdapter,
   OPERATOR_ID_FLOOR,
@@ -136,7 +141,15 @@ function getDoltgresCitesSql(): Sql {
 // log view.
 export function getDoltgresWorkItemsAdapter(
   logger?: Logger,
-  deps: { readonly metricBaseline?: MetricBaselinePort } = {}
+  deps: {
+    readonly metricBaseline?: MetricBaselinePort;
+    /** PR head and merge state for the status gates (task.0122). Without it the gated moves answer 503. */
+    readonly prFacts?: PrFactsPort;
+    /** `owner/repo` pin of the repositories whose PRs are code deliverables. Unset: a PR of any github.com repository is. */
+    readonly prRepos?: readonly string[];
+    /** This hub's own origin: a story validation must name it. Unset, a story validation is refused (fail closed). */
+    readonly hubOrigin?: string;
+  } = {}
 ): DoltgresWorkItemAdapter {
   if (!_adapter)
     _adapter = new DoltgresWorkItemAdapter(getDoltgresSql(), {
@@ -162,6 +175,13 @@ export function getDoltgresWorkItemsAdapter(
       // story.0033: a `moves` entry pins the metric's latest good observation as its baseline.
       // Absent ⇒ a non-empty `moves` write is refused (`MovesUnsupportedError`), nothing written.
       ...(deps.metricBaseline ? { metricBaseline: deps.metricBaseline } : {}),
+      // task.0122: gate facts. An inbox's head and merge state is a plain SELECT on committed main, so it rides the read pool.
+      ...(deps.prFacts ? { prFacts: deps.prFacts } : {}),
+      inboxes: createDoltgresInboxStates({
+        unsafe: (query) => getDoltgresReadSql().unsafe(query),
+      }),
+      ...(deps.prRepos?.length ? { prRepos: deps.prRepos } : {}),
+      ...(deps.hubOrigin ? { hubOrigin: deps.hubOrigin } : {}),
     });
   return _adapter;
 }

@@ -357,6 +357,11 @@ export const serverSchema = z.object({
   COGNI_REPO_PATH: optionalString,
   // SHA override for mounts without .git (e.g., git-sync worktree)
   COGNI_REPO_SHA: optionalString,
+  // owner/repo of this node's repository: only a pull request there is a code deliverable of a work item (task.0122).
+  // Optional: one or more comma-separated owner/repo; when set, only a pull request of those repositories is a code
+  // deliverable. Unset, the gate accepts a PR of any
+  // github.com repository and the container logs `adapter.work_items.pr_repo_unpinned` once at boot. No default.
+  WORK_ITEMS_PR_REPO: optionalString,
 
   // TigerBeetle (Financial Ledger) - Optional
   // Required only when double-entry ledger is enabled.

@@ -90,11 +90,15 @@ export function nextActionForWorkItem(input: {
 
   switch (workItem.status) {
     case "needs_implement":
-      return `Continue /implement for ${workItem.id}; when ${prTag} carries Evidence and Merge Danger, set needs_merge so a fresh /review-implementation starts while CI runs.`;
+      return `Continue /implement for ${workItem.id}; when ${prTag} carries Evidence and Merge Danger, PATCH status needs_implementation_review so a fresh /review-implementation starts while CI runs.`;
+    case "needs_implementation_review":
+      return `Start a fresh /review-implementation of ${prTag} (${workItem.id}) now, while CI runs; the implementer never reviews its own work. Record the implementation_review artifact at the PR head (POST /api/v1/work/items/{id}/artifacts); APPROVE moves ${workItem.id} to needs_validation, REQUEST CHANGES returns it to needs_implement.`;
+    case "needs_validation":
+      return `Flight the approved head SHA of ${prTag} (POST /api/v1/vcs/flight) and run /validate-candidate, which posts the scorecard on the PR; record the validation artifact (PASS grade at that head) and PATCH status needs_merge.`;
     case "needs_merge":
-      return `Start a fresh /review-implementation of ${prTag} (${workItem.id}) now, while CI runs; the implementer never reviews its own work. When APPROVE and required CI are green at one head SHA, flight that SHA (POST /api/v1/vcs/flight) and run /validate-candidate, which posts the scorecard on the PR; when it passes, PATCH status needs_closeout so /closeout merges through POST /api/v1/vcs/merge. REQUEST CHANGES returns ${workItem.id} to needs_implement.`;
+      return `Merge ${prTag} (${workItem.id}) through POST /api/v1/vcs/merge once the scorecard and required CI name one head SHA; after it merges, PATCH status needs_closeout (the gate reads the merge from GitHub).`;
     case "needs_closeout":
-      return `Run /closeout for ${workItem.id}: confirm CI, the /review-implementation APPROVE and the passing /validate-candidate scorecard name one head SHA on ${prTag} (else return to needs_merge), then POST /api/v1/vcs/merge and set done after it merges.`;
+      return `Run /closeout for ${workItem.id}: record the closeout artifact (verdict done), then PATCH status done. The move to done needs that artifact, never a bare status write.`;
     case "done":
       return `${workItem.id} is done. Preview follows main; production promote waits for a human to look at user-facing changes.`;
     case "blocked":

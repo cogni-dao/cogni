@@ -161,6 +161,29 @@ export class GitHubVcsAdapter implements VcsCapability {
     );
   }
 
+  /**
+   * A pull request's current head and merge state, for the work-item status gates (task.0122).
+   * One read: no checks, no reviews. Not part of `VcsCapability`; the work-item PR-facts port takes it structurally.
+   */
+  async getPrFacts(params: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    signal?: AbortSignal;
+  }): Promise<{ headSha: string; merged: boolean }> {
+    const octokit = await this.getOctokit(params.owner, params.repo);
+    const { data: pr } = await octokit.request(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}",
+      {
+        owner: params.owner,
+        repo: params.repo,
+        pull_number: params.prNumber,
+        ...(params.signal ? { request: { signal: params.signal } } : {}),
+      }
+    );
+    return { headSha: pr.head.sha, merged: pr.merged === true };
+  }
+
   async getCiStatus(params: {
     owner: string;
     repo: string;

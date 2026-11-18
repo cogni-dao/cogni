@@ -3,7 +3,7 @@
 
 /**
  * Module: `@cogni/operator-doltgres-schema/work-items`
- * Purpose: Operator's Doltgres `work_items` table — pure re-export of the shared
+ * Purpose: Operator's Doltgres `work_items` and `work_item_artifacts` tables — pure re-export of the shared
  *   shape from @cogni/knowledge-base. Promoted to base 2026-05-30 (spike.5004) so
  *   every knowledge-capable node owns its own work_items without re-defining the schema.
  * Scope: Re-exports only. Targets Doltgres via pg wire protocol (dialect: postgresql).
@@ -21,7 +21,10 @@
  */
 
 export {
+  workItemArtifacts,
   workItems,
+  type NewWorkItemArtifactRow,
   type NewWorkItemRow,
+  type WorkItemArtifactRow,
   type WorkItemRow,
 } from "@cogni/knowledge-base";

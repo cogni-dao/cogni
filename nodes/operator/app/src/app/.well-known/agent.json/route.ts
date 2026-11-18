@@ -25,6 +25,9 @@ import {
   flightOperation,
   knowledgeHistoryOperation,
   reviewOperation,
+  workItemsArtifactGetOperation,
+  workItemsArtifactsCreateOperation,
+  workItemsArtifactsListOperation,
   workItemsCreateOperation,
   workItemsGetOperation,
   workItemsHistoryOperation,
@@ -117,6 +120,8 @@ export async function GET(request: Request) {
       workItemHeartbeat: `${origin}/api/v1/work/items/{id}/heartbeat`,
       workItemPr: `${origin}/api/v1/work/items/{id}/pr`,
       workItemCoordination: `${origin}/api/v1/work/items/{id}/coordination`,
+      workItemArtifacts: `${origin}/api/v1/work/items/{id}/artifacts`,
+      workItemHistory: `${origin}/api/v1/work/items/{id}/history`,
       runs: `${origin}/api/v1/agent/runs`,
       nodeTraceObservations: `${origin}/api/v1/nodes/{id}/observability/langfuse/api/public/v2/observations`,
       runStream: `${origin}/api/v1/agent/runs/{runId}/stream`,
@@ -207,7 +212,8 @@ export async function GET(request: Request) {
       // take `{ metricId, direction }` only; the server pins the baseline.
       getWorkItem: {
         method: "GET",
-        endpoint: `${origin}/api/v1/work/items/{id}`,
+        endpoint: `${origin}/api/v1/work/items/{id}?include={include}&artifact={artifact}`,
+        description: workItemsGetOperation.description,
         auth: { type: "bearer" },
         inputSchema: z.toJSONSchema(workItemsGetOperation.input),
         outputSchema: z.toJSONSchema(workItemsGetOperation.output),
@@ -215,6 +221,7 @@ export async function GET(request: Request) {
       updateWorkItem: {
         method: "PATCH",
         endpoint: `${origin}/api/v1/work/items/{id}`,
+        description: workItemsPatchOperation.description,
         auth: { type: "bearer" },
         inputSchema: z.toJSONSchema(workItemsPatchOperation.input),
         outputSchema: z.toJSONSchema(workItemsPatchOperation.output),
@@ -223,10 +230,37 @@ export async function GET(request: Request) {
       // change reason. Schemas are the package-owned operations, projected like the rest.
       getWorkItemHistory: {
         method: "GET",
-        endpoint: `${origin}/api/v1/work/items/{id}/history`,
+        endpoint: `${origin}/api/v1/work/items/{id}/history?view={view}&cursor={cursor}`,
+        description: workItemsHistoryOperation.description,
         auth: { type: "bearer" },
         inputSchema: z.toJSONSchema(workItemsHistoryOperation.input),
         outputSchema: z.toJSONSchema(workItemsHistoryOperation.output),
+      },
+      // ARTIFACTS_ARE_THE_ROUTES (task.0028): triage, review and validation verdicts are insert-only rows on one item.
+      // A forward status move needs the exit artifact of the stage it leaves, so these three are how an agent clears a gate.
+      recordWorkItemArtifact: {
+        method: "POST",
+        endpoint: `${origin}/api/v1/work/items/{id}/artifacts`,
+        description: workItemsArtifactsCreateOperation.description,
+        auth: { type: "bearer" },
+        inputSchema: z.toJSONSchema(workItemsArtifactsCreateOperation.input),
+        outputSchema: z.toJSONSchema(workItemsArtifactsCreateOperation.output),
+      },
+      listWorkItemArtifacts: {
+        method: "GET",
+        endpoint: `${origin}/api/v1/work/items/{id}/artifacts?view={view}&cursor={cursor}`,
+        description: workItemsArtifactsListOperation.description,
+        auth: { type: "bearer" },
+        inputSchema: z.toJSONSchema(workItemsArtifactsListOperation.input),
+        outputSchema: z.toJSONSchema(workItemsArtifactsListOperation.output),
+      },
+      getWorkItemArtifact: {
+        method: "GET",
+        endpoint: `${origin}/api/v1/work/items/{id}/artifacts/{artifactId}`,
+        description: workItemsArtifactGetOperation.description,
+        auth: { type: "bearer" },
+        inputSchema: z.toJSONSchema(workItemsArtifactGetOperation.input),
+        outputSchema: z.toJSONSchema(workItemsArtifactGetOperation.output),
       },
       getKnowledgeHistory: {
         method: "GET",
