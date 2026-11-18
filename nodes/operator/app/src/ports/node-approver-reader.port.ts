@@ -21,12 +21,23 @@
  * @public
  */
 
+/** Why a read was `unavailable`. A subset of the sync's closed reason enum, mirrored for the same layering reason. */
+export type NodeApproverUnavailableReason =
+  | "no_app_installation"
+  | "timeout"
+  | "not_found"
+  | "user_lookup_failed"
+  | "unexpected";
+
 /**
  * What the reader learned about one node, already mapped from wallets to env-local user ids.
  * Mirrored (not imported) from `@shared/node-registry/node-admin-sync`: `ports` may not import `shared`.
  */
 export type NodeApproverRead =
-  | { readonly status: "unavailable" }
+  | {
+      readonly status: "unavailable";
+      readonly reason: NodeApproverUnavailableReason;
+    }
   | {
       readonly status: "read";
       /** Approver wallets listed in the repo-spec (0 when the list is empty or malformed). */

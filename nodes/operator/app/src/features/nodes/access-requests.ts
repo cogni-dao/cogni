@@ -19,6 +19,7 @@ import { users } from "@cogni/db-schema/refs";
 import { and, desc, eq, sql } from "drizzle-orm";
 
 import {
+  type LegacyNodeAccessRole,
   type NodeAccessRequestStatus,
   type NodeAccessRole,
   nodeAccessRequests,
@@ -109,7 +110,8 @@ export async function transitionAccessRequestOnDecision(
   input: {
     readonly nodeId: string;
     readonly agentUserId: string;
-    readonly role: NodeAccessRole;
+    // A legacy `admin` row can still be denied or revoked (clean-up).
+    readonly role: NodeAccessRole | LegacyNodeAccessRole;
     readonly decision: "approve" | "reject";
   }
 ): Promise<void> {

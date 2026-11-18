@@ -56,7 +56,12 @@ describe("planNodeAdminSync", () => {
         approvers: read([], 0),
         currentUserIds: ["a"],
       })
-    ).toEqual({ outcome: "empty", adds: [], deletes: [] });
+    ).toEqual({
+      outcome: "empty",
+      reason: "no_approvers",
+      adds: [],
+      deletes: [],
+    });
   });
 
   it("is empty when approvers exist but none maps to a user, and never deletes", () => {
@@ -65,16 +70,26 @@ describe("planNodeAdminSync", () => {
         approvers: read([], 2),
         currentUserIds: ["a"],
       })
-    ).toEqual({ outcome: "empty", adds: [], deletes: [] });
+    ).toEqual({
+      outcome: "empty",
+      reason: "unmapped_approvers",
+      adds: [],
+      deletes: [],
+    });
   });
 
   it("is unavailable when the repo-spec read failed", () => {
     expect(
       planNodeAdminSync({
-        approvers: { status: "unavailable" },
+        approvers: { status: "unavailable", reason: "timeout" },
         currentUserIds: ["a"],
       })
-    ).toEqual({ outcome: "unavailable", adds: [], deletes: [] });
+    ).toEqual({
+      outcome: "unavailable",
+      reason: "timeout",
+      adds: [],
+      deletes: [],
+    });
   });
 
   it("is unavailable when the current tuples could not be read", () => {
@@ -83,7 +98,12 @@ describe("planNodeAdminSync", () => {
         approvers: read(["a"]),
         currentUserIds: null,
       })
-    ).toEqual({ outcome: "unavailable", adds: [], deletes: [] });
+    ).toEqual({
+      outcome: "unavailable",
+      reason: "openfga_read_failed",
+      adds: [],
+      deletes: [],
+    });
   });
 
   it("deduplicates mapped user ids", () => {
@@ -100,6 +120,7 @@ describe("planAdminDiff", () => {
   it("refuses a diff that would leave zero admins", () => {
     expect(planAdminDiff(["a", "b"], [])).toEqual({
       outcome: "refused",
+      reason: "zero_admins",
       adds: [],
       deletes: [],
     });

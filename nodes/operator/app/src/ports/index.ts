@@ -318,6 +318,7 @@ export type {
   NodeApproverRead,
   NodeApproverReader,
   NodeApproverTarget,
+  NodeApproverUnavailableReason,
 } from "./node-approver-reader.port";
 export type {
   AttemptMesh,

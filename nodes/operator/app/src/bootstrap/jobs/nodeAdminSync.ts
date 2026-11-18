@@ -14,7 +14,8 @@
  *   - NEVER_LOCK_OUT: nothing is written for `unavailable`, `empty` or `refused`; adds are applied before
  *     deletes, and a failed add skips every delete, so a partial apply never shrinks the admin set.
  *   - NEVER_THROWS: a node's failure is its own `unavailable` outcome and never stops the other nodes.
- *   - ONE_EVENT_PER_NODE_PER_TICK: `identity.node_admin_sync` with nodeId, outcome, mode, adds, deletes.
+ *   - ONE_EVENT_PER_NODE_PER_TICK: `identity.node_admin_sync` with nodeId, outcome, mode, adds, deletes,
+ *     and a closed-enum `reason` on every non-ok outcome (`NODE_ADMIN_SYNC_REASONS`).
  *   - USER_IDS_ONLY_IN_LOGS: the event carries user ids and counts, never wallet addresses.
  *   - BOUNDED_CONCURRENCY: at most `NODE_ADMIN_SYNC_CONCURRENCY` nodes are in flight.
  * Side-effects: IO (OpenFGA reads and, in write mode, writes), logging.
@@ -28,6 +29,7 @@ import type { NodeApproverReader, NodeApproverTarget } from "@/ports";
 import {
   type NodeAdminPlan,
   type NodeAdminSyncOutcome,
+  type NodeAdminSyncReason,
   type NodeApproverRead,
   planNodeAdminSync,
   userIdFromSubject,
@@ -58,6 +60,8 @@ export interface NodeAdminSyncDeps {
 export interface NodeAdminSyncResult {
   readonly nodeId: string;
   readonly outcome: NodeAdminSyncOutcome;
+  /** Closed-enum reason; present for every non-ok outcome. */
+  readonly reason?: NodeAdminSyncReason;
   readonly mode: "report" | "write";
   readonly adds: number;
   readonly deletes: number;
@@ -68,8 +72,16 @@ export async function syncNodeAdmin(
   node: NodeApproverTarget
 ): Promise<NodeAdminSyncResult> {
   const mode = deps.write ? "write" : "report";
-  let approvers: NodeApproverRead = { status: "unavailable" };
-  let plan: NodeAdminPlan = { outcome: "unavailable", adds: [], deletes: [] };
+  let approvers: NodeApproverRead = {
+    status: "unavailable",
+    reason: "unexpected",
+  };
+  let plan: NodeAdminPlan = {
+    outcome: "unavailable",
+    reason: "unexpected",
+    adds: [],
+    deletes: [],
+  };
   let writeFailed = false;
 
   try {
@@ -93,16 +105,25 @@ export async function syncNodeAdmin(
   } catch {
     // The reader and the authorization port report failure as values. Anything thrown here is
     // unexpected; it is this node's `unavailable`, never a stop for the other nodes.
-    plan = { outcome: "unavailable", adds: [], deletes: [] };
+    plan = {
+      outcome: "unavailable",
+      reason: "unexpected",
+      adds: [],
+      deletes: [],
+    };
   }
 
   const outcome: NodeAdminSyncOutcome = writeFailed
     ? "unavailable"
     : plan.outcome;
+  const reason: NodeAdminSyncReason | undefined = writeFailed
+    ? "openfga_write_failed"
+    : plan.reason;
   const fields: Record<string, unknown> = {
     event: EVENT_NAMES.IDENTITY_NODE_ADMIN_SYNC,
     nodeId: node.nodeId,
     outcome,
+    ...(outcome !== "ok" ? { reason: reason ?? "unexpected" } : {}),
     mode,
     adds: plan.adds.length,
     deletes: plan.deletes.length,
@@ -129,6 +150,7 @@ export async function syncNodeAdmin(
   return {
     nodeId: node.nodeId,
     outcome,
+    ...(outcome !== "ok" ? { reason: reason ?? "unexpected" } : {}),
     mode,
     adds: plan.adds.length,
     deletes: plan.deletes.length,

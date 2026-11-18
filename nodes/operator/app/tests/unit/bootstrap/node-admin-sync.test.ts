@@ -21,7 +21,10 @@ import {
   syncNodeAdmin,
   syncNodeAdmins,
 } from "@/bootstrap/jobs/nodeAdminSync";
-import { startNodeAdminSyncOnBoot } from "@/bootstrap/node-admin-sync";
+import {
+  runNodeAdminSyncTick,
+  startNodeAdminSyncOnBoot,
+} from "@/bootstrap/node-admin-sync";
 import type { NodeApproverRead, NodeApproverTarget } from "@/ports";
 
 const NODE: NodeApproverTarget = {
@@ -60,6 +63,22 @@ function deps(
     log: makeLog(),
   };
 }
+
+const tick = vi.hoisted(() => ({
+  summary: {
+    nodes: 0,
+    byOutcome: {} as Record<string, number>,
+    mode: "report" as "report" | "write",
+    skipped: false,
+  },
+  log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
+}));
+vi.mock("@/bootstrap/jobs/syncNodeAdmins.job", () => ({
+  runNodeAdminSyncJob: vi.fn(async () => tick.summary),
+}));
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: () => ({ log: tick.log }),
+}));
 
 describe("syncNodeAdmin", () => {
   it("report mode logs the diff and writes nothing", async () => {
@@ -149,10 +168,22 @@ describe("syncNodeAdmin", () => {
   });
 
   it.each([
-    ["unavailable", { status: "unavailable" } as NodeApproverRead],
-    ["empty", { status: "read", approverCount: 0, userIds: [] }],
-    ["empty", { status: "read", approverCount: 2, userIds: [] }],
-  ] as const)("%s: write mode deletes and adds nothing", async (outcome, read) => {
+    [
+      "unavailable",
+      "timeout",
+      { status: "unavailable", reason: "timeout" } as NodeApproverRead,
+    ],
+    [
+      "empty",
+      "no_approvers",
+      { status: "read", approverCount: 0, userIds: [] },
+    ],
+    [
+      "empty",
+      "unmapped_approvers",
+      { status: "read", approverCount: 2, userIds: [] },
+    ],
+  ] as const)("%s/%s: write mode deletes and adds nothing and names its reason", async (outcome, reason, read) => {
     const authorization = new FakeAuthorizationAdapter();
     await seedAdmins(authorization, ["old"]);
     const write = vi.spyOn(authorization, "writeRelation");
@@ -161,6 +192,7 @@ describe("syncNodeAdmin", () => {
     const result = await syncNodeAdmin(deps(read, authorization, true), NODE);
 
     expect(result.outcome).toBe(outcome);
+    expect(result.reason).toBe(reason);
     expect(write).not.toHaveBeenCalled();
     expect(del).not.toHaveBeenCalled();
   });
@@ -180,6 +212,7 @@ describe("syncNodeAdmin", () => {
     );
 
     expect(result.outcome).toBe("unavailable");
+    expect(result.reason).toBe("openfga_read_failed");
     expect(write).not.toHaveBeenCalled();
   });
 
@@ -202,7 +235,11 @@ describe("syncNodeAdmin", () => {
     expect(result.outcome).toBe("unavailable");
     expect(del).not.toHaveBeenCalled();
     expect(d.log.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "unavailable", writeFailed: true }),
+      expect.objectContaining({
+        outcome: "unavailable",
+        reason: "openfga_write_failed",
+        writeFailed: true,
+      }),
       "identity.node_admin_sync"
     );
   });
@@ -221,6 +258,7 @@ describe("syncNodeAdmin", () => {
     };
     await expect(syncNodeAdmin(d, NODE)).resolves.toMatchObject({
       outcome: "unavailable",
+      reason: "unexpected",
     });
   });
 });
@@ -240,7 +278,7 @@ describe("syncNodeAdmins", () => {
           peak = Math.max(peak, inFlight);
           await new Promise((resolve) => setTimeout(resolve, 5));
           inFlight -= 1;
-          return { status: "unavailable" };
+          return { status: "unavailable", reason: "timeout" };
         },
       },
       authorization: new FakeAuthorizationAdapter(),
@@ -303,11 +341,25 @@ describe("RepoSpecNodeApproverReader", () => {
       ...base,
       fetchRepoSpec: async () => null,
     });
+    const notInstalled = new RepoSpecNodeApproverReader({
+      ...base,
+      fetchRepoSpec: async () => {
+        throw Object.assign(new Error("not installed"), {
+          code: "github_app_not_installed",
+        });
+      },
+    });
     await expect(failing.approvers(NODE)).resolves.toEqual({
       status: "unavailable",
+      reason: "unexpected",
+    });
+    await expect(notInstalled.approvers(NODE)).resolves.toEqual({
+      status: "unavailable",
+      reason: "no_app_installation",
     });
     await expect(missing.approvers(NODE)).resolves.toEqual({
       status: "unavailable",
+      reason: "not_found",
     });
   });
 
@@ -319,6 +371,7 @@ describe("RepoSpecNodeApproverReader", () => {
     });
     await expect(reader.approvers(NODE)).resolves.toEqual({
       status: "unavailable",
+      reason: "timeout",
     });
   });
 
@@ -347,6 +400,7 @@ describe("RepoSpecNodeApproverReader", () => {
     });
     await expect(reader.approvers(NODE)).resolves.toEqual({
       status: "unavailable",
+      reason: "user_lookup_failed",
     });
   });
 });
@@ -357,5 +411,49 @@ describe("startNodeAdminSyncOnBoot", () => {
     startNodeAdminSyncOnBoot();
     expect(setIntervalSpy).not.toHaveBeenCalled();
     setIntervalSpy.mockRestore();
+  });
+});
+
+describe("runNodeAdminSyncTick", () => {
+  it("logs one tick event with a count per outcome, even for a tick with zero rows", async () => {
+    tick.log.info.mockClear();
+    tick.summary = { nodes: 0, byOutcome: {}, mode: "report", skipped: false };
+    await runNodeAdminSyncTick();
+    expect(tick.log.info).toHaveBeenCalledTimes(1);
+    expect(tick.log.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "identity.node_admin_sync.tick",
+        mode: "report",
+        nodes: 0,
+        skipped: false,
+        ok: 0,
+        unavailable: 0,
+        empty: 0,
+        refused: 0,
+      }),
+      "identity.node_admin_sync.tick"
+    );
+  });
+
+  it("reports counts per outcome", async () => {
+    tick.log.info.mockClear();
+    tick.summary = {
+      nodes: 4,
+      byOutcome: { ok: 2, unavailable: 1, empty: 1 },
+      mode: "write",
+      skipped: false,
+    };
+    await runNodeAdminSyncTick();
+    expect(tick.log.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "write",
+        nodes: 4,
+        ok: 2,
+        unavailable: 1,
+        empty: 1,
+        refused: 0,
+      }),
+      "identity.node_admin_sync.tick"
+    );
   });
 });

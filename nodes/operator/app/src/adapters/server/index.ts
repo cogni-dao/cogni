@@ -154,6 +154,7 @@ export {
 export {
   drizzleUsersForWallets,
   extractRepoSpecApprovers,
+  NodeApproverReadError,
   RepoSpecNodeApproverReader,
   type RepoSpecNodeApproverReaderDeps,
 } from "./identity/repo-spec-node-approver-reader.adapter";

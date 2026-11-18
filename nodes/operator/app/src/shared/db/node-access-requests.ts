@@ -60,6 +60,14 @@ export const NODE_ACCESS_ROLES = [
 
 export type NodeAccessRole = (typeof NODE_ACCESS_ROLES)[number];
 
+/**
+ * Roles that can no longer be requested or approved but may still sit on old rows. The developers
+ * route lets an owner deny or revoke them (clean-up) and never approve them.
+ */
+export const LEGACY_NODE_ACCESS_ROLES = ["admin"] as const;
+
+export type LegacyNodeAccessRole = (typeof LEGACY_NODE_ACCESS_ROLES)[number];
+
 export const nodeAccessRequests = pgTable(
   "node_access_requests",
   {

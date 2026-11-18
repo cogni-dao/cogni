@@ -36,7 +36,10 @@ import {
 } from "@/features/nodes/access-requests";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
 import { getServerSessionUser } from "@/lib/auth/server";
-import { NODE_ACCESS_ROLES } from "@/shared/db/node-access-requests";
+import {
+  LEGACY_NODE_ACCESS_ROLES,
+  NODE_ACCESS_ROLES,
+} from "@/shared/db/node-access-requests";
 import { nodes } from "@/shared/db/nodes";
 import { userBindings } from "@/shared/db/schema";
 import { serverEnv } from "@/shared/env";
@@ -49,13 +52,29 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const DeveloperDecisionInput = z.object({
-  agentUserId: z.string().uuid(),
-  decision: z.enum(["approve", "reject"]),
-  role: z.enum(NODE_ACCESS_ROLES).default("developer"),
-  // NO githubLogin here by design (https://cognidao.org/knowledge/authz-port-contract §6a): the human approving never supplies a GitHub login.
-  // The agent declared its own login on the access REQUEST; approve resolves it from there.
-});
+const DeveloperDecisionInput = z
+  .object({
+    agentUserId: z.string().uuid(),
+    decision: z.enum(["approve", "reject"]),
+    // A legacy `admin` row can still be denied or revoked (clean-up); approving it is refused below.
+    role: z
+      .enum([...NODE_ACCESS_ROLES, ...LEGACY_NODE_ACCESS_ROLES])
+      .default("developer"),
+    // NO githubLogin here by design (https://cognidao.org/knowledge/authz-port-contract §6a): the human approving never supplies a GitHub login.
+    // The agent declared its own login on the access REQUEST; approve resolves it from there.
+  })
+  .refine(
+    (input) =>
+      !(
+        input.decision === "approve" &&
+        (LEGACY_NODE_ACCESS_ROLES as readonly string[]).includes(input.role)
+      ),
+    {
+      path: ["role"],
+      message:
+        "admin cannot be approved: a node's admins are its repo-spec approvers",
+    }
+  );
 
 /** Outcome of the §6a GitHub branch-push side-effect, surfaced in the response + audit log. */
 type BranchPushOutcome =

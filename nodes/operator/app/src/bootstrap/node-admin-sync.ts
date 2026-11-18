@@ -10,6 +10,8 @@
  *     first-success barrier. Nothing here is awaited by container init and nothing here rejects into it.
  *   - NO_OVERLAP: a tick that fires while one is running is dropped; the job also holds a cross-replica
  *     advisory lock.
+ *   - ONE_TICK_EVENT: every tick that returns logs `identity.node_admin_sync.tick` with mode, nodes and a
+ *     count per outcome, including a skipped tick and a tick with zero rows.
  *   - FAILURE_IS_LOGGED_NOT_THROWN: a failed tick is logged and the next tick tries again.
  *   - TEST_INERT: no timer ever starts in tests.
  * Side-effects: schedules a detached, unref'd interval outside tests.
@@ -35,18 +37,38 @@ export function startNodeAdminSyncOnBoot(): void {
 /** Run one tick now unless one is already running. Never rejects. */
 export function triggerNodeAdminSync(): void {
   if (isTestRuntime() || _running) return;
-  _running = runTick().finally(() => {
+  _running = runNodeAdminSyncTick().finally(() => {
     _running = null;
   });
 }
 
-async function runTick(): Promise<void> {
+/** One tick: run the job, log the tick event. Never rejects. Exported for tests; the timer is test-inert. */
+export async function runNodeAdminSyncTick(): Promise<void> {
+  const startedAt = Date.now();
   try {
-    // Dynamic import avoids a static container -> sync -> job -> container cycle.
+    // Dynamic imports avoid a static container -> sync -> job -> container cycle.
     const { runNodeAdminSyncJob } = await import(
       "@/bootstrap/jobs/syncNodeAdmins.job"
     );
-    await runNodeAdminSyncJob();
+    const summary = await runNodeAdminSyncJob();
+    const { getContainer } = await import("@/bootstrap/container");
+    const { EVENT_NAMES } = await import("@/shared/observability");
+    // ONE_TICK_EVENT: logged for every tick that returns, including a skipped tick and a tick with
+    // zero rows, so "the sync is alive" is a positive signal and silence means it did not run.
+    getContainer().log.info(
+      {
+        event: EVENT_NAMES.IDENTITY_NODE_ADMIN_SYNC_TICK,
+        mode: summary.mode,
+        nodes: summary.nodes,
+        skipped: summary.skipped,
+        ok: summary.byOutcome.ok ?? 0,
+        unavailable: summary.byOutcome.unavailable ?? 0,
+        empty: summary.byOutcome.empty ?? 0,
+        refused: summary.byOutcome.refused ?? 0,
+        durationMs: Date.now() - startedAt,
+      },
+      EVENT_NAMES.IDENTITY_NODE_ADMIN_SYNC_TICK
+    );
   } catch (error) {
     try {
       const { getContainer } = await import("@/bootstrap/container");

@@ -24,6 +24,7 @@ import { isNotNull } from "drizzle-orm";
 import {
   drizzleUsersForWallets,
   extractRepoSpecApprovers,
+  NodeApproverReadError,
   RepoSpecNodeApproverReader,
 } from "@/adapters/server";
 import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
@@ -92,10 +93,19 @@ export async function runNodeAdminSyncJob(): Promise<NodeAdminSyncJobSummary> {
     );
 
     const reader = new RepoSpecNodeApproverReader({
-      // A missing App (no GH_REVIEW_APP_*) throws here; the reader reports it as `unavailable`.
       fetchRepoSpec: (ref, path) => {
         const { owner, repo } = parseGithubRepoUrl(ref);
-        appReader ??= createOperatorDeployPlane(env);
+        if (!appReader) {
+          try {
+            appReader = createOperatorDeployPlane(env);
+          } catch {
+            // No GH_REVIEW_APP_* configured: there is no App to read through.
+            throw new NodeApproverReadError(
+              "no_app_installation",
+              "operator GitHub App is not configured"
+            );
+          }
+        }
         return appReader.fetchFileText({ owner, repo, path });
       },
       extractApprovers: extractRepoSpecApprovers,
@@ -107,13 +117,13 @@ export async function runNodeAdminSyncJob(): Promise<NodeAdminSyncJobSummary> {
       targets
     );
 
-    nodeAdminSyncLastSuccessSeconds.set(Date.now() / 1000);
-    return {
-      nodes: results.length,
-      byOutcome: countByOutcome(results),
-      mode,
-      skipped: false,
-    };
+    const byOutcome = countByOutcome(results);
+    // Liveness means the sync did real work: at least one node reached `ok`. A tick where every
+    // node is unavailable must not look healthy.
+    if ((byOutcome.ok ?? 0) > 0) {
+      nodeAdminSyncLastSuccessSeconds.set(Date.now() / 1000);
+    }
+    return { nodes: results.length, byOutcome, mode, skipped: false };
   } finally {
     await reservedConn`SELECT pg_advisory_unlock(hashtext('node_admin_sync'))`;
     reservedConn.release();

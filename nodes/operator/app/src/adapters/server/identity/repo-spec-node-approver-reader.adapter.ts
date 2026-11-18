@@ -13,7 +13,7 @@
  *   - APP_ONLY_READ: the injected `fetchRepoSpec` must use the GitHub App contents API. The bootstrap
  *     wiring passes the operator App writer, never `AppOrPublicDeclarationReader`.
  *   - READ_DEADLINE: one node's read is abandoned after `READ_TIMEOUT_MS` (10 s) and reported `unavailable`.
- *   - NEVER_THROWS: every failure path is `{ status: "unavailable" }`; a malformed spec is `approverCount: 0`.
+ *   - NEVER_THROWS: every failure path is `{ status: "unavailable", reason }` with a closed reason; a malformed spec is `approverCount: 0`.
  *   - WALLETS_ARE_LOWERCASE: approvers are lowercased before lookup and compared case-insensitively.
  *   - USERS_COLUMN_FIRST: a wallet maps to the `users.wallet_address` row when one exists, else to a wallet
  *     `user_bindings` row. A wallet never maps to two users.
@@ -30,11 +30,41 @@ import type {
   NodeApproverRead,
   NodeApproverReader,
   NodeApproverTarget,
+  NodeApproverUnavailableReason,
 } from "@/ports";
 import { userBindings, users } from "@/shared/db/schema";
 
 /** Per-node deadline for the repo-spec read. */
 export const READ_TIMEOUT_MS = 10_000;
+
+/** `error.code` the GitHub App reader sets when the App is not installed on a repo. */
+const GITHUB_APP_NOT_INSTALLED_CODE = "github_app_not_installed";
+
+/**
+ * Thrown by the read deadline, and by wiring that cannot reach the App at all, so the reader can
+ * report a closed `reason` instead of a bare `unavailable`.
+ */
+export class NodeApproverReadError extends Error {
+  constructor(
+    readonly reason: NodeApproverUnavailableReason,
+    message: string
+  ) {
+    super(message);
+    this.name = "NodeApproverReadError";
+  }
+}
+
+function unavailable(reason: NodeApproverUnavailableReason): NodeApproverRead {
+  return { status: "unavailable", reason };
+}
+
+function classifyReadError(error: unknown): NodeApproverUnavailableReason {
+  if (error instanceof NodeApproverReadError) return error.reason;
+  if ((error as { code?: unknown })?.code === GITHUB_APP_NOT_INSTALLED_CODE) {
+    return "no_app_installation";
+  }
+  return "unexpected";
+}
 
 export interface RepoSpecNodeApproverReaderDeps {
   /** Read `path` in the repo at URL `ref`, at the default-branch head, through the GitHub App only. Null when absent. Same call shape as agent-grants `fetchRepoSpec(ref, path)`. */
@@ -58,10 +88,10 @@ export class RepoSpecNodeApproverReader implements NodeApproverReader {
         this.deps.fetchRepoSpec(node.repoUrl, node.repoSpecPath),
         this.deps.readTimeoutMs ?? READ_TIMEOUT_MS
       );
-    } catch {
-      return { status: "unavailable" };
+    } catch (error) {
+      return unavailable(classifyReadError(error));
     }
-    if (text === null) return { status: "unavailable" };
+    if (text === null) return unavailable("not_found");
 
     let wallets: string[];
     try {
@@ -86,7 +116,7 @@ export class RepoSpecNodeApproverReader implements NodeApproverReader {
         userIds: [...new Set(userIds)],
       };
     } catch {
-      return { status: "unavailable" };
+      return unavailable("user_lookup_failed");
     }
   }
 }
@@ -141,7 +171,13 @@ async function withDeadline<T>(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`repo-spec read timed out after ${timeoutMs}ms`)),
+      () =>
+        reject(
+          new NodeApproverReadError(
+            "timeout",
+            `repo-spec read timed out after ${timeoutMs}ms`
+          )
+        ),
       timeoutMs
     );
   });

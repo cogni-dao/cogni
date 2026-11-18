@@ -19,9 +19,28 @@
 
 export type NodeAdminSyncOutcome = "ok" | "unavailable" | "empty" | "refused";
 
+/**
+ * Closed enum of why a node's sync is not `ok`. Carried on every non-ok `identity.node_admin_sync`
+ * event so an operator can tell a missing App install from a timeout from an OpenFGA outage.
+ */
+export const NODE_ADMIN_SYNC_REASONS = [
+  "no_app_installation",
+  "timeout",
+  "not_found",
+  "user_lookup_failed",
+  "openfga_read_failed",
+  "openfga_write_failed",
+  "no_approvers",
+  "unmapped_approvers",
+  "zero_admins",
+  "unexpected",
+] as const;
+
+export type NodeAdminSyncReason = (typeof NODE_ADMIN_SYNC_REASONS)[number];
+
 /** What the approver reader learned about one node, already mapped from wallets to env-local user ids. */
 export type NodeApproverRead =
-  | { readonly status: "unavailable" }
+  | { readonly status: "unavailable"; readonly reason: NodeAdminSyncReason }
   | {
       readonly status: "read";
       /** Approver wallets listed in the repo-spec (0 when the list is empty or malformed). */
@@ -32,6 +51,8 @@ export type NodeApproverRead =
 
 export interface NodeAdminPlan {
   readonly outcome: NodeAdminSyncOutcome;
+  /** Why the outcome is not `ok`. Absent when `outcome` is `ok`. */
+  readonly reason?: NodeAdminSyncReason;
   /** User ids to grant `admin`. Empty unless `outcome` is `ok`. */
   readonly adds: readonly string[];
   /** User ids to revoke `admin`. Empty unless `outcome` is `ok`. */
@@ -65,7 +86,9 @@ export function planAdminDiff(
 
   const resulting = new Set([...current, ...adds]);
   for (const id of deletes) resulting.delete(id);
-  if (resulting.size === 0) return { outcome: "refused", ...NO_WRITES };
+  if (resulting.size === 0) {
+    return { outcome: "refused", reason: "zero_admins", ...NO_WRITES };
+  }
 
   return { outcome: "ok", adds, deletes };
 }
@@ -79,12 +102,22 @@ export function planNodeAdminSync(input: {
   readonly currentUserIds: readonly string[] | null;
 }): NodeAdminPlan {
   const { approvers, currentUserIds } = input;
-  if (approvers.status === "unavailable" || currentUserIds === null) {
-    return { outcome: "unavailable", ...NO_WRITES };
+  if (approvers.status === "unavailable") {
+    return { outcome: "unavailable", reason: approvers.reason, ...NO_WRITES };
+  }
+  if (currentUserIds === null) {
+    return {
+      outcome: "unavailable",
+      reason: "openfga_read_failed",
+      ...NO_WRITES,
+    };
   }
   const target = [...new Set(approvers.userIds.filter((id) => id.length > 0))];
-  if (approvers.approverCount === 0 || target.length === 0) {
-    return { outcome: "empty", ...NO_WRITES };
+  if (approvers.approverCount === 0) {
+    return { outcome: "empty", reason: "no_approvers", ...NO_WRITES };
+  }
+  if (target.length === 0) {
+    return { outcome: "empty", reason: "unmapped_approvers", ...NO_WRITES };
   }
   return planAdminDiff(currentUserIds, target);
 }

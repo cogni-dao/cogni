@@ -134,6 +134,23 @@ describe("POST /api/v1/nodes/[id]/access-requests", () => {
     );
   });
 
+  it("refuses to file an admin request (task.5494): admin is not requestable", async () => {
+    await testApiHandler({
+      appHandler,
+      params: { id: NODE_ID },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: "admin" }),
+        });
+        expect(res.status).toBe(400);
+      },
+    });
+
+    expect(upsert.values).not.toHaveBeenCalled();
+  });
+
   it("rejects an unauthenticated caller before any write", async () => {
     mockGetSessionUser.mockResolvedValue(null);
 
