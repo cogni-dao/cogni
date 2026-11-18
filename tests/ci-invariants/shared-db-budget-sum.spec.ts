@@ -104,26 +104,4 @@ describe("shared database budget sum (bug.5637)", () => {
       )
     ).toBe(8);
   });
-
-  it("spawny-boi candidate-a caps cover the app lane (live + spare) plus 2 test envs (story.5159)", () => {
-    const sb = catalogs.find((c) => c.name === "spawny-boi");
-    const placement = sb?.database?.["candidate-a"];
-    const profile = profiles[placement?.budget_profile ?? ""];
-    // copies - the app lane's 2 = the test env cap the operator derives (testEnvCap)
-    expect(placement?.copies).toBe(4);
-    expect(
-      scaled(
-        profile?.roles.app.connection_limit ?? 0,
-        placement?.copies,
-        profile?.copies
-      )
-    ).toBe(4);
-    expect(
-      scaled(
-        profile?.roles.service.connection_limit ?? 0,
-        placement?.copies,
-        profile?.copies
-      )
-    ).toBe(8);
-  });
 });

@@ -16,15 +16,13 @@
  *     `siblingLabel` + `hostOwnedBy` guard the sequencer applies, so a test env never holds the node's main host.
  *   - APP_COPY_ONLY: only a plain app is copied. A worker, a non-http app, an app with companions or with state
  *     bindings is refused: a bound state workload would be shared across envs.
- *   - CAP_FROM_THE_CATALOG: the cap is `catalog database.candidate-a.copies - APP_LANE_COPIES` (the app lane's
- *     live + spare), at most `MAX_TEST_ENVS_PER_NODE`. No `copies` means no test envs. The role caps that
- *     `copies` sizes are an operator-run provisioning input, not read here (bug.5637, tests/ci-invariants).
+ *   - CAP_IS_A_CONSTANT: a node holds at most `MAX_TEST_ENVS_PER_NODE` test envs. The database role caps that
+ *     must cover them are provisioned by hand (break-glass), not read here.
  *   - SLOTS_COUNT_OPEN_LEASES: a running te row counts, and so does a stopped one while an attempt of it is not
  *     terminal, because its lease still holds database connections.
  *   - TTL_STOPS_ONLY_TEST_ENVS: `expiredTestEnvs` never selects a row that is not a te key.
  * Side-effects: IO (read-only store port, in `testEnvSlots`)
- * Links: contracts/test-envs.v2.contract.ts, app/api/v2/test-envs/route.ts, edge.ts, stop-plan.ts,
- *   infra/catalog/_schema.json (`database.<env>.copies`), tests/ci-invariants/shared-db-budget-sum.spec.ts
+ * Links: contracts/test-envs.v2.contract.ts, app/api/v2/test-envs/route.ts, edge.ts, stop-plan.ts
  * @public
  */
 
@@ -48,10 +46,11 @@ import { TERMINAL_ATTEMPT_PHASES } from "./stop-plan";
 export const TEST_ENV_ENV = "candidate-a";
 /** A test env closes this long after it was requested. */
 export const TEST_ENV_TTL_MS = 4 * 3_600_000;
-/** Copies the node's own `app` lane holds on the shared roles: one live plus one spare. */
-export const APP_LANE_COPIES = 2;
-/** Ceiling whatever the catalog says (more needs a bigger Postgres budget or a pooler, story.5166). */
-export const MAX_TEST_ENVS_PER_NODE = 3;
+/**
+ * Test envs one node may hold at once. A constant for the prototype: the role connection caps that must cover
+ * `app` + this many copies are a recorded break-glass on candidate-a (design section 4), not read here.
+ */
+export const MAX_TEST_ENVS_PER_NODE = 5;
 /** The workload manifest every test env copies. */
 export const TEST_ENV_SOURCE_WORKLOAD = "app";
 /** Declared env var naming the optional label; non-secret and readable in the release spec. */
@@ -150,23 +149,6 @@ export function testEnvSpec(
       ...(label !== undefined ? { [TEST_ENV_LABEL_ENV]: label } : {}),
     },
   };
-}
-
-/**
- * How many test envs a node may hold at once: the catalog's `database.<env>.copies` minus the app lane's own
- * copies, at most `MAX_TEST_ENVS_PER_NODE`. A row with no valid `copies` allows none.
- */
-export function testEnvCap(catalogRow: unknown, env = TEST_ENV_ENV): number {
-  const copies = (
-    catalogRow as {
-      database?: Record<string, { copies?: unknown } | undefined>;
-    } | null
-  )?.database?.[env]?.copies;
-  if (typeof copies !== "number" || !Number.isInteger(copies)) return 0;
-  return Math.max(
-    0,
-    Math.min(MAX_TEST_ENVS_PER_NODE, copies - APP_LANE_COPIES)
-  );
 }
 
 const hasOpenLease = (attempts: readonly Pick<AttemptRow, "phase">[]) =>

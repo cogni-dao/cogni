@@ -376,7 +376,6 @@ export {
   MAX_ATTEMPT_STEPS,
   PayerError,
   SERVED_ATTEMPT_PHASES,
-  TEST_ENV_KEY_PATTERN,
   TEST_ENV_KEY_RE,
   withResolvedImage,
 } from "./node-deploy.port";

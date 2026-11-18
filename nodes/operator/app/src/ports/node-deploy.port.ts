@@ -57,11 +57,9 @@ export const keyString = (k: WorkloadKey): string =>
 
 /**
  * A test env's workload key (story.5159): `te` + 6 lowercase letters. One plain label (no hyphen, no digit), so
- * `<slug>-<key>` is a sibling host the edge guard already admits. The Postgres twin is `TEST_ENV_KEY_PATTERN`.
+ * `<slug>-<key>` is a sibling host the edge guard already admits.
  */
 export const TEST_ENV_KEY_RE = /^te[a-z]{6}$/;
-/** The same rule as a Postgres regex (`~`), for source queries that exclude or select test envs. */
-export const TEST_ENV_KEY_PATTERN = "^te[a-z]{6}$";
 export const isTestEnvKey = (workload: string): boolean =>
   TEST_ENV_KEY_RE.test(workload);
 

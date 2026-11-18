@@ -6,7 +6,7 @@
  * Purpose: Contract tests for `/api/v2/test-envs` (story.5159): the v2 routes run the SAME authorization gate as
  *   `POST /api/v1/deploy/workloads` on candidate-a (`node.flight` OR `node.manage_envs`, then the served-env and
  *   deploy-verb refusals), read and write nothing on a denial, hand the one release writer a `testEnv` input whose
- *   cap comes from the node's catalog `copies`, and answer the v2 shapes.
+ *   cap is the node constant (5), and answer the v2 shapes.
  * Invariants:
  *   - SAME_GATE_AS_V1: the authz actions checked are exactly `authzActionsForEnv("candidate-a")`, in order.
  *   - AUTHZ_BEFORE_READ_OR_WRITE: a denial calls neither the release writer nor `requestStop`.
@@ -182,7 +182,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   dbState.call = 0;
   keys.next = [];
-  catalog.row = { database: { "candidate-a": { copies: 4 } } };
+  catalog.row = {};
   envState.DEPLOY_ENVIRONMENT = "candidate-a";
   authz.check.mockResolvedValue(allow);
   mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
@@ -267,7 +267,7 @@ describe("POST /api/v2/test-envs", () => {
     expect(record).not.toHaveBeenCalled();
   });
 
-  it("202 {testEnvId, host, state}; hands the writer the key, label and the catalog-derived cap (copies 4 -> 2)", async () => {
+  it("202 {testEnvId, host, state}; hands the writer the key, label and the node cap (5)", async () => {
     const res = await post({ ...GOOD, label: "pr-7" });
     expect(res.status).toBe(202);
     const body = TestEnvCreatedSchema.parse(await res.json());
@@ -282,14 +282,8 @@ describe("POST /api/v2/test-envs", () => {
       workload: "tezzzzzz",
       sourceSha: SHA,
       createdBy: `user:${TEST_SESSION_USER_1.id}`,
-      testEnv: { key: "tezzzzzz", label: "pr-7", cap: 2 },
+      testEnv: { key: "tezzzzzz", label: "pr-7", cap: 5 },
     });
-  });
-
-  it("the cap comes from the catalog row: no copies means 0", async () => {
-    catalog.row = {};
-    await post(GOOD);
-    expect(record.mock.calls[0]?.[0].testEnv.cap).toBe(0);
   });
 
   it("draws a new key when the first is taken by any node on the env", async () => {

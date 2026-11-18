@@ -33,9 +33,9 @@ import {
   TestEnvCreateInputSchema,
 } from "@/contracts/test-envs.v2.contract";
 import {
+  MAX_TEST_ENVS_PER_NODE,
   newTestEnvKey,
   TEST_ENV_ENV,
-  testEnvCap,
 } from "@/features/node-deploy/test-env";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
@@ -106,7 +106,7 @@ export const POST = wrapRouteHandlerWithLogging(
         mayGenerateSecrets: g.mayGenerateSecrets,
         log: ctx.log,
         reqId: ctx.reqId,
-        testEnv: { key, label, cap: testEnvCap(g.catalogRow) },
+        testEnv: { key, label, cap: MAX_TEST_ENVS_PER_NODE },
       });
       if (!result.ok)
         return NextResponse.json(result.body, { status: result.status });

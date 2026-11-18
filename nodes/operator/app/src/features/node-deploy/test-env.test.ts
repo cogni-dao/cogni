@@ -15,14 +15,12 @@ import type { AttemptRow, DesiredRow, WorkloadKey } from "@/ports";
 import { isTestEnvKey } from "@/ports";
 import { hostOwnedBy, siblingLabel } from "./edge";
 import {
-  APP_LANE_COPIES,
   expiredTestEnvs,
   MAX_TEST_ENVS_PER_NODE,
   newTestEnvKey,
   TEST_ENV_LABEL_ENV,
   TEST_ENV_TTL_MS,
   TestEnvRefusal,
-  testEnvCap,
   testEnvHost,
   testEnvSlots,
   testEnvSpec,
@@ -142,23 +140,9 @@ describe("testEnvSpec", () => {
   });
 });
 
-describe("testEnvCap", () => {
-  const row = (copies: unknown) => ({
-    database: { "candidate-a": { tier: "shared", copies } },
-  });
-  it("is the catalog copies minus the app lane's live + spare", () => {
-    expect(APP_LANE_COPIES).toBe(2);
-    expect(testEnvCap(row(4))).toBe(2); // spawny-boi
-    expect(testEnvCap(row(3))).toBe(1);
-    expect(testEnvCap(row(2))).toBe(0);
-  });
-  it("is capped at the ceiling and is 0 without a valid copies", () => {
-    expect(testEnvCap(row(40))).toBe(MAX_TEST_ENVS_PER_NODE);
-    for (const bad of [undefined, "4", 4.5, -1, null])
-      expect(testEnvCap(row(bad)), String(bad)).toBe(0);
-    expect(testEnvCap(undefined)).toBe(0);
-    expect(testEnvCap({})).toBe(0);
-    expect(testEnvCap({ database: { production: { copies: 9 } } })).toBe(0);
+describe("cap", () => {
+  it("a node may hold 5 test envs", () => {
+    expect(MAX_TEST_ENVS_PER_NODE).toBe(5);
   });
 });
 

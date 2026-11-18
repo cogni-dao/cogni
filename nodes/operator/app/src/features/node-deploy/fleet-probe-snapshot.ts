@@ -199,7 +199,7 @@ export function createFleetProbeSnapshots(
 
   return {
     get(scope, ctx) {
-      const key = `${scope.nodeId ?? "*"}/${scope.env ?? "*"}/${scope.testEnvs ?? "-"}`;
+      const key = `${scope.nodeId ?? "*"}/${scope.env ?? "*"}`;
       const hit = cache.get(key);
       if (hit && now() - hit.at < ttlMs) return hit.snapshot;
       const entry = { at: now(), snapshot: build(scope, ctx) };
