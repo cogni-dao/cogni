@@ -329,6 +329,12 @@
       "required": ["tier", "budget_profile"],
       "properties": {
         "tier": { "enum": ["shared", "dedicated"] },
+        "copies": {
+          "description": "bug.5637: simultaneous copies of the node on these roles (workloads x live+spare); scales the profile caps by copies / profile copies",
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 32
+        },
         "placement": { "const": "akash-cell" },
         "runtimePoolLimits": {
           "type": "object",
