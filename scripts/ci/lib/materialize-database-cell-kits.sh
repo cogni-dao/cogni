@@ -11,6 +11,7 @@ materialize_database_cell_kits() {
   local cell_domain_root="$DOMAIN"
   case "$DEPLOY_ENVIRONMENT" in preview) cell_domain_root="${cell_domain_root#preview.}" ;; candidate-a) cell_domain_root="${cell_domain_root#test.}" ;; esac
   source "$REPO_ROOT/scripts/setup/lib/cogni-deployment-identity.sh"
+  local source_alias='' lane_alias
   local slots='[]' existing_kits='[]' existing_authorities='[]' operator_sha plans native_source output published_json
   operator_sha="$(git -C "$APP_SOURCE_DIR" rev-parse HEAD)"
   [[ "$operator_sha" =~ ^[0-9a-f]{40}$ ]] || fail "cell bootstrap artifact provenance missing"
@@ -44,6 +45,10 @@ materialize_database_cell_kits() {
       [[ -n "$lane" ]] || continue
       physical="$(lane_db_vm_env "$cell_node" "$lane")" || fail "cell source residency unresolved"
       [[ "$physical" == "$DEPLOY_ENVIRONMENT" ]] || continue
+      # The lane's VM alias from the one residency resolver; every admitted slot shares it (bug.5638).
+      lane_alias="$(lane_db_host "$cell_node" "$lane")" || fail "cell source VM alias unresolved"
+      [[ -z "$source_alias" || "$source_alias" == "$lane_alias" ]] || fail "cell source VM aliases disagree"
+      source_alias="$lane_alias"
       source_ns="__cell-source-${cell_node}-${lane}"
       prefetch_path "$cell_node" "$lane" "$source_ns"
       node_uuid="$(node_id_for_target "$cell_node")"
@@ -74,7 +79,7 @@ materialize_database_cell_kits() {
     pg_user=$(docker exec "$container_id" printenv POSTGRES_USER)
     [ -n "$pg_user" ]
     docker exec "$container_id" psql -U "$pg_user" -d postgres -XAtv ON_ERROR_STOP=1 -c "SELECT jsonb_build_object('\''systemIdentifier'\'', (SELECT system_identifier::text FROM pg_control_system()), '\''databases'\'', (SELECT jsonb_agg(datname) FROM pg_database), '\''roles'\'', (SELECT jsonb_agg(rolname) FROM pg_roles));"')"
-  plans="$(jq -n --arg operatorSourceSha "$operator_sha" --arg environment "$DEPLOY_ENVIRONMENT" --arg expectedSourceHost "$VM_IP" --arg expectedSourceAlias "$(cogni_vm_host_for_env "$DEPLOY_ENVIRONMENT" "${FORK_DOMAIN_ROOT:-$(cogni_domain_root)}" "$(cogni_deployment_slug)")" --argjson nativeSource "$native_source" --argjson slots "$slots" '{operatorSourceSha:$operatorSourceSha,environment:$environment,expectedSourceHost:$expectedSourceHost,expectedSourceAlias:$expectedSourceAlias,nativeSource:$nativeSource,slots:$slots}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-kits.ts" --plan)" || fail "actual cell source identity did not validate"
+  plans="$(jq -n --arg operatorSourceSha "$operator_sha" --arg environment "$DEPLOY_ENVIRONMENT" --arg expectedSourceHost "$VM_IP" --arg expectedSourceAlias "$source_alias" --argjson nativeSource "$native_source" --argjson slots "$slots" '{operatorSourceSha:$operatorSourceSha,environment:$environment,expectedSourceHost:$expectedSourceHost,expectedSourceAlias:$expectedSourceAlias,nativeSource:$nativeSource,slots:$slots}' | pnpm --dir "$REPO_ROOT" exec tsx "$REPO_ROOT/scripts/lib/materialize-database-cell-kits.ts" --plan)" || fail "actual cell source identity did not validate"
   while IFS= read -r cell_node; do
     cell_bank="${cell_node}-database-cell"
     prefetch_path "$cell_bank"

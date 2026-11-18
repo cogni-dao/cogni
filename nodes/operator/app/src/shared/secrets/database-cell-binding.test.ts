@@ -60,7 +60,7 @@ describe("canonical private database cells", () => {
     expect(() =>
       planDatabaseCellKits({ ...source, expectedSourceHost: "10.0.0.2" })
     ).toThrow("residency");
-    // bug.5636: a lane DSN that names the env VM alias is the same residency.
+    // bug.5636: (bug.5638) a lane DSN that names the env VM alias is the same residency.
     const aliased = {
       ...source,
       expectedSourceHost: "10.0.0.2",
