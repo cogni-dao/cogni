@@ -157,11 +157,11 @@ litellm_settings:
   # Per-node billing routing via custom callback (replaces generic_api).
   # See: infra/images/litellm/cogni_callbacks.py, https://node-template.cognidao.org/knowledge/node-tenancy-isolation
   # Langfuse traces over OTLP (bug.5643): Langfuse Cloud shut down the v3 ingestion API the
-  # legacy `langfuse` callback used. cogni_langfuse_otel keeps the metadata shape the operator
-  # trace reader authorizes on; see infra/images/litellm/cogni_langfuse_otel.py.
+  # legacy `langfuse` callback used. cogni_callbacks.cogni_langfuse_otel keeps the metadata shape the operator
+  # trace reader authorizes on; see the Langfuse OTLP section of infra/images/litellm/cogni_callbacks.py.
   callbacks:
     - cogni_callbacks.cogni_node_router
-    - cogni_langfuse_otel.cogni_langfuse_otel
+    - cogni_callbacks.cogni_langfuse_otel
 
 general_settings:
   master_key: "os.environ/LITELLM_MASTER_KEY"

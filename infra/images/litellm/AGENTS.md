@@ -40,7 +40,7 @@ Custom LiteLLM Docker image extending upstream with per-node billing callback ro
 ## Public Surface
 
 - `cogni_callbacks.CogniNodeRouter` — CustomLogger subclass for LiteLLM success callbacks
-- `cogni_langfuse_otel.cogni_langfuse_otel` — Langfuse OTLP trace emitter (bug.5643); writes the metadata the operator trace reader authorizes on
+- `cogni_callbacks.cogni_langfuse_otel` — Langfuse OTLP trace emitter (bug.5643); writes the metadata the operator trace reader authorizes on
 - `Dockerfile` — extends `ghcr.io/berriai/litellm` with the custom callback module
 
 ## Env Vars
