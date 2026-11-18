@@ -31,6 +31,7 @@ export const NODE_ADMIN_SYNC_REASONS = [
   "openfga_read_failed",
   "openfga_write_failed",
   "no_approvers",
+  "malformed_spec",
   "unmapped_approvers",
   "zero_admins",
   "unexpected",
@@ -47,6 +48,8 @@ export type NodeApproverRead =
       readonly approverCount: number;
       /** Env-local user ids the approver wallets map to (may be fewer than `approverCount`). */
       readonly userIds: readonly string[];
+      /** True when the YAML did not parse or `approvers` is not a list of addresses. */
+      readonly malformed?: boolean;
     };
 
 export interface NodeAdminPlan {
@@ -113,6 +116,9 @@ export function planNodeAdminSync(input: {
     };
   }
   const target = [...new Set(approvers.userIds.filter((id) => id.length > 0))];
+  if (approvers.malformed) {
+    return { outcome: "empty", reason: "malformed_spec", ...NO_WRITES };
+  }
   if (approvers.approverCount === 0) {
     return { outcome: "empty", reason: "no_approvers", ...NO_WRITES };
   }

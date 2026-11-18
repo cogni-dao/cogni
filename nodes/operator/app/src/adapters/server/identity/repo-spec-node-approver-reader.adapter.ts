@@ -13,18 +13,20 @@
  *   - APP_ONLY_READ: the injected `fetchRepoSpec` must use the GitHub App contents API. The bootstrap
  *     wiring passes the operator App writer, never `AppOrPublicDeclarationReader`.
  *   - READ_DEADLINE: one node's read is abandoned after `READ_TIMEOUT_MS` (10 s) and reported `unavailable`.
- *   - NEVER_THROWS: every failure path is `{ status: "unavailable", reason }` with a closed reason; a malformed spec is `approverCount: 0`.
+ *   - NEVER_THROWS: every failure path is `{ status: "unavailable", reason }` with a closed reason; a malformed spec is `approverCount: 0, malformed: true`.
  *   - WALLETS_ARE_LOWERCASE: approvers are lowercased before lookup and compared case-insensitively.
  *   - USERS_COLUMN_FIRST: a wallet maps to the `users.wallet_address` row when one exists, else to a wallet
  *     `user_bindings` row. A wallet never maps to two users.
  * Side-effects: IO (GitHub App read, PostgreSQL read through the injected service-role database).
+ *   - APPROVERS_ONLY: `extractRepoSpecApprovers` reads only `activity_ledger.approvers`; the rest of the spec
+ *     may be invalid (a retired field) without hiding the approvers.
  * Links: src/ports/node-approver-reader.port.ts, https://cognidao.org/knowledge/operator-identity-model, task.5494
  * @public
  */
 
 import type { Database } from "@cogni/db-client";
-import { extractLedgerApprovers, parseRepoSpec } from "@cogni/repo-spec";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { parse as parseYaml } from "yaml";
 
 import type {
   NodeApproverRead,
@@ -101,8 +103,9 @@ export class RepoSpecNodeApproverReader implements NodeApproverReader {
         ),
       ];
     } catch {
-      // Readable but not a valid repo-spec: the approver list is malformed, i.e. empty.
-      return { status: "read", approverCount: 0, userIds: [] };
+      // Readable, but the YAML does not parse or `activity_ledger.approvers` is not a list of
+      // addresses. Not the same as a valid empty list: the sync reports `malformed_spec`.
+      return { status: "read", approverCount: 0, userIds: [], malformed: true };
     }
     if (wallets.length === 0) {
       return { status: "read", approverCount: 0, userIds: [] };
@@ -121,9 +124,37 @@ export class RepoSpecNodeApproverReader implements NodeApproverReader {
   }
 }
 
-/** Default `extractApprovers`: the repo-spec's `activity_ledger.approvers`, lowercased. */
+const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * Default `extractApprovers`: ONLY `activity_ledger.approvers`, lowercased.
+ *
+ * Deliberately not `parseRepoSpec`: that parser is strict about the WHOLE spec and throws on any
+ * retired field (a fork's old `secret_refs`, say), which would hide valid approvers behind an
+ * unrelated defect. Throws when the YAML does not parse or the value is not a list of 0x + 40 hex
+ * addresses. A missing section or list is a valid empty list.
+ */
 export function extractRepoSpecApprovers(repoSpecText: string): string[] {
-  return extractLedgerApprovers(parseRepoSpec(repoSpecText));
+  const doc: unknown = parseYaml(repoSpecText);
+  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
+    throw new Error("repo-spec is not a YAML mapping");
+  }
+  const ledger = (doc as Record<string, unknown>).activity_ledger;
+  if (ledger === undefined || ledger === null) return [];
+  if (typeof ledger !== "object" || Array.isArray(ledger)) {
+    throw new Error("activity_ledger is not a mapping");
+  }
+  const approvers = (ledger as Record<string, unknown>).approvers;
+  if (approvers === undefined || approvers === null) return [];
+  if (!Array.isArray(approvers)) {
+    throw new Error("activity_ledger.approvers is not a list");
+  }
+  return approvers.map((entry) => {
+    if (typeof entry !== "string" || !EVM_ADDRESS.test(entry)) {
+      throw new Error("activity_ledger.approvers entry is not an EVM address");
+    }
+    return entry.toLowerCase();
+  });
 }
 
 /**

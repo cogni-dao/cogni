@@ -44,6 +44,8 @@ export type NodeApproverRead =
       readonly approverCount: number;
       /** Env-local user ids the approver wallets map to (may be fewer than `approverCount`). */
       readonly userIds: readonly string[];
+      /** True when the spec's approvers could not be read as a list of addresses (distinct from a valid empty list). */
+      readonly malformed?: boolean;
     };
 
 /**

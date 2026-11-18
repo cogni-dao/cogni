@@ -15,7 +15,10 @@
 import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
 import { describe, expect, it, vi } from "vitest";
 
-import { RepoSpecNodeApproverReader } from "@/adapters/server/identity/repo-spec-node-approver-reader.adapter";
+import {
+  extractRepoSpecApprovers,
+  RepoSpecNodeApproverReader,
+} from "@/adapters/server/identity/repo-spec-node-approver-reader.adapter";
 import {
   type NodeAdminSyncDeps,
   syncNodeAdmin,
@@ -375,18 +378,19 @@ describe("RepoSpecNodeApproverReader", () => {
     });
   });
 
-  it("a malformed spec reads as an empty approver list", async () => {
+  it("an unreadable approvers value reads as malformed, not as an empty list", async () => {
     const reader = new RepoSpecNodeApproverReader({
       ...base,
       fetchRepoSpec: async () => spec,
       extractApprovers: () => {
-        throw new Error("invalid repo-spec");
+        throw new Error("invalid approvers");
       },
     });
     await expect(reader.approvers(NODE)).resolves.toEqual({
       status: "read",
       approverCount: 0,
       userIds: [],
+      malformed: true,
     });
   });
 
@@ -455,5 +459,80 @@ describe("runNodeAdminSyncTick", () => {
       }),
       "identity.node_admin_sync.tick"
     );
+  });
+});
+
+// The real shape of a fork repo-spec that still carries a retired field (spawny-boi, candidate-a).
+const SPEC_WITH_RETIRED_FIELD = `
+schema_version: "0.1.4"
+node_id: "11111111-1111-4111-8111-111111111111"
+deployment:
+  services:
+    - name: app
+      secret_refs:
+        - key: EXTRA_KEY
+activity_ledger:
+  epoch_length_days: 7
+  approvers:
+    - "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01"
+`;
+
+describe("extractRepoSpecApprovers (APPROVERS_ONLY)", () => {
+  it("still yields the approver when an unrelated retired field would fail the strict parser", () => {
+    expect(extractRepoSpecApprovers(SPEC_WITH_RETIRED_FIELD)).toEqual([
+      "0xabcdef0123456789abcdef0123456789abcdef01",
+    ]);
+  });
+
+  it("an empty list is valid and empty", () => {
+    expect(
+      extractRepoSpecApprovers("activity_ledger:\n  approvers: []\n")
+    ).toEqual([]);
+    expect(extractRepoSpecApprovers("node_id: x\n")).toEqual([]);
+  });
+
+  it.each([
+    ["YAML that does not parse", "activity_ledger: [unclosed"],
+    ["a spec that is not a mapping", "- just\n- a list\n"],
+    ["approvers that is not a list", "activity_ledger:\n  approvers: nope\n"],
+    [
+      "an entry that is not an address",
+      'activity_ledger:\n  approvers:\n    - "0x123"\n',
+    ],
+  ])("throws for %s", (_name, text) => {
+    expect(() => extractRepoSpecApprovers(text)).toThrow();
+  });
+
+  it("maps to the right reason end to end: malformed_spec vs no_approvers, both write nothing", async () => {
+    const run = async (text: string) => {
+      const authorization = new FakeAuthorizationAdapter();
+      await seedAdmins(authorization, ["old"]);
+      const write = vi.spyOn(authorization, "writeRelation");
+      const del = vi.spyOn(authorization, "deleteRelation");
+      const result = await syncNodeAdmin(
+        {
+          reader: new RepoSpecNodeApproverReader({
+            fetchRepoSpec: async () => text,
+            extractApprovers: extractRepoSpecApprovers,
+            usersForWallets: async () => ["user-a"],
+          }),
+          authorization,
+          write: true,
+          log: makeLog(),
+        },
+        NODE
+      );
+      expect(write).not.toHaveBeenCalled();
+      expect(del).not.toHaveBeenCalled();
+      return result;
+    };
+
+    await expect(run("activity_ledger: [unclosed")).resolves.toMatchObject({
+      outcome: "empty",
+      reason: "malformed_spec",
+    });
+    await expect(
+      run("activity_ledger:\n  approvers: []\n")
+    ).resolves.toMatchObject({ outcome: "empty", reason: "no_approvers" });
   });
 });

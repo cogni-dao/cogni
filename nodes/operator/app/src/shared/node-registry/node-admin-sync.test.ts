@@ -64,6 +64,25 @@ describe("planNodeAdminSync", () => {
     });
   });
 
+  it("is empty with reason malformed_spec when the approvers value is unreadable, and never deletes", () => {
+    expect(
+      planNodeAdminSync({
+        approvers: {
+          status: "read",
+          approverCount: 0,
+          userIds: [],
+          malformed: true,
+        },
+        currentUserIds: ["a"],
+      })
+    ).toEqual({
+      outcome: "empty",
+      reason: "malformed_spec",
+      adds: [],
+      deletes: [],
+    });
+  });
+
   it("is empty when approvers exist but none maps to a user, and never deletes", () => {
     expect(
       planNodeAdminSync({
