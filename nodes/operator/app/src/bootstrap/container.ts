@@ -289,7 +289,10 @@ import { serverEnv } from "@/shared/env/server-env";
 import { resolveNodeCatalogSource } from "@/shared/node-registry/catalog-source";
 import { envForApex } from "@/shared/node-registry/deploy-hosts";
 import { baseDomain } from "@/shared/node-registry/resolve";
-import { makeLogger } from "@/shared/observability";
+import {
+  makeLogger,
+  EVENT_NAMES as OPERATOR_EVENT_NAMES,
+} from "@/shared/observability";
 import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
 import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
 
@@ -991,6 +994,9 @@ function createContainer(): Container {
       environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
       // Compute receipts and skipped invalid definitions must reach Loki.
       log: (event) => log.info(event, "metric.event"),
+      // edge.caught@1: one terminal event per host and window (story.5148).
+      logEdgeWindow: (event) =>
+        log.info(event, OPERATOR_EVENT_NAMES.EDGE_CAUGHT_WINDOW),
     });
     knowledgeCapability = {
       ...createKnowledgeCapability(knowledgePort),
