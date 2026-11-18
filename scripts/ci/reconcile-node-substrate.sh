@@ -278,6 +278,18 @@ db_lock_timeout_ms="$(budget_value common.lock_timeout_ms)"
 db_idle_in_transaction_timeout_ms="$(budget_value common.idle_in_transaction_session_timeout_ms)"
 db_temp_file_limit_mib="$(budget_value common.temp_file_limit_mib)"
 db_work_mem_mib="$(budget_value common.work_mem_mib)"
+# bug.5637 — the profile caps cover `copies` simultaneous copies of the node. A catalog row
+# with more lanes declares database.<env>.copies; both role caps scale by that ratio.
+catalog_copies="$(yq -r ".database.\"${DEPLOY_ENVIRONMENT}\".copies // \"\"" "$node_catalog_file")"
+if [[ -n "$catalog_copies" && "$catalog_copies" != "null" ]]; then
+  profile_copies="$(budget_value copies)"
+  [[ "$catalog_copies" =~ ^[1-9][0-9]*$ && "$profile_copies" =~ ^[1-9][0-9]*$ ]] \
+    || fail "database copies for ${TARGET_NODE}/${DEPLOY_ENVIRONMENT} must be a positive integer"
+  (( catalog_copies >= profile_copies )) \
+    || fail "database copies for ${TARGET_NODE}/${DEPLOY_ENVIRONMENT} is below profile '${budget_profile}' copies"
+  db_app_connection_limit=$(( (db_app_connection_limit * catalog_copies + profile_copies - 1) / profile_copies ))
+  db_service_connection_limit=$(( (db_service_connection_limit * catalog_copies + profile_copies - 1) / profile_copies ))
+fi
 for budget_number in \
   "$db_app_connection_limit" "$db_app_statement_timeout_ms" \
   "$db_service_connection_limit" "$db_service_statement_timeout_ms" \

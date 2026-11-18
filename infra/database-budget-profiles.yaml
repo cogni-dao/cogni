@@ -3,6 +3,10 @@
 # candidate replay; it is not a claim about future query shape.
 shared-default-v1:
   design_rate_per_minute: 60
+  # bug.5637 — the role caps below are sized for this many simultaneous copies of the node:
+  # one workload x (1 live + 1 spare/release slot). A catalog row that declares
+  # database.<env>.copies scales both caps by copies / this value (pool per copy stays fixed).
+  copies: 2
   cell_capacity:
     vcpus: 2
     memory_gib: 4
