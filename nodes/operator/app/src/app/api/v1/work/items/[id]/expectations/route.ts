@@ -58,7 +58,11 @@ export const GET = wrapRouteHandlerWithLogging<{
       if (!container.knowledgeStorePort?.readWorkEdo)
         return reply({ error: "unavailable" }, 503, "unavailable");
       const [itemResult, pageResult] = await Promise.allSettled([
-        getWorkItem(id, { signal: request.signal, chain: false }),
+        getWorkItem(id, {
+          signal: request.signal,
+          chain: false,
+          artifacts: false,
+        }),
         container.knowledgeStorePort.readWorkEdo(id, request.signal),
       ]);
       if (

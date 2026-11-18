@@ -46,14 +46,17 @@ export const GET = wrapRouteHandlerWithLogging<{
     if (!context) throw new Error("context required for dynamic routes");
     const { id } = await context.params;
 
-    // `?include=links` (comma list): optional envelope parts. Unknown parts are a 400, not ignored.
-    const requested = new URL(request.url).searchParams
+    // `?include=links,artifacts,history` (comma list) and `?artifact=<id>`: optional envelope parts. Unknown parts are a 400, not ignored.
+    const params = new URL(request.url).searchParams;
+    const requested = params
       .getAll("include")
       .flatMap((value) => value.split(","))
       .filter(Boolean);
+    const artifact = params.get("artifact");
     const input = workItemsGetOperation.input.safeParse({
       id,
       ...(requested.length && { include: requested }),
+      ...(artifact !== null && { artifact }),
     });
     if (!input.success) {
       return NextResponse.json(
@@ -65,6 +68,11 @@ export const GET = wrapRouteHandlerWithLogging<{
     const item = await getWorkItem(id, {
       signal: request.signal,
       includeLinks: input.data.include?.includes("links") ?? false,
+      includeArtifacts: input.data.include?.includes("artifacts") ?? false,
+      includeHistory: input.data.include?.includes("history") ?? false,
+      ...(input.data.artifact !== undefined && {
+        artifactId: input.data.artifact,
+      }),
     });
 
     if (!item) {

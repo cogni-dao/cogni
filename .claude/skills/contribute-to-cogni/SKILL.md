@@ -7,14 +7,17 @@ description: Use when implementing a code change, opening a code PR, or resuming
 
 Use the current node's owned work item and invoke the command for its status.
 
-| status          | invoke                       |
-| --------------- | ---------------------------- |
-| needs_triage    | /triage                      |
-| needs_research  | /research                    |
-| needs_design    | /design, then /review-design |
-| needs_implement | /implement                   |
-| needs_merge     | /review-implementation       |
-| needs_closeout  | /closeout                    |
+| status                      | invoke                   |
+| --------------------------- | ------------------------ |
+| needs_triage                | /triage                  |
+| needs_research              | /research                |
+| needs_design                | /design                  |
+| needs_design_review         | /review-design           |
+| needs_implement             | /implement               |
+| needs_implementation_review | /review-implementation   |
+| needs_validation            | flight the approved head |
+| needs_merge                 | operator merge           |
+| needs_closeout              | /closeout                |
 
 Each command loads its owning procedure and any required dependencies.
 A multi-task outcome uses dev-manager. Knowledge-only contributions use

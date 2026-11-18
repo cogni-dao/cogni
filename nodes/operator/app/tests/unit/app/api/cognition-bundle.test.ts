@@ -250,7 +250,10 @@ describe("renderBundleMarkdown", () => {
       expect(markdown).toContain(
         '{"reason":"<why, one line, at most 25 words>","set":{...}}'
       );
-      expect(markdown).toContain(
+      // task.0149: a forward move is gated; `done` needs the closeout artifact, never a bare status write.
+      expect(markdown).toContain("gate_unmet");
+      expect(markdown).toContain("`closeout` artifact");
+      expect(markdown).not.toContain(
         '{"reason":"PR merged","set":{"status":"done"}}'
       );
       expect(markdown).toContain("There is no `in_progress`");

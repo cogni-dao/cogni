@@ -155,7 +155,8 @@ describe("GET /.well-known/agent.json", () => {
 
     expect(body.actions.getWorkItemHistory).toMatchObject({
       method: "GET",
-      endpoint: "https://operator.example/api/v1/work/items/{id}/history",
+      endpoint:
+        "https://operator.example/api/v1/work/items/{id}/history?view={view}&cursor={cursor}",
       auth: { type: "bearer" },
     });
     expect(body.actions.getKnowledgeHistory).toMatchObject({
@@ -163,8 +164,45 @@ describe("GET /.well-known/agent.json", () => {
       endpoint: "https://operator.example/api/v1/knowledge/{id}/history",
       auth: { type: "bearer" },
     });
-    expect(body.actions.getWorkItemHistory.outputSchema).toHaveProperty(
-      "properties"
+    // The full page and the refs page (story.0058) are one union; each variant is an object schema.
+    const history = body.actions.getWorkItemHistory.outputSchema as {
+      anyOf?: object[];
+    };
+    expect(
+      (history.anyOf ?? [history]).every((variant) => "properties" in variant)
+    ).toBe(true);
+  });
+
+  // task.0149: the artifact routes are discoverable, so an agent can clear a status gate without guessing.
+  it("publishes the artifact record, list and read actions from the package operations (task.0028)", async () => {
+    const { GET } = await import("./route");
+    const response = await GET(
+      new Request("http://0.0.0.0:3000/.well-known/agent.json", {
+        headers: {
+          "x-forwarded-host": "operator.example",
+          "x-forwarded-proto": "https",
+        },
+      })
+    );
+    const body = await response.json();
+
+    expect(body.actions.recordWorkItemArtifact).toMatchObject({
+      method: "POST",
+      endpoint: "https://operator.example/api/v1/work/items/{id}/artifacts",
+      auth: { type: "bearer" },
+    });
+    expect(body.actions.listWorkItemArtifacts).toMatchObject({
+      method: "GET",
+      auth: { type: "bearer" },
+    });
+    expect(body.actions.getWorkItemArtifact).toMatchObject({
+      method: "GET",
+      endpoint:
+        "https://operator.example/api/v1/work/items/{id}/artifacts/{artifactId}",
+    });
+    expect(body.actions.updateWorkItem.description).toContain("gate_unmet");
+    expect(body.endpoints.workItemArtifacts).toBe(
+      "https://operator.example/api/v1/work/items/{id}/artifacts"
     );
   });
 
@@ -210,7 +248,8 @@ describe("GET /.well-known/agent.json", () => {
 
     expect(body.actions.getWorkItem).toMatchObject({
       method: "GET",
-      endpoint: "https://operator.example/api/v1/work/items/{id}",
+      endpoint:
+        "https://operator.example/api/v1/work/items/{id}?include={include}&artifact={artifact}",
     });
     const read =
       body.actions.getWorkItem.outputSchema.properties.moves.items.properties;

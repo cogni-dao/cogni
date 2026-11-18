@@ -115,6 +115,7 @@ export * from "./vcs.merge.v1.contract";
 export * from "./vcs.review.v1.contract";
 // ── VCS ─────────────────────────────────────────────────────────────────────
 export * from "./vcs.run-ci.v1.contract";
+export * from "./work.items.artifacts.v1.contract";
 export * from "./work.items.create.v1.contract";
 export * from "./work.items.delete.v1.contract";
 export * from "./work.items.get.v1.contract";

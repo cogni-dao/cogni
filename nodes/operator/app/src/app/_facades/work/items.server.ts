@@ -10,6 +10,7 @@
  *   author-scoped write authority applies unchanged.
  * Moves (story.0033): create and patch accept `moves` (new ids are resolved and baselined by the store). A single-item read, a create response and a patch response add each move's baseline, current reading and verdict from the goal-metric observations (at most 3 moves); list reads return the stored moves only.
  * Envelope (task.0118): `getWorkItem` is the one single-item read; each move also carries its metric, KPI and goal (`composeItemEnvelope`, the call the agent tool's capability makes), and `includeLinks` adds the first page of citation links. List and summary reads stay summary-sized. An unknown or deprecated metric id is `EntryUnresolvedError` (field `moves`); a non-empty write with no metric wiring is `MovesUnsupportedError`; a bad list is `MovesInvalidError`; a failed baseline read is `MetricBaselineUnavailableError`.
+ * Artifacts (task.0028): `getWorkItem` also adds `artifacts`, the latest triage, review or validation of each kind (no `body`) from one bounded read; a failed read is `artifacts: { unavailable: true }`, never an empty answer.
  * Side-effects: IO (filesystem read via port; database read/write via Doltgres port; goal-metric reads for moves)
  * Links: contracts/work.items.{list, get, create, patch}.v1.contract
  * @internal
@@ -21,9 +22,11 @@ import type {
   WorkItemDto,
   WorkItemSummariesListInput,
   WorkItemSummariesListOutput,
+  WorkItemsGetOutput,
   WorkItemsListInput,
   WorkItemsListOutput,
 } from "@cogni/node-contracts";
+import { EVENT_NAMES } from "@cogni/node-shared";
 import type {
   WorkBoardColumnPages,
   WorkItem,
@@ -41,6 +44,7 @@ import {
 
 import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
+import { createItemRefPorts } from "@/bootstrap/capabilities/work-item-refs";
 import { getContainer } from "@/bootstrap/container";
 
 /**
@@ -396,12 +400,20 @@ async function withMoveReadings(dto: WorkItemDto): Promise<WorkItemDto> {
   return (await judgeMoveSummaries([dto], readings))[0] ?? dto;
 }
 
-/** Single-item read options; `includeLinks` adds the first page of citation links (`?include=links`). */
+/**
+ * Single-item read options; `includeLinks` adds the first page of citation links (`?include=links`), `includeArtifacts`
+ * and `includeHistory` the first page of artifact and history refs, `artifactId` one artifact in full (story.0058).
+ */
 export interface WorkItemReadOptions {
   readonly signal?: AbortSignal;
   readonly includeLinks?: boolean;
+  readonly includeArtifacts?: boolean;
+  readonly includeHistory?: boolean;
+  readonly artifactId?: string;
   /** Set false for a caller that needs only the stored move ids (the EDO expectations read). Default: resolve the chain. */
   readonly chain?: boolean;
+  /** Set false for a caller that needs only the item (the EDO expectations read). Default: read the latest artifacts. */
+  readonly artifacts?: boolean;
 }
 
 /**
@@ -412,8 +424,9 @@ export interface WorkItemReadOptions {
 async function withItemEnvelope(
   dto: WorkItemDto,
   options?: WorkItemReadOptions
-): Promise<WorkItemDto> {
+): Promise<WorkItemsGetOutput> {
   const container = getContainer();
+  const artifactStore = container.workItemArtifacts?.artifacts;
   const readings = container.goalMetrics
     ? createMoveMetricPorts(
         () => container.goalMetrics,
@@ -426,7 +439,17 @@ async function withItemEnvelope(
     {
       readings,
       links: createCitationLinksPort(() => container.knowledgeStorePort),
-      log: (event) => container.log.warn(event, "work.items.envelope_degraded"),
+      // task.0028: the latest artifact of each kind, without body, one bounded read.
+      artifacts: artifactStore
+        ? { latest: (id) => artifactStore.latest(id) }
+        : undefined,
+      // story.0058: refs first, then one read; the same ports the agent tool's capability wires.
+      ...createItemRefPorts({
+        artifacts: artifactStore,
+        history: container.doltgresWorkItems,
+      }),
+      log: (event) =>
+        container.log.warn(event, EVENT_NAMES.WORK_ITEMS_ENVELOPE_DEGRADED),
     },
     options
   );
@@ -614,7 +637,7 @@ export async function listWorkBoardColumns(
 export async function getWorkItem(
   id: string,
   options?: WorkItemReadOptions
-): Promise<WorkItemDto | null> {
+): Promise<WorkItemsGetOutput | null> {
   const container = getContainer();
   // Doltgres-first: legacy markdown IDs (e.g. bug.0002) can also live in Doltgres
   // after the markdown→Doltgres import (task.5002). Fall back to markdown only when
