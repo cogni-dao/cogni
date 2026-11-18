@@ -215,13 +215,62 @@ const OPERATOR_LABELS: ReadonlySet<string> = new Set([
   "env",
   "workload",
   "service",
+  // Target identity labels. Alloy keeps tenant labels (`honor_labels`), so a tenant `job` or `instance` would
+  // re-label its series as another scrape job (for example the deadman's `integrations/unix`).
+  "job",
+  "instance",
 ]);
 const SYNTHETIC_PREFIX = "cogni_lease_scrape_";
+/**
+ * Metric names the platform's own health rules read. A tenant sample under one is dropped: its series would carry
+ * the lane's `env` and join the min/max/count the rules compute over the platform's own series.
+ */
+const RESERVED_NAMES: ReadonlySet<string> = new Set([
+  "up",
+  "ALERTS",
+  "ALERTS_FOR_STATE",
+]);
+const RESERVED_PREFIXES: readonly string[] = [
+  SYNTHETIC_PREFIX,
+  "scrape_",
+  "node_",
+  "container_",
+  "kube_",
+  "probe_",
+  "pg_",
+  "postgres_",
+];
+function isReservedName(name: string): boolean {
+  return (
+    RESERVED_NAMES.has(name) ||
+    RESERVED_PREFIXES.some((prefix) => name.startsWith(prefix))
+  );
+}
+/** A longer line is dropped before any parsing, so no tenant line can cost more than a bounded scan. */
+export const MAX_LINE_CHARS = 4096;
+/** Most labels one sample may carry. */
+const MAX_LABELS = 32;
 const SAMPLE_START = /^[a-zA-Z_:][a-zA-Z0-9_:]*/;
-/** ` <value>[ <timestamp>]` after the labels: a float, `NaN` or `+Inf`/`-Inf`, then an optional integer. */
-const SAMPLE_VALUE =
-  /^\s+(?:[+-]?(?:\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|Inf)|NaN)(?:\s+-?\d+)?\s*$/;
+/** A float (no ambiguous grouping, so linear), `NaN`, or `Inf` with an optional sign. */
+const SAMPLE_NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const SAMPLE_SPECIAL = /^(?:NaN|[+-]?Inf)$/;
+const SAMPLE_TIMESTAMP = /^-?\d{1,20}$/;
 const LABEL_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+/** `<value>[ <timestamp>]` after the labels, rebuilt from validated tokens. Undefined when it is not a sample tail. */
+function sampleTail(rest: string): string | undefined {
+  if (!/^\s/.test(rest)) return undefined;
+  const tokens = rest.trim().split(/\s+/);
+  const [value, timestamp] = tokens;
+  if (
+    tokens.length > 2 ||
+    value === undefined ||
+    !(SAMPLE_NUMBER.test(value) || SAMPLE_SPECIAL.test(value)) ||
+    (timestamp !== undefined && !SAMPLE_TIMESTAMP.test(timestamp))
+  )
+    return undefined;
+  return timestamp === undefined ? ` ${value}` : ` ${value} ${timestamp}`;
+}
 
 /** Escape a label value for the text exposition format. */
 export function escapeLabelValue(value: string): string {
@@ -247,24 +296,26 @@ function splitSample(line: string):
   const name = nameMatch[0];
   let i = name.length;
   if (line[i] !== "{") {
-    const rest = line.slice(i);
-    return SAMPLE_VALUE.test(rest) ? { name, labels: [], rest } : undefined;
+    const rest = sampleTail(line.slice(i));
+    return rest === undefined ? undefined : { name, labels: [], rest };
   }
   i += 1;
   const labels: (readonly [string, string])[] = [];
+  const seen = new Set<string>();
   while (i < line.length) {
     while (line[i] === " " || line[i] === ",") i += 1;
     if (line[i] === "}") {
-      const rest = line.slice(i + 1);
-      return SAMPLE_VALUE.test(rest) ? { name, labels, rest } : undefined;
+      const rest = sampleTail(line.slice(i + 1));
+      return rest === undefined ? undefined : { name, labels, rest };
     }
+    if (labels.length >= MAX_LABELS) return undefined;
     const eq = line.indexOf("=", i);
     if (eq < 0) return undefined;
     const labelName = line.slice(i, eq).trim();
     if (
       !LABEL_NAME.test(labelName) ||
       labelName.startsWith("__") ||
-      labels.some(([existing]) => existing === labelName) ||
+      seen.has(labelName) ||
       line[eq + 1] !== '"'
     )
       return undefined;
@@ -286,6 +337,7 @@ function splitSample(line: string):
     }
     if (line[j] !== '"') return undefined;
     labels.push([labelName, raw]);
+    seen.add(labelName);
     i = j + 1;
   }
   return undefined;
@@ -296,8 +348,9 @@ export function stampSample(
   line: string,
   stamp: Readonly<Record<string, string>>
 ): string | undefined {
+  if (line.length > MAX_LINE_CHARS) return undefined;
   const parts = splitSample(line);
-  if (!parts || parts.name.startsWith(SYNTHETIC_PREFIX)) return undefined;
+  if (!parts || isReservedName(parts.name)) return undefined;
   const kept = parts.labels
     .filter(([name]) => !OPERATOR_LABELS.has(name))
     .map(([name, raw]) => `${name}="${raw}"`);
@@ -317,16 +370,31 @@ const METRIC_TYPES: ReadonlySet<string> = new Set([
 ]);
 const HELP_MAX = 200;
 
-/** HELP text safe to forward: no control characters, only the two valid escapes, bounded. */
+/**
+ * HELP text safe to forward: control characters become spaces, a backslash is kept only as one of the two valid
+ * escapes (`\\` or `\n`; any other becomes an escaped backslash), and the result is cut on a token boundary.
+ */
 function sanitizeHelp(value: string): string {
-  const printable = Array.from(value, (ch) => {
-    const code = ch.charCodeAt(0);
-    return code < 0x20 || code === 0x7f ? " " : ch;
-  }).join("");
-  return printable
-    .replace(/\\(?![\\n])/g, "\\\\")
-    .slice(0, HELP_MAX)
-    .replace(/\\$/, "");
+  let out = "";
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i] as string;
+    const next = value[i + 1];
+    let token: string;
+    if (ch === "\\") {
+      if (next === "\\" || next === "n") {
+        token = `\\${next}`;
+        i += 1;
+      } else {
+        token = "\\\\";
+      }
+    } else {
+      const code = ch.charCodeAt(0);
+      token = code < 0x20 || code === 0x7f ? " " : ch;
+    }
+    if (out.length + token.length > HELP_MAX) break;
+    out += token;
+  }
+  return out;
 }
 
 interface Family {
@@ -354,7 +422,7 @@ class Exposition {
     let added = 0;
     for (const raw of text.split("\n")) {
       const line = raw.trimEnd();
-      if (line === "") continue;
+      if (line === "" || line.length > MAX_LINE_CHARS) continue;
       if (line.startsWith("#")) {
         const m =
           /^#\s+(HELP|TYPE)\s+([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\s+(.*))?$/.exec(
@@ -367,7 +435,7 @@ class Exposition {
           string,
           string | undefined,
         ];
-        if (name.startsWith(SYNTHETIC_PREFIX)) {
+        if (isReservedName(name)) {
           current = undefined;
           continue;
         }

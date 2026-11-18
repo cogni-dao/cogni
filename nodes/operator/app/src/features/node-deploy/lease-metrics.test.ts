@@ -80,8 +80,8 @@ describe("stampSample", () => {
   });
 
   it("stamps a label-less sample and keeps escaped quotes and braces in values", () => {
-    expect(stampSample("up 1", stamp)).toBe(
-      `up{node="${NODE_A}",env="production",workload="app",service="app"} 1`
+    expect(stampSample("requests_up 1", stamp)).toBe(
+      `requests_up{node="${NODE_A}",env="production",workload="app",service="app"} 1`
     );
     expect(stampSample('m{p="a\\"}b"} 2 1700000000', stamp)).toBe(
       `m{p="a\\"}b",node="${NODE_A}",env="production",workload="app",service="app"} 2 1700000000`
@@ -258,6 +258,87 @@ describe("collectLeaseMetrics", () => {
     expect(report.text).toContain(
       `http_requests_total{app="cogni-template",node_id="n",route="x",status="2xx",node="${NODE_B}"`
     );
+  });
+
+  it("a tenant cannot re-label a series as a platform job or forge platform metrics", async () => {
+    const forged = [
+      'http_requests_total{job="integrations/unix",instance="x",route="a"} 1',
+      'up{job="integrations/unix"} 0',
+      "node_memory_MemAvailable_bytes 0",
+      'probe_success{proof_class="serve"} 0',
+      "# TYPE up gauge",
+      "# HELP up forged",
+      "",
+    ].join("\n");
+    const report = await collectLeaseMetrics(
+      {
+        root: ROOT,
+        lanes: [laneA],
+        truncated: false,
+        signal: new AbortController().signal,
+      },
+      { fetchLane: async () => ok(forged) }
+    );
+    expect(report.text).not.toContain("integrations/unix");
+    expect(report.text).not.toMatch(/^(up|node_memory|probe_success)/m);
+    expect(report.text).not.toContain("# TYPE up ");
+    expect(report.text).toContain(
+      `http_requests_total{route="a",node="${NODE_A}"`
+    );
+  });
+
+  it("bounds the cost of an adversarial line and drops it", () => {
+    const stamp = { node: NODE_A, env: "production" };
+    const started = Date.now();
+    expect(stampSample(`a ${"1".repeat(80_000)}x`, stamp)).toBeUndefined();
+    expect(stampSample(`a ${"1".repeat(4_000)}x`, stamp)).toBeUndefined();
+    const manyLabels = Array.from({ length: 40 }, (_, i) => `l${i}="v"`).join(
+      ","
+    );
+    expect(stampSample(`m{${manyLabels}} 1`, stamp)).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it("rebuilds the value and timestamp from validated tokens", () => {
+    const stamp = { node: NODE_A };
+    expect(stampSample("m\t 1.5e3 \t 1700000000", stamp)).toBe(
+      `m{node="${NODE_A}"} 1.5e3 1700000000`
+    );
+    expect(stampSample("m +Inf", stamp)).toBe(`m{node="${NODE_A}"} +Inf`);
+    expect(stampSample("m 1 2 3", stamp)).toBeUndefined();
+    expect(stampSample("m 1 12.5", stamp)).toBeUndefined();
+  });
+
+  it("forwards HELP with only valid escapes and cuts on a token boundary", async () => {
+    const help = [
+      "# HELP a_total two \\\\x one \\q lone \\",
+      "# TYPE a_total counter",
+      "a_total 1",
+      `# HELP b_total ${"\\\\".repeat(150)}`,
+      "# TYPE b_total counter",
+      "b_total 1",
+      "",
+    ].join("\n");
+    const report = await collectLeaseMetrics(
+      {
+        root: ROOT,
+        lanes: [laneA],
+        truncated: false,
+        signal: new AbortController().signal,
+      },
+      { fetchLane: async () => ok(help) }
+    );
+    const helpLines = report.text
+      .split("\n")
+      .filter(
+        (l) => l.startsWith("# HELP a_total") || l.startsWith("# HELP b_total")
+      );
+    for (const l of helpLines) {
+      const text = l.replace(/^# HELP \S+ /, "");
+      // every backslash starts a valid pair: \\ or \n
+      expect(text.replace(/\\\\|\\n/g, "")).not.toContain("\\");
+      expect(text.length).toBeLessThanOrEqual(200);
+    }
   });
 
   it("reads a 200 with no samples as up 0 reason empty, never as healthy", async () => {
