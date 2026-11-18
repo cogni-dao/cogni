@@ -40,6 +40,7 @@ Custom LiteLLM Docker image extending upstream with per-node billing callback ro
 ## Public Surface
 
 - `cogni_callbacks.CogniNodeRouter` — CustomLogger subclass for LiteLLM success callbacks
+- `cogni_langfuse_otel.cogni_langfuse_otel` — Langfuse OTLP trace emitter (bug.5643); writes the metadata the operator trace reader authorizes on
 - `Dockerfile` — extends `ghcr.io/berriai/litellm` with the custom callback module
 
 ## Env Vars
@@ -48,6 +49,8 @@ Custom LiteLLM Docker image extending upstream with per-node billing callback ro
 - `LITELLM_MASTER_KEY` — existing gateway key; its hash verifies the local compatibility path
 - `COGNI_DEFAULT_NODE_ID` — local primary node for master-key calls without node attribution
 - `BILLING_INGEST_TOKEN` — Bearer token forwarded to node ingest endpoints
+
+- `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` / `LANGFUSE_HOST` / `LANGFUSE_TRACING_ENVIRONMENT` — Langfuse OTLP export; unset keys disable tracing without stopping the gateway
 
 ## Responsibilities
 

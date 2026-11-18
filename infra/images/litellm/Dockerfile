@@ -13,3 +13,6 @@ RUN pip install --no-cache-dir httpx>=0.27
 
 # Copy custom callback module
 COPY cogni_callbacks.py /app/cogni_callbacks.py
+
+# Langfuse trace emitter over OTLP (bug.5643): the v3 ingestion API the legacy callback used is gone
+COPY cogni_langfuse_otel.py /app/cogni_langfuse_otel.py
