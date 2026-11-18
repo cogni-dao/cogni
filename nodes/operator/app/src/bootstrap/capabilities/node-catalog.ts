@@ -19,9 +19,9 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { ImageCatalogNodes } from "@/adapters/server";
-import type { NodeCatalogPort } from "@/ports";
+import type { EdgeHostCatalogPort, NodeCatalogPort } from "@/ports";
 
-let cached: NodeCatalogPort | undefined;
+let cached: ImageCatalogNodes | undefined;
 
 /** First root that holds `infra/catalog`: the image (`/app`), then the monorepo checkout (dev, tests). */
 function imageRoot(): string {
@@ -37,6 +37,12 @@ function imageRoot(): string {
 }
 
 export function createNodeCatalog(): NodeCatalogPort {
+  cached ??= new ImageCatalogNodes({ root: imageRoot() });
+  return cached;
+}
+
+/** The same image catalog as the edge application roster (story.5148 `edge.caught@1`). */
+export function createEdgeHostCatalog(): EdgeHostCatalogPort {
   cached ??= new ImageCatalogNodes({ root: imageRoot() });
   return cached;
 }
