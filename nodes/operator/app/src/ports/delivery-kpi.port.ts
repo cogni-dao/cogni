@@ -21,6 +21,12 @@
 export interface DeliveryScope {
   readonly nodeId?: string | undefined;
   readonly env?: string | undefined;
+  /**
+   * Only releases whose `sourceSha` is one of these (full lowercase shas). A `releases()` read only; a lane read
+   * ignores it. Unbounded in time when the caller gives `recordedFrom` at the epoch: served-ness of a given head
+   * must not depend on a lookback window (task.5498).
+   */
+  readonly sourceShas?: readonly string[] | undefined;
 }
 
 /** One release, aggregated over its attempts. All instants come from durable rows. */
