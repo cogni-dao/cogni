@@ -93,14 +93,21 @@ describe("GET /api/metrics/leases (discovery)", () => {
     );
   });
 
-  it("returns the SD groups and warns when the lane read was truncated", async () => {
+  it("returns the SD groups", async () => {
     const groups = [{ targets: ["a.example.org"], labels: { node: NODE } }];
-    listTargets.mockResolvedValue({ groups, truncated: true });
+    listTargets.mockResolvedValue({ groups, truncated: false });
     const res = await discover(`Bearer ${TOKEN}`);
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual(groups);
-    expect(log.warn).toHaveBeenCalledWith(
+  });
+
+  it("is 503, never a short list, when the lane read hit its bound", async () => {
+    const groups = [{ targets: ["a.example.org"], labels: { node: NODE } }];
+    listTargets.mockResolvedValue({ groups, truncated: true });
+    const res = await discover(`Bearer ${TOKEN}`);
+    expect(res.status).toBe(503);
+    expect(log.error).toHaveBeenCalledWith(
       { reason: "lanes_truncated", lanes: 1 },
       "lease_metrics_scrape"
     );

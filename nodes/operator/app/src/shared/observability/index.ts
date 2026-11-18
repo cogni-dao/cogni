@@ -105,8 +105,8 @@ export const EVENT_NAMES = {
   // Edge catch-all counter (story.5148, `edge.caught@1`): ONE terminal event per host and 300 s window, a number or
   // unknown with a stable `reason`. A Grafana alert reads it from Loki. Fields: env, host, outcome, caught, reason.
   EDGE_CAUGHT_WINDOW: "edge_caught_window",
-  // Lease metrics scrape (bug.5641): ONE terminal event per `/api/metrics/leases` pass. Fields: lanes, scraped, failed,
-  // truncated, reasons (bounded enum counts), durationMs. Never a token, a host or a body.
+  // Lease metrics (bug.5641): one event per FAILED discovery read (`reason` lanes_unavailable | lanes_truncated) or
+  // FAILED lane relay (nodeId, env, workload, bounded `reason`, upstreamStatus). Never a token, a host or a body.
   LEASE_METRICS_SCRAPE: "lease_metrics_scrape",
 } as const;
 

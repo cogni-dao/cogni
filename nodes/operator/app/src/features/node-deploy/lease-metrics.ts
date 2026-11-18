@@ -9,6 +9,9 @@
  *   and label precedence stay native Prometheus behavior. This is the control-plane counterpart of the lease-log pump.
  * Scope: Token derivation, the SD target shape, lane-path validation and the relay outcome. IO lives in the caller.
  * Invariants:
+ *   - ONE_SECRET_TWO_USES: the operator METRICS_TOKEN is both Alloy's bearer for these routes and the HMAC root of every
+ *     lane token. Rotating it 401s every lane until its next release (bug.5641 debt).
+ *   - NODE_APPS_ONLY: only node-app lanes are listed and relayed. A `worker` release gets no token and no `/api/metrics`.
  *   - TOKEN_IS_DERIVED: a lane's token is `HMAC-SHA256(operator METRICS_TOKEN, "metrics-scrape:v1:<nodeId>:<env>")` in
  *     hex. The sequencer puts it in the lease env as `METRICS_TOKEN`; the operator recomputes it. No node bucket is read,
  *     and one leaked token reaches one node and env only.
@@ -27,8 +30,11 @@ import { createHmac } from "node:crypto";
 
 /** The path every node app serves its Prometheus exposition on. */
 export const LEASE_METRICS_PATH = "/api/metrics";
-/** Most lanes one discovery read lists (the same bound as the lane probes). */
-export const MAX_LEASE_LANES = 64;
+/**
+ * Most lanes one discovery read lists. One operator store holds every env it serves (nodes x envs x workloads). A read
+ * past the bound is refused (503), never a silently short list: an unlisted lane would have no `up` to alert on.
+ */
+export const MAX_LEASE_LANES = 1000;
 /** Relay deadline per lane. Alloy's scrape timeout for the job is longer. */
 export const LEASE_SCRAPE_TIMEOUT_MS = 8_000;
 /** Largest relayed body, in bytes. A body at the cap is refused as too large. Alloy's `body_size_limit` matches. */
@@ -50,7 +56,8 @@ export function deriveLeaseMetricsToken(
   nodeId: string,
   env: string
 ): string {
-  return createHmac("sha256", root)
+  // Trimmed like the sequencer's file read, so the relay and the lease derive from the same bytes.
+  return createHmac("sha256", root.trim())
     .update(`${TOKEN_MESSAGE_PREFIX}:${nodeId}:${env}`, "utf8")
     .digest("hex");
 }

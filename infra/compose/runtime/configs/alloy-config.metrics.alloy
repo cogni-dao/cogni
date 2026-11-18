@@ -332,6 +332,9 @@ prometheus.relabel "app_metrics" {
 //   - The SD target is the lane's public host; it becomes `instance`, then `__address__` points at the operator.
 //   - honor_labels = false: node / env / workload / service / app come from the operator's release store as
 //     target labels. A tenant copy becomes exported_<name>; a tenant cannot claim another node.
+//   - honor_timestamps = false: a tenant sample stamped in the future would make the native `up` write out of
+//     order and hide a dead lane. Scrape time is the only time. A tenant series named `up` cannot be dropped here
+//     without dropping the native one; it can only ever claim its own lane, and only while its scrape succeeds.
 //   - up{job="node-lanes"} = 0 for a dead, unauthorised or not-yet-released lane; the node-lane-metrics-down
 //     alert reads it. Design: https://cognidao.org/knowledge/lease-metrics-forwarding-design
 
@@ -363,6 +366,7 @@ prometheus.scrape "node_lanes" {
   scrape_timeout           = "15s"
   bearer_token             = sys.env("METRICS_TOKEN")
   honor_labels             = false
+  honor_timestamps         = false
   sample_limit             = 20000
   body_size_limit          = "2MB"
   label_limit              = 32

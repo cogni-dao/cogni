@@ -42,6 +42,7 @@ export async function listLeaseScrapeTargets(signal: AbortSignal): Promise<{
     scope: {},
     maxRows: MAX_LEASE_LANES,
     signal,
+    nodeAppsOnly: true,
   });
   return { groups: leaseScrapeTargets(read.lanes), truncated: read.truncated };
 }
@@ -57,6 +58,7 @@ export async function relayLeaseMetrics(
     scope: { nodeId: key.nodeId, env: key.env },
     maxRows: MAX_LANES_PER_NODE_ENV,
     signal,
+    nodeAppsOnly: true,
   });
   const lane = read.lanes.find((l) => l.workload === key.workload);
   if (!lane) return { ok: false, reason: "not_serving" };

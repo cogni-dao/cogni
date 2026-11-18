@@ -40,6 +40,12 @@ describe("deriveLeaseMetricsToken", () => {
       deriveLeaseMetricsToken("x".repeat(40), NODE_A, "production")
     ).not.toBe(t);
   });
+
+  it("ignores surrounding whitespace on the root, like the sequencer's file read", () => {
+    expect(deriveLeaseMetricsToken(`${ROOT}\n`, NODE_A, "production")).toBe(
+      deriveLeaseMetricsToken(ROOT, NODE_A, "production")
+    );
+  });
 });
 
 describe("leaseScrapeTargets", () => {

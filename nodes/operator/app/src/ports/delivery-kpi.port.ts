@@ -118,6 +118,8 @@ export interface DeliveryKpiSourcePort {
     readonly scope: DeliveryScope;
     readonly maxRows: number;
     readonly signal: AbortSignal;
+    /** Only node-app lanes: a `worker` release (no node-app env, no `/api/metrics`) is left out (bug.5641). */
+    readonly nodeAppsOnly?: boolean | undefined;
   }): Promise<{
     readonly lanes: readonly DeliveryLaneFacts[];
     readonly truncated: boolean;

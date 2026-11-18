@@ -9,8 +9,8 @@
  * Scope: Auth, one bounded lane read and the SD JSON. Target shape lives in `@features/node-deploy/lease-metrics`.
  * Invariants:
  *   - SAME_AUTH_AS_METRICS: the operator's METRICS_TOKEN bearer, constant-time compare (`../_bearer`).
- *   - NEVER_EMPTY_ON_FAILURE: a failed lane read is 503. Alloy then keeps its last good target list; it never
- *     drops every lane because the store blinked.
+ *   - NEVER_EMPTY_ON_FAILURE: a failed or over-bound lane read is 503. Alloy then keeps its last good target list; it
+ *     never drops lanes because the store blinked or the list grew past its bound.
  * Side-effects: IO (release store read)
  * Links: https://cognidao.org/knowledge/lease-metrics-forwarding-design, https://prometheus.io/docs/prometheus/latest/http_sd/
  * @public
@@ -53,11 +53,17 @@ export const GET = wrapRouteHandlerWithLogging(
       const { groups, truncated } = await listLeaseScrapeTargets(
         AbortSignal.timeout(READ_DEADLINE_MS)
       );
-      if (truncated)
-        ctx.log.warn(
+      if (truncated) {
+        // Fail closed: Alloy keeps its last good list, and the error is logged, instead of dropping lanes silently.
+        ctx.log.error(
           { reason: "lanes_truncated", lanes: groups.length },
           EVENT_NAMES.LEASE_METRICS_SCRAPE
         );
+        return NextResponse.json(
+          { error: "Lane list over its bound" },
+          { status: 503 }
+        );
+      }
       return NextResponse.json(groups, {
         headers: { "Cache-Control": "no-store" },
       });
