@@ -216,6 +216,29 @@ describe("EsoNodeRuntimeSecrets", () => {
     }
   });
 
+  it("a rewrite only ADDS keys: a sibling workload's key is kept (story.5159)", async () => {
+    const sibling = {
+      secretKey: "SIBLING_ONLY_KEY",
+      remoteRef: { key: "production/poly", property: "SIBLING_ONLY_KEY" },
+    };
+    const f = fake({
+      existing: {
+        spec: { ...goodSpec, data: [goodSpec.data[0], sibling] },
+        resourceVersion: "9",
+      },
+      secret: { AUTH_SECRET: "a", PAPER_ENFORCE_MODE: "true" },
+      conditions: READY,
+    });
+    await f.port.read("production", "poly", KEYS);
+    expect(f.replaced).toHaveLength(1);
+    const keys = (
+      f.replaced[0] as { spec: { data: { secretKey: string }[] } }
+    ).spec.data.map((d) => d.secretKey);
+    expect(new Set(keys)).toEqual(
+      new Set(["AUTH_SECRET", "PAPER_ENFORCE_MODE", "SIBLING_ONLY_KEY"])
+    );
+  });
+
   it("waits a bounded time for Ready, then reads", async () => {
     const f = fake({
       secret: { AUTH_SECRET: "a" },
