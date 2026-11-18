@@ -330,7 +330,7 @@ describe("collectLeaseMetrics", () => {
       nodeId: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
     });
     const big = Array.from({ length: 19_000 }, (_, i) => `m_${i} 1`).join("\n");
-    const lanes = Array.from({ length: 11 }, (_, i) => lane(i));
+    const lanes = Array.from({ length: 6 }, (_, i) => lane(i));
     const report = await collectLeaseMetrics(
       {
         root: ROOT,
@@ -340,8 +340,40 @@ describe("collectLeaseMetrics", () => {
       },
       { fetchLane: async () => ok(big) }
     );
-    expect(report.scraped).toBe(10);
-    expect(report.reasons).toEqual({ ok: 10, too_large: 1 });
+    expect(report.scraped).toBe(5);
+    expect(report.reasons).toEqual({ ok: 5, too_large: 1 });
+  });
+
+  it("drops values outside float64 range, which would fail the whole scrape downstream", () => {
+    const stamp = { node: NODE_A };
+    for (const bad of ["1e400", "-1e400", "1e99999999999", "9".repeat(400)])
+      expect(stampSample(`m ${bad}`, stamp), bad).toBeUndefined();
+    expect(stampSample("m 1e-400", stamp)).toBe(`m{node="${NODE_A}"} 0`);
+    expect(stampSample("m NaN", stamp)).toBe(`m{node="${NODE_A}"} NaN`);
+  });
+
+  it("renders a family shared by many lanes without overflowing the stack", async () => {
+    const same = Array.from(
+      { length: 19_000 },
+      (_, i) => `shared_total{i="${i}"} 1`
+    ).join("\n");
+    const lanes = Array.from({ length: 5 }, (_, i) => ({
+      ...laneA,
+      nodeId: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    }));
+    const report = await collectLeaseMetrics(
+      {
+        root: ROOT,
+        lanes,
+        truncated: false,
+        signal: new AbortController().signal,
+      },
+      { fetchLane: async () => ok(same) }
+    );
+    expect(report.scraped).toBe(5);
+    expect(
+      report.text.split("\n").filter((l) => l.startsWith("shared_total")).length
+    ).toBe(95_000);
   });
 
   it("bounds the cost of an adversarial line and drops it", () => {
@@ -359,7 +391,7 @@ describe("collectLeaseMetrics", () => {
   it("rebuilds the value, dropping the timestamp, from validated tokens", () => {
     const stamp = { node: NODE_A };
     expect(stampSample("m\t 1.5e3 \t 1700000000", stamp)).toBe(
-      `m{node="${NODE_A}"} 1.5e3`
+      `m{node="${NODE_A}"} 1500`
     );
     expect(stampSample("m +Inf", stamp)).toBe(`m{node="${NODE_A}"} +Inf`);
     expect(stampSample("m 1 2 3", stamp)).toBeUndefined();

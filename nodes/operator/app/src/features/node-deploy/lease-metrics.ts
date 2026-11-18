@@ -41,7 +41,7 @@ export const LEASE_SCRAPE_MAX_BYTES = 2_000_000;
 /** Most samples one lane may contribute. More reads as too large: one tenant cannot flood the fleet's series quota. */
 export const LEASE_SCRAPE_MAX_SAMPLES = 20_000;
 /** Most samples one merged pass may hold. A lane that would pass it reads as too large. */
-export const LEASE_SCRAPE_MAX_TOTAL_SAMPLES = 200_000;
+export const LEASE_SCRAPE_MAX_TOTAL_SAMPLES = 100_000;
 
 const TOKEN_MESSAGE_PREFIX = "metrics-scrape:v1";
 
@@ -279,7 +279,11 @@ function sampleTail(rest: string): string | undefined {
     (timestamp !== undefined && !SAMPLE_TIMESTAMP.test(timestamp))
   )
     return undefined;
-  return ` ${value}`;
+  // A value outside float64 range (`1e400`, a 400-digit integer) is a parse error downstream that rolls back the
+  // WHOLE scrape: it is dropped here, and a finite one is re-printed canonically.
+  if (SAMPLE_SPECIAL.test(value)) return ` ${value}`;
+  const n = Number(value);
+  return Number.isFinite(n) ? ` ${String(n)}` : undefined;
 }
 
 /** Escape a label value for the text exposition format. */
@@ -434,9 +438,7 @@ function nextToken(
 }
 
 /** `# HELP name text` or `# TYPE name type`, parsed without backtracking. Undefined for any other comment. */
-function parseMetadata(
-  line: string
-):
+function parseMetadata(line: string):
   | {
       readonly kind: "HELP" | "TYPE";
       readonly name: string;
@@ -529,7 +531,8 @@ class Exposition {
       if (family.lines.length === 0) continue;
       if (family.help !== undefined) out.push(`# HELP ${name} ${family.help}`);
       if (family.type !== undefined) out.push(`# TYPE ${name} ${family.type}`);
-      out.push(...family.lines);
+      // A loop, not a spread: a spread of ~120k lines overflows the call stack.
+      for (const sample of family.lines) out.push(sample);
     }
     return `${out.join("\n")}\n`;
   }
