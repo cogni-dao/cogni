@@ -137,7 +137,7 @@ describe("collectLeaseMetrics", () => {
     const hist = lines.indexOf("# TYPE http_request_duration_ms histogram");
     expect(lines[hist + 1]).toContain("http_request_duration_ms_bucket");
     expect(report.text).toContain(
-      `cogni_lease_scrape_up{node="${NODE_A}",env="production",workload="app",reason="ok"} 1`
+      `cogni_lease_scrape_up{node="${NODE_A}",env="production",workload="app"} 1`
     );
   });
 
@@ -168,7 +168,7 @@ describe("collectLeaseMetrics", () => {
     });
     expect(report.reasons).toEqual({ not_configured: 1, ok: 1 });
     expect(report.text).toContain(
-      `cogni_lease_scrape_up{node="${NODE_A}",env="production",workload="app",reason="not_configured"} 0`
+      `cogni_lease_scrape_up{node="${NODE_A}",env="production",workload="app"} 0`
     );
     expect(report.text).toContain("cogni_lease_scrape_lanes_truncated 1");
     expect(report.text).not.toContain(
@@ -210,5 +210,86 @@ describe("collectLeaseMetrics", () => {
       }
     );
     expect(report.reasons).toEqual({ timeout: 1 });
+  });
+
+  it("keeps a hostile lane from breaking the merged exposition", async () => {
+    const hostile = [
+      "# HELP http_requests_total bad \\q escape\u0001 and control",
+      "# TYPE http_requests_total counter junk",
+      "# TYPE other bogus",
+      'http_requests_total{route="x",route="y"} 1',
+      'http_requests_total{__name__="z"} 1',
+      'http_requests_total{p="bad\\qescape"} 1',
+      'http_requests_total{route="ok"} 5',
+      "",
+    ].join("\n");
+    const report = await collectLeaseMetrics(
+      {
+        root: ROOT,
+        lanes: [laneA, laneB],
+        truncated: false,
+        signal: new AbortController().signal,
+      },
+      {
+        fetchLane: async (lane) =>
+          ok(lane.nodeId === NODE_A ? hostile : APP_BODY),
+      }
+    );
+    const lines = report.text.split("\n").filter((l) => l !== "");
+    // Every line is a valid comment or a sample with a numeric value.
+    for (const l of lines) {
+      if (l.startsWith("# TYPE"))
+        expect(l).toMatch(
+          /^# TYPE \S+ (counter|gauge|histogram|summary|untyped|unknown)$/
+        );
+      else if (l.startsWith("# HELP"))
+        expect([...l].every((ch) => ch.charCodeAt(0) >= 0x20)).toBe(true);
+      else
+        expect(l).toMatch(
+          /^\S+ [-+0-9.eEInfNa]+( \d+)?$|\} [-+0-9.eEInfNa]+( \d+)?$/
+        );
+    }
+    // The valid sample of the hostile lane survives; the invalid ones are dropped; lane B is untouched.
+    expect(report.text).toContain(
+      `http_requests_total{route="ok",node="${NODE_A}"`
+    );
+    expect(report.text).not.toContain("__name__");
+    expect(report.text).not.toContain('route="y"');
+    expect(report.text).toContain(
+      `http_requests_total{app="cogni-template",node_id="n",route="x",status="2xx",node="${NODE_B}"`
+    );
+  });
+
+  it("reads a 200 with no samples as up 0 reason empty, never as healthy", async () => {
+    const report = await collectLeaseMetrics(
+      {
+        root: ROOT,
+        lanes: [laneA],
+        truncated: false,
+        signal: new AbortController().signal,
+      },
+      { fetchLane: async () => ok("<html>not metrics</html>\n") }
+    );
+    expect(report).toMatchObject({ scraped: 0, failed: 1 });
+    expect(report.reasons).toEqual({ empty: 1 });
+    expect(report.text).toContain(
+      `cogni_lease_scrape_up{node="${NODE_A}",env="production",workload="app"} 0`
+    );
+    expect(report.text).toContain('reason="empty"} 1');
+  });
+
+  it("refuses a lane that sends more samples than the cap", async () => {
+    const big = Array.from({ length: 20_001 }, (_, i) => `m_${i} 1`).join("\n");
+    const report = await collectLeaseMetrics(
+      {
+        root: ROOT,
+        lanes: [laneA],
+        truncated: false,
+        signal: new AbortController().signal,
+      },
+      { fetchLane: async () => ok(big) }
+    );
+    expect(report.reasons).toEqual({ too_large: 1 });
+    expect(report.text).not.toContain("m_1{");
   });
 });

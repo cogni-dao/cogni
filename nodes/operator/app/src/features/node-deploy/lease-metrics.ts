@@ -36,8 +36,10 @@ export const MAX_LEASE_LANES = 64;
 export const LEASE_SCRAPE_CONCURRENCY = 8;
 /** Per-lane deadline. */
 export const LEASE_SCRAPE_TIMEOUT_MS = 4_000;
-/** Largest accepted body per lane. A body at the cap counts as too large. */
+/** Largest accepted body per lane, in bytes. A body at the cap counts as too large. */
 export const LEASE_SCRAPE_MAX_BYTES = 2_000_000;
+/** Most samples one lane may contribute. More reads as too large: one tenant cannot flood the fleet's series quota. */
+export const LEASE_SCRAPE_MAX_SAMPLES = 20_000;
 
 const TOKEN_MESSAGE_PREFIX = "metrics-scrape:v1";
 
@@ -69,7 +71,8 @@ export type LeaseScrapeReason =
   | "timeout"
   | "network"
   | "invalid_target"
-  | "too_large";
+  | "too_large"
+  | "empty";
 
 export type LeaseFetchResult =
   | {
@@ -115,6 +118,16 @@ export interface LeaseMetricsReport {
   readonly reasons: Readonly<Record<string, number>>;
 }
 
+/** Non-empty, non-comment lines: the most samples the body can hold. */
+function countSampleLines(body: string): number {
+  let n = 0;
+  for (const line of body.split("\n")) {
+    const t = line.trim();
+    if (t !== "" && !t.startsWith("#")) n += 1;
+  }
+  return n;
+}
+
 function classify(result: LeaseFetchResult): LeaseScrapeReason {
   if (result.kind === "unreachable") {
     return result.code === "timeout" ||
@@ -124,7 +137,10 @@ function classify(result: LeaseFetchResult): LeaseScrapeReason {
       : "network";
   }
   if (result.status === 200) {
-    return result.body.length >= LEASE_SCRAPE_MAX_BYTES ? "too_large" : "ok";
+    return Buffer.byteLength(result.body, "utf8") >= LEASE_SCRAPE_MAX_BYTES ||
+      countSampleLines(result.body) > LEASE_SCRAPE_MAX_SAMPLES
+      ? "too_large"
+      : "ok";
   }
   if (result.status === 401) return "unauthorized";
   if (result.status === 500) return "not_configured";
@@ -245,13 +261,22 @@ function splitSample(line: string):
     const eq = line.indexOf("=", i);
     if (eq < 0) return undefined;
     const labelName = line.slice(i, eq).trim();
-    if (!LABEL_NAME.test(labelName) || line[eq + 1] !== '"') return undefined;
+    if (
+      !LABEL_NAME.test(labelName) ||
+      labelName.startsWith("__") ||
+      labels.some(([existing]) => existing === labelName) ||
+      line[eq + 1] !== '"'
+    )
+      return undefined;
     let j = eq + 2;
     let raw = "";
     for (; j < line.length; j += 1) {
       const c = line[j];
       if (c === "\\") {
-        raw += `${c}${line[j + 1] ?? ""}`;
+        const next = line[j + 1];
+        // Only the three escapes the text format defines; anything else is a parse error downstream.
+        if (next !== "\\" && next !== '"' && next !== "n") return undefined;
+        raw += `${c}${next}`;
         j += 1;
       } else if (c === '"') {
         break;
@@ -282,6 +307,28 @@ export function stampSample(
   return `${parts.name}{${[...kept, ...stamped].join(",")}}${parts.rest}`;
 }
 
+const METRIC_TYPES: ReadonlySet<string> = new Set([
+  "counter",
+  "gauge",
+  "histogram",
+  "summary",
+  "untyped",
+  "unknown",
+]);
+const HELP_MAX = 200;
+
+/** HELP text safe to forward: no control characters, only the two valid escapes, bounded. */
+function sanitizeHelp(value: string): string {
+  const printable = Array.from(value, (ch) => {
+    const code = ch.charCodeAt(0);
+    return code < 0x20 || code === 0x7f ? " " : ch;
+  }).join("");
+  return printable
+    .replace(/\\(?![\\n])/g, "\\\\")
+    .slice(0, HELP_MAX)
+    .replace(/\\$/, "");
+}
+
 interface Family {
   help?: string;
   type?: string;
@@ -301,9 +348,10 @@ class Exposition {
     return family;
   }
 
-  /** Add one lane's exposition text under the operator's labels. */
-  addLane(text: string, stamp: Readonly<Record<string, string>>): void {
+  /** Add one lane's exposition text under the operator's labels. Returns how many samples it contributed. */
+  addLane(text: string, stamp: Readonly<Record<string, string>>): number {
     let current: string | undefined;
+    let added = 0;
     for (const raw of text.split("\n")) {
       const line = raw.trimEnd();
       if (line === "") continue;
@@ -325,9 +373,15 @@ class Exposition {
         }
         const family = this.family(name);
         if (kind === "HELP" && family.help === undefined)
-          family.help = value ?? "";
-        if (kind === "TYPE" && family.type === undefined)
-          family.type = value ?? "untyped";
+          family.help = sanitizeHelp(value ?? "");
+        // Tenant metadata is validated like its samples: one bad TYPE line must not fail the whole merged scrape.
+        const type = (value ?? "").trim();
+        if (
+          kind === "TYPE" &&
+          family.type === undefined &&
+          METRIC_TYPES.has(type)
+        )
+          family.type = type;
         current = name;
         continue;
       }
@@ -340,7 +394,9 @@ class Exposition {
           ? current
           : sampleName;
       this.family(key).lines.push(stamped);
+      added += 1;
     }
+    return added;
   }
 
   render(): string {
@@ -374,8 +430,12 @@ export function renderLeaseMetrics(
   const reasons: Record<string, number> = {};
   const up = exposition.family("cogni_lease_scrape_up");
   up.help =
-    "Whether the operator scraped this lease's /api/metrics (1) or not (0), with the bounded reason.";
+    "1 when the operator scraped at least one sample from this lease's /api/metrics, else 0.";
   up.type = "gauge";
+  const info = exposition.family("cogni_lease_scrape_info");
+  info.help =
+    "Why the last scrape of this lease read as it did (bounded reason enum).";
+  info.type = "gauge";
   const duration = exposition.family("cogni_lease_scrape_duration_seconds");
   duration.help = "Seconds the operator spent scraping this lease.";
   duration.type = "gauge";
@@ -395,18 +455,20 @@ export function renderLeaseMetrics(
     })
       .map(([k, v]) => `${k}="${escapeLabelValue(v as string)}"`)
       .join(",");
-    const ok = outcome.reason === "ok";
-    reasons[outcome.reason] = (reasons[outcome.reason] ?? 0) + 1;
+    let reason = outcome.reason;
+    if (reason === "ok" && outcome.body !== undefined) {
+      // ABSENCE_IS_VISIBLE: up is 1 only when the lane really contributed samples (a 200 HTML page is not metrics).
+      if (exposition.addLane(outcome.body, stamp) > 0) scraped += 1;
+      else reason = "empty";
+    }
+    reasons[reason] = (reasons[reason] ?? 0) + 1;
     up.lines.push(
-      `cogni_lease_scrape_up{${labels},reason="${outcome.reason}"} ${ok ? 1 : 0}`
+      `cogni_lease_scrape_up{${labels}} ${reason === "ok" ? 1 : 0}`
     );
+    info.lines.push(`cogni_lease_scrape_info{${labels},reason="${reason}"} 1`);
     duration.lines.push(
       `cogni_lease_scrape_duration_seconds{${labels}} ${outcome.durationSeconds}`
     );
-    if (ok && outcome.body !== undefined) {
-      exposition.addLane(outcome.body, stamp);
-      scraped += 1;
-    }
   }
   return {
     text: exposition.render(),
