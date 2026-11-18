@@ -69,6 +69,7 @@ function composedProduction(): Record<string, string> {
     SCHEDULER_API_TOKEN: "v-SCHEDULER_API_TOKEN",
     BILLING_INGEST_TOKEN: "v-BILLING_INGEST_TOKEN",
     COGNI_NODE_ID: NODE_ID,
+    COGNI_INSTANCE: "main",
     DOMAIN: "cognidao.org",
     NODE_NAME: "poly",
     COGNI_REPO_PATH: "/app",
@@ -98,6 +99,32 @@ describe("operator issuer", () => {
       secrets: { ...profileBucket(), DOMAIN: "attacker.example" },
     });
     expect(env.DOMAIN).toBe("test.operator.example");
+  });
+});
+
+describe("instance stamp (story.5159)", () => {
+  const bucket = { secrets: profileBucket() };
+  it("the app workload is the main instance, and so is an absent workload", () => {
+    expect(
+      nodeAppEnv({ ...base, workload: "app", ...bucket }).COGNI_INSTANCE
+    ).toBe("main");
+    expect(nodeAppEnv({ ...base, ...bucket }).COGNI_INSTANCE).toBe("main");
+  });
+  it("any other workload is its own instance", () => {
+    expect(
+      nodeAppEnv({ ...base, workload: "canary", ...bucket }).COGNI_INSTANCE
+    ).toBe("canary");
+  });
+  it("a bucket or declared key can never set COGNI_INSTANCE", () => {
+    const env = nodeAppEnv({
+      ...base,
+      workload: "canary",
+      secretKeys: [...COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS, "COGNI_INSTANCE"],
+      secrets: { ...profileBucket(), COGNI_INSTANCE: "main" },
+    });
+    expect(env.COGNI_INSTANCE).toBe("canary");
+    expect(runtimeOwnedEnvKeys("app", []).has("COGNI_INSTANCE")).toBe(true);
+    expect(runtimeOwnedEnvKeys("worker", []).has("COGNI_INSTANCE")).toBe(false);
   });
 });
 

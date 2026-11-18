@@ -126,6 +126,13 @@ export interface GraphRunWorkflowInput {
   scheduledFor?: string;
   /** Optional caller-provided run ID for cross-system correlation */
   runId?: string;
+  /**
+   * The copy of the node this run belongs to (story.5159, design hub `candidate-pr-lanes`): `canary`,
+   * later `pr-<n>`. An identity, never a URL: the worker resolves it from the operator's instance
+   * directory. Absent or `main` = the node's main copy (the static endpoint map, unchanged). A node
+   * stamps it from its own `COGNI_INSTANCE`; scheduled runs carry none and run on `main`.
+   */
+  instance?: string;
 }
 
 /**
@@ -156,6 +163,7 @@ export async function GraphRunWorkflow(
     temporalScheduleId,
     scheduledFor: inputScheduledFor,
     runId: providedRunId,
+    instance,
   } = input;
 
   // For scheduled runs, derive scheduledFor from Temporal search attribute.
@@ -191,6 +199,7 @@ export async function GraphRunWorkflow(
         nodeId,
         grantId: executionGrantId,
         graphId,
+        instance,
       });
     } catch {
       // Grant invalid — create record and mark skipped (CONVERGED_FINALIZE)
@@ -205,12 +214,14 @@ export async function GraphRunWorkflow(
         dbScheduleId: dbScheduleId ?? undefined,
         scheduledFor,
         stateKey,
+        instance,
       });
       await updateGraphRunActivity({
         nodeId,
         runId,
         status: "skipped",
         errorMessage: "Grant validation failed",
+        instance,
       });
       return { ok: false, runId };
     }
@@ -228,10 +239,11 @@ export async function GraphRunWorkflow(
     dbScheduleId: dbScheduleId ?? undefined,
     scheduledFor,
     stateKey,
+    instance,
   });
 
   // 3. Mark run as started
-  await updateGraphRunActivity({ nodeId, runId, status: "running" });
+  await updateGraphRunActivity({ nodeId, runId, status: "running", instance });
 
   // 4. Execute graph via internal API. patched() preserves replay for runs
   // whose Activity command was created before transport recovery shipped.
@@ -248,6 +260,7 @@ export async function GraphRunWorkflow(
       input: graphInput,
       scheduledFor: scheduledFor ?? workflowInfo().startTime.toISOString(),
       runId,
+      instance,
     });
 
     // 5. CONVERGED_FINALIZE: mark success or error
@@ -257,6 +270,7 @@ export async function GraphRunWorkflow(
         runId,
         status: "success",
         traceId: result.traceId,
+        instance,
       });
       return {
         ok: true,
@@ -273,6 +287,7 @@ export async function GraphRunWorkflow(
         traceId: result.traceId,
         errorMessage: result.errorCode ?? "Graph execution failed",
         errorCode: result.errorCode,
+        instance,
       });
       return {
         ok: false,
@@ -292,6 +307,7 @@ export async function GraphRunWorkflow(
       runId,
       status: graphActivityFailureStatus(transportRecoveryEnabled, error),
       errorMessage,
+      instance,
     });
     throw error; // Re-throw so Temporal marks workflow as failed
   }

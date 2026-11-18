@@ -7,7 +7,9 @@
  * Scope: Worker owns no DB credentials for runs/grants. These adapters route each call to the owning node's internal API based on nodeId → nodeUrl lookup.
  * Invariants:
  *   - NO_DB_IN_WORKER: No DB client created here. Only fetch().
- *   - nodeId is mandatory and resolved against COGNI_NODE_ENDPOINTS at call time.
+ *   - nodeId is mandatory and resolved against COGNI_NODE_ENDPOINTS at call time. An optional `instance`
+ *     other than `main` resolves from the operator instance directory instead (story.5159); an unresolvable
+ *     instance is a non-retryable refusal before any request, never a fallback to the main copy.
  *   - Bearer SCHEDULER_API_TOKEN attached to every request.
  *   - 4xx responses are mapped to port-level errors (grant errors); 5xx/network errors rethrow so Temporal retries.
  * Side-effects: IO (HTTP)
@@ -31,6 +33,9 @@ import {
   GrantRevokedError,
   GrantScopeMismatchError,
   type GraphRunHttpWriter,
+  InstanceUnresolvedError,
+  type InstanceUrlResolver,
+  isMainInstance,
   RunHttpClientError,
 } from "../ports/index.js";
 
@@ -48,6 +53,11 @@ export interface RunHttpAdapterDeps {
   nodeEndpoints: Map<string, string>;
   schedulerApiToken: string;
   logger: Logger;
+  /**
+   * Resolves a NON-MAIN instance from the operator directory (story.5159). Absent = this worker has no
+   * directory, so any non-main instance is refused. `main` never uses it.
+   */
+  instanceResolver?: InstanceUrlResolver | undefined;
 }
 
 function resolveNodeUrl(
@@ -63,6 +73,35 @@ function resolveNodeUrl(
     );
   }
   return url.replace(/\/$/, "");
+}
+
+/**
+ * The base URL a call goes to. No instance or `main`: the COGNI_NODE_ENDPOINTS map, exactly as before.
+ * Any other instance: the directory only. An unresolvable instance throws a NON-retryable
+ * `RunHttpClientError` (retryable only when the operator was unreachable and nothing is cached) BEFORE any
+ * request, so no token is sent and the call never falls back to the main copy.
+ */
+async function resolveBase(
+  deps: RunHttpAdapterDeps,
+  nodeId: string,
+  instance: string | undefined
+): Promise<string> {
+  if (instance === undefined || isMainInstance(instance))
+    return resolveNodeUrl(deps.nodeEndpoints, nodeId);
+  if (!deps.instanceResolver)
+    throw new RunHttpClientError(
+      `Instance "${instance}" of node "${nodeId}" cannot be resolved: this worker has no instance directory (OPERATOR_DIRECTORY_URL); no request was sent`,
+      0,
+      false
+    );
+  try {
+    const url = await deps.instanceResolver.resolve(nodeId, instance);
+    return url.replace(/\/$/, "");
+  } catch (err) {
+    if (err instanceof InstanceUnresolvedError)
+      throw new RunHttpClientError(err.message, 0, err.retryable);
+    throw err;
+  }
 }
 
 /**
@@ -137,13 +176,14 @@ function isRetryableStatus(status: number): boolean {
 export function createHttpGraphRunWriter(
   deps: RunHttpAdapterDeps
 ): GraphRunHttpWriter {
-  const { nodeEndpoints, schedulerApiToken, logger } = deps;
+  const { schedulerApiToken, logger } = deps;
 
   async function postCreate(
     nodeId: string,
-    body: InternalCreateGraphRunInput
+    body: InternalCreateGraphRunInput,
+    instance: string | undefined
   ): Promise<void> {
-    const base = resolveNodeUrl(nodeEndpoints, nodeId);
+    const base = await resolveBase(deps, nodeId, instance);
     const url = `${base}/api/internal/graph-runs`;
     const response = await fetchNode(logger, nodeId, url, {
       method: "POST",
@@ -175,9 +215,10 @@ export function createHttpGraphRunWriter(
   async function patchUpdate(
     nodeId: string,
     runId: string,
-    body: InternalUpdateGraphRunInput
+    body: InternalUpdateGraphRunInput,
+    instance: string | undefined
   ): Promise<void> {
-    const base = resolveNodeUrl(nodeEndpoints, nodeId);
+    const base = await resolveBase(deps, nodeId, instance);
     const url = `${base}/api/internal/graph-runs/${encodeURIComponent(runId)}`;
     const response = await fetchNode(logger, nodeId, url, {
       method: "PATCH",
@@ -200,37 +241,46 @@ export function createHttpGraphRunWriter(
   }
 
   return {
-    async createRun(_actorId, nodeId, params) {
-      await postCreate(nodeId, {
-        runId: params.runId,
-        ...(params.graphId !== undefined && { graphId: params.graphId }),
-        ...(params.runKind !== undefined && {
-          runKind: params.runKind as InternalCreateGraphRunInput["runKind"],
-        }),
-        ...(params.triggerSource !== undefined && {
-          triggerSource: params.triggerSource,
-        }),
-        ...(params.triggerRef !== undefined && {
-          triggerRef: params.triggerRef,
-        }),
-        ...(params.requestedBy !== undefined && {
-          requestedBy: params.requestedBy,
-        }),
-        ...(params.scheduleId !== undefined && {
-          scheduleId: params.scheduleId,
-        }),
-        ...(params.scheduledFor !== undefined && {
-          scheduledFor: params.scheduledFor.toISOString(),
-        }),
-        ...(params.stateKey !== undefined && { stateKey: params.stateKey }),
-      });
+    async createRun(_actorId, nodeId, params, instance) {
+      await postCreate(
+        nodeId,
+        {
+          runId: params.runId,
+          ...(params.graphId !== undefined && { graphId: params.graphId }),
+          ...(params.runKind !== undefined && {
+            runKind: params.runKind as InternalCreateGraphRunInput["runKind"],
+          }),
+          ...(params.triggerSource !== undefined && {
+            triggerSource: params.triggerSource,
+          }),
+          ...(params.triggerRef !== undefined && {
+            triggerRef: params.triggerRef,
+          }),
+          ...(params.requestedBy !== undefined && {
+            requestedBy: params.requestedBy,
+          }),
+          ...(params.scheduleId !== undefined && {
+            scheduleId: params.scheduleId,
+          }),
+          ...(params.scheduledFor !== undefined && {
+            scheduledFor: params.scheduledFor.toISOString(),
+          }),
+          ...(params.stateKey !== undefined && { stateKey: params.stateKey }),
+        },
+        instance
+      );
     },
 
-    async markRunStarted(_actorId, nodeId, runId, traceId) {
-      await patchUpdate(nodeId, runId, {
-        status: "running",
-        ...(traceId !== undefined && { traceId }),
-      });
+    async markRunStarted(_actorId, nodeId, runId, traceId, instance) {
+      await patchUpdate(
+        nodeId,
+        runId,
+        {
+          status: "running",
+          ...(traceId !== undefined && { traceId }),
+        },
+        instance
+      );
     },
 
     async markRunCompleted(
@@ -239,13 +289,19 @@ export function createHttpGraphRunWriter(
       runId,
       status,
       errorMessage,
-      errorCode
+      errorCode,
+      instance
     ) {
-      await patchUpdate(nodeId, runId, {
-        status,
-        ...(errorMessage !== undefined && { errorMessage }),
-        ...(errorCode !== undefined && { errorCode }),
-      });
+      await patchUpdate(
+        nodeId,
+        runId,
+        {
+          status,
+          ...(errorMessage !== undefined && { errorMessage }),
+          ...(errorCode !== undefined && { errorCode }),
+        },
+        instance
+      );
     },
   };
 }
@@ -257,7 +313,7 @@ export function createHttpGraphRunWriter(
 export function createHttpExecutionGrantValidator(
   deps: RunHttpAdapterDeps
 ): ExecutionGrantHttpValidator {
-  const { nodeEndpoints, schedulerApiToken, logger } = deps;
+  const { schedulerApiToken, logger } = deps;
 
   async function validateGrantForScope(
     _actorId: Parameters<
@@ -265,9 +321,10 @@ export function createHttpExecutionGrantValidator(
     >[0],
     nodeId: string,
     grantId: string,
-    scope: string
+    scope: string,
+    instance?: string
   ) {
-    const base = resolveNodeUrl(nodeEndpoints, nodeId);
+    const base = await resolveBase(deps, nodeId, instance);
     const url = `${base}/api/internal/grants/${encodeURIComponent(grantId)}/validate`;
     const response = await fetchNode(logger, nodeId, url, {
       method: "POST",
@@ -328,12 +385,13 @@ export function createHttpExecutionGrantValidator(
 
   return {
     validateGrantForScope,
-    async validateGrantForGraph(actorId, nodeId, grantId, graphId) {
+    async validateGrantForGraph(actorId, nodeId, grantId, graphId, instance) {
       return validateGrantForScope(
         actorId,
         nodeId,
         grantId,
-        graphExecuteScope(graphId)
+        graphExecuteScope(graphId),
+        instance
       );
     },
   };
