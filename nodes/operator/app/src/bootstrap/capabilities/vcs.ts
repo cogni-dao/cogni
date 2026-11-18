@@ -75,3 +75,25 @@ export function createVcsCapability(env: ServerEnv): VcsCapability {
 
   return new GitHubVcsAdapter({ appId, privateKey });
 }
+
+/** Mints a one-repo push token through the operator GitHub App (POST /api/v1/vcs/push-token). */
+export interface RepoPushTokenMinter {
+  mintRepoPushToken(params: {
+    owner: string;
+    repo: string;
+  }): Promise<{ token: string; expiresAt: string }>;
+}
+
+/**
+ * Create the push-token minter from the same App credentials as VcsCapability.
+ * Returns null when they are not configured; the route answers 503 `vcs_not_configured`.
+ */
+export function createRepoPushTokenMinter(
+  env: ServerEnv
+): RepoPushTokenMinter | null {
+  const appId = env.GH_REVIEW_APP_ID;
+  const privateKeyBase64 = env.GH_REVIEW_APP_PRIVATE_KEY_BASE64;
+  if (!appId || !privateKeyBase64) return null;
+  const privateKey = Buffer.from(privateKeyBase64, "base64").toString("utf-8");
+  return new GitHubVcsAdapter({ appId, privateKey });
+}

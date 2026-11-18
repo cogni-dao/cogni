@@ -32,6 +32,7 @@ import type {
   PrSummary,
   VcsCapability,
 } from "@cogni/ai-tools";
+import { PUSH_TOKEN_PERMISSIONS } from "@cogni/node-contracts";
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "@octokit/core";
 import {
@@ -701,6 +702,28 @@ export class GitHubVcsAdapter implements VcsCapability {
       ref: refData.ref,
       sha: refData.object.sha,
     };
+  }
+
+  /**
+   * Mint an installation token limited to ONE repo with exactly PUSH_TOKEN_PERMISSIONS (push a branch,
+   * open a PR). GitHub enforces both limits, so the holder cannot widen them. auth-app caches the
+   * token per (installation, repos, permissions) and refreshes it before expiry.
+   */
+  async mintRepoPushToken(params: {
+    owner: string;
+    repo: string;
+  }): Promise<{ token: string; expiresAt: string }> {
+    const installationId = await this.resolveInstallationId(
+      params.owner,
+      params.repo
+    );
+    const auth = await this.appAuth({
+      type: "installation",
+      installationId,
+      repositoryNames: [params.repo],
+      permissions: { ...PUSH_TOKEN_PERMISSIONS },
+    });
+    return { token: auth.token, expiresAt: auth.expiresAt };
   }
 
   // ---------------------------------------------------------------------------
