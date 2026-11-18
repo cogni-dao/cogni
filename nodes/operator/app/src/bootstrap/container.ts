@@ -987,6 +987,8 @@ function createContainer(): Container {
       },
       // Substrate host pressure (bug.5613): the operator Grafana read credential, or null when unwired.
       prometheus: createGoalPrometheusReader(),
+      // Akash run cost (task.5497): the operator's own cost ledger, undefined unless the account is pinned.
+      akashSpend: akashSpendReader,
       environment: env.DEPLOY_ENVIRONMENT ?? "unknown",
       // Compute receipts and skipped invalid definitions must reach Loki.
       log: (event) => log.info(event, "metric.event"),

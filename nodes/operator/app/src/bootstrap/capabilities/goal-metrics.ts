@@ -9,7 +9,8 @@
  *   node-deploy release store, fleet uptime (`fleet.lanes-down@1`, `fleet.substrate-reach@1`,
  *   `fleet.uptime@1`, task.5457) over the same lane probes and the stored lanes-down readings, and PR review (`review.merge-coverage@1`, `review.fail-fix-rate@1`,
  *   task.5450) over the review App's check runs on the parent repo, and shared-substrate host pressure
- *   (`substrate.host-pressure@1`, bug.5613) over per-host node_exporter and k3s-kine series in Grafana Cloud Mimir. Package calculators, budgets
+ *   (`substrate.host-pressure@1`, bug.5613) over per-host node_exporter and k3s-kine series in Grafana Cloud Mimir, and the operator's
+ *   Akash run cost (`compute.akash-spend@1`, task.5497) over its own cost ledger. Package calculators, budgets
  *   enforcement and the engine live in `@cogni-dao/metrics/knowledge`; nothing here re-implements them.
  * Invariants:
  *   - EDGE_CAUGHT_IS_NODE_LOCAL: `edge.caught@1` (story.5148) probes each application edge host's canary and reads
@@ -25,6 +26,10 @@
  *   - SUBSTRATE_READS_PROMETHEUS_DELIBERATELY: `substrate.host-pressure@1` is the one calculator that reads
  *     Prometheus (Mimir, through `MetricsQueryPort`). Host pressure exists only there. An absent reader or a
  *     Mimir failure makes its readings unavailable, never 0.
+ *   - AKASH_SPEND_READS_OWN_LEDGER: `compute.akash-spend@1` (task.5497) reads the operator's own Akash cost ledger
+ *     through the container's `akashSpendReader` (injected as `readCosts`) and converts rates with the shared
+ *     `akashUsdPerDay`. No new credential and no network call. An absent reader (no `AKASH_ACTUATOR_ACCOUNT_ID`) or
+ *     a ledger failure makes its reading unavailable, never 0.
  *   - ONE_PROBE_SNAPSHOT: drift, lanes-down and substrate-reach share one per-tick probe snapshot, so a lane is
  *     probed once per tick. Uptime reads this node's own stored observations (`<node>/<environment>/` scope),
  *     read-only (task.5457).
@@ -32,7 +37,8 @@
  *     App id from `GH_REVIEW_APP_ID`; neither is a literal. Missing env makes a reading unavailable.
  * Side-effects: none (factory only)
  * Links: hub adopt-node-package-release, story.0021, task.5442, task.5450, bug.5613, features/node-deploy/delivery-kpis.ts,
- *   features/review/review-kpis.ts, features/substrate-health/substrate-kpis.ts
+ *   features/review/review-kpis.ts, features/substrate-health/substrate-kpis.ts,
+ *   features/akash-spend/akash-kpis.ts
  * @internal
  */
 
@@ -43,6 +49,7 @@ import {
 } from "@cogni-dao/metrics/knowledge";
 import type { Sql } from "postgres";
 import {
+  akashUsdPerDay,
   DeliveryKpiSource,
   FleetObservationReader,
   GitHubReviewKpiSource,
@@ -50,6 +57,7 @@ import {
 } from "@/adapters/server";
 import { createEdgeHostCatalog } from "@/bootstrap/capabilities/node-catalog";
 import { createLokiMetricReader } from "@/bootstrap/observability.factory";
+import { createAkashSpendCalculators } from "@/features/akash-spend/akash-kpis";
 import { createDeliveryCalculators } from "@/features/node-deploy/delivery-kpis";
 import {
   createEdgeCaughtCalculators,
@@ -59,10 +67,30 @@ import { createFleetCalculators } from "@/features/node-deploy/fleet-kpis";
 import { createFleetProbeSnapshots } from "@/features/node-deploy/fleet-probe-snapshot";
 import { createReviewCalculators } from "@/features/review/review-kpis";
 import { createSubstrateCalculators } from "@/features/substrate-health/substrate-kpis";
-import type { MetricsQueryPort } from "@/ports";
+import type { ComputeCostReport, MetricsQueryPort } from "@/ports";
 import { getNodeId } from "@/shared/config";
 
 export { createGoalProgressReader, createGoalSource };
+
+/**
+ * `compute.akash-spend@1` over the container's `akashSpendReader` (task.5497). Conversion is the shared
+ * `akashUsdPerDay`, so block time and uact-to-USD live in one place; the feature file imports no adapter.
+ */
+export function createOperatorAkashSpendCalculators(
+  akashSpend:
+    | {
+        accountId: string;
+        reportByNode(): Promise<readonly ComputeCostReport[]>;
+      }
+    | null
+    | undefined
+) {
+  return createAkashSpendCalculators({
+    accountId: akashSpend?.accountId,
+    readCosts: akashSpend ? () => akashSpend.reportByNode() : undefined,
+    usdPerDay: (rate) => akashUsdPerDay(rate),
+  });
+}
 
 export function createGoalMetrics(deps: {
   knowledgeSql: Sql;
@@ -82,6 +110,17 @@ export function createGoalMetrics(deps: {
   };
   /** The Mimir instant reader for `substrate.host-pressure@1`; absent makes substrate readings unavailable. */
   prometheus?: Pick<MetricsQueryPort, "queryInstant"> | null;
+  /**
+   * The operator's own Akash cost ledger (the container's `akashSpendReader`, task.5497); absent unless
+   * `AKASH_ACTUATOR_ACCOUNT_ID` is pinned, which makes `compute.akash-spend@1` unavailable.
+   */
+  akashSpend?:
+    | {
+        accountId: string;
+        reportByNode(): Promise<readonly ComputeCostReport[]>;
+      }
+    | null
+    | undefined;
   environment: string;
   log(event: object): void;
   /** One `edge_caught_window` event per `edge.caught@1` compute (story.5148). */
@@ -92,6 +131,7 @@ export function createGoalMetrics(deps: {
     controlHost,
     review,
     prometheus,
+    akashSpend,
     logEdgeWindow,
     ...rest
   } = deps;
@@ -132,6 +172,9 @@ export function createGoalMetrics(deps: {
         { repo: reviewRepo }
       ),
       ...createSubstrateCalculators({ prometheus }),
+      // task.5497: the operator's Akash run cost. Reads its own ledger in-process; conversion is the shared
+      // `akashUsdPerDay`, so block time and uact-to-USD live in one place.
+      ...createOperatorAkashSpendCalculators(akashSpend),
     ],
   });
 }

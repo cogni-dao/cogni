@@ -294,6 +294,7 @@ export { domainExpiryReader } from "./finance/domain-expiry.reader";
 export { grafanaOverageReader } from "./finance/grafana-overage.reader";
 export {
   akashHostingReaders,
+  akashUsdPerDay,
   collapseAkash,
   readAkashReports,
   unavailableFinanceReader,
