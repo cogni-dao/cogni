@@ -136,6 +136,7 @@ import {
   siblingLabel,
   workerHostRefusal,
 } from "./edge";
+import { deriveLeaseMetricsToken } from "./lease-metrics";
 import {
   attemptTransport,
   type DeviceWatchEntry,
@@ -279,6 +280,11 @@ export interface NodeAppRuntimeDeps {
   readonly operatorDomain: string;
   /** `vm_host_for_env` of the environment VM; absent omits the substrate env block. */
   readonly substrateHost?: string | undefined;
+  /**
+   * The operator's own `METRICS_TOKEN` (bug.5641): the root every lane's scrape token derives from. Absent = apps
+   * get no `METRICS_TOKEN` (their `/api/metrics` answers 500) and nothing else changes.
+   */
+  readonly metricsTokenRoot?: string | undefined;
 }
 
 /**
@@ -1257,6 +1263,15 @@ export class NodeDeploySequencer {
           operatorDomain: rt.operatorDomain,
           port: w.port,
           databasePoolLimits: policy.databasePoolLimits,
+          ...(rt.metricsTokenRoot
+            ? {
+                metricsToken: deriveLeaseMetricsToken(
+                  rt.metricsTokenRoot,
+                  key.nodeId,
+                  key.env
+                ),
+              }
+            : {}),
           ...substrate,
         }),
         substratePorts: nodeAppSubstrateBinding(substrate)?.ports ?? [],

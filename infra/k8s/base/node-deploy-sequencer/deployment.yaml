@@ -135,3 +135,12 @@ spec:
                       path: CLOUDFLARE_API_TOKEN
                     - key: CLOUDFLARE_ZONE_ID
                       path: CLOUDFLARE_ZONE_ID
+              # The operator's own scrape token (bug.5641): the HMAC root of every lane's derived
+              # `METRICS_TOKEN`. OPTIONAL so a missing key never blocks a deploy; without it a lease
+              # gets no token and its `/api/metrics` answers 500, exactly as before.
+              - secret:
+                  name: operator-env-secrets
+                  optional: true
+                  items:
+                    - key: METRICS_TOKEN
+                      path: METRICS_TOKEN

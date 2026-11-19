@@ -118,6 +118,8 @@ export interface DeliveryKpiSourcePort {
     readonly scope: DeliveryScope;
     readonly maxRows: number;
     readonly signal: AbortSignal;
+    /** Only node-app lanes: a `worker` release (no node-app env, no `/api/metrics`) is left out (bug.5641). */
+    readonly nodeAppsOnly?: boolean | undefined;
   }): Promise<{
     readonly lanes: readonly DeliveryLaneFacts[];
     readonly truncated: boolean;
@@ -130,5 +132,7 @@ export interface DeliveryKpiSourcePort {
     readonly timeoutMs: number;
     readonly maxBytes: number;
     readonly signal: AbortSignal;
+    /** Extra request headers (the lease metrics scrape sends its bearer). Never logged. */
+    readonly headers?: Readonly<Record<string, string>> | undefined;
   }): Promise<DeliveryProbeResult>;
 }

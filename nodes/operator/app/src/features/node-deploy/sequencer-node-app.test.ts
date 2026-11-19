@@ -38,8 +38,8 @@ import {
 } from "@/shared/node-registry/fleet-ownership";
 import { selectReleaseBundle } from "./artifact-selection";
 import { DeclarationError, resolveWorkloadDeclaration } from "./declarations";
-
 import { EdgeRouter, edgeHostRegexFor } from "./edge";
+import { deriveLeaseMetricsToken } from "./lease-metrics";
 import { nodeAppEnv, workerEnv } from "./node-app-env";
 import { releasePlacementRefusal } from "./node-catalog-policy";
 import {
@@ -901,6 +901,27 @@ describe("node app runtime env (task.5405)", () => {
       DECLARED.filter((k) => k !== "DATABASE_URL")
     );
     expect(JSON.stringify(h.log.lines)).not.toContain("inherited-");
+  });
+
+  it("delivers the derived per-lane scrape token as METRICS_TOKEN only when the operator holds a root (bug.5641)", async () => {
+    const without = harness();
+    await stateUp(without, POLY_ID);
+    await releaseApp(without, POLY_ID);
+    expect(appCreates(without)[0]?.spec.services[0]?.env).not.toHaveProperty(
+      "METRICS_TOKEN"
+    );
+
+    const h = harness();
+    const root = "r".repeat(40);
+    (h.runtime as { metricsTokenRoot?: string }).metricsTokenRoot = root;
+    await stateUp(h, POLY_ID);
+    await releaseApp(h, POLY_ID);
+    const env = appCreates(h)[0]?.spec.services[0]?.env ?? {};
+    // the one derivation the operator route recomputes at scrape time (CD2)
+    expect(env.METRICS_TOKEN).toBe(deriveLeaseMetricsToken(root, POLY_ID, ENV));
+    // the root itself never reaches the lease, nor the bucket read
+    expect(JSON.stringify(env)).not.toContain(root);
+    expect(h.runtimeSecrets.reads.at(-1)?.keys).not.toContain("METRICS_TOKEN");
   });
 
   it("starts a database-consuming node app through the DB CA trust wrapper, keeping its argv", async () => {

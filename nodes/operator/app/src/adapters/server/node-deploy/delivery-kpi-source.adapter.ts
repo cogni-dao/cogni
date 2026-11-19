@@ -195,6 +195,7 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
     readonly scope: DeliveryScope;
     readonly maxRows: number;
     readonly signal: AbortSignal;
+    readonly nodeAppsOnly?: boolean | undefined;
   }) {
     const s = this.sql;
     const rows = await cancellable(
@@ -220,6 +221,7 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
         LEFT JOIN node_workload_releases ar ON ar.id = act.release_id
         WHERE d.state = 'running'
           AND dr.spec -> 'expose' -> 'http' ->> 'host' IS NOT NULL
+          ${input.nodeAppsOnly ? s`AND dr.spec ->> 'runtimeProfile' IS DISTINCT FROM 'worker'` : s``}
           ${this.scopeSql("d", input.scope)}
         ORDER BY d.node_id, d.env, d.workload
         LIMIT ${input.maxRows + 1}
@@ -255,6 +257,7 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
     readonly timeoutMs: number;
     readonly maxBytes: number;
     readonly signal: AbortSignal;
+    readonly headers?: Readonly<Record<string, string>> | undefined;
   }): Promise<DeliveryProbeResult> {
     input.signal.throwIfAborted();
     if (!HOST_RE.test(input.host) || !input.path.startsWith("/"))
@@ -266,7 +269,11 @@ export class DeliveryKpiSource implements DeliveryKpiSourcePort {
         redirect: "manual",
         cache: "no-store",
         // With the caller's `cb=` query, keeps an edge cache from answering for the lane.
-        headers: { accept: "application/json", "cache-control": "no-cache" },
+        headers: {
+          accept: "application/json",
+          "cache-control": "no-cache",
+          ...input.headers,
+        },
         signal: AbortSignal.any([input.signal, timeout]),
       });
       return {
