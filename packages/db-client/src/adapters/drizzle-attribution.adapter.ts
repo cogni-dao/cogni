@@ -532,6 +532,34 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     return rows.map(toEpoch);
   }
 
+  // story.0076: recorded one-time port of @cogni-dao/attribution EpochPageReader (node-template#438).
+  // Exit: attribution-package-boundary slice 3 ships one adapter; delete this copy then.
+  async listEpochsPage(
+    nodeId: string,
+    page: { limit: number; offset: number },
+    filter?: { readonly status?: AttributionEpoch["status"] }
+  ): Promise<{ epochs: AttributionEpoch[]; total: number }> {
+    const where = and(
+      eq(epochs.nodeId, nodeId),
+      eq(epochs.scopeId, this.scopeId),
+      filter?.status ? eq(epochs.status, filter.status) : undefined
+    );
+    const [rows, counted] = await Promise.all([
+      this.db
+        .select()
+        .from(epochs)
+        .where(where)
+        .orderBy(epochs.id)
+        .limit(page.limit)
+        .offset(page.offset),
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(epochs)
+        .where(where),
+    ]);
+    return { epochs: rows.map(toEpoch), total: counted[0]?.total ?? 0 };
+  }
+
   async closeIngestion(
     epochId: bigint,
     approvers: string[],
@@ -1046,6 +1074,48 @@ export class DrizzleAttributionAdapter implements AttributionStore {
     return rows.map((r) => toIngestionReceipt(r.receipt));
   }
 
+  async getEpochActivityPage(
+    nodeId: string,
+    epochId: bigint,
+    window: { periodStart: Date; periodEnd: Date },
+    page: { limit: number; offset: number }
+  ): Promise<{ receipts: IngestionReceipt[]; total: number }> {
+    await this.resolveEpochScoped(epochId);
+    // One predicate over ingestion_receipts: in the window, or selected into this epoch.
+    // A receipt matching both appears once (no UNION, no in-memory dedup).
+    const selectedIntoEpoch = this.db
+      .select({ receiptId: epochSelection.receiptId })
+      .from(epochSelection)
+      .where(eq(epochSelection.epochId, epochId));
+    const where = and(
+      eq(ingestionReceipts.nodeId, nodeId),
+      or(
+        and(
+          gte(ingestionReceipts.eventTime, window.periodStart),
+          lte(ingestionReceipts.eventTime, window.periodEnd)
+        ),
+        inArray(ingestionReceipts.receiptId, selectedIntoEpoch)
+      )
+    );
+    const [rows, counted] = await Promise.all([
+      this.db
+        .select()
+        .from(ingestionReceipts)
+        .where(where)
+        .orderBy(ingestionReceipts.eventTime, ingestionReceipts.receiptId)
+        .limit(page.limit)
+        .offset(page.offset),
+      this.db
+        .select({ total: sql<number>`count(*)::int` })
+        .from(ingestionReceipts)
+        .where(where),
+    ]);
+    return {
+      receipts: rows.map(toIngestionReceipt),
+      total: counted[0]?.total ?? 0,
+    };
+  }
+
   // ── Selection ────────────────────────────────────────────────
 
   async upsertSelection(params: UpsertSelectionParams[]): Promise<void> {
@@ -1103,6 +1173,24 @@ export class DrizzleAttributionAdapter implements AttributionStore {
       .select()
       .from(epochSelection)
       .where(eq(epochSelection.epochId, epochId));
+    return rows.map(toSelection);
+  }
+
+  async getSelectionForReceipts(
+    epochId: bigint,
+    receiptIds: readonly string[]
+  ): Promise<AttributionSelection[]> {
+    if (receiptIds.length === 0) return [];
+    await this.resolveEpochScoped(epochId);
+    const rows = await this.db
+      .select()
+      .from(epochSelection)
+      .where(
+        and(
+          eq(epochSelection.epochId, epochId),
+          inArray(epochSelection.receiptId, [...receiptIds])
+        )
+      );
     return rows.map(toSelection);
   }
 

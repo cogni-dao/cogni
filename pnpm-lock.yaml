@@ -358,6 +358,9 @@ importers:
       '@cogni-dao/agent-grants':
         specifier: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.8.0/cogni-dao-agent-grants-0.8.0.tgz
         version: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.8.0/cogni-dao-agent-grants-0.8.0.tgz
+      '@cogni-dao/attribution':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/attribution-v0.1.1/cogni-dao-attribution-0.1.1.tgz
+        version: '@cogni-dao/attribution@https://github.com/cogni-dao/node-template/releases/download/attribution-v0.1.1/cogni-dao-attribution-0.1.1.tgz'
       '@cogni-dao/knowledge-store':
         specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.20.0/cogni-dao-knowledge-store-0.20.0.tgz
         version: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.20.0/cogni-dao-knowledge-store-0.20.0.tgz
@@ -1933,6 +1936,10 @@ packages:
       '@cogni-dao/knowledge-store': ^0.11.0 || ^0.12.0 || ^0.13.0 || ^0.14.0 || ^0.15.0 || ^0.16.0 || ^0.17.0 || ^0.18.0
       '@cogni-dao/metrics': ^0.13.0 || ^0.14.0
       '@cogni-dao/work-items': ^0.13.0
+
+  '@cogni-dao/attribution@https://github.com/cogni-dao/node-template/releases/download/attribution-v0.1.1/cogni-dao-attribution-0.1.1.tgz':
+    resolution: {integrity: sha512-bRiuVy7xJYt1WGR6irQNEHef9Kk0dhvzveFVo0u+Nxr8UY3/qEkTgPhfjDJ5FjRFWxlG1sSd0+nAWlO9hvhMIg==, tarball: https://github.com/cogni-dao/node-template/releases/download/attribution-v0.1.1/cogni-dao-attribution-0.1.1.tgz}
+    version: 0.1.1
 
   '@cogni-dao/doltgres-admission@https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.1/cogni-dao-doltgres-admission-0.1.1.tgz':
     resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.1/cogni-dao-doltgres-admission-0.1.1.tgz}
@@ -13665,6 +13672,8 @@ snapshots:
       '@cogni-dao/work-items': https://github.com/cogni-dao/node-template/releases/download/work-items-v0.15.0/cogni-dao-work-items-0.15.0.tgz
       '@types/json-schema': 7.0.15
       zod: 4.3.6
+
+  '@cogni-dao/attribution@https://github.com/cogni-dao/node-template/releases/download/attribution-v0.1.1/cogni-dao-attribution-0.1.1.tgz': {}
 
   '@cogni-dao/doltgres-admission@https://github.com/cogni-dao/node-template/releases/download/doltgres-admission-v0.1.1/cogni-dao-doltgres-admission-0.1.1.tgz': {}
 

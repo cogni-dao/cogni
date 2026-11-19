@@ -516,6 +516,38 @@ export interface EpochReader {
   listEpochs(nodeId: string): Promise<AttributionEpoch[]>;
 }
 
+/** One offset page request. Callers cap `limit` (the read contracts allow at most 200). */
+export interface ReadPage {
+  readonly limit: number;
+  readonly offset: number;
+}
+
+/** Bounded reads for the epoch read views (story.0076, bounded-data-reads). */
+export interface EpochPageReader {
+  /** One page of a node's epochs, oldest first, plus the matching count. `status` narrows both. */
+  listEpochsPage(
+    nodeId: string,
+    page: ReadPage,
+    filter?: { readonly status?: AttributionEpoch["status"] }
+  ): Promise<{ epochs: AttributionEpoch[]; total: number }>;
+  /**
+   * One page of an epoch's activity: the node's receipts in the epoch window, plus receipts
+   * selected into the epoch from another window, without duplicates. Ordered by event time,
+   * then receipt id. `total` counts the whole set.
+   */
+  getEpochActivityPage(
+    nodeId: string,
+    epochId: bigint,
+    window: { periodStart: Date; periodEnd: Date },
+    page: ReadPage
+  ): Promise<{ receipts: IngestionReceipt[]; total: number }>;
+  /** Selection rows of `epochId` for the given receipts only. */
+  getSelectionForReceipts(
+    epochId: bigint,
+    receiptIds: readonly string[]
+  ): Promise<AttributionSelection[]>;
+}
+
 export interface EpochWriter {
   createEpoch(params: {
     nodeId: string;
@@ -813,6 +845,7 @@ export interface IdentityResolver {
 
 export interface AttributionStore
   extends EpochReader,
+    EpochPageReader,
     EpochWriter,
     ReceiptStore,
     SelectionStore,
