@@ -285,6 +285,12 @@ export interface NodeAppRuntimeDeps {
    * get no `METRICS_TOKEN` (their `/api/metrics` answers 500) and nothing else changes.
    */
   readonly metricsTokenRoot?: string | undefined;
+  /**
+   * The public host of the operator this process IS (its own `DEPLOY_ENVIRONMENT` issuer), the one holding
+   * `metricsTokenRoot` (story.5169). Nodes read their own metrics there. NOT `operatorDomain`, which for a lane in
+   * another env is that env's operator and cannot verify a token derived from this root.
+   */
+  readonly metricsReadDomain?: string | undefined;
 }
 
 /**
@@ -1271,6 +1277,9 @@ export class NodeDeploySequencer {
                   key.env
                 ),
               }
+            : {}),
+          ...(rt.metricsReadDomain
+            ? { metricsReadDomain: rt.metricsReadDomain }
             : {}),
           ...substrate,
         }),

@@ -108,6 +108,9 @@ export const EVENT_NAMES = {
   // Lease metrics (bug.5641): one event per FAILED discovery read (`reason` lanes_unavailable | lanes_truncated) or
   // FAILED lane relay (nodeId, env, workload, bounded `reason`, upstreamStatus). Never a token, a host or a body.
   LEASE_METRICS_SCRAPE: "lease_metrics_scrape",
+  // Node metrics read (story.5169): ONE warn per refused or failed `/api/metrics/read` request. Fields: nodeId (only
+  // when the credential parsed), env, kind, reason (bounded enum), upstreamStatus, queryChars. Never a token or query text.
+  NODE_METRICS_READ: "node_metrics_read",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

@@ -924,6 +924,34 @@ describe("node app runtime env (task.5405)", () => {
     expect(h.runtimeSecrets.reads.at(-1)?.keys).not.toContain("METRICS_TOKEN");
   });
 
+  it("points the lane's metrics read at the RELEASING operator, not at the lane's own issuer (story.5169)", async () => {
+    const h = harness();
+    (h.runtime as { metricsTokenRoot?: string }).metricsTokenRoot = "r".repeat(
+      40
+    );
+    (h.runtime as { metricsReadDomain?: string }).metricsReadDomain =
+      "releasing.example";
+    await stateUp(h, POLY_ID);
+    await releaseApp(h, POLY_ID);
+    const env = appCreates(h)[0]?.spec.services[0]?.env ?? {};
+    // the lane's DOMAIN is this env's issuer; the read host is the operator that holds the root
+    expect(env.DOMAIN).toBe("operator.example");
+    expect(env.PROMETHEUS_QUERY_URL).toBe(
+      "https://releasing.example/api/metrics/read"
+    );
+    expect(env.PROMETHEUS_READ_USERNAME).toBe(POLY_ID);
+    expect(env.PROMETHEUS_READ_PASSWORD).toBe(env.METRICS_TOKEN);
+
+    const noRoot = harness();
+    (noRoot.runtime as { metricsReadDomain?: string }).metricsReadDomain =
+      "releasing.example";
+    await stateUp(noRoot, POLY_ID);
+    await releaseApp(noRoot, POLY_ID);
+    expect(appCreates(noRoot)[0]?.spec.services[0]?.env).not.toHaveProperty(
+      "PROMETHEUS_QUERY_URL"
+    );
+  });
+
   it("starts a database-consuming node app through the DB CA trust wrapper, keeping its argv", async () => {
     const h = harness();
     await stateUp(h, POLY_ID);

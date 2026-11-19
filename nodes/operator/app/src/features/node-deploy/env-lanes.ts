@@ -170,19 +170,30 @@ const isDomain = (value: string | undefined): value is string =>
     value
   );
 
+/**
+ * The public host of the operator that serves `environment` under `operatorDomainRoot`, or "" when the root is not
+ * a valid domain. A process's OWN value is the operator that releases its lanes and holds the metrics root
+ * (story.5169): other lanes it releases carry their env's issuer in `EnvLane.operatorDomain`, a different operator.
+ */
+export function operatorDomainFor(
+  environment: string,
+  operatorDomainRoot: string | undefined
+): string {
+  if (!isFlightEnv(environment))
+    throw new EnvLaneConfigError(
+      "environment_invalid",
+      `unsupported environment "${environment}"`
+    );
+  return isDomain(operatorDomainRoot)
+    ? hostForEnv("operator", true, environment, operatorDomainRoot)
+    : "";
+}
+
 export function resolveEnvLanes(input: EnvLaneInput): EnvLane[] {
   const root = input.operatorDomainRoot;
-  // Keep lanes observable when issuer config is invalid; nodeAppEnv refuses a fresh create.
-  const validRoot = isDomain(root);
   const meshZone = input.meshZone?.trim();
-  const issuerFor = (env: string): string => {
-    if (!isFlightEnv(env))
-      throw new EnvLaneConfigError(
-        "environment_invalid",
-        `unsupported environment "${env}"`
-      );
-    return validRoot && root ? hostForEnv("operator", true, env, root) : "";
-  };
+  // Keep lanes observable when issuer config is invalid; nodeAppEnv refuses a fresh create.
+  const issuerFor = (env: string): string => operatorDomainFor(env, root);
   const listed = (input.environments ?? "")
     .split(",")
     .map((e) => e.trim())

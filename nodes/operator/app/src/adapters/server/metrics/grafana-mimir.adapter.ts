@@ -17,11 +17,21 @@
 import { z } from "zod";
 import { MimirMetricsAdapter } from "./mimir.adapter";
 
-export async function createGrafanaMimirAdapter(input: {
+export interface GrafanaMimirSource {
+  /** The governed datasource proxy base; `<url>/api/v1/query[_range]` is the Prometheus API. */
+  readonly url: string;
+  readonly bearerToken: string;
+}
+
+/**
+ * Discover the governed Mimir datasource and return its Grafana proxy URL and the token that reaches it. One
+ * authority for the operator's own adapter and for the node-scoped read proxy (story.5169).
+ */
+export async function discoverGrafanaMimirSource(input: {
   grafanaUrl: string;
   bearerToken: string;
   timeoutMs: number;
-}): Promise<MimirMetricsAdapter> {
+}): Promise<GrafanaMimirSource> {
   const grafana = new URL(input.grafanaUrl);
   if (
     grafana.protocol !== "https:" ||
@@ -71,9 +81,18 @@ export async function createGrafanaMimirAdapter(input: {
   );
   if (proxy.origin !== grafana.origin)
     throw new Error("grafana_metrics_proxy_origin_mismatch");
+  return { url: proxy.toString(), bearerToken: input.bearerToken };
+}
+
+export async function createGrafanaMimirAdapter(input: {
+  grafanaUrl: string;
+  bearerToken: string;
+  timeoutMs: number;
+}): Promise<MimirMetricsAdapter> {
+  const source = await discoverGrafanaMimirSource(input);
   return new MimirMetricsAdapter({
-    url: proxy.toString(),
-    bearerToken: input.bearerToken,
+    url: source.url,
+    bearerToken: source.bearerToken,
     timeoutMs: input.timeoutMs,
   });
 }

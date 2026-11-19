@@ -91,6 +91,7 @@ import {
   type EnvLane,
   EnvLaneConfigError,
   EnvLaneSequencers,
+  operatorDomainFor,
   resolveEnvLanes,
 } from "@/features/node-deploy/env-lanes";
 import {
@@ -197,6 +198,11 @@ try {
   );
   throw error;
 }
+// The operator this process is (story.5169): lanes of every env it releases read metrics here, with the token it derives.
+const selfOperatorDomain = operatorDomainFor(
+  environment,
+  runtimeEnv.NODE_DEPLOY_OPERATOR_DOMAIN_ROOT
+);
 const appProviders = (runtimeEnv.NODE_DEPLOY_APP_PROVIDERS ?? "")
   .split(",")
   .map((p) => p.trim())
@@ -329,6 +335,10 @@ const composed = await composeNodeDeployLanes({
         substrateHost: lane.substrateHost,
         operatorDomain: lane.operatorDomain,
         ...(metricsTokenRoot ? { metricsTokenRoot } : {}),
+        // Every lane this process releases reads metrics at THIS operator (it holds the root), whatever its env.
+        ...(selfOperatorDomain
+          ? { metricsReadDomain: selfOperatorDomain }
+          : {}),
       },
       ...(chain ? { chain } : {}),
       clock: {
