@@ -107,7 +107,8 @@ export const POST = wrapRouteHandlerWithLogging(
     // must be a listed service-link target, and its review needs the signer and the remote reader, all checked
     // here, before dispatch. Authority on the subject was checked above (`node.flight` on the named node).
     if (rbac.node.nodeId !== getNodeId()) {
-      if (!findServiceLinkTarget(rbac.node.nodeId)) {
+      const target = findServiceLinkTarget(rbac.node.nodeId);
+      if (!target) {
         return fail(
           422,
           "review_node_unsupported",
@@ -115,7 +116,8 @@ export const POST = wrapRouteHandlerWithLogging(
           { prNumber }
         );
       }
-      if (!getRemoteReaderRegistry().available) {
+      // The reader must expose `index` (grounding reads it first), not only exist.
+      if (!getRemoteReaderRegistry().available(target)) {
         return fail(
           503,
           "review_remote_reader_unavailable",

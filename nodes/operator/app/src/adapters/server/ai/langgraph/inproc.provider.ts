@@ -273,10 +273,10 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
 
     // SUBJECT_IS_THE_REVIEWED_NODE (task.5448): a run whose host-validated subject is ANOTHER node. The
     // operator's work items are not that node's, so `work_item_read` leaves the tool ids and the allowlist.
+    // Fail closed: without this node's own id a subject is never assumed to be self.
     const otherSubject =
       scope.codeSubject !== undefined &&
-      this.nodeId !== undefined &&
-      scope.codeSubject.nodeId !== this.nodeId
+      (this.nodeId === undefined || scope.codeSubject.nodeId !== this.nodeId)
         ? scope.codeSubject
         : undefined;
     const forSubject = (ids: readonly string[]): readonly string[] =>

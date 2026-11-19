@@ -335,6 +335,7 @@ describe("remote transport registry (task.5448)", () => {
         get: vi.fn(),
         list: vi.fn(),
         search: vi.fn(),
+        index: vi.fn(),
       } satisfies RemoteKnowledgeReadPort;
     });
     const authorizationHeader = vi.fn(async () => "Bearer jwt");
@@ -343,7 +344,7 @@ describe("remote transport registry (task.5448)", () => {
       authorizationHeader,
       log,
     });
-    expect(registry.available).toBe(true);
+    expect(registry.available(TARGET)).toBe(true);
     expect(registry.forTarget(TARGET)).toBe(registry.forTarget(TARGET));
     expect(factory).toHaveBeenCalledTimes(1);
 
@@ -364,10 +365,39 @@ describe("remote transport registry (task.5448)", () => {
       authorizationHeader: vi.fn(),
       log,
     });
-    expect(registry.available).toBe(false);
+    expect(registry.available(TARGET)).toBe(false);
     expect(() => registry.forTarget(TARGET)).toThrow(
       "remote_transport_unavailable"
     );
+  });
+
+  it("is not available when the built reader has no index (ai-tools 0.15 through 0.17)", () => {
+    const factory = vi.fn(
+      () =>
+        ({
+          originOf: () => TARGET.origin,
+          get: vi.fn(),
+          list: vi.fn(),
+          search: vi.fn(),
+        }) satisfies RemoteKnowledgeReadPort
+    );
+    const registry = createRemoteReaderRegistry({
+      factory: factory as never,
+      authorizationHeader: vi.fn(),
+      log,
+    });
+    expect(registry.available(TARGET)).toBe(false);
+  });
+
+  it("is not available when building the reader throws", () => {
+    const registry = createRemoteReaderRegistry({
+      factory: (() => {
+        throw new Error("boom");
+      }) as never,
+      authorizationHeader: vi.fn(),
+      log,
+    });
+    expect(registry.available(TARGET)).toBe(false);
   });
 
   it("logs ONE review.remote_read per request: alias, route, status, kid; never a URL, id or token", async () => {
@@ -461,7 +491,7 @@ describe("subject grounding (task.5448)", () => {
       operatorBuildSha: "operator-sha",
       log: { warn },
       findTarget: (id) => (id === NODE_TEMPLATE ? TARGET : undefined),
-      registry: { available: true, forTarget: () => reader },
+      registry: { available: () => true, forTarget: () => reader },
     });
     return { loader, readCommitFile, warn, reader };
   }

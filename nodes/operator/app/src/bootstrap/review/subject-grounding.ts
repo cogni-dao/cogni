@@ -82,7 +82,7 @@ export function createSubjectGroundingLoader(deps: {
       throw new AiExecutionError("invalid_request", "subject_not_linked");
     }
     const registry = deps.registry ?? getRemoteReaderRegistry();
-    if (!registry.available) {
+    if (!registry.available(target)) {
       throw new AiExecutionError("internal", "remote_transport_unavailable");
     }
     const reader = registry.forTarget(target);

@@ -15,8 +15,9 @@
  *   - NO_TOKEN_IN_LOGS: `review.remote_read` carries alias, route class, status, kid, duration only; never
  *     a URL, a knowledge id, a header or a body.
  *   - SEAM_FOR_THE_SHARED_PACKAGE: `resolveTransportFactory` reads `createRemoteKnowledgeTransport` from the
- *     installed `@cogni/shared-ai-tools`. A release without it (before PR1 adopts ai-tools >= 0.15)
- *     yields no factory, and the review route answers a typed 503 before dispatch.
+ *     installed `@cogni/shared-ai-tools`. A release without it (before PR1 adopts ai-tools >= 0.15), or one
+ *     whose reader has no `index` (0.15 through 0.17), is not `available`, and the review route answers a typed
+ *     503 before dispatch. See the CD10 seam note on `resolveTransportFactory`.
  * Side-effects: IO (HTTPS GET to a linked node, through the transport)
  * Links: src/ports/remote-knowledge.port.ts, https://cognidao.org/knowledge/operator-identity-model
  * @internal
@@ -49,8 +50,13 @@ export type RemoteTransportFactory = (deps: {
 
 /**
  * The shared package's transport factory, or undefined when the installed release has none.
- * TODO(task.5448): after PR1 adopts `@cogni/shared-ai-tools` >= 0.15 (0.16.0 for `index`), replace this
- * lookup with a plain `import { createRemoteKnowledgeTransport }`.
+ *
+ * CD10 SEAM (bounded, task.5448): this runtime lookup bypasses the type checker, so it is a dated yellow.
+ *   Owner: flock-leader (story.5167 dev-manager).
+ *   Expiry: 2026-12-16.
+ *   Closing proof: PR1 pins shared ai-tools with index, and the lookup is replaced by a static import.
+ * `tests/unit/bootstrap/review/remote-transport-seam.test.ts` FAILS once the installed package exports the
+ * transport with `index`, so the bump cannot leave this seam behind unnoticed.
  */
 export function resolveTransportFactory(): RemoteTransportFactory | undefined {
   const candidate = (sharedAiTools as unknown as Record<string, unknown>)
@@ -143,8 +149,12 @@ export function createLoggedFetch(
 }
 
 export interface RemoteReaderRegistry {
-  /** True when a transport factory is available (the shared package carries one). */
-  readonly available: boolean;
+  /**
+   * True only when a transport factory exists AND the reader it builds for `target` exposes `index`.
+   * Published ai-tools 0.15 through 0.17 export the transport without `index`; the review's grounding reads the
+   * target's index first, so such a reader could never ground a review. Never throws.
+   */
+  available(target: RemoteKnowledgeTarget): boolean;
   /** The cached reader for a listed target. */
   forTarget(target: RemoteKnowledgeTarget): RemoteKnowledgeReadPort;
 }
@@ -167,7 +177,14 @@ export function createRemoteReaderRegistry(
 ): RemoteReaderRegistry {
   const readers = new Map<string, RemoteKnowledgeReadPort>();
   return {
-    available: deps.factory !== undefined,
+    available(target) {
+      if (!deps.factory) return false;
+      try {
+        return typeof this.forTarget(target).index === "function";
+      } catch {
+        return false;
+      }
+    },
     forTarget(target) {
       const key = `${target.alias}\n${target.nodeId}\n${target.origin}`;
       const cached = readers.get(key);
@@ -241,7 +258,8 @@ export function remoteKnowledgeCapabilityFor(
   const target = (deps.findTarget ?? findServiceLinkTarget)(nodeId);
   if (!target) throw new Error("knowledge_subject_not_linked");
   const readers = deps.registry ?? getRemoteReaderRegistry();
-  if (!readers.available) throw new Error("remote_transport_unavailable");
+  if (!readers.available(target))
+    throw new Error("remote_transport_unavailable");
   return createRemoteKnowledgeCapability(
     readers.forTarget(target),
     target.alias

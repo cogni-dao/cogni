@@ -31,7 +31,15 @@ const BASE_SHA = "b".repeat(40);
 
 const mockFindLinkTarget = vi.hoisted(() => vi.fn());
 const mockSigner = vi.hoisted(() => vi.fn());
-const mockReaderAvailable = vi.hoisted(() => vi.fn());
+/** The transport factory the shared package would export; `undefined` = the package has none. */
+const mockTransportFactory = vi.hoisted(() => vi.fn());
+const readerWith = (extra: Record<string, unknown>) => ({
+  originOf: () => "https://node-template-test.cognidao.org",
+  get: vi.fn(),
+  list: vi.fn(),
+  search: vi.fn(),
+  ...extra,
+});
 const mockGate = vi.hoisted(() => vi.fn());
 const mockResolveNodeRepo = vi.hoisted(() => vi.fn());
 const mockResolvePullRequest = vi.hoisted(() => vi.fn());
@@ -90,9 +98,22 @@ vi.mock("@/shared/config", async (importOriginal) => ({
 vi.mock("@/bootstrap/review/git-review-signer", () => ({
   getGitReviewSigner: () => mockSigner(),
 }));
-vi.mock("@/bootstrap/review/remote-knowledge", () => ({
-  getRemoteReaderRegistry: () => ({ available: mockReaderAvailable() }),
-}));
+// The REAL registry over a per-test factory: the route's gate is `available(target)`, which builds the reader.
+vi.mock("@/bootstrap/review/remote-knowledge", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/bootstrap/review/remote-knowledge")
+    >();
+  return {
+    ...actual,
+    getRemoteReaderRegistry: () =>
+      actual.createRemoteReaderRegistry({
+        factory: mockTransportFactory() as never,
+        authorizationHeader: async () => "Bearer test",
+        log: { info: vi.fn(), warn: vi.fn() },
+      }),
+  };
+});
 vi.mock("@/shared/env", () => ({
   serverEnv: () => ({
     NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
@@ -161,7 +182,8 @@ describe("POST /api/v1/vcs/review", () => {
     mockWorkflowStart.mockResolvedValue(undefined);
     mockFindLinkTarget.mockReturnValue(undefined);
     mockSigner.mockResolvedValue({ ok: true, signer: {} });
-    mockReaderAvailable.mockReturnValue(true);
+    // A transport WITH index, as a release that supports reviews of linked nodes would build.
+    mockTransportFactory.mockReturnValue(() => readerWith({ index: vi.fn() }));
   });
 
   it("202: starts the stable-id workflow with actor = payer = requestedBy = session user", async () => {
@@ -318,13 +340,25 @@ describe("POST /api/v1/vcs/review", () => {
       expect(mockWorkflowStart).not.toHaveBeenCalled();
     });
 
-    it("503 review_remote_reader_unavailable: no transport refuses the review before dispatch", async () => {
-      mockReaderAvailable.mockReturnValue(false);
+    it("503 review_remote_reader_unavailable: the shared package has no transport factory", async () => {
+      mockTransportFactory.mockReturnValue(undefined);
       const res = await post({ nodeId: "node-template", prNumber: 7 });
       expect(res.status).toBe(503);
       await expect(res.json()).resolves.toMatchObject({
         errorCode: "review_remote_reader_unavailable",
       });
+      expect(mockResolveNodeRepo).not.toHaveBeenCalled();
+      expect(mockWorkflowStart).not.toHaveBeenCalled();
+    });
+
+    it("503 review_remote_reader_unavailable: a factory whose reader has NO index (ai-tools 0.15 through 0.17)", async () => {
+      mockTransportFactory.mockReturnValue(() => readerWith({}));
+      const res = await post({ nodeId: "node-template", prNumber: 7 });
+      expect(res.status).toBe(503);
+      await expect(res.json()).resolves.toMatchObject({
+        errorCode: "review_remote_reader_unavailable",
+      });
+      expect(mockResolveNodeRepo).not.toHaveBeenCalled();
       expect(mockWorkflowStart).not.toHaveBeenCalled();
     });
 
@@ -334,7 +368,7 @@ describe("POST /api/v1/vcs/review", () => {
         node: { nodeId: OPERATOR_NODE_ID, slug: "operator" },
       });
       mockSigner.mockResolvedValue({ ok: false, reason: "seed_missing" });
-      mockReaderAvailable.mockReturnValue(false);
+      mockTransportFactory.mockReturnValue(undefined);
       mockResolveNodeRepo.mockResolvedValue({
         owner: "cogni-test-org",
         repo: "cogni-monorepo",
