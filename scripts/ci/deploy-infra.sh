@@ -600,8 +600,8 @@ render_shared_db_provision_config() {
 }
 NODE_DB_PROVISION_CONFIG="$(render_shared_db_provision_config)" || log_fatal "Invalid shared database catalog/budget inputs; refusing infra reconcile"
 # story.5159 - shared Postgres connection ceiling is declared per env in git
-# (infra/database-budget-profiles.yaml env_max_connections); tests/ci-invariants/shared-db-budget-sum.spec.ts reads the same value.
-POSTGRES_MAX_CONNECTIONS="$(yq -r ".env_max_connections.\"${DEPLOY_ENVIRONMENT}\" // 100" "$REPO_ROOT/infra/database-budget-profiles.yaml")"
+# (infra/compose/runtime/configs/postgres-limits.yaml env_max_connections); tests/ci-invariants/shared-db-budget-sum.spec.ts reads the same value.
+POSTGRES_MAX_CONNECTIONS="$(yq -r ".env_max_connections.\"${DEPLOY_ENVIRONMENT}\" // 100" "$REPO_ROOT/infra/compose/runtime/configs/postgres-limits.yaml")"
 [[ "$POSTGRES_MAX_CONNECTIONS" =~ ^[1-9][0-9]*$ && "$POSTGRES_MAX_CONNECTIONS" -ge 20 && "$POSTGRES_MAX_CONNECTIONS" -le 500 ]] \
   || log_fatal "env_max_connections.${DEPLOY_ENVIRONMENT} must be an integer 20..500, got '${POSTGRES_MAX_CONNECTIONS}'"
 # Only a value that differs from the image default adds the compose override (and the .env key);

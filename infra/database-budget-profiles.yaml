@@ -1,14 +1,6 @@
 # Versioned Postgres budgets referenced by infra/catalog/* database declarations.
 # Values are native Postgres/role limits. Admission rate is an input to the
 # candidate replay; it is not a claim about future query shape.
-# story.5159 - shared Postgres max_connections per env (compose `-c max_connections`, read by
-# deploy-infra.sh). candidate-a is higher to hold per-dev test envs. Changing it restarts postgres.
-# tests/ci-invariants/shared-db-budget-sum.spec.ts keeps role caps <= this value - reserve.
-env_max_connections:
-  candidate-a: 200
-  preview: 100
-  production: 100
-
 shared-default-v1:
   design_rate_per_minute: 60
   # bug.5637 — the role caps below are sized for this many simultaneous copies of the node:

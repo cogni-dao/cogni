@@ -18,7 +18,7 @@ import yaml from "yaml";
 
 const root = path.resolve(__dirname, "../..");
 const ENVS = ["candidate-a", "preview", "production"] as const;
-// The per-env ceiling is declared in infra/database-budget-profiles.yaml `env_max_connections`;
+// The per-env ceiling is declared in infra/compose/runtime/configs/postgres-limits.yaml `env_max_connections`;
 // deploy-infra.sh passes the same value to the shared Postgres (`-c max_connections`, default 100).
 // Reserve covers superuser slots, the readonly exporter/Grafana role, support sessions and one
 // migration burst outside node budgets.
@@ -31,9 +31,15 @@ interface Profile {
     service: { connection_limit: number };
   };
 }
-const { env_max_connections: envMaxConnections, ...profiles } = yaml.parse(
+const profiles = yaml.parse(
   readFileSync(path.join(root, "infra/database-budget-profiles.yaml"), "utf8")
-) as { env_max_connections: Record<string, number> } & Record<string, Profile>;
+) as Record<string, Profile>;
+const { env_max_connections: envMaxConnections } = yaml.parse(
+  readFileSync(
+    path.join(root, "infra/compose/runtime/configs/postgres-limits.yaml"),
+    "utf8"
+  )
+) as { env_max_connections: Record<string, number> };
 
 const catalogs = readdirSync(path.join(root, "infra/catalog"))
   .filter((f) => f.endsWith(".yaml"))
@@ -59,6 +65,32 @@ function scaled(
   return Math.ceil((cap * copies) / base);
 }
 
+/** Sum of every shared-tier node's role caps declared for one env. */
+function roleCapSum(env: (typeof ENVS)[number]) {
+  let sum = 0;
+  for (const node of catalogs) {
+    const placement = node.database?.[env];
+    if (!placement || placement.tier !== "shared") continue;
+    const profile = profiles[placement.budget_profile];
+    expect(profile, `${node.name}: unknown profile`).toBeDefined();
+    if (!profile) continue;
+    // app + service + migration (1) + recovery probe (1)
+    sum +=
+      scaled(
+        profile.roles.app.connection_limit,
+        placement.copies,
+        profile.copies
+      ) +
+      scaled(
+        profile.roles.service.connection_limit,
+        placement.copies,
+        profile.copies
+      ) +
+      2;
+  }
+  return sum;
+}
+
 describe("shared database budget sum (bug.5637)", () => {
   it.each(ENVS)("%s role caps fit the env Postgres ceiling", (env) => {
     const maxConnections = envMaxConnections[env];
@@ -68,28 +100,13 @@ describe("shared database budget sum (bug.5637)", () => {
     ).toBe(true);
     expect(maxConnections).toBeGreaterThanOrEqual(20);
     expect(maxConnections).toBeLessThanOrEqual(500);
-    let sum = 0;
-    for (const node of catalogs) {
-      const placement = node.database?.[env];
-      if (!placement || placement.tier !== "shared") continue;
-      const profile = profiles[placement.budget_profile];
-      expect(profile, `${node.name}: unknown profile`).toBeDefined();
-      if (!profile) continue;
-      // app + service + migration (1) + recovery probe (1)
-      sum +=
-        scaled(
-          profile.roles.app.connection_limit,
-          placement.copies,
-          profile.copies
-        ) +
-        scaled(
-          profile.roles.service.connection_limit,
-          placement.copies,
-          profile.copies
-        ) +
-        2;
-    }
-    expect(sum).toBeLessThanOrEqual(maxConnections - RESERVE);
+    expect(roleCapSum(env)).toBeLessThanOrEqual(maxConnections - RESERVE);
+  });
+
+  it.each(
+    ENVS
+  )("%s current catalog also fits the image-default ceiling of 100", (env) => {
+    expect(roleCapSum(env)).toBeLessThanOrEqual(100 - RESERVE);
   });
 
   it("only candidate-a raises the ceiling above the image default", () => {
@@ -100,24 +117,24 @@ describe("shared database budget sum (bug.5637)", () => {
     });
   });
 
-  it("node-template candidate-a caps cover 3 workloads x (live + spare) + 5 test envs + margin", () => {
+  it("node-template candidate-a caps cover both lanes x (live + spare)", () => {
     const nt = catalogs.find((c) => c.name === "node-template");
     const placement = nt?.database?.["candidate-a"];
     const profile = profiles[placement?.budget_profile ?? ""];
-    expect(placement?.copies).toBe(12);
+    expect(placement?.copies).toBe(4);
     expect(
       scaled(
         profile?.roles.app.connection_limit ?? 0,
         placement?.copies,
         profile?.copies
       )
-    ).toBe(12);
+    ).toBe(4);
     expect(
       scaled(
         profile?.roles.service.connection_limit ?? 0,
         placement?.copies,
         profile?.copies
       )
-    ).toBe(24);
+    ).toBe(8);
   });
 });

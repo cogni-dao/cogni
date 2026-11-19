@@ -1,6 +1,6 @@
 # story.5159 - shared Postgres connection ceiling override.
 # deploy-infra.sh adds this file to the runtime compose list ONLY when
-# infra/database-budget-profiles.yaml env_max_connections.<env> differs from the image
+# infra/compose/runtime/configs/postgres-limits.yaml env_max_connections.<env> differs from the image
 # default (100). Envs at 100 never see this file, so their postgres config (and its
 # recovery-receipt hash) stays byte-identical. Applying it recreates postgres once;
 # the long grace period lets the old container checkpoint and shut down cleanly.
