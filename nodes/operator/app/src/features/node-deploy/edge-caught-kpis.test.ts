@@ -709,6 +709,11 @@ describe("edge.caught@1 shared rules", () => {
     expect(envDomainFor("candidate-a", "production", prodHost)).toBe(DOMAIN);
     expect(envDomainFor("candidate-a", "candidate-a", DOMAIN)).toBe(DOMAIN);
     expect(envDomainFor("staging", "production", prodHost)).toBeUndefined();
+    // A per-dev test env's domain has no derivable root: only its own env is served.
+    expect(
+      envDomainFor("production", "candidate-x", "candidate-x.cognidao.org")
+    ).toBeUndefined();
+    expect(envDomainFor("production", undefined, DOMAIN)).toBeUndefined();
     expect(envDomainFor("production", "production", undefined)).toBeUndefined();
 
     const fromProd = harness({
@@ -723,6 +728,26 @@ describe("edge.caught@1 shared rules", () => {
     expect(fromProd.probes[0]?.host).toBe(DOMAIN);
     expect(fromProd.instants[0]?.query).toContain('env="candidate-a"');
     expect(fromProd.instants[0]?.query).toContain("poly-test");
+    expect(fromProd.events[0]).toMatchObject({
+      env: "candidate-a",
+      observerEnv: "production",
+      outcome: "number",
+    });
+
+    // The inverse: a candidate operator derives production's roster, so `poly.cognidao.org` is probed. The fake
+    // Loki has no line for that host, so the reading stays unknown and no count is read.
+    const fromCandidate = harness({
+      probeLineOnPoll: 1,
+      vector: vec(2),
+      probeByHost: { [prodHost]: canaryOk },
+    });
+    const sample = await compute(fromCandidate, {
+      env: "production",
+      host: "poly.cognidao.org",
+    });
+    expect(fromCandidate.probes[0]?.host).toBe("poly.cognidao.org");
+    expect(fromCandidate.instants).toHaveLength(0);
+    expect(sample.complete).toBe(false);
   });
 
   it("is unknown for an env outside the flight envs, a host outside that env's roster, or no env domain", async () => {

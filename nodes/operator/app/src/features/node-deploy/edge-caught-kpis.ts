@@ -40,7 +40,8 @@
  *     env's operator host, derived from the same root (`hostForEnv("operator", primary, env, rootDomain(domain))`:
  *     `cognidao.org` → `test.cognidao.org`, `preview.cognidao.org`). Every edge is public, so one operator can probe and
  *     count every env, including an env whose own operator is down (bug.5650: the candidate operator could not report
- *     its own outage). A param `env` outside `FLIGHT_ENVS` is unknown.
+ *     its own outage). A param `env` outside `FLIGHT_ENVS` is unknown, and so is any other env when the operator's
+ *     own env is not a flight env (a per-dev test env's domain has no derivable root).
  *   - ONE_EVENT_PER_WINDOW: every compute emits exactly one `edge_caught_window` event with stable enum fields
  *     (scope, host, env, window, outcome, caught, reason), so a Grafana alert can read Loki. No error text, header
  *     or URL is logged.
@@ -133,7 +134,7 @@ export function envDomainFor(
 ): string | undefined {
   if (!ownDomain) return undefined;
   if (env === ownEnv) return ownDomain;
-  return isFlightEnv(env)
+  return isFlightEnv(env) && ownEnv !== undefined && isFlightEnv(ownEnv)
     ? hostForEnv("operator", true, env, rootDomain(ownDomain))
     : undefined;
 }
@@ -358,7 +359,10 @@ const nanos = (ms: number) => `${Math.trunc(ms)}000000`;
 export interface EdgeCaughtWindowEvent {
   /** The registry name as a field (hub contract): Grafana filters on `event`, not only the message. */
   readonly event: typeof EVENT_NAMES.EDGE_CAUGHT_WINDOW;
+  /** The env measured. */
   readonly env: string;
+  /** The env of the operator that measured it; differs from `env` for a cross-env reading. */
+  readonly observerEnv: string | null;
   /** `host`: one application host. `env`: every application host of the env. */
   readonly scope: "host" | "env";
   /** The host counted (scope `host`) or probed (scope `env`: the operator's own env host); null when never resolved. */
@@ -451,6 +455,7 @@ export function createEdgeCaughtCalculators(
         options.log({
           event: EVENT_NAMES.EDGE_CAUGHT_WINDOW,
           env: p.env,
+          observerEnv: options.env ?? null,
           scope,
           host: probeHost,
           windowSeconds: p.windowSeconds,
