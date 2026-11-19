@@ -56,15 +56,16 @@ export async function listEpochsForNode(
 /**
  * Load the window + epoch-selected receipts for `nodeId`/`epochId`, dedup by receiptId, join
  * selections, and run read-time GitHub identity resolution. Shared by both the contributors
- * and activity views. `onResolved` lets the activity caller persist resolved userIds + log;
- * the contributors caller omits it (read-only resolution).
+ * and activity views. Pure read: it returns what it resolved (`resolvedIdentities`,
+ * `unresolvedGithubCount`) and the caller decides whether to persist/log. There is deliberately
+ * NO callback parameter — a callback that reads this function's own return value is invoked
+ * before that value is bound (TDZ; bug.5647).
  */
 async function loadEnrichedReceipts(
   store: AttributionStore,
   nodeId: string,
   epoch: NonNullable<Awaited<ReturnType<AttributionStore["getEpoch"]>>>,
-  epochId: bigint,
-  onResolved?: (resolved: Map<string, string>, unresolvedCount: number) => void
+  epochId: bigint
 ) {
   // Same store reads as the epoch-activity route: window receipts (may be pending) +
   // epoch-selected receipts (may be cross-epoch), deduped.
@@ -102,13 +103,6 @@ async function loadEnrichedReceipts(
       ? await store.resolveIdentities("github", [...unresolvedGithubIds])
       : new Map<string, string>();
 
-  if (resolvedIdentities.size > 0) {
-    onResolved?.(
-      resolvedIdentities,
-      unresolvedGithubIds.size - resolvedIdentities.size
-    );
-  }
-
   const enriched: EnrichedReceipt[] = receipts.map((r) => {
     const selection = selectionMap.get(r.receiptId);
     const needsResolution =
@@ -128,7 +122,13 @@ async function loadEnrichedReceipts(
     };
   });
 
-  return { enriched, receipts, selectionMap, resolvedIdentities };
+  return {
+    enriched,
+    receipts,
+    selectionMap,
+    resolvedIdentities,
+    unresolvedGithubCount: unresolvedGithubIds.size,
+  };
 }
 
 /** One activity-view event: an ingestion-receipt DTO with its (possibly null) selection DTO. */
@@ -248,34 +248,37 @@ export async function buildEpochActivityView(
   const epoch = await store.getEpoch(epochId);
   if (!epoch) return EPOCH_NOT_FOUND;
 
-  const { enriched, receipts, selectionMap } = await loadEnrichedReceipts(
-    store,
-    nodeId,
-    epoch,
-    epochId,
-    (resolvedIdentities, unresolvedCount) => {
-      // Fire-and-forget: persist resolved userIds to selection rows for future reads.
-      const updates: Promise<void>[] = [];
-      for (const r of receipts) {
-        const sel = selectionMap.get(r.receiptId);
-        if (sel && sel.userId === null && r.source === "github") {
-          const resolved = resolvedIdentities.get(r.platformUserId);
-          if (resolved) {
-            updates.push(
-              store.updateSelectionUserId(epochId, r.receiptId, resolved)
-            );
-          }
+  const {
+    enriched,
+    receipts,
+    selectionMap,
+    resolvedIdentities,
+    unresolvedGithubCount,
+  } = await loadEnrichedReceipts(store, nodeId, epoch, epochId);
+
+  if (resolvedIdentities.size > 0) {
+    // Fire-and-forget: persist resolved userIds to selection rows for future reads.
+    // Runs AFTER loadEnrichedReceipts returns so `receipts`/`selectionMap` are initialized.
+    const updates: Promise<void>[] = [];
+    for (const r of receipts) {
+      const sel = selectionMap.get(r.receiptId);
+      if (sel && sel.userId === null && r.source === "github") {
+        const resolved = resolvedIdentities.get(r.platformUserId);
+        if (resolved) {
+          updates.push(
+            store.updateSelectionUserId(epochId, r.receiptId, resolved)
+          );
         }
       }
-      // Don't await — background DB updates, response returns immediately.
-      void Promise.allSettled(updates);
-
-      onIdentityResolved?.({
-        resolvedCount: resolvedIdentities.size,
-        unresolvedCount,
-      });
     }
-  );
+    // Don't await — background DB updates, response returns immediately.
+    void Promise.allSettled(updates);
+
+    onIdentityResolved?.({
+      resolvedCount: resolvedIdentities.size,
+      unresolvedCount: unresolvedGithubCount - resolvedIdentities.size,
+    });
+  }
 
   const slice = enriched.slice(page.offset, page.offset + page.limit);
 
