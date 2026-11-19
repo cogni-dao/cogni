@@ -366,6 +366,40 @@ describe("RepoSpecNodeApproverReader", () => {
     });
   });
 
+  it("a non-canonical repoUrl or repoSpecPath is unavailable/unexpected and never reaches the fetcher", async () => {
+    const fetchRepoSpec = vi.fn(async () => spec);
+    const reader = new RepoSpecNodeApproverReader({ ...base, fetchRepoSpec });
+    const bad: NodeApproverTarget[] = [
+      { ...NODE, repoUrl: "https://gitlab.com/cogni-dao/toks5" },
+      { ...NODE, repoUrl: "https://github.com/cogni-dao" },
+      { ...NODE, repoUrl: "git@github.com:cogni-dao/toks5.git" },
+      { ...NODE, repoSpecPath: "../.cogni/repo-spec.yaml" },
+      { ...NODE, repoSpecPath: "/.cogni/repo-spec.yaml" },
+      { ...NODE, repoSpecPath: "other/repo-spec.yaml" },
+    ];
+    for (const node of bad) {
+      await expect(reader.approvers(node)).resolves.toEqual({
+        status: "unavailable",
+        reason: "unexpected",
+      });
+    }
+    expect(fetchRepoSpec).not.toHaveBeenCalled();
+  });
+
+  it("owner and repo reach the fetcher lowercased (the package's canonical key); the path is unchanged", async () => {
+    const fetchRepoSpec = vi.fn(async () => spec);
+    const reader = new RepoSpecNodeApproverReader({ ...base, fetchRepoSpec });
+    await reader.approvers({
+      ...NODE,
+      repoUrl: "https://github.com/Cogni-DAO/Toks5",
+      repoSpecPath: "nodes/Toks5/.cogni/repo-spec.yaml",
+    });
+    expect(fetchRepoSpec).toHaveBeenCalledWith(
+      "https://github.com/cogni-dao/toks5",
+      "nodes/Toks5/.cogni/repo-spec.yaml"
+    );
+  });
+
   it("a read that exceeds the deadline is unavailable", async () => {
     const reader = new RepoSpecNodeApproverReader({
       ...base,
