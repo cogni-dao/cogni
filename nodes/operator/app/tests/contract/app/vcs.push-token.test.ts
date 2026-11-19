@@ -281,13 +281,31 @@ describe("POST /api/v1/vcs/push-token", () => {
     expect((await res.json()).errorCode).toBe("app_not_installed");
   });
 
+  it("502 mint_failed, not app_not_installed, when the installation lookup is refused (bad key)", async () => {
+    // Defect: a revoked or wrong App key reported as "not installed", sending the operator to the wrong fix.
+    grant("node.push", NODE_A);
+    mockMint.mockRejectedValueOnce(
+      new Error("GitHub App not installed on Cogni-DAO/creative (HTTP 401)")
+    );
+    const res = await post({ nodeId: SLUG_A });
+    expect(res.status).toBe(502);
+    expect((await res.json()).errorCode).toBe("mint_failed");
+  });
+
   it.each([
     ["App id", { GH_NODE_DEV_APP_ID: undefined }],
     ["private key", { GH_NODE_DEV_APP_PRIVATE_KEY_BASE64: undefined }],
   ])("503 vcs_not_configured when the node dev App %s is unset", async (_l, unset) => {
     // Defect: falling back to the operator App's credentials, whose identity carries bypass rights.
     grant("node.push", NODE_A);
-    envState.current = { ...envState.current, ...unset };
+    envState.current = {
+      ...envState.current,
+      // The operator App's credentials are present: the route must still refuse rather than mint from them.
+      GH_REVIEW_APP_ID: "99",
+      GH_REVIEW_APP_PRIVATE_KEY_BASE64:
+        Buffer.from("operator-key").toString("base64"),
+      ...unset,
+    };
     const res = await post({ nodeId: SLUG_A });
     expect(res.status).toBe(503);
     expect((await res.json()).errorCode).toBe("vcs_not_configured");

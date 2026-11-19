@@ -12,7 +12,7 @@
  *   - FIXED_PERMISSIONS: the token carries exactly PUSH_TOKEN_PERMISSIONS; never workflows, actions,
  *     administration or secrets.
  * Side-effects: none
- * Links: nodes/operator/app/src/app/api/v1/vcs/push-token/route.ts, https://node-template.cognidao.org/knowledge/node-ai-github-apps
+ * Links: nodes/operator/app/src/app/api/v1/vcs/push-token/route.ts, https://node-template.cognidao.org/knowledge/node-ai-code-identity
  * @public
  */
 

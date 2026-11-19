@@ -722,6 +722,9 @@ export class GitHubVcsAdapter implements VcsCapability {
       installationId,
       repositoryNames: [params.repo],
       permissions: { ...PUSH_TOKEN_PERMISSIONS },
+      // auth-app caches installation tokens for 59 min; a node asks only when its own copy is near expiry,
+      // so always hand back a fresh 1-hour token.
+      refresh: true,
     });
     return { token: auth.token, expiresAt: auth.expiresAt };
   }

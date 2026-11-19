@@ -52,6 +52,7 @@ describe("GitHubVcsAdapter.mintRepoPushToken", () => {
       installationId: 42,
       repositoryNames: ["node-template"],
       permissions: { contents: "write", pull_requests: "write" },
+      refresh: true,
     });
   });
 

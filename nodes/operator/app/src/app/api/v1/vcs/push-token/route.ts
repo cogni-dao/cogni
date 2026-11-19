@@ -24,7 +24,7 @@
  *   - CONTRACTS_ARE_TRUTH: input/output parsed through `pushTokenOperation`.
  * Side-effects: IO (catalog read + GitHub installation-token mint via the App).
  * Links: packages/node-contracts/src/vcs.push-token.v1.contract.ts, nodes/operator/app/src/app/_lib/node-rbac.ts,
- *   https://node-template.cognidao.org/knowledge/node-ai-github-apps
+ *   https://node-template.cognidao.org/knowledge/node-ai-code-identity
  * @public
  */
 
@@ -159,9 +159,10 @@ export const POST = wrapRouteHandlerWithLogging(
       minted = await minter.mintRepoPushToken({ owner, repo });
     } catch (error) {
       const status = (error as { status?: number })?.status;
+      // resolveInstallationId throws "GitHub App not installed ... (HTTP <status>)" for any non-OK lookup;
+      // only a 404 means not installed. A 401/403/5xx (bad key, GitHub outage) is a mint failure.
       const notInstalled =
-        error instanceof Error &&
-        error.message.startsWith("GitHub App not installed");
+        error instanceof Error && /\(HTTP 404\)$/.test(error.message);
       if (notInstalled || status === 404) {
         return fail(
           502,
