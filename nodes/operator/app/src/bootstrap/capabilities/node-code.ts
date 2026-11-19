@@ -8,7 +8,11 @@
  * Invariants: ToolRunner and this bound capability independently require computed node.flight authority; reject wrong execution node.
  *   REVIEW_READS_PR_HEAD (story.5102): when the run scope carries a host-validated `codeSubject`, every
  *   call builds a NEW reader for `codeSubject.owner/repo@headSha` with REVIEW_NODE_CODE_POLICY — the
- *   serving-code reader is never mutated. v0 single-node authz: a subject for another node is denied.
+ *   serving-code reader is never mutated.
+ *   SUBJECT_MUST_BE_LISTED (task.5448): a subject for ANOTHER node is admitted only when that node is a listed
+ *   service-link target (`.cogni/service-links.yaml`, one reader). `scope.nodeId` stays this node; the
+ *   `node.flight` check runs on the SUBJECT node's resource, so the requesting developer needs flight authority
+ *   there. Code is read through this node's GitHub App from the subject's catalog repo.
  * Side-effects: none
  * Links: https://cognidao.org/work/items/subtask.5027, story.5102
  * @internal
@@ -25,9 +29,60 @@ import {
   getExecutionScope,
   REVIEW_NODE_CODE_POLICY,
 } from "@/adapters/server";
+import { findServiceLinkTarget, type LinkTarget } from "@/shared/config";
+
+/**
+ * Read one UTF-8 file of a pinned commit through this node's GitHub App (host-owned, no model argument).
+ * Returns null when the file is absent, unreadable or only partly returned. Used for the reviewed node's
+ * repo-spec at the base SHA (task.5448); the review admission policy applies.
+ */
+export function createCommitFileReader(deps: {
+  appId: string | undefined;
+  privateKeyBase64: string | undefined;
+  log: {
+    info(fields: Record<string, unknown>): void;
+    warn(fields: Record<string, unknown>): void;
+  };
+}): (input: {
+  nodeId: string;
+  origin: string;
+  owner: string;
+  repo: string;
+  commitSha: string;
+  path: string;
+}) => Promise<string | null> {
+  let adapter: GitHubVcsAdapter | undefined;
+  return async (input) => {
+    if (!deps.appId || !deps.privateKeyBase64) return null;
+    adapter ??= new GitHubVcsAdapter({
+      appId: deps.appId,
+      privateKey: Buffer.from(deps.privateKeyBase64, "base64").toString("utf8"),
+    });
+    const result = await adapter
+      .nodeCodeReader(
+        {
+          nodeId: input.nodeId,
+          origin: input.origin,
+          owner: input.owner,
+          repo: input.repo,
+          commitSha: input.commitSha,
+          roots: [],
+          manifests: [],
+        },
+        deps.log,
+        REVIEW_NODE_CODE_POLICY
+      )
+      .read({ path: input.path });
+    return result.fileComplete && result.content !== null
+      ? result.content
+      : null;
+  };
+}
 
 export function createNodeCodeCapability(deps: {
   getAuthorization?: () => AuthorizationPort | undefined;
+  /** The listed target for a node id; defaults to the service-links reader (tests inject). */
+  findLinkTarget?: (nodeId: string) => LinkTarget | undefined;
   nodeId: string;
   origin: string | undefined;
   owner: string;
@@ -95,21 +150,28 @@ export function createNodeCodeCapability(deps: {
     if (!scope.actorUserId || scope.nodeId !== deps.nodeId)
       throw new Error("node_code_scope_unavailable");
     const subject = scope.codeSubject;
-    // v0 single-node authz: node.flight below is checked on THIS node only.
-    if (subject && subject.nodeId !== deps.nodeId)
+    // SUBJECT_MUST_BE_LISTED: another node's code is readable only when that node is a listed link target.
+    const linked =
+      subject && subject.nodeId !== deps.nodeId
+        ? (deps.findLinkTarget ?? findServiceLinkTarget)(subject.nodeId)
+        : undefined;
+    if (subject && subject.nodeId !== deps.nodeId && !linked)
       throw new Error("node_code_authz_denied");
-    if (subject ? !adapter || !origin : !reader)
+    const subjectOrigin = linked?.origin ?? origin;
+    if (subject ? !adapter || !subjectOrigin : !reader)
       throw new Error("node_code_source_unavailable");
     const authorization = deps.getAuthorization?.();
     if (!authorization) throw new Error("node_code_authz_unavailable");
+    // `scope.nodeId` stays this node; the flight authority is checked on the node whose code is read.
+    const authzNodeId = subject?.nodeId ?? deps.nodeId;
     let decision: AuthzDecision;
     try {
       decision = await authorization.check({
         actorId: `user:${scope.actorUserId}`,
         action: "node.flight",
-        resource: authzNodeResource(deps.nodeId),
+        resource: authzNodeResource(authzNodeId),
         context: {
-          nodeId: deps.nodeId,
+          nodeId: authzNodeId,
           tenantId: scope.billing.billingAccountId,
           ...(scope.grantId ? { grantId: scope.grantId } : {}),
         },
@@ -123,12 +185,12 @@ export function createNodeCodeCapability(deps: {
           ? "node_code_authz_unavailable"
           : "node_code_authz_denied"
       );
-    if (subject && adapter && origin) {
+    if (subject && adapter && subjectOrigin) {
       // A fresh reader per call, bound to the PR head; the serving reader stays untouched.
       return adapter.nodeCodeReader(
         {
-          nodeId: deps.nodeId,
-          origin,
+          nodeId: subject.nodeId,
+          origin: subjectOrigin,
           owner: subject.owner,
           repo: subject.repo,
           commitSha: subject.headSha,

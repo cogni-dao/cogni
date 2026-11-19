@@ -60,9 +60,19 @@ export {
   type LangGraphDevProviderConfig,
   LangGraphInProcAgentCatalogProvider,
   LangGraphInProcProvider,
+  type SubjectGrounding,
+  type SubjectGroundingLoader,
+  selectArchitectEntryId,
 } from "./ai/langgraph";
 export { LiteLlmAdapter } from "./ai/litellm.adapter";
 export { RedisRunStreamAdapter } from "./ai/redis-run-stream.adapter";
+export {
+  createRemoteKnowledgeCapability,
+  REMOTE_INDEX_LIMIT,
+  readIndexRows,
+  remoteFailureToExecutionCode,
+  toRemoteExecutionError,
+} from "./ai/remote-knowledge-capability";
 export {
   TavilyWebSearchAdapter,
   type TavilyWebSearchConfig,

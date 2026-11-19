@@ -56,6 +56,8 @@ import {
   runInScope,
 } from "@/adapters/server/ai/execution-scope";
 import { OPERATOR_CORE_TOOL_BUNDLE } from "@/bootstrap/ai/evaluation-baseline";
+import { createCommitFileReader } from "@/bootstrap/capabilities/node-code";
+import { createSubjectGroundingLoader } from "@/bootstrap/review/subject-grounding";
 import type {
   AiExecutionErrorCode,
   BillingContext,
@@ -577,7 +579,18 @@ function createInProcProvider(
             (await container.knowledgeStorePort?.getKnowledge(id))?.content ??
             null,
         }
-      : undefined
+      : undefined,
+    // task.5448: a review of ANOTHER node is grounded only from that node (its index, architect, origin and
+    // mission), read before any model call. The operator's own hub is never a fallback.
+    createSubjectGroundingLoader({
+      readCommitFile: createCommitFileReader({
+        appId: serverEnv().GH_REVIEW_APP_ID,
+        privateKeyBase64: serverEnv().GH_REVIEW_APP_PRIVATE_KEY_BASE64,
+        log: container.log,
+      }),
+      operatorBuildSha: serverEnv().APP_BUILD_SHA ?? null,
+      log: container.log,
+    })
   );
 }
 

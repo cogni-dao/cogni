@@ -78,6 +78,7 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
   - `RateLimitBypassConfig` - Test bypass config type (from `http/wrapPublicRoute`)
   - `TokenBucketRateLimiter`, `publicApiLimiter`, `extractClientIp` - Rate limiting utilities (from `http/`)
   - `getAgentCredentialStore`, `operatorHasRoles`, `verifyAgentCredential` - `agent-credentials.ts`
+  - Git-review of a connected node (task.5448), `review/`: `getGitReviewSigner` (one cached Ed25519 signer from `GIT_REVIEW_SIGNING_SEED`), `getRemoteReaderRegistry`/`remoteKnowledgeCapabilityFor` (one signed read transport per listed target, one `review.remote_read` event per request), `createSubjectGroundingLoader` (index, architect, mission of the reviewed node before any model call); `capabilities/scoped-knowledge.ts` (`createScopedKnowledgeCapability`: local hub for no subject or the operator itself, remote-only for a listed node, no operator fallback); `node-code.ts` `createCommitFileReader`
 - **Env/Config keys:** none (uses `@/shared/env`)
 - **Files considered API:** `container.ts`, `graph-executor.factory.ts`, `agent-discovery.ts`, `identity-attestation.ts`, `http/index.ts`, `http/wrapPublicRoute.ts`, `http/rateLimiter.ts`
 

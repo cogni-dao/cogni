@@ -97,6 +97,16 @@ export interface ToolBindingDeps {
   readonly knowledgeContributionReadCapability?: KnowledgeContributionReadCapability;
   readonly nodePublicOrigin?: string | undefined;
   readonly knowledgeCapability: KnowledgeCapability;
+  /**
+   * Run-scoped knowledge capability for the review reader tools (task.5448): local Doltgres for no subject or the
+   * operator's own subject, the signed remote reader of a listed node otherwise. Defaults to `knowledgeCapability`.
+   */
+  readonly scopedKnowledgeCapability?: KnowledgeCapability;
+  /**
+   * The public origin the reader tools cite as the source of what they read: the reviewed node's origin when the
+   * run's subject is another node, undefined otherwise (the operator's `nodePublicOrigin` applies).
+   */
+  readonly readerNodePublicOrigin?: () => string | undefined;
   readonly edoCapability: EdoCapability;
   readonly metricsCapability: MetricsCapability;
   readonly webSearchCapability: WebSearchCapability;
@@ -130,6 +140,9 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
   // Type widening: implementations are contravariant in input type, so we
   // cast to the base type. This is safe because contractToRuntime validates
   // at runtime via Zod schemas.
+  // The reader tools (index, search, read) follow the run's code subject; everything else stays local.
+  const readerKnowledgeCapability =
+    deps.scopedKnowledgeCapability ?? deps.knowledgeCapability;
   const nodeCodeCapability = deps.nodeCodeCapability ?? {
     read: async () => {
       throw new Error("node_code_source_unavailable");
@@ -166,14 +179,17 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
       knowledgeCapability: deps.knowledgeCapability,
     }) as AnyToolImplementation,
     [KNOWLEDGE_INDEX_NAME]: createKnowledgeIndexImplementation({
-      knowledgeCapability: deps.knowledgeCapability,
+      knowledgeCapability: readerKnowledgeCapability,
     }) as AnyToolImplementation,
     [KNOWLEDGE_SEARCH_NAME]: createKnowledgeSearchImplementation({
-      nodePublicOrigin: deps.nodePublicOrigin,
-      knowledgeCapability: deps.knowledgeCapability,
+      // Read at call time by the tool: a review of another node cites THAT node's origin.
+      get nodePublicOrigin() {
+        return deps.readerNodePublicOrigin?.() ?? deps.nodePublicOrigin;
+      },
+      knowledgeCapability: readerKnowledgeCapability,
     }) as AnyToolImplementation,
     [KNOWLEDGE_READ_NAME]: createKnowledgeReadImplementation({
-      knowledgeCapability: deps.knowledgeCapability,
+      knowledgeCapability: readerKnowledgeCapability,
     }) as AnyToolImplementation,
     [KNOWLEDGE_WRITE_NAME]: createKnowledgeWriteImplementation({
       knowledgeCapability: deps.knowledgeCapability,

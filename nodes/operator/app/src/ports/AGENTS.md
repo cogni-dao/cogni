@@ -58,6 +58,7 @@ Does NOT re-export packages with `node:` transitive dependencies.
 - ReceiptDelivery + ReceiptDeliveryTarget (catalog-routed operator→child attribution receipts)
 - NodeAddressPort + NodeAddressError (PLACEMENT_DECIDES_THE_ADDRESS — the one seam every operator→node client uses to turn a slug into a base URL)
 - IdentityAttestationRepositoryPort, IdentityAttestationSignerPort
+- RemoteKnowledgeReadPort, RemoteKnowledgeTarget, RemoteKnowledgeFailure, isRemoteKnowledgeFailure (task.5448: the narrow read-only port to a linked node's hub; mirrors the shared ai-tools transport)
 - TreasurySettlementPort, TreasurySettlementOutcome
 - BuiltImageResolverPort + BuiltImageRegistryError (story.5127 — `<image_repository>:sha-<sha>` to a digest-pinned `repo@sha256:<digest>`; absent image is `null`, a registry failure throws)
 - DeployPlanePort, including `resolveNodeSource` (a node's own source repo + image repository from its catalog row, story.5127), candidate legacy-intent cancellation (target-node authority with operator App custody, exact marker/head and pre-fence tree, non-force Git update), separately bound reviewed workflow/remote-node identities, operator App-backed app promotion, the operator-only production infra reconcile contract, and fixed production-worker routing publication/receipt rollback

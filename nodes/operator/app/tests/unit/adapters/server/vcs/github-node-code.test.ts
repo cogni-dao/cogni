@@ -482,13 +482,73 @@ describe("host-bound immutable node Git reader", () => {
         });
         expect(call[2]).toBe(REVIEW_NODE_CODE_POLICY);
       }
-      // v0 single-node authz: a subject for another node is denied before any read.
+      // SUBJECT_MUST_BE_LISTED (task.5448): a subject for another node that is not a listed target is denied
+      // before any read.
       scope.codeSubject = { ...scope.codeSubject, nodeId: "other-node" };
       boundRead.mockClear();
       await expect(cap.read({ path: "README.md" })).rejects.toThrow(
         "node_code_authz_denied"
       );
       expect(boundRead).not.toHaveBeenCalled();
+    } finally {
+      delete scope.codeSubject;
+    }
+  });
+
+  it("a LISTED node's subject checks node.flight on the SUBJECT node and reads its repo at the PR head (task.5448)", async () => {
+    const head = "d".repeat(40);
+    const listed = {
+      alias: "node-template",
+      nodeId: "listed-node",
+      origin: "https://listed.example",
+    };
+    const authorization = new FakeAuthorizationAdapter();
+    const check = vi.spyOn(authorization, "check");
+    const request = {
+      actorId: "user:developer",
+      action: "node.flight" as const,
+      resource: "node:listed-node",
+      context: { nodeId: "listed-node", tenantId: "payer" },
+    };
+    const cap = createNodeCodeCapability({
+      ...binding,
+      appId: "123",
+      privateKeyBase64: "aw==",
+      log,
+      getAuthorization: () => authorization,
+      findLinkTarget: (nodeId) =>
+        nodeId === "listed-node" ? listed : undefined,
+    });
+    scope.nodeId = "node-own"; // the operator stays the execution node
+    scope.codeSubject = {
+      nodeId: "listed-node",
+      owner: "cogni-dao",
+      repo: "node-template",
+      baseSha: "e".repeat(40),
+      headSha: head,
+    };
+    try {
+      // No flight authority on the SUBJECT node: denied, nothing read.
+      readerFactory.mockClear();
+      await expect(cap.read({ path: "README.md" })).rejects.toThrow(
+        "node_code_authz_denied"
+      );
+      expect(check).toHaveBeenLastCalledWith(request);
+      expect(readerFactory).not.toHaveBeenCalled();
+
+      authorization.allow(request);
+      boundRead.mockReset();
+      boundRead.mockResolvedValue({ complete: true });
+      await cap.read({ path: "README.md" });
+      expect(readerFactory).toHaveBeenCalledTimes(1);
+      expect(readerFactory.mock.calls[0]?.[0]).toMatchObject({
+        nodeId: "listed-node",
+        origin: "https://listed.example",
+        owner: "cogni-dao",
+        repo: "node-template",
+        commitSha: head,
+      });
+      expect(readerFactory.mock.calls[0]?.[2]).toBe(REVIEW_NODE_CODE_POLICY);
     } finally {
       delete scope.codeSubject;
     }

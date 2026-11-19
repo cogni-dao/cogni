@@ -95,6 +95,10 @@ export const EVENT_NAMES = {
   // One per tick, even with zero node rows: mode, nodes, and a count per outcome. Absence of this
   // event means the tick did not run.
   IDENTITY_NODE_ADMIN_SYNC_TICK: "identity.node_admin_sync.tick",
+  // One per HTTP request git-review sends to a linked node's hub (task.5448), plus one per access ask. Fields: alias, route
+  // (knowledge.get | knowledge.list | knowledge.index | enrollment), status (HTTP status, null when unreachable), kid (the
+  // public key id of the signed assertion), outcome, durationMs. Never a URL, a knowledge id, a header or a token.
+  REVIEW_REMOTE_READ: "review.remote_read",
   DNS_REVERSE_RECONCILE_SKIPPED: "dns.reverse_reconcile.skipped",
   DNS_FORWARD_RECONCILE_SKIPPED: "dns.forward_reconcile.skipped",
   // Goal metrics (@cogni-dao/metrics, story.0021): one refresh tick and one goals read.

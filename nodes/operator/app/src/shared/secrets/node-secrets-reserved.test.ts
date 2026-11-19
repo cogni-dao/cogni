@@ -126,6 +126,7 @@ describe("off-cluster-workload secret boundary (gate 3, provenance-keyed)", () =
     "GH_REVIEW_APP_PRIVATE_KEY_BASE64",
     "GH_GRAFANA_PARENT_SA_TOKEN",
     "IDENTITY_ATTESTATION_PRIVATE_KEY", // signs every node's attestation
+    "GIT_REVIEW_SIGNING_SEED", // signs git-review's calls to linked nodes
     "APP_DB_PASSWORD",
     "POSTGRES_ROOT_PASSWORD",
     "TEMPORAL_DB_PASSWORD",

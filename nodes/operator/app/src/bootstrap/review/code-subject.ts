@@ -10,6 +10,9 @@
  * Invariants:
  *   - CATALOG_DECLARES_SUBJECT: only graphs whose catalog entry sets `codeSubject: true` may
  *     receive one; any other graph carrying a subject is refused (400).
+ *   - SUBJECT_IS_SELF_OR_LISTED (task.5448): a subject is this node itself or a node listed in
+ *     `.cogni/service-links.yaml` (the same reader the review route and the node-code capability use);
+ *     any other node is refused (403 `code_subject_node_not_linked`) before the repo check.
  *   - SUBJECT_REPO_IS_RESOLVED: owner/repo must equal `resolveNodeRepo(subject.nodeId)`
  *     (case-insensitive); a mismatch or unknown node is refused (403). The model never chooses it.
  * Side-effects: IO (service-db node lookup, catalog read through the deploy plane) in
@@ -25,6 +28,7 @@ import type { ExecutionCodeSubject } from "@/adapters/server";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { resolveServiceDb } from "@/bootstrap/container";
 import { resolveNodeRef } from "@/features/nodes/node-lookup";
+import { findServiceLinkTarget, getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 
 export type CodeSubjectDecision =
@@ -43,9 +47,16 @@ export function decideCodeSubject(input: {
     readonly owner: string;
     readonly repo: string;
   } | null;
+  /** This node's id: a subject equal to it needs no listing. */
+  readonly selfNodeId: string;
+  /** True when the subject's node id is a listed service-link target. */
+  readonly subjectIsListed: boolean;
 }): CodeSubjectDecision {
   if (!input.catalogDeclares) {
     return { ok: false, status: 400, error: "code_subject_not_accepted" };
+  }
+  if (input.subject.nodeId !== input.selfNodeId && !input.subjectIsListed) {
+    return { ok: false, status: 403, error: "code_subject_node_not_linked" };
   }
   if (!input.resolvedRepo) {
     return { ok: false, status: 403, error: "code_subject_node_unknown" };
@@ -77,8 +88,18 @@ export async function resolveRunCodeSubject(
   const catalogDeclares =
     graphName !== undefined &&
     LANGGRAPH_CATALOG[graphName]?.codeSubject === true;
+  // One reader of the listed link targets, shared with the review route and the node-code capability.
+  const listing = {
+    selfNodeId: getNodeId(),
+    subjectIsListed: findServiceLinkTarget(subject.nodeId) !== undefined,
+  };
   if (!catalogDeclares) {
-    return decideCodeSubject({ subject, catalogDeclares, resolvedRepo: null });
+    return decideCodeSubject({
+      subject,
+      catalogDeclares,
+      resolvedRepo: null,
+      ...listing,
+    });
   }
 
   const env = serverEnv();
@@ -87,7 +108,12 @@ export async function resolveRunCodeSubject(
   }
   const node = await resolveNodeRef(resolveServiceDb(), subject.nodeId);
   if (!node || node.nodeId !== subject.nodeId) {
-    return decideCodeSubject({ subject, catalogDeclares, resolvedRepo: null });
+    return decideCodeSubject({
+      subject,
+      catalogDeclares,
+      resolvedRepo: null,
+      ...listing,
+    });
   }
   let resolvedRepo: { owner: string; repo: string };
   try {
@@ -99,8 +125,18 @@ export async function resolveRunCodeSubject(
   } catch (error) {
     const code = (error as { code?: string })?.code;
     return code === "catalog_missing"
-      ? decideCodeSubject({ subject, catalogDeclares, resolvedRepo: null })
+      ? decideCodeSubject({
+          subject,
+          catalogDeclares,
+          resolvedRepo: null,
+          ...listing,
+        })
       : { ok: false, status: 503, error: "code_subject_unresolvable" };
   }
-  return decideCodeSubject({ subject, catalogDeclares, resolvedRepo });
+  return decideCodeSubject({
+    subject,
+    catalogDeclares,
+    resolvedRepo,
+    ...listing,
+  });
 }

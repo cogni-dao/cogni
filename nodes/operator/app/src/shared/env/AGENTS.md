@@ -72,6 +72,7 @@ Single source of truth for environment variables. Lazy validation with Zod preve
 - Temporal: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`
 - Repo access: `COGNI_REPO_PATH`, `COGNI_REPO_SHA`; `COGNI_REPO_ROOT` is derived from `COGNI_REPO_PATH`
 - Fleet identity: `IDENTITY_ATTESTATION_PRIVATE_KEY` (operator-only Ed25519 seed; nodes consume its public JWKS)
+- Git-review signing: `GIT_REVIEW_SIGNING_SEED` (operator-only 64-hex Ed25519 seed for git-review's per-call assertions to linked nodes, task.5448; public half beside the attestation key in JWKS; unset = a review of another node is refused with a typed 503)
 - DoltHub: `DOLTHUB_OWNER`, `DOLTHUB_API_TOKEN`, `DOLTHUB_OAUTH_CLIENT_ID`, `DOLTHUB_OAUTH_CLIENT_SECRET`
 
 **Public client (`client.ts`)**

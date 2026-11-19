@@ -40,9 +40,10 @@ Server-only thin wrapper over `@cogni/repo-spec`. Handles file I/O, caching, and
 - **Exports:** `getNodeId()`, `getScopeId()`, `getPaymentConfig()`, `InboundPaymentConfig`, `getGovernanceConfig()`, `GovernanceConfig`, `GovernanceSchedule`, `getLedgerApprovers()` - server-only helpers reading repo-spec metadata
 - **Exports (schema):** Re-exported from `@cogni/repo-spec`: `repoSpecSchema`, `creditsTopupSpecSchema`, `governanceScheduleSchema`, `governanceSpecSchema`, `activityLedgerSpecSchema`, `poolConfigSpecSchema`
 - **Exports (types):** Re-exported from `@cogni/repo-spec`: `LedgerPoolConfig`, `LedgerConfig`, `GovernanceSchedule`, `InboundPaymentConfig`, `GovernanceConfig`
+- **Exports (service links, task.5448):** `getServiceLinkTargets()`, `findServiceLinkTarget(nodeId)`, `parseServiceLinks(doc, env)`, `LinkTarget` - the nodes git-review may call with signed per-call assertions, read from `nodes/operator/.cogni/service-links.yaml` by the operator's own `DEPLOY_ENVIRONMENT`; a missing file or section is no targets. One reader serves the review route, `decideCodeSubject` and the node-code capability.
 - **Routes/CLI:** none
-- **Env/Config keys:** none (reads versioned files only)
-- **Files considered API:** index.ts, repoSpec.server.ts, repoSpec.schema.ts
+- **Env/Config keys:** none (reads versioned files only; `service-links.server.ts` selects its section by `DEPLOY_ENVIRONMENT`)
+- **Files considered API:** index.ts, repoSpec.server.ts, repoSpec.schema.ts, service-links.server.ts
 
 ## Responsibilities
 

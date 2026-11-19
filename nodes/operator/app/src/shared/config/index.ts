@@ -37,3 +37,9 @@ export {
   type KnowledgeConfig,
   type NodeTokenomicsConfig,
 } from "./repoSpec.server";
+export {
+  findServiceLinkTarget,
+  getServiceLinkTargets,
+  type LinkTarget,
+  parseServiceLinks,
+} from "./service-links.server";
