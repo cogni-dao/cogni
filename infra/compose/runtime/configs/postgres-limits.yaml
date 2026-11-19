@@ -1,0 +1,8 @@
+# story.5159 - shared Postgres max_connections per env.
+# Read by scripts/ci/deploy-infra.sh (DEPLOY_ENVIRONMENT key, default 100). A value other than 100
+# adds docker-compose.pg-max-connections.yml and restarts postgres on the next infra reconcile.
+# tests/ci-invariants/shared-db-budget-sum.spec.ts keeps node role caps <= value - reserve.
+env_max_connections:
+  candidate-a: 200
+  preview: 100
+  production: 100
