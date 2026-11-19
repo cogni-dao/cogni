@@ -16,7 +16,8 @@
  * Invariants:
  *   - EDGE_CAUGHT_IS_NODE_LOCAL: `edge.caught@1` (story.5148) probes each application edge host's canary and reads
  *     the Caddy access log from Loki through the operator's existing Loki reader; hosts come from the catalog
- *     roster and this operator's own env domain, never a literal.
+ *     roster and the measured env's operator host (its own domain, or the same root's host for another flight env),
+ *     never a literal.
  *   - RELEASE_OWNS_BEHAVIOR: metric computation, assessment and goal progress come from the package.
  *   - SERVES_FROM_PACKAGE (0.9.0, story.0033): a metric row's `serves` and `band` are parsed, joined under their KPI
  *     (`served`) and reported (`orphans`, `servedTruncated`, `servedUnavailable`) by the package; no operator code
@@ -145,8 +146,8 @@ export function createGoalMetrics(deps: {
           `${getNodeId()}/${rest.environment}/`
         ),
       }),
-      // story.5148: the edge catch-all counter. Hosts come from the catalog roster + this operator's env domain
-      // (its own public host); the Loki reader is the operator's existing Grafana read credential (null = unknown).
+      // story.5148: the edge catch-all counter. Hosts come from the catalog roster + the measured env's operator host
+      // (derived from this operator's own domain); the Loki reader is the operator's Grafana read credential (null = unknown).
       ...createEdgeCaughtCalculators({
         env: rest.environment,
         domain: controlHost,
