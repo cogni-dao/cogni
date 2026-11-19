@@ -91,6 +91,16 @@ export interface AuthorizationPort {
    * as "no grants"). `user` is a resource string (`user:<id>`).
    */
   listRelations(user: string): Promise<AuthzListDecision>;
+  /**
+   * Lists every stored tuple on one object (`node:<id>`), optionally one relation, across ALL
+   * subjects. Paginated to completion: a partial page is never returned as success. Same
+   * fail-closed-WITH-DISTINCTION shape as `listRelations` (`authz_list_unavailable`). The read
+   * plane the node-admin sync diffs against (task.5494).
+   */
+  listRelationsByObject(
+    object: string,
+    relation?: string
+  ): Promise<AuthzListDecision>;
 }
 
 export interface AuthzRelationTuple {

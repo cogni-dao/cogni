@@ -6,7 +6,7 @@
  * Purpose: Prove catalog projection uses env-local ownership and preserves lifecycle state on update.
  * Scope: Mocked Drizzle transaction only; no PostgreSQL process.
  * Invariants: USER_IDS_ARE_ENV_LOCAL, STATUS_NEVER_REGRESSES, NODE_ID_IS_DEPLOYMENT_IDENTITY,
- *   PLACEMENT_IS_CATALOG_OWNED.
+ *   PLACEMENT_IS_CATALOG_OWNED, INSERT_ONLY_OWNER, REPO_SPEC_PATH_IS_PROJECTED.
  * Side-effects: none
  * Links: src/adapters/server/db/drizzle-catalog-node-registry.adapter.ts
  * @internal
@@ -24,6 +24,7 @@ const DEFINITION: CatalogNodeDefinition = {
   repoUrl: "https://github.com/Cogni-DAO/atlas",
   repoOwner: "Cogni-DAO",
   repoName: "atlas",
+  repoSpecPath: ".cogni/repo-spec.yaml",
   deployEnvs: ["candidate-a"],
   activityEnv: "candidate-a",
   ownerWallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949",
@@ -83,6 +84,13 @@ describe("DrizzleCatalogNodeRegistryAdapter", () => {
     };
     expect(conflict.set).not.toHaveProperty("status");
     expect(conflict.set).not.toHaveProperty("id");
+    // INSERT_ONLY_OWNER (task.5494): insert sets the spawner, a conflict never overwrites it.
+    expect(conflict.set).not.toHaveProperty("ownerUserId");
+    // REPO_SPEC_PATH_IS_PROJECTED: written on insert and re-stamped on every reconcile.
+    expect(nodeInsert.values).toHaveBeenCalledWith(
+      expect.objectContaining({ repoSpecPath: ".cogni/repo-spec.yaml" })
+    );
+    expect(conflict.set.repoSpecPath).toBe(".cogni/repo-spec.yaml");
     // Placement is git intent — an existing row is re-stamped on every reconcile, so moving a
     // node between providers (or back to k3s) reaches the address resolver.
     expect(conflict.set.deploymentProviders).toEqual({

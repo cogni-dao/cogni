@@ -1,0 +1,1 @@
+ALTER TABLE "nodes" ADD COLUMN "repo_spec_path" text;

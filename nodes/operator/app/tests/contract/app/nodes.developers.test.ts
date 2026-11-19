@@ -411,6 +411,53 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
     expect(deployPlane.setNodeCollaborator).not.toHaveBeenCalled();
   });
 
+  it("refuses to approve admin (task.5494): nobody grants it, the node-admin sync does", async () => {
+    await testApiHandler({
+      appHandler,
+      params: { id: NODE_ID },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agentUserId: AGENT_USER_ID,
+            decision: "approve",
+            role: "admin",
+          }),
+        });
+        expect(res.status).toBe(400);
+      },
+    });
+
+    expect(authz.writeRelation).not.toHaveBeenCalled();
+  });
+
+  it("still lets the owner reject (revoke) a legacy admin row", async () => {
+    await testApiHandler({
+      appHandler,
+      params: { id: NODE_ID },
+      async test({ fetch }) {
+        const res = await fetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agentUserId: AGENT_USER_ID,
+            decision: "reject",
+            role: "admin",
+          }),
+        });
+        expect(res.status).toBe(200);
+      },
+    });
+
+    expect(authz.deleteRelation).toHaveBeenCalledWith({
+      user: `user:${AGENT_USER_ID}`,
+      relation: "admin",
+      object: `node:${NODE_ID}`,
+    });
+    expect(authz.writeRelation).not.toHaveBeenCalled();
+  });
+
   it("rejects by removing the developer tuple AND de-provisioning branch-push", async () => {
     dbState.requestedGithubLogin = "flock-leader";
 

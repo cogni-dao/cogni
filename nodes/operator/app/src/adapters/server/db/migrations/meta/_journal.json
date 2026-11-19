@@ -456,6 +456,13 @@
       "when": 1794707046986,
       "tag": "0064_node_workload_stop",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1795035002013,
+      "tag": "0065_node_repo_spec_path",
+      "breakpoints": true
     }
   ]
 }

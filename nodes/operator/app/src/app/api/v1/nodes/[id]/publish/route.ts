@@ -577,6 +577,9 @@ export async function POST(request: Request, routeArgs: RouteParams) {
             // inherits the deployment monorepo's optional merge queue.
             mergeQueueSourceOwner: parentOwner,
             mergeQueueSourceRepo: parentRepo,
+            // The spawner's wallet is the node's first approver, so its admin answer exists from
+            // birth (task.5494). `session.walletAddress` is non-null: `wallet_required` above.
+            approvers: [session.walletAddress],
             ...identity,
           });
           currentStep = "open_submodule_pr";

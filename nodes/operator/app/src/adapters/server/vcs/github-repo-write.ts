@@ -105,6 +105,7 @@ import {
   NODE_DEPLOYMENT_PROVIDERS,
   nodeAppBaseUrl,
 } from "@/shared/node-registry/placement";
+import { deriveCatalogRepoSpecPath } from "@/shared/node-registry/repo-spec-path";
 import {
   NODE_REPO_POLICY_PATH,
   type NodeRepoPolicy,
@@ -400,6 +401,8 @@ export interface ForkFromTemplateInput {
   readonly knowledgeRemote?: NodeKnowledgeRemote;
   /** One-line node mission (`intent.mission`); a starter seed is emitted when omitted. */
   readonly mission?: string;
+  /** Wallets written as `activity_ledger.approvers`: the node's admins (task.5494). The spawner's wallet. */
+  readonly approvers: readonly string[];
   /**
    * Repo whose optional `merge_queue` ruleset is copied onto the new node repo
    * (the deployment monorepo — `NODE_SUBMODULE_PARENT_*`). The required PR/check
@@ -1229,6 +1232,7 @@ export async function listCatalogNodesVia(
       repoUrl: `https://github.com/${source.owner}/${source.repo}`,
       repoOwner: source.owner,
       repoName: source.repo,
+      repoSpecPath: deriveCatalogRepoSpecPath(row.data),
       deployEnvs: row.data.envs,
       activityEnv: row.data.activity_env,
       ownerWallet: row.data.owner_wallet,
@@ -2986,6 +2990,7 @@ export class GitHubRepoWriter implements DeployPlanePort {
         tokenContract: input.tokenContract,
         knowledgeRemote: input.knowledgeRemote,
         mission: input.mission,
+        approvers: input.approvers,
       })
     );
     // story.5137 / task.5411 — the node's app workload manifest, read by the node-deploy verb at

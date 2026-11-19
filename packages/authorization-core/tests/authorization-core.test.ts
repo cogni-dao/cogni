@@ -694,3 +694,151 @@ describe("listRelations", () => {
     });
   });
 });
+
+describe("listRelationsByObject", () => {
+  it("FakeAuthorizationAdapter lists every subject on one object, optionally one relation", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    await authz.writeRelation({
+      user: "user:a",
+      relation: "admin",
+      object: "node:n1",
+    });
+    await authz.writeRelation({
+      user: "user:b",
+      relation: "admin",
+      object: "node:n1",
+    });
+    await authz.writeRelation({
+      user: "user:c",
+      relation: "developer",
+      object: "node:n1",
+    });
+    await authz.writeRelation({
+      user: "user:a",
+      relation: "admin",
+      object: "node:n2",
+    });
+
+    const all = await authz.listRelationsByObject("node:n1");
+    if (all.decision !== "success") throw new Error("expected success");
+    expect(all.tuples.map((t) => t.user).sort()).toEqual([
+      "user:a",
+      "user:b",
+      "user:c",
+    ]);
+
+    const admins = await authz.listRelationsByObject("node:n1", "admin");
+    if (admins.decision !== "success") throw new Error("expected success");
+    expect(admins.tuples.map((t) => t.user).sort()).toEqual([
+      "user:a",
+      "user:b",
+    ]);
+  });
+
+  it("FakeAuthorizationAdapter can fail-close distinctly", async () => {
+    const authz = new FakeAuthorizationAdapter();
+    authz.failNextList();
+    await expect(authz.listRelationsByObject("node:n1")).resolves.toMatchObject(
+      {
+        decision: "failure",
+        code: "authz_list_unavailable",
+      }
+    );
+  });
+
+  it("OpenFgaAuthorizationAdapter follows the continuation token to the last page", async () => {
+    const seen: unknown[] = [];
+    const pages = [
+      {
+        tuples: [
+          { key: { user: "user:a", relation: "admin", object: "node:n1" } },
+        ],
+        continuation_token: "page-2",
+      },
+      {
+        tuples: [
+          { key: { user: "user:b", relation: "admin", object: "node:n1" } },
+        ],
+        continuation_token: "",
+      },
+    ];
+    const client = {
+      async check(): Promise<{ allowed: boolean }> {
+        return { allowed: false };
+      },
+      async read(body: unknown, options: unknown) {
+        seen.push({ body, options });
+        return pages[seen.length - 1] ?? { tuples: [] };
+      },
+    } satisfies OpenFgaReadClient;
+
+    const authz = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://openfga.test",
+      storeId: "store",
+      client,
+    });
+
+    const listed = await authz.listRelationsByObject("node:n1", "admin");
+    if (listed.decision !== "success") throw new Error("expected success");
+    expect(listed.tuples.map((t) => t.user)).toEqual(["user:a", "user:b"]);
+    expect(seen).toEqual([
+      {
+        body: { object: "node:n1", relation: "admin" },
+        options: { pageSize: 100, continuationToken: undefined },
+      },
+      {
+        body: { object: "node:n1", relation: "admin" },
+        options: { pageSize: 100, continuationToken: "page-2" },
+      },
+    ]);
+  });
+
+  it("OpenFgaAuthorizationAdapter never returns a partial list when a later page fails", async () => {
+    let calls = 0;
+    const client = {
+      async check(): Promise<{ allowed: boolean }> {
+        return { allowed: false };
+      },
+      async read() {
+        calls += 1;
+        if (calls === 2) throw new Error("network down");
+        return {
+          tuples: [
+            { key: { user: "user:a", relation: "admin", object: "node:n1" } },
+          ],
+          continuation_token: "more",
+        };
+      },
+    } satisfies OpenFgaReadClient;
+
+    await expect(
+      new OpenFgaAuthorizationAdapter({
+        apiUrl: "http://openfga.test",
+        storeId: "store",
+        client,
+      }).listRelationsByObject("node:n1")
+    ).resolves.toMatchObject({
+      decision: "failure",
+      code: "authz_list_unavailable",
+    });
+  });
+
+  it("OpenFgaAuthorizationAdapter fails closed when the client cannot read", async () => {
+    const client = {
+      async check(): Promise<{ allowed: boolean }> {
+        return { allowed: false };
+      },
+    } satisfies OpenFgaCheckClient;
+
+    await expect(
+      new OpenFgaAuthorizationAdapter({
+        apiUrl: "http://openfga.test",
+        storeId: "store",
+        client,
+      }).listRelationsByObject("node:n1")
+    ).resolves.toMatchObject({
+      decision: "failure",
+      code: "authz_list_unavailable",
+    });
+  });
+});

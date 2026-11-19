@@ -66,6 +66,7 @@ Single source of truth for environment variables. Lazy validation with Zod preve
 - Database: `DATABASE_URL`, `DATABASE_SERVICE_URL`; both are explicit DSNs, no component-piece fallback, startup rejects same-user/superuser DSNs
 - LLM/billing/ops: `LITELLM_BASE_URL`, `LITELLM_MASTER_KEY`, `LITELLM_MVP_API_KEY`, `OPENROUTER_API_KEY`, `BILLING_INGEST_TOKEN`, `SCHEDULER_API_TOKEN`, `INTERNAL_OPS_TOKEN`
 - Auth/session: `AUTH_SECRET`
+- Node-admin sync: `NODE_ADMIN_SYNC_WRITE` (default `false` = report-only; `true` = the sync writes `node:<id>#admin` and the legacy catalog owner writer is skipped, task.5494)
 - Authorization: `OPENFGA_API_URL`, `OPENFGA_STORE_ID`, `OPENFGA_AUTHORIZATION_MODEL_ID`, `OPENFGA_API_TOKEN`; `OPENFGA_STORE_ID` is required when OpenFGA activation vars are present
 - Metrics/analytics: `METRICS_TOKEN`, `PROMETHEUS_REMOTE_WRITE_URL`, `PROMETHEUS_QUERY_URL`, `PROMETHEUS_READ_USERNAME`, `PROMETHEUS_READ_PASSWORD`, `ANALYTICS_K_THRESHOLD`, `ANALYTICS_QUERY_TIMEOUT_MS`
 - Temporal: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_TASK_QUEUE`

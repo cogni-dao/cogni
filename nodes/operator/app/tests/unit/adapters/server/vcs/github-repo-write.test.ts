@@ -57,6 +57,8 @@ import {
 } from "@/shared/node-app-scaffold/gens";
 import { parseNodeRepoPolicy } from "@/shared/node-repo-policy";
 
+const TEST_APPROVER_WALLET = "0x1111111111111111111111111111111111111111";
+
 const TEST_NODE_REPO_POLICY_JSON = JSON.stringify({
   schemaVersion: "cogni.node-repo-policy.v1",
   ruleset: {
@@ -864,6 +866,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
     await expect(
       makeWriter().forkFromTemplate({
+        approvers: [TEST_APPROVER_WALLET],
         templateOwner: "cogni-test-org",
         owner: "cogni-test-org",
         slug: "atlas",
@@ -921,6 +924,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
     await expect(
       makeWriter().forkFromTemplate({
+        approvers: [TEST_APPROVER_WALLET],
         templateOwner: "cogni-test-org",
         owner: "cogni-test-org",
         slug: "atlas",
@@ -941,6 +945,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     setHappyForkHandlers();
 
     const result = await makeWriter().forkFromTemplate({
+      approvers: [TEST_APPROVER_WALLET],
       templateOwner: "Cogni-DAO",
       owner: "Cogni-DAO",
       slug: "atlas",
@@ -993,6 +998,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     };
 
     await makeWriter().forkFromTemplate({
+      approvers: [TEST_APPROVER_WALLET],
       templateOwner: "Cogni-DAO",
       owner: "Cogni-DAO",
       slug: "atlas",
@@ -1037,6 +1043,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     };
 
     await makeWriter().forkFromTemplate({
+      approvers: [TEST_APPROVER_WALLET],
       templateOwner: "Cogni-DAO",
       owner: "Cogni-DAO",
       slug: "atlas",
@@ -1090,6 +1097,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
       recordRuleset(params, 99);
 
     await makeWriter().forkFromTemplate({
+      approvers: [TEST_APPROVER_WALLET],
       templateOwner: "Cogni-DAO",
       owner: "Cogni-DAO",
       slug: "atlas",
@@ -1161,6 +1169,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
     // Resolves (no throw) despite the queue write failing.
     const result = await makeWriter().forkFromTemplate({
+      approvers: [TEST_APPROVER_WALLET],
       templateOwner: "Cogni-DAO",
       owner: "Cogni-DAO",
       slug: "atlas",
@@ -1181,6 +1190,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
     await expect(
       makeWriter().forkFromTemplate({
+        approvers: [TEST_APPROVER_WALLET],
         templateOwner: "Cogni-DAO",
         owner: "Cogni-DAO",
         slug: "atlas",
@@ -1213,6 +1223,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
     await expect(
       makeWriter().forkFromTemplate({
+        approvers: [TEST_APPROVER_WALLET],
         templateOwner: "Cogni-DAO",
         owner: "Cogni-DAO",
         slug: "atlas",
@@ -1236,6 +1247,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
     await expect(
       makeWriter().forkFromTemplate({
+        approvers: [TEST_APPROVER_WALLET],
         templateOwner: "Cogni-DAO",
         owner: "Cogni-DAO",
         slug: "atlas",
@@ -1259,6 +1271,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     });
 
     const result = await makeWriter().forkFromTemplate({
+      approvers: [TEST_APPROVER_WALLET],
       templateOwner: "Cogni-DAO",
       owner: "Cogni-DAO",
       slug: "atlas",
@@ -1306,6 +1319,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
     await expect(
       makeWriter().forkFromTemplate({
+        approvers: [TEST_APPROVER_WALLET],
         templateOwner: "Cogni-DAO",
         owner: "Cogni-DAO",
         slug: "atlas",
@@ -1335,6 +1349,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
 
     await expect(
       makeWriter().forkFromTemplate({
+        approvers: [TEST_APPROVER_WALLET],
         templateOwner: "Cogni-DAO",
         owner: "Cogni-DAO",
         slug: "atlas",
@@ -1364,6 +1379,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     };
 
     const result = await makeWriter().forkFromTemplate({
+      approvers: [TEST_APPROVER_WALLET],
       templateOwner: "Cogni-DAO",
       owner: "Cogni-DAO",
       slug: "atlas",
@@ -1395,6 +1411,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     });
 
     const result = await makeWriter().forkFromTemplate({
+      approvers: [TEST_APPROVER_WALLET],
       templateOwner: "Cogni-DAO",
       owner: "Cogni-DAO",
       slug: "atlas",
@@ -1420,6 +1437,7 @@ describe("GitHubRepoWriter.forkFromTemplate", () => {
     });
 
     const result = await makeWriter().forkFromTemplate({
+      approvers: [TEST_APPROVER_WALLET],
       templateOwner: "cogni-dao",
       owner: "Cogni-DAO",
       slug: "atlas",
@@ -1532,6 +1550,8 @@ owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
         repoUrl: "https://github.com/Cogni-DAO/atlas",
         repoOwner: "Cogni-DAO",
         repoName: "atlas",
+        // task.5494 — a source_repo node keeps its repo-spec at the root of its own repo.
+        repoSpecPath: ".cogni/repo-spec.yaml",
         deployEnvs: ["candidate-a"],
         activityEnv: "candidate-a",
         // bug.5106 — declared placement is projected so the operator can resolve WHERE this
@@ -1545,6 +1565,8 @@ owner_wallet: "0x070075F1389Ae1182aBac722B36CA12285d0c949"
         repoUrl: "https://github.com/Cogni-DAO/cogni",
         repoOwner: "Cogni-DAO",
         repoName: "cogni",
+        // task.5494 — an in-repo node keeps it under its path_prefix in the parent repo.
+        repoSpecPath: "nodes/operator/.cogni/repo-spec.yaml",
         deployEnvs: ["candidate-a", "preview", "production"],
         activityEnv: "production",
         // No `deployment_provider` row ⇒ empty map ⇒ K3S_IS_DEFAULT everywhere.
@@ -4194,6 +4216,7 @@ describe("forkFromTemplate — protection is the last fallible step", () => {
           };
 
     await makeWriter().forkFromTemplate({
+      approvers: [TEST_APPROVER_WALLET],
       templateOwner: "Cogni-DAO",
       owner: "Cogni-DAO",
       slug: "atlas",
@@ -4243,6 +4266,7 @@ describe("forkFromTemplate — protection is the last fallible step", () => {
 
     await expect(
       makeWriter().forkFromTemplate({
+        approvers: [TEST_APPROVER_WALLET],
         templateOwner: "Cogni-DAO",
         owner: "Cogni-DAO",
         slug: "atlas",
@@ -4309,6 +4333,7 @@ describe("forkFromTemplate — policy is bound to the inherited tree", () => {
     };
 
     await makeWriter().forkFromTemplate({
+      approvers: [TEST_APPROVER_WALLET],
       templateOwner: "Cogni-DAO",
       owner: "Cogni-DAO",
       slug: "atlas",
@@ -4346,6 +4371,7 @@ describe("forkFromTemplate — policy is bound to the inherited tree", () => {
 
     await expect(
       makeWriter().forkFromTemplate({
+        approvers: [TEST_APPROVER_WALLET],
         templateOwner: "Cogni-DAO",
         owner: "Cogni-DAO",
         slug: "atlas",

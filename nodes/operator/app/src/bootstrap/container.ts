@@ -208,6 +208,7 @@ import {
 import { startCatalogRegistryReconcileOnBoot } from "@/bootstrap/catalog-registry-reconcile";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
+import { startNodeAdminSyncOnBoot } from "@/bootstrap/node-admin-sync";
 import { createGoalPrometheusReader } from "@/bootstrap/observability.factory";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
 import {
@@ -510,6 +511,9 @@ export function getContainer(): Container {
     void startCatalogRegistryReconcileOnBoot().then(() => {
       startGovernanceSyncOnBoot("all");
     });
+    // Node-admin sync (task.5494): its own 2-min tick and advisory lock, never awaited here and
+    // never part of the reconcile's first-success barrier. Report-only unless NODE_ADMIN_SYNC_WRITE.
+    startNodeAdminSyncOnBoot();
   }
   return _container;
 }

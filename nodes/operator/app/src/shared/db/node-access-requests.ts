@@ -52,13 +52,21 @@ export const NODE_ACCESS_ROLES = [
   "secrets_manager",
   "production_promoter",
   "env_manager",
-  // `admin` → the node-administrator relation (node owner scope, above env_manager).
-  // Grantable so an agent can request it and the owner approves the single tuple; gates
-  // repo-governance verbs that flip GitHub Actions permissions (reconcile-actions, bug.5482).
-  "admin",
+  // `admin` is NOT requestable (task.5494, ONE_ADMIN_ANSWER): a node's admins are its repo-spec
+  // approvers, written only by the node-admin sync. The DB CHECK below keeps `admin` as a legacy
+  // value so rows written before this change stay valid; it is deliberately NOT derived from
+  // this list.
 ] as const;
 
 export type NodeAccessRole = (typeof NODE_ACCESS_ROLES)[number];
+
+/**
+ * Roles that can no longer be requested or approved but may still sit on old rows. The developers
+ * route lets an owner deny or revoke them (clean-up) and never approve them.
+ */
+export const LEGACY_NODE_ACCESS_ROLES = ["admin"] as const;
+
+export type LegacyNodeAccessRole = (typeof LEGACY_NODE_ACCESS_ROLES)[number];
 
 export const nodeAccessRequests = pgTable(
   "node_access_requests",

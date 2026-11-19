@@ -359,7 +359,7 @@ module.exports = {
       name: "no-internal-adapter-imports",
       severity: "error",
       from: {
-        path: "^nodes/operator/app/src/(?!adapters/server/)(?!auth\\.ts$)(?!bootstrap/container\\.ts$)(?!bootstrap/graph-executor\\.factory\\.ts$)(?!bootstrap/agent-discovery\\.ts$)(?!bootstrap/node-deploy-sequencer\\.ts$)(?!bootstrap/jobs/(syncGovernanceSchedules|reconcileCatalogNodeRegistry)\\.job\\.ts$)",
+        path: "^nodes/operator/app/src/(?!adapters/server/)(?!auth\\.ts$)(?!bootstrap/container\\.ts$)(?!bootstrap/graph-executor\\.factory\\.ts$)(?!bootstrap/agent-discovery\\.ts$)(?!bootstrap/node-deploy-sequencer\\.ts$)(?!bootstrap/jobs/(syncGovernanceSchedules|reconcileCatalogNodeRegistry|syncNodeAdmins)\\.job\\.ts$)",
       },
       to: {
         path: "^nodes/operator/app/src/adapters/server/(?!index\\.ts$).*\\.ts$",
@@ -652,7 +652,7 @@ module.exports = {
       from: {
         path: "^nodes/operator/app/src/",
         pathNot:
-          "^nodes/operator/app/src/(auth\\.ts|bootstrap/container\\.ts|bootstrap/jobs/(syncGovernanceSchedules|reconcileCatalogNodeRegistry)\\.job\\.ts)$",
+          "^nodes/operator/app/src/(auth\\.ts|bootstrap/container\\.ts|bootstrap/jobs/(syncGovernanceSchedules|reconcileCatalogNodeRegistry|syncNodeAdmins)\\.job\\.ts)$",
       },
       to: {
         path: "^nodes/operator/app/src/adapters/server/db/drizzle\\.service-client\\.ts$",

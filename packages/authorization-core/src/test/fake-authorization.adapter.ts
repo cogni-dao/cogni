@@ -132,6 +132,25 @@ export class FakeAuthorizationAdapter implements AuthorizationPort {
     return this.relations.has(relationKey(tuple));
   }
 
+  async listRelationsByObject(
+    object: string,
+    relation?: string
+  ): Promise<AuthzListDecision> {
+    if (this.listUnavailableReason !== undefined) {
+      const reason = this.listUnavailableReason;
+      this.listUnavailableReason = undefined;
+      return { decision: "failure", code: "authz_list_unavailable", reason };
+    }
+    const tuples = [...this.relations]
+      .map((key) => JSON.parse(key) as AuthzRelationTuple)
+      .filter(
+        (tuple) =>
+          tuple.object === object &&
+          (relation === undefined || tuple.relation === relation)
+      );
+    return { decision: "success", code: "authz_list_success", tuples };
+  }
+
   /** Set the next listRelations() to fail-closed (authz_list_unavailable). */
   failNextList(reason = "Fake authz list unavailable"): void {
     this.listUnavailableReason = reason;

@@ -327,6 +327,12 @@ export type { ModelProviderResolverPort } from "./model-provider-resolver.port";
 export type { NodeAddressPort } from "./node-address.port";
 export { NodeAddressError } from "./node-address.port";
 export type {
+  NodeApproverRead,
+  NodeApproverReader,
+  NodeApproverTarget,
+  NodeApproverUnavailableReason,
+} from "./node-approver-reader.port";
+export type {
   AttemptMesh,
   AttemptPatch,
   AttemptPhase,

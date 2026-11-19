@@ -337,6 +337,15 @@ const BEHAVIOR_EXCEPTIONS: Record<string, Rule[]> = {
       pattern:
         /^patch\[Deployment\/node-deploy-sequencer\]\.spec\.template\.spec\.containers\[sequencer\]\.env\[NODE_DEPLOY_SUBSTRATE_TRANSPORTS\]\.value$/,
     },
+    {
+      why:
+        "TEMPORARY WRITE-MODE PROOF (task.5494): candidate-a runs the node-admin sync with " +
+        "NODE_ADMIN_SYNC_WRITE=true to prove write mode before production flips. Production stays " +
+        "report-only (flag unset, default false) until the flip change, which sets it in production and " +
+        "deletes this exception (the stale-exception check below fails until it does).",
+      pattern:
+        /^patch\[ConfigMap\/node-app-config\] add \/data\/NODE_ADMIN_SYNC_WRITE$/,
+    },
   ],
   "scheduler-worker": [
     {
