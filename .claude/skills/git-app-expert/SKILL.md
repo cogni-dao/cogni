@@ -36,6 +36,16 @@ cannot share one. Create + wire per the canonical guide:
 | `cogni-node-template`      | 3062001 | 115515535  | legacy/vcs       | selected repos; use only if the env's `GH_REVIEW_APP_ID` is `3062001`  |
 | `cogni-git-review`         | 1761205 | 80293097   | production       | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`                  |
 | `cogni-git-review-preview` | 2011345 | 87655574   | preview          | `preview.cognidao.org/...webhooks/github` · selected preview repos     |
+| `cogni-node-dev`           | not yet | not yet    | production       | minting only, no webhook, no bypass · all repos on `Cogni-DAO`         |
+| `cogni-node-dev-test`      | not yet | not yet    | candidate-a/test | minting only, no webhook, no bypass · all repos on `cogni-test-org`    |
+
+**`cogni-node-dev` / `cogni-node-dev-test` mint node AI push tokens and do nothing else.** Permissions are Contents
+write, Pull requests write and Metadata read. They have no webhook and sit on no ruleset bypass list. Only the operator
+holds the key (`GH_NODE_DEV_APP_ID`, `GH_NODE_DEV_APP_PRIVATE_KEY_BASE64`, `service: operator`). `POST /api/v1/vcs/push-token`
+mints a 1-hour token for ONE node repo, gated on `node.push` (the `pusher` role). Never mint from `cogni-operator`: a minted
+token acts as its App, and that identity carries admin, workflow and merge-queue bypass. Design:
+[node-ai-code-identity](https://node-template.cognidao.org/knowledge/node-ai-code-identity); creation walkthrough:
+[create-node-dev-app](https://node-template.cognidao.org/knowledge/create-node-dev-app). Ids are filled in once the Apps exist.
 
 `Cogni-DAO/test-repo` is only a legacy review-webhook fixture. It is not
 sufficient for node publish/flight testing: the candidate/test App must see the

@@ -7,11 +7,12 @@
  *   gets a short-lived installation token for ONE node repo, limited to contents + pull_requests write, so it
  *   can push a branch and open a PR. The token comes from the unprivileged node dev App, never the operator
  *   App; only the operator holds either key. No per-node App, machine user or long-lived token exists.
- * Scope: Auth → RBAC (node-scoped) → resolve repo → refuse the monorepo → mint. Adds no deploy-brain logic.
+ * Scope: Auth → RBAC (node-scoped, node.push) → resolve repo → refuse the monorepo → mint. Adds no deploy-brain logic.
  * Invariants:
  *   - AUTH_REQUIRED: Bearer token (machine agents) or SIWE session.
- *   - RBAC_IS_THE_GATE: `node.flight` on the NAMED node, the role that already carries branch push
- *     (developer, rbac.md §6a). No new grant. Fails closed (503) when no authority is configured.
+ *   - RBAC_IS_THE_GATE: `node.push` (→ `can_push`, held by the push-only `pusher` role) on the NAMED node.
+ *     `developer` does NOT imply it, so a node AI never needs `can_flight`. Fails closed (503) when no
+ *     authority is configured.
  *   - NO_REPO_FROM_AGENT: owner/repo come from the node's catalog `source_repo`, never the body.
  *   - REMOTE_SOURCE_ONLY: an in-repo node (no `source_repo`) resolves to the operator monorepo, whose CI
  *     carries secrets; it is refused (403 `in_repo_node_unsupported`).
@@ -79,11 +80,11 @@ export const POST = wrapRouteHandlerWithLogging(
       return fail(400, "validation_error", "Invalid request");
     }
 
-    // 2. RBAC — node-scoped, reusing can_flight (the developer role that already carries branch push).
+    // 2. RBAC — node-scoped `can_push`, granted by the push-only `pusher` role (never by `developer`).
     const rbac = await resolveNodeAndAuthorize({
       id: parsed.data.nodeId,
       userId: sessionUser.id,
-      action: "node.flight",
+      action: "node.push",
     });
     if (!rbac.ok) {
       const error =

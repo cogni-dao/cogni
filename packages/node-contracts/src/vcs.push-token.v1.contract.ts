@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/node-contracts/vcs.push-token.v1`
- * Purpose: Zod contract for the node-scoped push token (POST /api/v1/vcs/push-token): the operator GitHub App
- *   mints a short-lived installation token limited to ONE node repo with contents + pull_requests write, so an
- *   agent with no GitHub account (a node's AI sandbox) can push a branch and open a PR.
+ * Purpose: Zod contract for the node-scoped push token (POST /api/v1/vcs/push-token): the node dev App mints a short-lived installation token limited to ONE node repo with contents + pull_requests write, so an agent with no GitHub account (a node's AI sandbox) can push a branch and open a PR.
  * Scope: Input/output shapes only. Does not make network calls or import the GitHub API.
  * Invariants:
  *   - CONTRACTS_ARE_TRUTH: wire shape is owned by vcs.push-token.v1.contract.
