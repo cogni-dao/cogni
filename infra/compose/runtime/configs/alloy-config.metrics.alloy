@@ -335,8 +335,9 @@ prometheus.relabel "app_metrics" {
 //   - honor_timestamps = false: a tenant sample stamped in the future would make the native `up` write out of
 //     order and hide a dead lane. Scrape time is the only time. A tenant series named `up` cannot be dropped here
 //     without dropping the native one; it can only ever claim its own lane, and only while its scrape succeeds.
-//   - up{job="node-lanes"} = 0 for a dead, unauthorised or not-yet-released lane; the node-lane-metrics-down
-//     alert reads it. Design: https://cognidao.org/knowledge/lease-metrics-forwarding-design
+//   - up{job="node-lanes"} = 0 for a dead, unauthorised or not-yet-released lane. The operator goal metric
+//     fleet.lane-metrics@1 compares it with the release store's serving lanes, so a missing series is dark too.
+//     Design: https://cognidao.org/knowledge/lease-metrics-forwarding-design
 
 discovery.http "node_lanes" {
   url              = "http://host.docker.internal:30000/api/metrics/leases"

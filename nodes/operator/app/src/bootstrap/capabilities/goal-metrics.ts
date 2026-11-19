@@ -10,7 +10,8 @@
  *   GitHub read against the release store's served SHAs), fleet uptime (`fleet.lanes-down@1`, `fleet.substrate-reach@1`,
  *   `fleet.uptime@1`, task.5457) over the same lane probes and the stored lanes-down readings, and PR review (`review.merge-coverage@1`, `review.fail-fix-rate@1`,
  *   task.5450) over the review App's check runs on the parent repo, and shared-substrate host pressure
- *   (`substrate.host-pressure@1`, bug.5613) over per-host node_exporter and k3s-kine series in Grafana Cloud Mimir. Package calculators, budgets
+ *   (`substrate.host-pressure@1`, bug.5613) over per-host node_exporter and k3s-kine series in Grafana Cloud Mimir, and dark
+ *   node-app metrics (`fleet.lane-metrics@1`, bug.5641) over the release store's serving lanes and `up{job="node-lanes"}`. Package calculators, budgets
  *   enforcement and the engine live in `@cogni-dao/metrics/knowledge`; nothing here re-implements them.
  * Invariants:
  *   - EDGE_CAUGHT_IS_NODE_LOCAL: `edge.caught@1` (story.5148) probes each application edge host's canary and reads
@@ -23,8 +24,8 @@
  *   - NODE_SCOPED_OBSERVATIONS: observations are scoped to `getNodeId()` + the deploy environment.
  *   - NODE_CALCULATORS_READ_OWN_TABLES: the delivery calculators read only the operator's own release
  *     store and public HTTP probes (node-member metadata or public data), never Prometheus.
- *   - SUBSTRATE_READS_PROMETHEUS_DELIBERATELY: `substrate.host-pressure@1` is the one calculator that reads
- *     Prometheus (Mimir, through `MetricsQueryPort`). Host pressure exists only there. An absent reader or a
+ *   - SUBSTRATE_READS_PROMETHEUS_DELIBERATELY: `substrate.host-pressure@1` and `fleet.lane-metrics@1` are the
+ *     calculators that read Prometheus (Mimir, through `MetricsQueryPort`). Host pressure and scrape `up` exist only there. An absent reader or a
  *     Mimir failure makes its readings unavailable, never 0.
  *   - ONE_PROBE_SNAPSHOT: drift, lanes-down and substrate-reach share one per-tick probe snapshot, so a lane is
  *     probed once per tick. Uptime reads this node's own stored observations (`<node>/<environment>/` scope),
@@ -66,6 +67,8 @@ import {
 } from "@/features/node-deploy/edge-caught-kpis";
 import { createFleetCalculators } from "@/features/node-deploy/fleet-kpis";
 import { createFleetProbeSnapshots } from "@/features/node-deploy/fleet-probe-snapshot";
+import { createLaneMetricsCalculators } from "@/features/node-deploy/lane-metrics-kpis";
+import { MAX_LEASE_LANES } from "@/features/node-deploy/lease-metrics";
 import { createReviewCalculators } from "@/features/review/review-kpis";
 import { createSubstrateCalculators } from "@/features/substrate-health/substrate-kpis";
 import type { MetricsQueryPort } from "@/ports";
@@ -161,6 +164,18 @@ export function createGoalMetrics(deps: {
         { repo: reviewRepo }
       ),
       ...createSubstrateCalculators({ prometheus }),
+      // bug.5641 R3: node-app lanes whose metrics stop reaching Mimir. Declared lanes come from the same release-store
+      // read the HTTP SD route lists; observed `up{job="node-lanes"}` from the same Mimir reader as host pressure.
+      ...createLaneMetricsCalculators({
+        lanes: async (env, signal) =>
+          deliverySource.servingLanes({
+            scope: { env },
+            maxRows: MAX_LEASE_LANES,
+            signal,
+            nodeAppsOnly: true,
+          }),
+        prometheus,
+      }),
     ],
   });
 }

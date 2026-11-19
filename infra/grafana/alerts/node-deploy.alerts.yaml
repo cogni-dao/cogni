@@ -174,36 +174,3 @@ groups:
         labels: { severity: critical, plane: node-deploy }
         noDataState: OK
         execErrState: Alerting
-
-      # A serving lane's request metrics are dark (bug.5641). Alloy scrapes every serving lane, found through the
-      # operator's HTTP SD, as its own target in job node-lanes; native `up` is 0 when the relay answers non-200
-      # (unauthorised: the lane needs a release made after the derived token shipped; not_configured: no token;
-      # timeout or network: unreachable; too_large: the app output is wrong). The operator logs the reason as a
-      # lease_metrics_scrape warn. Missing evidence is critical: if every production lane series disappears
-      # (discovery down, Alloy job gone) the rule fires on no data, so an absent scraper never reads green.
-      - uid: node-lane-metrics-down
-        title: Node lane metrics DOWN — a serving lane's request metrics are dark
-        condition: THRESHOLD
-        for: 15m
-        data:
-          - refId: UP
-            datasourceUid: grafanacloud-prom
-            relativeTimeRange: { from: 900, to: 0 }
-            model:
-              datasource: { type: prometheus, uid: grafanacloud-prom }
-              expr: 'min by (node, env, workload) (up{job="node-lanes", env="production"})'
-              instant: true
-              refId: UP
-          - refId: THRESHOLD
-            datasourceUid: __expr__
-            model:
-              type: threshold
-              expression: UP
-              conditions:
-                - evaluator: { type: lt, params: [1] }
-              refId: THRESHOLD
-        annotations:
-          summary: "Node {{ $labels.node }} workload {{ $labels.workload }} ({{ $labels.env }}): Alloy cannot scrape its /api/metrics through the operator relay, so http_requests_total and the AI histograms are dark. Read the operator's lease_metrics_scrape warn for the reason (unauthorized or not_configured: the lane needs a release made after the derived token shipped; timeout or network: the lane is unreachable; too_large or http_error: the app output is wrong)."
-        labels: { severity: critical, plane: node-deploy }
-        noDataState: Alerting
-        execErrState: Alerting
