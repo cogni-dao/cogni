@@ -17,6 +17,7 @@
  */
 
 import { authzUserResource } from "@cogni/authorization-core";
+import { writeExternalPrincipal } from "@cogni-dao/agent-grants";
 import {
   agentRolesHasRoles,
   type CredentialSql,
@@ -67,6 +68,23 @@ export function getAgentCredentialStore(): CredentialStore {
     throw new CredentialStoreUnavailableError(cause);
   }
   return store;
+}
+
+/**
+ * Register an outside agent: its `users` row and its external `agent_principals` row in ONE transaction, so an agent
+ * never exists without its kind (ONE_PRINCIPAL_WRITER, `@cogni-dao/agent-grants` 0.8.0: key upgrade REFUSES a user with
+ * no principal row). Uses the same service-role postgres.js client the credential store uses; the billing account stays
+ * on the container's drizzle service and is created by the caller right after.
+ */
+export async function registerAgentUser(input: {
+  userId: string;
+  name: string;
+}): Promise<void> {
+  const client = resolveServiceDb().$client as unknown as CredentialSql;
+  await client.begin(async (tx) => {
+    await tx`INSERT INTO users (id, name, wallet_address) VALUES (${input.userId}, ${input.name}, NULL)`;
+    await writeExternalPrincipal(tx, input.userId);
+  });
 }
 
 /**

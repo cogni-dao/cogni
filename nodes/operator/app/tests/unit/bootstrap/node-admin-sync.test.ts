@@ -366,6 +366,40 @@ describe("RepoSpecNodeApproverReader", () => {
     });
   });
 
+  it("a non-canonical repoUrl or repoSpecPath is unavailable/unexpected and never reaches the fetcher", async () => {
+    const fetchRepoSpec = vi.fn(async () => spec);
+    const reader = new RepoSpecNodeApproverReader({ ...base, fetchRepoSpec });
+    const bad: NodeApproverTarget[] = [
+      { ...NODE, repoUrl: "https://gitlab.com/cogni-dao/toks5" },
+      { ...NODE, repoUrl: "https://github.com/cogni-dao" },
+      { ...NODE, repoUrl: "git@github.com:cogni-dao/toks5.git" },
+      { ...NODE, repoSpecPath: "../.cogni/repo-spec.yaml" },
+      { ...NODE, repoSpecPath: "/.cogni/repo-spec.yaml" },
+      { ...NODE, repoSpecPath: "other/repo-spec.yaml" },
+    ];
+    for (const node of bad) {
+      await expect(reader.approvers(node)).resolves.toEqual({
+        status: "unavailable",
+        reason: "unexpected",
+      });
+    }
+    expect(fetchRepoSpec).not.toHaveBeenCalled();
+  });
+
+  it("owner and repo reach the fetcher lowercased (the package's canonical key); the path is unchanged", async () => {
+    const fetchRepoSpec = vi.fn(async () => spec);
+    const reader = new RepoSpecNodeApproverReader({ ...base, fetchRepoSpec });
+    await reader.approvers({
+      ...NODE,
+      repoUrl: "https://github.com/Cogni-DAO/Toks5",
+      repoSpecPath: "nodes/Toks5/.cogni/repo-spec.yaml",
+    });
+    expect(fetchRepoSpec).toHaveBeenCalledWith(
+      "https://github.com/cogni-dao/toks5",
+      "nodes/Toks5/.cogni/repo-spec.yaml"
+    );
+  });
+
   it("a read that exceeds the deadline is unavailable", async () => {
     const reader = new RepoSpecNodeApproverReader({
       ...base,
@@ -501,6 +535,29 @@ describe("extractRepoSpecApprovers (APPROVERS_ONLY)", () => {
     ],
   ])("throws for %s", (_name, text) => {
     expect(() => extractRepoSpecApprovers(text)).toThrow();
+  });
+
+  it("the package-backed reader still reads the approver of a spec with a retired field (spawny-boi)", async () => {
+    const fetchRepoSpec = vi.fn(async () => SPEC_WITH_RETIRED_FIELD);
+    const usersForWallets = vi.fn(async () => ["user-a"]);
+    const reader = new RepoSpecNodeApproverReader({
+      fetchRepoSpec,
+      extractApprovers: extractRepoSpecApprovers,
+      usersForWallets,
+    });
+
+    await expect(reader.approvers(NODE)).resolves.toEqual({
+      status: "read",
+      approverCount: 1,
+      userIds: ["user-a"],
+    });
+    expect(fetchRepoSpec).toHaveBeenCalledWith(
+      "https://github.com/cogni-dao/toks5",
+      ".cogni/repo-spec.yaml"
+    );
+    expect(usersForWallets).toHaveBeenCalledWith([
+      "0xabcdef0123456789abcdef0123456789abcdef01",
+    ]);
   });
 
   it("maps to the right reason end to end: malformed_spec vs no_approvers, both write nothing", async () => {

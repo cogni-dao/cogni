@@ -6,6 +6,7 @@
  * Purpose: Runtime agent authority tables: internal agent principals and node role rows.
  * Scope: Schema only. Reads and writes live in `@cogni-dao/agent-grants` (raw SQL over an injected client). Does not contain queries or business logic.
  * Invariants:
+ *   - ORG_HAS_OWNER_SOURCE: an `org` row carries both owner-source columns (CHECK); one org per source (partial unique index).
  *   - AGENTS_HOLD_NO_WALLET: an internal principal row points at a seeded `users` row with no wallet and has no credential.
  *   - CREDENTIALS_ONLY_ON_AGENT_PRINCIPALS: `agent_credentials` rows belong only to a user with an `external` `agent_principals` row
  *     (a trigger in the migration enforces it).
@@ -38,13 +39,20 @@ import {
 
 import { users } from "./refs";
 
-/** A marked agent. `internal` rows are seeded for a graph to act as; `external` rows come from redeemed spawn grants (later). */
+/**
+ * A marked agent. `internal` rows are seeded for a graph to act as; `external` rows come from redeemed spawn grants (later);
+ * `org` rows (`@cogni-dao/agent-grants` 0.8.0) own one ordinary billing account and carry an owner source.
+ */
 export const agentPrincipals = pgTable(
   "agent_principals",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     kind: text("kind").notNull(),
     slug: text("slug"),
+    /** Set only for an `org`: the kind of source that owns it (`repo-spec`). */
+    ownerSourceKind: text("owner_source_kind"),
+    /** Set only for an `org`: the canonical source key, e.g. `https://github.com/<o>/<r>`. */
+    ownerSourceRef: text("owner_source_ref"),
     userId: text("user_id")
       .notNull()
       .references(() => users.id),
@@ -55,7 +63,11 @@ export const agentPrincipals = pgTable(
   (table) => [
     check(
       "agent_principals_kind_canonical",
-      sql`${table.kind} IN ('internal','external')`
+      sql`${table.kind} IN ('internal','external','org')`
+    ),
+    check(
+      "agent_principals_org_has_owner_source",
+      sql`${table.kind} <> 'org' OR (${table.ownerSourceKind} IS NOT NULL AND ${table.ownerSourceRef} IS NOT NULL)`
     ),
     check(
       "agent_principals_internal_has_slug",
@@ -63,6 +75,10 @@ export const agentPrincipals = pgTable(
     ),
     uniqueIndex("agent_principals_slug_unique").on(table.slug),
     uniqueIndex("agent_principals_user_id_unique").on(table.userId),
+    // One org per owner source (`@cogni-dao/agent-grants` 0.8.0 `ensureOrg`).
+    uniqueIndex("agent_principals_org_source_unique")
+      .on(table.ownerSourceKind, table.ownerSourceRef)
+      .where(sql`${table.kind} = 'org'`),
     // Read-only for every role: slug and seeded user id are not secret, and the wallet-binding trigger must see
     // them whichever role binds. Writes stay deny-all for the app role (no write policy; FORCE RLS).
     pgPolicy("agent_principals_read", { for: "select", using: sql`true` }),

@@ -5,15 +5,19 @@
  * Module: `@adapters/server/identity/repo-spec-node-approver-reader`
  * Purpose: `NodeApproverReader` over a node's repo-spec: read the file through the GitHub App, extract
  *   the approver wallets, map them to env-local user ids.
- * Scope: Composes three injected functions: `fetchRepoSpec`, `extractApprovers`, `usersForWallets`. These are
- *   the same three options `@cogni-dao/agent-grants` `createRepoSpecOwnerSource` takes, so swapping this
- *   class for that package (0.8.0, `ttlMs: 0`) is a few lines in `approvers()`. Also ships the default
- *   `extractApprovers` and the Drizzle `usersForWallets`.
+ * Scope: Composes three injected functions: `fetchRepoSpec`, `extractApprovers`, `usersForWallets`, and hands them to
+ *   `@cogni-dao/agent-grants/orgs` `createRepoSpecOwnerSource` (0.8.0, `ttlMs: 0`). The package owns the read order,
+ *   the wallet lowercasing and the "no approvers" rule; this class keeps the App-only fetch, the 10 s deadline, the
+ *   approvers-only extractor and the closed `reason` mapping. Also ships the default `extractApprovers` and the
+ *   Drizzle `usersForWallets`.
  * Invariants:
  *   - APP_ONLY_READ: the injected `fetchRepoSpec` must use the GitHub App contents API. The bootstrap
  *     wiring passes the operator App writer, never `AppOrPublicDeclarationReader`.
  *   - READ_DEADLINE: one node's read is abandoned after `READ_TIMEOUT_MS` (10 s) and reported `unavailable`.
  *   - NEVER_THROWS: every failure path is `{ status: "unavailable", reason }` with a closed reason; a malformed spec is `approverCount: 0, malformed: true`.
+ *   - PACKAGE_REASONS_MAPPED: `OwnerSourceUnavailableError.reason` `no_approvers` reads as an empty list, `malformed_spec` as
+ *     `malformed: true`, and every other package failure is classified from its `cause` (the deadline, a missing file, the
+ *     App-not-installed code, a failed user lookup) or is `unexpected`.
  *   - WALLETS_ARE_LOWERCASE: approvers are lowercased before lookup and compared case-insensitively.
  *   - USERS_COLUMN_FIRST: a wallet maps to the `users.wallet_address` row when one exists, else to a wallet
  *     `user_bindings` row. A wallet never maps to two users.
@@ -25,6 +29,10 @@
  */
 
 import type { Database } from "@cogni/db-client";
+import {
+  createRepoSpecOwnerSource,
+  OwnerSourceUnavailableError,
+} from "@cogni-dao/agent-grants/orgs";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { parse as parseYaml } from "yaml";
 
@@ -49,9 +57,10 @@ const GITHUB_APP_NOT_INSTALLED_CODE = "github_app_not_installed";
 export class NodeApproverReadError extends Error {
   constructor(
     readonly reason: NodeApproverUnavailableReason,
-    message: string
+    message: string,
+    options?: { cause?: unknown }
   ) {
-    super(message);
+    super(message, options);
     this.name = "NodeApproverReadError";
   }
 }
@@ -84,42 +93,73 @@ export class RepoSpecNodeApproverReader implements NodeApproverReader {
   constructor(private readonly deps: RepoSpecNodeApproverReaderDeps) {}
 
   async approvers(node: NodeApproverTarget): Promise<NodeApproverRead> {
-    let text: string | null;
-    try {
-      text = await withDeadline(
-        this.deps.fetchRepoSpec(node.repoUrl, node.repoSpecPath),
-        this.deps.readTimeoutMs ?? READ_TIMEOUT_MS
-      );
-    } catch (error) {
-      return unavailable(classifyReadError(error));
-    }
-    if (text === null) return unavailable("not_found");
+    // The package hides the wallet count, so the lookup wrapper records it. `ttlMs: 0` means the source holds
+    // no cache, so building one per call loses nothing and keeps this count call-local.
+    let approverCount = 0;
+    const source = createRepoSpecOwnerSource({
+      ttlMs: 0,
+      fetchRepoSpec: async (ref, path) => {
+        const text = await withDeadline(
+          this.deps.fetchRepoSpec(ref, path),
+          this.deps.readTimeoutMs ?? READ_TIMEOUT_MS
+        );
+        if (text === null) {
+          throw new NodeApproverReadError("not_found", "repo-spec not found");
+        }
+        return text;
+      },
+      extractApprovers: (text) => {
+        try {
+          return [...this.deps.extractApprovers(text)];
+        } catch (cause) {
+          // Readable, but the YAML does not parse or `activity_ledger.approvers` is not a list of
+          // addresses. The package maps exactly this message to its `malformed_spec` reason.
+          throw new Error("malformed_spec", { cause });
+        }
+      },
+      usersForWallets: async (wallets) => {
+        approverCount = wallets.length;
+        try {
+          return [...(await this.deps.usersForWallets(wallets))];
+        } catch (cause) {
+          throw new NodeApproverReadError(
+            "user_lookup_failed",
+            "user lookup failed",
+            { cause }
+          );
+        }
+      },
+    });
 
-    let wallets: string[];
     try {
-      wallets = [
-        ...new Set(
-          this.deps.extractApprovers(text).map((wallet) => wallet.toLowerCase())
-        ),
-      ];
-    } catch {
-      // Readable, but the YAML does not parse or `activity_ledger.approvers` is not a list of
-      // addresses. Not the same as a valid empty list: the sync reports `malformed_spec`.
-      return { status: "read", approverCount: 0, userIds: [], malformed: true };
-    }
-    if (wallets.length === 0) {
-      return { status: "read", approverCount: 0, userIds: [] };
-    }
-
-    try {
-      const userIds = await this.deps.usersForWallets(wallets);
+      const userIds = await source.owners({
+        kind: "repo-spec",
+        ref: node.repoUrl,
+        path: node.repoSpecPath,
+      });
       return {
         status: "read",
-        approverCount: wallets.length,
+        approverCount,
         userIds: [...new Set(userIds)],
       };
-    } catch {
-      return unavailable("user_lookup_failed");
+    } catch (error) {
+      if (!(error instanceof OwnerSourceUnavailableError)) {
+        return unavailable("unexpected");
+      }
+      // A repo-spec that lists no approvers is a valid empty list, not an outage.
+      if (error.reason === "no_approvers") {
+        return { status: "read", approverCount: 0, userIds: [] };
+      }
+      // Not the same as a valid empty list: the sync reports `malformed_spec`.
+      if (error.reason === "malformed_spec") {
+        return {
+          status: "read",
+          approverCount: 0,
+          userIds: [],
+          malformed: true,
+        };
+      }
+      return unavailable(classifyReadError(error.cause));
     }
   }
 }

@@ -15,12 +15,15 @@
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mockInsertValues = vi.fn();
-const mockInsert = vi.fn(() => ({ values: mockInsertValues }));
-const mockLimit = vi.fn().mockResolvedValue([{ id: "user-1" }]);
-const mockWhere = vi.fn(() => ({ limit: mockLimit }));
-const mockFrom = vi.fn(() => ({ where: mockWhere }));
-const mockSelect = vi.fn(() => ({ from: mockFrom }));
+// The service-role postgres.js client: `begin` runs the callback with a tag that records each statement.
+const sqlStatements: string[] = [];
+const mockTx = vi.fn(async (strings: TemplateStringsArray) => {
+  sqlStatements.push(strings.join("?"));
+  return [];
+});
+const mockBegin = vi.fn(async (fn: (tx: typeof mockTx) => Promise<unknown>) =>
+  fn(mockTx)
+);
 
 const mockGetOrCreate = vi.fn().mockResolvedValue({ id: "billing-1" });
 
@@ -46,10 +49,7 @@ vi.mock("@/bootstrap/container", () => {
     debug: vi.fn(),
   };
   return {
-    resolveServiceDb: vi.fn(() => ({
-      insert: mockInsert,
-      select: mockSelect,
-    })),
+    resolveServiceDb: vi.fn(() => ({ $client: { begin: mockBegin } })),
     getContainer: vi.fn(() => ({
       log,
       clock: { now: vi.fn(() => new Date("2026-01-01T00:00:00Z")) },
@@ -66,7 +66,7 @@ import * as appHandler from "@/app/api/v1/agent/register/route";
 describe("POST /api/v1/agent/register", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockLimit.mockResolvedValue([{ id: "user-1" }]);
+    sqlStatements.length = 0;
   });
 
   it("returns 201 with actor credentials", async () => {
@@ -89,6 +89,12 @@ describe("POST /api/v1/agent/register", () => {
         expect(json.userId).toBeTypeOf("string");
         expect(json.apiKey).toContain("cogni_ag_sk_v1_");
         expect(json.billingAccountId).toBe("billing-1");
+        // The user row and its external principal row are written in ONE transaction.
+        expect(mockBegin).toHaveBeenCalledTimes(1);
+        expect(sqlStatements).toHaveLength(2);
+        expect(sqlStatements[0]).toContain("INSERT INTO users");
+        expect(sqlStatements[1]).toContain("INSERT INTO agent_principals");
+        expect(sqlStatements[1]).toContain("'external'");
       },
     });
   });

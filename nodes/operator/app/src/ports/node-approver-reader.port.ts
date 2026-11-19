@@ -13,10 +13,9 @@
  *   - UNAVAILABLE_IS_NOT_EMPTY: a failed read is `unavailable`; a readable-but-empty or malformed approver
  *     list is `read` with `approverCount` 0. The sync treats both as "write nothing", but logs them apart.
  * Side-effects: none (interface); implementations do IO.
- * Swap path: `@cogni-dao/agent-grants` 0.8.0 ships `createRepoSpecOwnerSource({ fetchRepoSpec,
- *   extractApprovers, usersForWallets, ttlMs: 0 }).owners({ kind: "repo-spec", ref })`. When it is
- *   published, the adapter delegates `approvers(node)` to that call; its three injected functions are
- *   exactly the three this adapter already takes, so the swap is a few lines.
+ * Backed by: `@cogni-dao/agent-grants/orgs` 0.8.0 `createRepoSpecOwnerSource({ fetchRepoSpec, extractApprovers,
+ *   usersForWallets, ttlMs: 0 }).owners({ kind: "repo-spec", ref, path })`; the adapter keeps the App-only fetch and
+ *   maps the package's `OwnerSourceUnavailableError.reason` onto the closed reasons below.
  * Links: src/adapters/server/identity/repo-spec-node-approver-reader.adapter.ts, https://cognidao.org/knowledge/operator-identity-model, task.5494
  * @public
  */
