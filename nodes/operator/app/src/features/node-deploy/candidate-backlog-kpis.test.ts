@@ -43,6 +43,12 @@ const pr = (n: number, c: string): CandidateOpenPr => ({
   number: n,
   headSha: sha(c),
   createdAt: ago(100),
+  updatedAt: ago(1),
+});
+/** A PR last updated `d` days ago. */
+const prUpdated = (n: number, c: string, d: number): CandidateOpenPr => ({
+  ...pr(n, c),
+  updatedAt: ago(d * 24),
 });
 
 function release(
@@ -183,12 +189,20 @@ describe("params", () => {
     expect(calc.unitFor?.(backlog)).toBe("prs");
     expect(calc.unitFor?.(wait)).toBe("h");
     expect(calc.paramsSchema.parse(backlog)).toMatchObject({ days: 28 });
+    // the default is applied in code: stored params parse unchanged, so no series identity moves
+    expect(calc.paramsSchema.parse(backlog)).not.toHaveProperty("activeDays");
+    expect(
+      calc.paramsSchema.parse({ ...backlog, activeDays: 14 })
+    ).toMatchObject({ activeDays: 14 });
     for (const bad of [
       {},
       { nodeId: NODE },
       { nodeId: "node-template", output: "backlog" },
       { nodeId: NODE, output: "p90" },
       { nodeId: NODE, output: "backlog", days: 0 },
+      { nodeId: NODE, output: "backlog", activeDays: 0 },
+      { nodeId: NODE, output: "backlog", activeDays: 29 },
+      { nodeId: NODE, output: "backlog", activeDays: 1.5 },
       { nodeId: NODE, output: "backlog", env: "production" },
     ])
       expect(() => calc.paramsSchema.parse(bad)).toThrow();
@@ -314,6 +328,76 @@ describe("backlog", () => {
       value: 0,
       complete: true,
     });
+  });
+});
+
+describe("active PRs only (activeDays)", () => {
+  it("backlog: a stale PR is excluded, an active one is included, and evidence names both counts", async () => {
+    const { sample, calls } = await run(
+      {
+        prs: [
+          prUpdated(1, "a", 2), // active, unserved
+          prUpdated(2, "b", 90), // stale, unserved
+          prUpdated(3, "c", 3), // active, served
+          prUpdated(4, "d", 8), // stale just outside the 7d default
+        ],
+        releases: [release("c", { activatedAt: ago(30), served: true })],
+      },
+      backlog
+    );
+    expect(sample).toMatchObject({ value: 1, complete: true });
+    expect(sample.evidenceRefs).toContain("candidate:open_prs=2,unserved=1");
+    expect(sample.evidenceRefs).toContain(
+      "candidate:active_days=7,active=2,excluded_stale=2"
+    );
+    expect(sample.evidenceRefs).toContain(
+      `candidate:unserved=pr1@${"a".repeat(7)}`
+    );
+    expect(sample.evidenceRefs).not.toContain(
+      `candidate:unserved=pr2@${"b".repeat(7)}`
+    );
+    // stale heads are not even looked up
+    expect(calls.scopes).toEqual([
+      { nodeId: NODE, env: "candidate-a", sourceShas: [sha("a"), sha("c")] },
+    ]);
+  });
+
+  it("wait: a stale PR adds no sample and no check-suites read; an active one does", async () => {
+    const { sample, calls } = await run(
+      {
+        prs: [prUpdated(1, "a", 2), prUpdated(2, "b", 90)],
+        green: { a: 5, b: 3530 },
+      },
+      wait
+    );
+    expect(sample).toMatchObject({ value: 5, complete: true });
+    expect(calls.suites).toEqual([sha("a")]);
+    expect(sample.evidenceRefs).toContain(
+      "candidate:active_days=7,active=1,excluded_stale=1"
+    );
+  });
+
+  it("the window is half-open and `activeDays` widens it", async () => {
+    const edge = [
+      { ...pr(1, "a"), updatedAt: new Date(NOW - 7 * 24 * HOUR) }, // exactly 7d: in
+      { ...pr(2, "b"), updatedAt: new Date(NOW - 7 * 24 * HOUR - 1) }, // just older: out
+      { ...pr(3, "c"), updatedAt: new Date(NOW) }, // now: out (end is exclusive)
+    ];
+    expect((await run({ prs: edge }, backlog)).sample.value).toBe(1);
+    const wide = await run({ prs: edge }, { ...backlog, activeDays: 28 });
+    expect(wide.sample.value).toBe(2);
+    expect(wide.sample.evidenceRefs).toContain(
+      "candidate:active_days=28,active=2,excluded_stale=1"
+    );
+  });
+
+  it("only stale PRs: an empty queue is a reading (0), not unknown, and no release read", async () => {
+    const { sample, calls } = await run(
+      { prs: [prUpdated(1, "a", 60)] },
+      backlog
+    );
+    expect(sample).toMatchObject({ value: 0, complete: true });
+    expect(calls.releases).toBe(0);
   });
 });
 
