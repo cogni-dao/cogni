@@ -1982,10 +1982,10 @@ packages:
 
   '@cogni-dao/langgraph-graphs@https://github.com/cogni-dao/node-template/releases/download/langgraph-graphs-v0.10.0/cogni-dao-langgraph-graphs-0.10.0.tgz':
     resolution: {integrity: sha512-2rqv96JsHKoW5dOqTfoRJC0n9l0U8RXITlAZYEu0lVfH9QNUTyj3x3O+aqtptUHzkFGQaCBgH20nIPx1mc/b2w==, tarball: https://github.com/cogni-dao/node-template/releases/download/langgraph-graphs-v0.10.0/cogni-dao-langgraph-graphs-0.10.0.tgz}
-    version: 0.9.0
+    version: 0.10.0
     peerDependencies:
-      '@cogni/agent-grants': '>=0.1.0'
-      '@cogni/ai-tools': '>=0.11.0'
+      '@cogni/agent-grants': '>=0.6.0'
+      '@cogni/ai-tools': '>=0.14.0'
 
   '@cogni-dao/metrics@https://github.com/cogni-dao/node-template/releases/download/metrics-v0.18.0/cogni-dao-metrics-0.18.0.tgz':
     resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/metrics-v0.18.0/cogni-dao-metrics-0.18.0.tgz}
