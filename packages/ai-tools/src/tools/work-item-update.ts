@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/ai-tools/tools/work-item-update`
  * Purpose: The operator's policy shell for `core__work_item_update`, the successor of the retired `core__work_item_transition` (task.5448).
- * Scope: Contract plus a stub. The runtime binds the released tool (`@cogni-dao/ai-tools` >= 0.15) over this contract's name and `requires`
+ * Scope: Contract plus a stub. Does not implement the tool. The runtime binds the released tool (`@cogni-dao/ai-tools` >= 0.15) over this contract's name and `requires`
  *   (`bootstrap/ai/evaluation-baseline`), so the input and output behaviour is the release's, not this file's.
  * Invariants:
  *   - TOOL_ID_NAMESPACED: ID is `core__work_item_update`
