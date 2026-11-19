@@ -43,7 +43,6 @@ describe("relationForAuthzAction", () => {
     expect(relationForAuthzAction("graph.invoke")).toBe("can_invoke");
     expect(relationForAuthzAction("user.act_as")).toBe("delegates");
     expect(relationForAuthzAction("node.flight")).toBe("can_flight");
-    expect(relationForAuthzAction("node.push")).toBe("can_push");
     expect(relationForAuthzAction("node.manage_secrets")).toBe(
       "can_manage_secrets"
     );

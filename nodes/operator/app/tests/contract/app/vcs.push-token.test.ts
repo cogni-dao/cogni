@@ -7,7 +7,7 @@
  * Scope: Route behavior with the real route, real env-to-minter factory and the real contract schema;
  *   OpenFGA is the deterministic fake, GitHub is the stubbed minter. Each test names the defect it guards.
  * Invariants:
- *   - PUSH_IS_ITS_OWN_GATE: `node.push` (can_push, the `pusher` role) authorizes; `node.flight` does not.
+ *   - DEVELOPER_IS_THE_GATE: `node.flight` (`developer`) on the named node authorizes; nothing else does.
  *   - NO_REPO_FROM_AGENT: the minted repo is the catalog's, never the body's.
  *   - REPO_ISOLATION: node A's principal never gets a token for node B or the operator monorepo.
  *   - TOKEN_NEVER_LOGGED: no log call carries the token.
@@ -132,7 +132,10 @@ async function post(body: unknown, raw?: string): Promise<Response> {
   return res;
 }
 
-function grant(action: "node.push" | "node.flight", nodeId: string): void {
+function grant(
+  action: "node.flight" | "node.manage_secrets",
+  nodeId: string
+): void {
   authzHolder.current?.allow({
     actorId: `user:${TEST_SESSION_USER_1.id}`,
     action,
@@ -163,8 +166,8 @@ describe("POST /api/v1/vcs/push-token", () => {
       dbState.byId[slug] = { nodeId, slug };
     }
     envState.current = {
-      GH_NODE_DEV_APP_ID: "7",
-      GH_NODE_DEV_APP_PRIVATE_KEY_BASE64:
+      GH_NODE_AI_APP_ID: "7",
+      GH_NODE_AI_APP_PRIVATE_KEY_BASE64:
         Buffer.from("private-key").toString("base64"),
       NODE_SUBMODULE_PARENT_OWNER: MONOREPO.owner,
       NODE_SUBMODULE_PARENT_REPO: MONOREPO.repo,
@@ -192,7 +195,7 @@ describe("POST /api/v1/vcs/push-token", () => {
 
   it("200: returns a one-repo token with the fixed permissions, uncached", async () => {
     // Defect: a widened permission set, a cached token response, or a repo other than the catalog's.
-    grant("node.push", NODE_A);
+    grant("node.flight", NODE_A);
     const res = await post({ nodeId: SLUG_A });
 
     expect(res.status).toBe(200);
@@ -212,7 +215,7 @@ describe("POST /api/v1/vcs/push-token", () => {
 
   it("takes the repo from the catalog and ignores an owner/repo in the body", async () => {
     // Defect: an agent steering the mint to a repo of its choosing.
-    grant("node.push", NODE_A);
+    grant("node.flight", NODE_A);
     const res = await post({
       nodeId: SLUG_A,
       owner: "cogni-dao",
@@ -222,7 +225,7 @@ describe("POST /api/v1/vcs/push-token", () => {
     expect(mockMint).toHaveBeenCalledWith({ owner: "Cogni-DAO", repo: SLUG_A });
   });
 
-  it("403 authz_denied without the pusher grant, and never mints", async () => {
+  it("403 authz_denied without the developer grant, and never mints", async () => {
     // Defect: deny-by-default lost, so any authenticated principal gets a push token.
     const res = await post({ nodeId: SLUG_A });
     expect(res.status).toBe(403);
@@ -230,9 +233,9 @@ describe("POST /api/v1/vcs/push-token", () => {
     expect(mockMint).not.toHaveBeenCalled();
   });
 
-  it("403 for a developer (can_flight) who lacks can_push, and never mints", async () => {
-    // Defect: `developer` implying `can_push`, which would force a node AI to hold merge/flight/attribution rights.
-    grant("node.flight", NODE_A);
+  it("403 for a principal holding only another role (secrets_manager), and never mints", async () => {
+    // Defect: any node role, not just developer, being enough to get a write token for the repo.
+    grant("node.manage_secrets", NODE_A);
     const res = await post({ nodeId: SLUG_A });
     expect(res.status).toBe(403);
     expect(mockMint).not.toHaveBeenCalled();
@@ -249,7 +252,7 @@ describe("POST /api/v1/vcs/push-token", () => {
 
   it("403 when node A's principal asks for node B, before any repo is resolved or minted", async () => {
     // Defect: cross-node pollination, so one node's AI pushes to another node's repo.
-    grant("node.push", NODE_A);
+    grant("node.flight", NODE_A);
     const res = await post({ nodeId: SLUG_B });
     expect(res.status).toBe(403);
     expect(mockResolveNodeRepo).not.toHaveBeenCalled();
@@ -262,7 +265,7 @@ describe("POST /api/v1/vcs/push-token", () => {
   ])("403 in_repo_node_unsupported when the node resolves to the operator monorepo (%s)", async (_label, owner, repo) => {
     // Defect: the all-repos install covers the monorepo, so a missed case-insensitive compare would mint
     // a token that can push into the repo whose CI carries secrets.
-    grant("node.push", NODE_A);
+    grant("node.flight", NODE_A);
     mockResolveNodeRepo.mockResolvedValue({ owner, repo });
     const res = await post({ nodeId: SLUG_A });
     expect(res.status).toBe(403);
@@ -272,7 +275,7 @@ describe("POST /api/v1/vcs/push-token", () => {
 
   it("502 app_not_installed when the dev App is not installed on the node repo", async () => {
     // Defect: an opaque 500 that hides the one fix (install the App), or a retry loop on it.
-    grant("node.push", NODE_A);
+    grant("node.flight", NODE_A);
     mockMint.mockRejectedValue(
       new Error("GitHub App not installed on Cogni-DAO/creative (HTTP 404)")
     );
@@ -283,7 +286,7 @@ describe("POST /api/v1/vcs/push-token", () => {
 
   it("502 mint_failed, not app_not_installed, when the installation lookup is refused (bad key)", async () => {
     // Defect: a revoked or wrong App key reported as "not installed", sending the operator to the wrong fix.
-    grant("node.push", NODE_A);
+    grant("node.flight", NODE_A);
     mockMint.mockRejectedValueOnce(
       new Error("GitHub App not installed on Cogni-DAO/creative (HTTP 401)")
     );
@@ -293,11 +296,11 @@ describe("POST /api/v1/vcs/push-token", () => {
   });
 
   it.each([
-    ["App id", { GH_NODE_DEV_APP_ID: undefined }],
-    ["private key", { GH_NODE_DEV_APP_PRIVATE_KEY_BASE64: undefined }],
-  ])("503 vcs_not_configured when the node dev App %s is unset", async (_l, unset) => {
+    ["App id", { GH_NODE_AI_APP_ID: undefined }],
+    ["private key", { GH_NODE_AI_APP_PRIVATE_KEY_BASE64: undefined }],
+  ])("503 vcs_not_configured when the node AI App %s is unset", async (_l, unset) => {
     // Defect: falling back to the operator App's credentials, whose identity carries bypass rights.
-    grant("node.push", NODE_A);
+    grant("node.flight", NODE_A);
     envState.current = {
       ...envState.current,
       // The operator App's credentials are present: the route must still refuse rather than mint from them.
@@ -318,7 +321,7 @@ describe("POST /api/v1/vcs/push-token", () => {
     ["empty nodeId", { nodeId: "" }, undefined],
   ])("400 validation_error on a malformed body (%s)", async (_l, body, raw) => {
     // Defect: a malformed body surfacing as a 500, or reaching authz and the mint.
-    grant("node.push", NODE_A);
+    grant("node.flight", NODE_A);
     const res = await post(body, raw);
     expect(res.status).toBe(400);
     expect((await res.json()).errorCode).toBe("validation_error");
@@ -327,7 +330,7 @@ describe("POST /api/v1/vcs/push-token", () => {
 
   it("never logs the token, on success or when the mint error carries it", async () => {
     // Defect: a credential in logs, reachable by anyone who can read them.
-    grant("node.push", NODE_A);
+    grant("node.flight", NODE_A);
     expect((await post({ nodeId: SLUG_A })).status).toBe(200);
 
     mockMint.mockRejectedValue(new Error(`boom with ${TOKEN} inside`));

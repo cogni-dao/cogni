@@ -5,8 +5,7 @@
  * Module: `@app/api/v1/nodes/[id]/developers`
  * Purpose: Owner-gated approval surface for node access roles (the grant half of the request→approve workflow).
  * Scope: Browser-session owners approve/reject a registered agent for one node by writing/removing the
- *   requested OpenFGA role tuple — `developer` (→can_flight), `production_promoter` (→can_promote_production),
- *   or `pusher` (→can_push; never provisions a GitHub collaborator).
+ *   requested OpenFGA role tuple — `developer` (→can_flight) or `production_promoter` (→can_promote_production).
  *   `role` defaults to `developer`. A `developer` decision ALSO provisions/de-provisions GitHub
  *   branch-push on the node repo via the operator App (https://cognidao.org/knowledge/authz-port-contract §6a) — best-effort, never reversing the
  *   authoritative tuple write. Without a grant path the role relations are inert (https://cognidao.org/knowledge/authz-port-contract §6).

@@ -34,14 +34,12 @@ import { AccessActions } from "./AccessActions.client";
 // One access request = one role (https://cognidao.org/knowledge/authz-port-contract §6/§6a), so the Access column is just the role name — no
 // verbose grant breakdown. developer→can_flight + GitHub branch-push; secrets_manager→
 // can_manage_secrets; production_promoter→can_promote_production; env_manager→can_manage_envs
-// (add/remove which envs a node deploys to — the narrowest, rarest grant; story.5020 W4); pusher→can_push
-// (mint a one-repo GitHub push token for the node's own repo; nothing else, no collaborator invite).
+// (add/remove which envs a node deploys to — the narrowest, rarest grant; story.5020 W4).
 const ROLE_LABEL: Record<NodeAccessRole, string> = {
   developer: "Developer",
   secrets_manager: "Secrets manager",
   production_promoter: "Production promoter",
   env_manager: "Environment manager",
-  pusher: "Pusher",
 };
 
 interface Props {

@@ -8,8 +8,7 @@
  * Scope: One row per (node, agent user). `role` is the OpenFGA relation requested. v0 grants
  *   `developer` (confers `can_flight`, candidate-a), `secrets_manager` (confers `can_manage_secrets`),
  *   `production_promoter` (confers `can_promote_production`), or `env_manager` (confers
- *   `can_manage_envs` — deploy-topology / env-membership authority), or `pusher` (confers `can_push`
- *   only — the node AI's push-token authority). Adding a role (e.g.
+ *   `can_manage_envs` — deploy-topology / env-membership authority). Adding a role (e.g.
  *   `preview_promoter` → `can_promote_preview`) is additive: extend NODE_ACCESS_ROLES + the CHECK +
  *   the OpenFGA model. Re-requests reopen the row.
  * Invariants: NOT_AUTHORITY, ONE_ROW_PER_AGENT_NODE_ROLE (an agent can request multiple roles on
@@ -46,15 +45,13 @@ export type NodeAccessRequestStatus =
 // The OpenFGA relation a request grants — one distinct, least-privilege role per
 // capability. `developer`→can_flight (candidate-a); `secrets_manager`→can_manage_secrets;
 // `production_promoter`→can_promote_production (production); `env_manager`→can_manage_envs
-// (deploy-topology / env-membership); `pusher`→can_push (a node AI's one-repo push token; a sibling of
-// `developer`, never implied by it, and approving it provisions no GitHub collaborator). A new role is added here + in the immutable OpenFGA
+// (deploy-topology / env-membership). A new role is added here + in the immutable OpenFGA
 // model + the CHECK below.
 export const NODE_ACCESS_ROLES = [
   "developer",
   "secrets_manager",
   "production_promoter",
   "env_manager",
-  "pusher",
   // `admin` is NOT requestable (task.5494, ONE_ADMIN_ANSWER): a node's admins are its repo-spec
   // approvers, written only by the node-admin sync. The DB CHECK below keeps `admin` as a legacy
   // value so rows written before this change stay valid; it is deliberately NOT derived from
@@ -107,7 +104,7 @@ export const nodeAccessRequests = pgTable(
     ),
     check(
       "node_access_requests_role_check",
-      sql`${t.role} IN ('developer','secrets_manager','production_promoter','env_manager','pusher','admin')`
+      sql`${t.role} IN ('developer','secrets_manager','production_promoter','env_manager','admin')`
     ),
     index("node_access_requests_node_id_idx").on(t.nodeId),
     index("node_access_requests_agent_user_id_idx").on(t.agentUserId),

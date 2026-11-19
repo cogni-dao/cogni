@@ -411,43 +411,6 @@ describe("POST /api/v1/nodes/[id]/developers", () => {
     expect(deployPlane.setNodeCollaborator).not.toHaveBeenCalled();
   });
 
-  it("approves a pusher without provisioning a GitHub collaborator, even with a declared login", async () => {
-    // Defect: the node AI's push-only grant also inviting it as a repo collaborator, which would give it a
-    // standing GitHub write path outside the 1-hour, one-repo token.
-    dbState.requestedGithubLogin = "flock-leader";
-
-    await testApiHandler({
-      appHandler,
-      params: { id: NODE_ID },
-      async test({ fetch }) {
-        const res = await fetch({
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            agentUserId: AGENT_USER_ID,
-            decision: "approve",
-            role: "pusher",
-          }),
-        });
-        expect(res.status).toBe(200);
-        expect(await res.json()).toEqual({
-          nodeId: NODE_ID,
-          agentUserId: AGENT_USER_ID,
-          decision: "approve",
-          role: "pusher",
-          branchPush: "skipped:not_developer_role",
-        });
-      },
-    });
-
-    expect(authz.writeRelation).toHaveBeenCalledWith({
-      user: `user:${AGENT_USER_ID}`,
-      relation: "pusher",
-      object: `node:${NODE_ID}`,
-    });
-    expect(deployPlane.setNodeCollaborator).not.toHaveBeenCalled();
-  });
-
   it("refuses to approve admin (task.5494): nobody grants it, the node-admin sync does", async () => {
     await testApiHandler({
       appHandler,

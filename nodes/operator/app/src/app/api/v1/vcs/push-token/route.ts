@@ -5,20 +5,20 @@
  * Module: `@app/api/v1/vcs/push-token`
  * Purpose: Node-scoped, operator-minted push token. An agent with no GitHub account (a node's AI sandbox)
  *   gets a short-lived installation token for ONE node repo, limited to contents + pull_requests write, so it
- *   can push a branch and open a PR. The token comes from the unprivileged node dev App, never the operator
+ *   can push a branch and open a PR. The token comes from the unprivileged node AI App, never the operator
  *   App; only the operator holds either key. No per-node App, machine user or long-lived token exists.
- * Scope: Auth → RBAC (node-scoped, node.push) → resolve repo → refuse the monorepo → mint. Adds no deploy-brain logic.
+ * Scope: Auth → RBAC (node-scoped, node.flight) → resolve repo → refuse the monorepo → mint. Adds no deploy-brain logic.
  * Invariants:
  *   - AUTH_REQUIRED: Bearer token (machine agents) or SIWE session.
- *   - RBAC_IS_THE_GATE: `node.push` (→ `can_push`, held by the push-only `pusher` role) on the NAMED node.
- *     `developer` does NOT imply it, so a node AI never needs `can_flight`. Fails closed (503) when no
- *     authority is configured.
+ *   - RBAC_IS_THE_GATE: `node.flight` on the NAMED node: `developer`, the role that already means "may push branches
+ *     to this node's repo" (rbac.md §6a). For an agent with a GitHub login that grant adds a collaborator; for a node AI
+ *     with none, it lets the agent ask for this token. No new role.
  *   - NO_REPO_FROM_AGENT: owner/repo come from the node's catalog `source_repo`, never the body.
  *   - REMOTE_SOURCE_ONLY: an in-repo node (no `source_repo`) resolves to the operator monorepo, whose CI
  *     carries secrets; it is refused (403 `in_repo_node_unsupported`).
  *   - FIXED_PERMISSIONS: exactly PUSH_TOKEN_PERMISSIONS on exactly one repo. Without `workflows`, GitHub
  *     refuses any push that changes `.github/workflows`. Merge stays at POST /vcs/merge.
- *   - DEV_APP_NOT_OPERATOR_APP: a minted token acts as the node dev App, which has no ruleset bypass, so it
+ *   - DEV_APP_NOT_OPERATOR_APP: a minted token acts as the node AI App, which has no ruleset bypass, so it
  *     never inherits the operator App's admin, workflow or merge-queue bypass.
  *   - TOKEN_NEVER_LOGGED: logs carry slug, principal, repo and expiry only. The response is `no-store`.
  *   - CONTRACTS_ARE_TRUTH: input/output parsed through `pushTokenOperation`.
@@ -80,11 +80,11 @@ export const POST = wrapRouteHandlerWithLogging(
       return fail(400, "validation_error", "Invalid request");
     }
 
-    // 2. RBAC — node-scoped `can_push`, granted by the push-only `pusher` role (never by `developer`).
+    // 2. RBAC — node-scoped `can_flight` (`developer`): the same grant that provisions branch push for login agents.
     const rbac = await resolveNodeAndAuthorize({
       id: parsed.data.nodeId,
       userId: sessionUser.id,
-      action: "node.push",
+      action: "node.flight",
     });
     if (!rbac.ok) {
       const error =
@@ -167,7 +167,7 @@ export const POST = wrapRouteHandlerWithLogging(
         return fail(
           502,
           "app_not_installed",
-          "node dev App not installed on the node repo",
+          "node AI App not installed on the node repo",
           {
             slug,
           }

@@ -17,7 +17,6 @@ export type AuthzAction =
   | "graph.invoke"
   | "user.act_as"
   | "node.flight"
-  | "node.push"
   | "node.manage_secrets"
   | "node.promote_production"
   | "node.manage_envs"
@@ -29,7 +28,6 @@ export const AUTHZ_ACTIONS = [
   "graph.invoke",
   "user.act_as",
   "node.flight",
-  "node.push",
   "node.manage_secrets",
   "node.promote_production",
   "node.manage_envs",
@@ -166,10 +164,6 @@ export function relationForAuthzAction(action: AuthzAction): string {
       return "delegates";
     case "node.flight":
       return "can_flight";
-    case "node.push":
-      // Push-only: a node AI's one-repo, 1-hour GitHub push token. Granted by the sibling `pusher`
-      // role, which `developer` does NOT imply (a node AI never needs can_flight).
-      return "can_push";
     case "node.manage_secrets":
       return "can_manage_secrets";
     case "node.promote_production":
