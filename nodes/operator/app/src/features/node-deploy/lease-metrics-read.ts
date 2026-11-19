@@ -236,9 +236,19 @@ const MATCHER_NODES = new Set([
  * Control characters other than tab and newline: `\r`, `\v`, `\f`, NUL, DEL, the C1 block (U+0080-009F, which has
  * NEL) and U+2028/2029. Prometheus and the grammar disagree on which of these end a line or a token.
  */
-// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
-const FORBIDDEN_CONTROL_RE =
-  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/;
+const hasForbiddenControl = (text: string): boolean => {
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (
+      (c < 0x20 && c !== 0x09 && c !== 0x0a) ||
+      (c >= 0x7f && c <= 0x9f) ||
+      c === 0x2028 ||
+      c === 0x2029
+    )
+      return true;
+  }
+  return false;
+};
 
 /**
  * True when the tree has an error node or a `#` comment. The grammar ends a comment only at `\n`; Prometheus also
@@ -338,7 +348,7 @@ function carries(
  * Used on the spliced output before it is forwarded, and by the tests to walk an output tree.
  */
 export function everySelectorScoped(query: string, scope: QueryScope): boolean {
-  if (FORBIDDEN_CONTROL_RE.test(query)) return false;
+  if (hasForbiddenControl(query)) return false;
   const tree = parser.parse(query);
   if (hasErrorOrComment(tree)) return false;
   return selectorsOf(tree).every(
@@ -355,7 +365,7 @@ export function everySelectorScoped(query: string, scope: QueryScope): boolean {
 export function scopePromQuery(query: string, scope: QueryScope): ScopeResult {
   if (query.trim() === "") return { ok: false, reason: "empty" };
   if (query.length > MAX_QUERY_CHARS) return { ok: false, reason: "too_long" };
-  if (FORBIDDEN_CONTROL_RE.test(query)) return { ok: false, reason: "syntax" };
+  if (hasForbiddenControl(query)) return { ok: false, reason: "syntax" };
   const tree = parser.parse(query);
   if (hasErrorOrComment(tree)) return { ok: false, reason: "syntax" };
   if (hasFunction(tree, "Info"))
