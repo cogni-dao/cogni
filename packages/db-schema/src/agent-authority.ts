@@ -6,7 +6,7 @@
  * Purpose: Runtime agent authority tables: internal agent principals and node role rows.
  * Scope: Schema only. Reads and writes live in `@cogni-dao/agent-grants` (raw SQL over an injected client). Does not contain queries or business logic.
  * Invariants:
- *   - ORG_HAS_OWNER_SOURCE: an `org` row carries `owner_source_kind` and `owner_source_ref` (CHECK), one org per source (partial unique index). Mirrors the package's `migrations/agent_principals_orgs.sql`.
+ *   - ORG_HAS_OWNER_SOURCE: an `org` row carries both owner-source columns (CHECK); one org per source (partial unique index).
  *   - AGENTS_HOLD_NO_WALLET: an internal principal row points at a seeded `users` row with no wallet and has no credential.
  *   - CREDENTIALS_ONLY_ON_AGENT_PRINCIPALS: `agent_credentials` rows belong only to a user with an `external` `agent_principals` row
  *     (a trigger in the migration enforces it).
