@@ -55,23 +55,32 @@ describe("operator shared evaluation binding", () => {
   });
 
   it("accepts the released six-axis patch contract without adding a priority", () => {
-    const transition = OPERATOR_CORE_TOOL_BUNDLE.find(
-      (tool) => tool.contract.name === "core__work_item_transition"
+    const update = OPERATOR_CORE_TOOL_BUNDLE.find(
+      (tool) => tool.contract.name === "core__work_item_update"
     );
-    if (!transition) throw new Error("Missing shared score patch binding");
+    if (!update) throw new Error("Missing shared score patch binding");
     const scores = Object.fromEntries(
       ["goal", "time", "unblocks", "ease", "confidence", "agent"].map(
         (axis) => [axis, { v: 2 }]
       )
     );
-    const parsed = transition.contract.inputSchema.parse({
-      action: "patch",
+    const parsed = update.contract.inputSchema.parse({
       id: "task.5111",
       expectedRevision: 4,
       reason: "score the six axes",
-      scores,
+      set: { scores },
     });
-    expect(parsed).toMatchObject({ expectedRevision: 4, scores });
-    expect(parsed).not.toHaveProperty("priority");
+    expect(parsed).toMatchObject({ expectedRevision: 4, set: { scores } });
+    expect((parsed as { set: object }).set).not.toHaveProperty("priority");
+  });
+
+  it("keeps the operator gate on the released update tool and drops the retired transition tool", () => {
+    const names = OPERATOR_CORE_TOOL_BUNDLE.map((tool) => tool.contract.name);
+    expect(names).toContain("core__work_item_update");
+    expect(names).not.toContain("core__work_item_transition");
+    const update = OPERATOR_CORE_TOOL_BUNDLE.find(
+      (tool) => tool.contract.name === "core__work_item_update"
+    );
+    expect(update?.contract.requires).toBe("node.collaborate");
   });
 });

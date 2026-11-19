@@ -15,9 +15,9 @@
  *   - NO_TOKEN_IN_LOGS: `review.remote_read` carries alias, route class, status, kid, duration only; never
  *     a URL, a knowledge id, a header or a body.
  *   - SEAM_FOR_THE_SHARED_PACKAGE: `resolveTransportFactory` reads `createRemoteKnowledgeTransport` from the
- *     installed `@cogni/shared-ai-tools`. A release without it (before PR1 adopts ai-tools >= 0.15), or one
- *     whose reader has no `index` (0.15 through 0.17), is not `available`, and the review route answers a typed
- *     503 before dispatch. See the CD10 seam note on `resolveTransportFactory`.
+ *     installed `@cogni/shared-ai-tools`. The pinned 0.16.0 exports it, but its reader has no `index` (true of
+ *     0.15 through 0.17), so a linked node is not `available` and the review route answers a typed 503
+ *     `review_remote_reader_unavailable` before dispatch. See the CD10 seam note on `resolveTransportFactory`.
  * Side-effects: IO (HTTPS GET to a linked node, through the transport)
  * Links: src/ports/remote-knowledge.port.ts, https://cognidao.org/knowledge/operator-identity-model
  * @internal
@@ -52,9 +52,10 @@ export type RemoteTransportFactory = (deps: {
  * The shared package's transport factory, or undefined when the installed release has none.
  *
  * CD10 SEAM (bounded, task.5448): this runtime lookup bypasses the type checker, so it is a dated yellow.
+ * PR1 (ai-tools 0.16.0) adopted the release, whose transport has no `index`, so the seam stays.
  *   Owner: flock-leader (story.5167 dev-manager).
  *   Expiry: 2026-12-16.
- *   Closing proof: PR1 pins shared ai-tools with index, and the lookup is replaced by a static import.
+ *   Closing proof: a later release exports the transport with `index`, and the lookup is replaced by a static import.
  * `tests/unit/bootstrap/review/remote-transport-seam.test.ts` FAILS once the installed package exports the
  * transport with `index`, so the bump cannot leave this seam behind unnoticed.
  */

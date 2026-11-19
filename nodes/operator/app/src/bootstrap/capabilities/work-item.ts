@@ -12,8 +12,8 @@
  *     when wired — in operator that is the Doltgres read path `GET /api/v1/work/items`
  *     uses (read pool, never writer admission). The runtime image carries no `work/`
  *     tree, so a markdown-bound query always saw an empty backlog.
- *   - WRITES_NOT_WIDENED: `transitionStatus` keeps its lookup + command on
- *     `workItemQuery` / `workItemCommand`; rebinding reads does not route writes anywhere new.
+ *   - NO_TRANSITION_PATH (task.5448): the released tools retired `transitionStatus`; a status move is a `patch` with `set.status`, so the
+ *     Doltgres store's status ladder gates it (409 `gate_unmet`) and there is no second, ungated write path.
  *   - PATCH_ON_THE_LIVE_BACKLOG (story.5096): when `backlogWriter` is wired, `patch` goes
  *     through the SAME Doltgres `patch` that `PATCH /api/v1/work/items/{id}` uses, attributed
  *     to `backlogWriter.principalId`. The store's own authority applies unchanged (a
@@ -41,11 +41,12 @@ import {
   type WorkItemInfo,
   WorkItemPatchConflictError,
   type WorkItemQueryParams,
-  type WorkItemTransitionResult,
 } from "@cogni/shared-ai-tools";
 import type {
   ActorKind,
   EnvelopeDegradedEvent,
+  ItemArtifactsPort,
+  ItemEnvelopeParts,
   ItemLinksPort,
   MoveReadingPort,
   WorkItem,
@@ -66,6 +67,8 @@ import {
   type WorkItemsDoltgresPort,
 } from "@cogni/work-items/adapters/doltgres";
 
+import type { ItemRefPorts } from "./work-item-refs";
+
 /**
  * Dependencies for creating the work item capability.
  */
@@ -83,6 +86,12 @@ export interface WorkItemCapabilityDeps {
   readonly moveReadings?: MoveReadingPort | undefined;
   /** First page of an item's citation links (`read` with `includeLinks`); absent reads `unavailable`. */
   readonly links?: ItemLinksPort | undefined;
+  /**
+   * The ref ports of the single-item envelope (story.0058, task.0028): the latest artifact of each kind, the first page of artifact
+   * and history refs, and one artifact by id. An absent port leaves its part off the read, the same as the HTTP facade.
+   */
+  readonly artifacts?: ItemArtifactsPort | undefined;
+  readonly itemRefs?: ItemRefPorts | undefined;
   /** One event per degraded envelope part (chain or links). */
   readonly log?: ((event: EnvelopeDegradedEvent) => void) | undefined;
   /**
@@ -162,7 +171,10 @@ export function createWorkItemCapability(
      * THE single-item envelope (task.0118), the shape `GET /api/v1/work/items/{id}` serves: the item with each
      * move's readings, verdict and metric, KPI and goal, and with `includeLinks` the first page of citation links.
      */
-    async read(id, options): Promise<WorkItemInfo | null> {
+    async read(
+      id,
+      options
+    ): Promise<(WorkItemInfo & ItemEnvelopeParts) | null> {
       const result = await listPage({ ids: [id], limit: 1 });
       const item = result.items
         .map(toWorkItemInfo)
@@ -170,8 +182,21 @@ export function createWorkItemCapability(
       if (!item) return null;
       return composeItemEnvelope(
         item,
-        { readings: deps.moveReadings, links: deps.links, log: deps.log },
-        { includeLinks: options?.includeLinks === true }
+        {
+          readings: deps.moveReadings,
+          links: deps.links,
+          artifacts: deps.artifacts,
+          ...deps.itemRefs,
+          log: deps.log,
+        },
+        {
+          includeLinks: options?.includeLinks === true,
+          includeArtifacts: options?.includeArtifacts === true,
+          includeHistory: options?.includeHistory === true,
+          ...(options?.artifactId !== undefined && {
+            artifactId: options.artifactId,
+          }),
+        }
       );
     },
 
@@ -188,27 +213,6 @@ export function createWorkItemCapability(
     async query(params): Promise<readonly WorkItemInfo[]> {
       const result = await listPage(params);
       return withMoveReadings(result.items.map(toWorkItemInfo));
-    },
-
-    async transitionStatus(input): Promise<WorkItemTransitionResult> {
-      const current = await workItemQuery.get(toWorkItemId(input.id));
-      if (!current) {
-        throw new Error(`Work item not found: ${input.id}`);
-      }
-
-      const updated = await workItemCommand.transitionStatus({
-        id: toWorkItemId(input.id),
-        expectedRevision: String(current.revision),
-        toStatus: input.toStatus as WorkItemStatus,
-        ...(input.reason && { reason: input.reason }),
-      });
-
-      return {
-        id: updated.id,
-        previousStatus: current.status,
-        newStatus: updated.status,
-        revision: updated.revision as number,
-      };
     },
 
     async patch(input): Promise<WorkItemInfo> {

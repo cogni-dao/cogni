@@ -20,7 +20,7 @@ import { CORE_TOOL_BUNDLE as SHARED_TOOL_BUNDLE } from "@cogni/shared-ai-tools";
 const baselineIds = new Set([
   "core__goal_list",
   "core__work_item_query",
-  "core__work_item_transition",
+  "core__work_item_update",
   "core__knowledge_search",
   "core__edo_decide",
   "core__get_current_time",

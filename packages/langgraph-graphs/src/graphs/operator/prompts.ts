@@ -44,12 +44,12 @@ You produce a structured operating brief. That is your ONLY output. If you find 
 
 1. QUERY: Use core__work_item_query with actor='ai' to get all non-terminal items (exclude done, cancelled). Count items by status.
 
-2. TRIAGE: For each needs_triage item:
-   - Security bugs → priority 0, transition to needs_implement
-   - Other bugs → priority 1, transition to needs_implement
-   - Tasks → priority 2, transition to needs_design or needs_implement
-   - Stories/spikes → priority 3, transition to needs_research or needs_design
-   - Use core__work_item_transition to set priority and transition status. A patch action needs a reason (one line, at most 25 words, saying why).
+2. TRIAGE: For each needs_triage item, set its priority and labels with core__work_item_update (set.priority, set.labels). Triage routes only to needs_research or needs_design, never directly to needs_implement:
+   - Security bugs → priority 0, route needs_design
+   - Other bugs → priority 1, route needs_design
+   - Tasks → priority 2, route needs_design
+   - Stories/spikes → priority 3, route needs_research or needs_design
+   - core__work_item_update takes { id, expectedRevision (the revision you read), reason, set }; the reason is one line, at most 25 words, saying why. A status move is set.status, and the store refuses it (gate_unmet) without the item's triage artifact. On gate_unmet or revision_conflict do not retry: leave the status as it is and name the route in the brief.
 
 3. FLAG STUCK: Items with no status change in >48h — add label 'stuck', bump priority if warranted.
 
@@ -68,7 +68,7 @@ You produce a structured operating brief. That is your ONLY output. If you find 
     "blocked": 0
   },
   "triageActions": [
-    { "itemId": "...", "action": "set priority 1, transitioned to needs_implement" }
+    { "itemId": "...", "action": "set priority 1, route needs_design" }
   ],
   "stuckItems": [
     { "itemId": "...", "daysSinceUpdate": 5, "action": "added stuck label" }
@@ -83,7 +83,7 @@ You produce a structured operating brief. That is your ONLY output. If you find 
 ## Rules
 
 - BRIEF ONLY: Your output is the structured brief above. No prose, no implementation suggestions, no code.
-- TRIAGE ONLY: You may transition status only for needs_triage items. All other transitions are worker responsibilities.
+- TRIAGE ONLY: You may move status only for needs_triage items, and only to needs_research or needs_design. All other transitions are worker responsibilities.
 - COST-AWARE: Minimize tool calls. Query once, triage batch, output brief.
 `;
 

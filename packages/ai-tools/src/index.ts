@@ -80,7 +80,6 @@ export type {
   WorkItemInfo,
   WorkItemQueryPage,
   WorkItemQueryParams,
-  WorkItemTransitionResult,
 } from "./capabilities";
 // Capabilities
 export {
@@ -439,18 +438,15 @@ export {
   workItemReadContract,
 } from "./tools/work-item-read";
 export {
-  createWorkItemTransitionImplementation,
-  WORK_ITEM_TRANSITION_NAME,
-  type WorkItemTransitionDeps,
-  type WorkItemTransitionInput,
-  WorkItemTransitionInputSchema,
-  type WorkItemTransitionOutput,
-  WorkItemTransitionOutputSchema,
-  type WorkItemTransitionRedacted,
-  workItemTransitionBoundTool,
-  workItemTransitionContract,
-  workItemTransitionStubImplementation,
-} from "./tools/work-item-transition";
+  WORK_ITEM_UPDATE_NAME,
+  type WorkItemUpdateInput,
+  WorkItemUpdateInputSchema,
+  type WorkItemUpdateOutput,
+  WorkItemUpdateOutputSchema,
+  workItemUpdateBoundTool,
+  workItemUpdateContract,
+  workItemUpdateStubImplementation,
+} from "./tools/work-item-update";
 // Tool types
 export type {
   BoundTool,

@@ -4,7 +4,7 @@
 /**
  * Module: `@cogni/ai-tools/capabilities/work-item`
  * Purpose: Generic work item capability interface for AI tools.
- * Scope: Defines WorkItemCapability — query + transition + patch over work items, and the store-agnostic patch conflict error. Does not contain implementations or app-domain concepts.
+ * Scope: Defines WorkItemCapability — query + patch over work items (a status move is a patch), and the store-agnostic patch conflict error. Does not contain implementations or app-domain concepts.
  * Invariants:
  *   - CAPABILITY_INJECTION: Implementation injected at bootstrap, not imported
  *   - PORTS_ARE_AUTHORITY: Delegates to WorkItemQueryPort + WorkItemCommandPort
@@ -13,7 +13,7 @@
  * @public
  */
 
-import type { WorkItemDto } from "@cogni/work-items";
+import type { WorkItemDto, WorkItemPatchInput } from "@cogni/work-items";
 
 export interface WorkItemAssignee {
   readonly kind: WorkItemDto["assignees"][number]["kind"];
@@ -50,22 +50,12 @@ export interface WorkItemQueryPage {
 }
 
 /**
- * Result of transitioning a work item.
- */
-export interface WorkItemTransitionResult {
-  readonly id: string;
-  readonly previousStatus: string;
-  readonly newStatus: string;
-  readonly revision: number;
-}
-
-/**
  * Generic work item capability for AI tools.
  *
  * Implementation is injected at bootstrap time (per CAPABILITY_INJECTION).
  * The implementation is responsible for:
  * - Delegating to WorkItemQueryPort and WorkItemCommandPort
- * - Enforcing valid transitions via the transition table
+ * - Enforcing the status gates: every status write is a `patch` with `set.status`, gated by the store (task.0122)
  * - Resolving revision for optimistic concurrency
  */
 export interface WorkItemCapability {
@@ -78,15 +68,8 @@ export interface WorkItemCapability {
    */
   queryPage?(params: WorkItemQueryParams): Promise<WorkItemQueryPage>;
 
-  /** Transition a work item to a new status. */
-  transitionStatus(input: {
-    id: string;
-    toStatus: string;
-    reason?: string;
-  }): Promise<WorkItemTransitionResult>;
-
   /**
-   * Patch work item fields (priority, rank, labels, summary).
+   * Patch work item fields: the PATCH route's `set` (status, priority, rank, labels, summary, scores, ...).
    *
    * `expectedRevision` (optional) is compare-and-set on the row's `revision`: the
    * write lands only if the row is still at that revision. A moved row throws
@@ -97,12 +80,9 @@ export interface WorkItemCapability {
     expectedRevision?: number;
     /** Why this change happens (task.0086): required; one line, at most 25 words and 240 characters; stored in history, never in the item. */
     reason: string;
-    set: {
-      priority?: number;
-      rank?: number;
-      labels?: string[];
-      summary?: string;
-    };
+    /** Hub atoms this change used (at most 8); the store pins each to a commit in history. */
+    cites?: WorkItemPatchInput["cites"];
+    set: WorkItemPatchInput["set"];
   }): Promise<WorkItemInfo>;
 }
 

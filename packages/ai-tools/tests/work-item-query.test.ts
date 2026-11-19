@@ -37,7 +37,6 @@ function capabilityReturning(
 ): WorkItemCapability {
   return {
     query: vi.fn().mockResolvedValue(items),
-    transitionStatus: vi.fn(),
     patch: vi.fn(),
   };
 }

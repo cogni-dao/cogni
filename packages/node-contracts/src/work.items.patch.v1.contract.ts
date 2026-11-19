@@ -25,6 +25,7 @@
  *   - OPTIONAL_CITES (task.0086): top-level `cites` (at most 8 hub atoms) are pinned to commits in history; an unknown id is a 400.
  *     The package schema owns the cite rules.
  *   - MOVES_SERVER_PINS_BASELINE (story.0033): `set.moves` is `[{ metricId, direction }]`, at most 3, or `[]`; the shared schema drops any other key on an entry and the store pins the baseline.
+ *   - SPEC_REFS_TYPED (story.0069, task.5448): `set.specRefs` entries are `knowledge:<atom-id>` (the package's `SpecRefsInputSchema`); any other entry is a 400.
  * Side-effects: none
  * Links: /api/v1/work/items/[id] route, https://node-template.cognidao.org/knowledge/work-items-port-contract
  * @internal
@@ -32,6 +33,7 @@
 
 import {
   ChangeReasonSchema,
+  SpecRefsInputSchema,
   WorkItemMovesInputSchema,
   WorkItemPatchInputSchema,
   WorkItemPatchStatusSchema,
@@ -76,7 +78,8 @@ export const workItemsPatchOperation = {
         // story.0033: [] = this item moves no metric (the edit reason says why). The server pins each baseline.
         moves: WorkItemMovesInputSchema.optional(),
         labels: z.array(z.string()).optional(),
-        specRefs: z.array(z.string()).optional(),
+        // SPEC_REFS_TYPED (story.0069): `knowledge:<atom-id>` only; any other entry is a 400.
+        specRefs: SpecRefsInputSchema.optional(),
         branch: z.string().optional(),
         pr: z.string().optional(),
         reviewer: z.string().optional(),

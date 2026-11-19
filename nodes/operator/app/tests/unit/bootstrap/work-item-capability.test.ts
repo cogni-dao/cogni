@@ -327,21 +327,35 @@ describe("createWorkItemCapability", () => {
     expect(md.query.list).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps transitions on the markdown ports (writes are not routed to the reader)", async () => {
+  it("has no transition path: a status move is a gated patch on the Doltgres writer (task.5448)", async () => {
     const md = markdownPorts();
-    const backlogReader = { list: vi.fn() };
+    const store = {
+      patch: vi
+        .fn()
+        .mockResolvedValue(item({ status: "needs_design", revision: 6 })),
+    };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
       workItemCommand: md.command,
-      backlogReader,
+      backlogWriter: { store, principalId: "actor:system" },
     });
 
-    await expect(
-      cap.transitionStatus({ id: "task.5282", toStatus: "done" })
-    ).rejects.toThrow("Work item not found");
-    expect(md.query.get).toHaveBeenCalledTimes(1);
-    expect(backlogReader.list).not.toHaveBeenCalled();
+    expect(cap).not.toHaveProperty("transitionStatus");
+    await cap.patch({
+      id: "task.5282",
+      reason: "triage routes to design",
+      set: { status: "needs_design" },
+    });
+
+    expect(store.patch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "task.5282",
+        set: expect.objectContaining({ status: "needs_design" }),
+      }),
+      "actor:system"
+    );
     expect(md.command.transitionStatus).not.toHaveBeenCalled();
+    expect(md.command.patch).not.toHaveBeenCalled();
   });
 
   it("patches through the Doltgres backlogWriter as its principal, forwarding expectedRevision", async () => {

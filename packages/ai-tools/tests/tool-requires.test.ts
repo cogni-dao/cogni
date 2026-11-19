@@ -40,7 +40,7 @@ describe("tool node-policy declarations (authz v0)", () => {
         ["core__work_item_read", "node.collaborate"],
         ["core__knowledge_search", "node.collaborate"],
         ["core__work_item_query", "node.collaborate"],
-        ["core__work_item_transition", "node.collaborate"],
+        ["core__work_item_update", "node.collaborate"],
       ].sort()
     );
   });

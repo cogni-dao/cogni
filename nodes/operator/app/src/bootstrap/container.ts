@@ -207,6 +207,7 @@ import {
   createPrFactsPort,
   resolveWorkItemsPrRepos,
 } from "@/bootstrap/capabilities/work-item-pr-facts";
+import { createItemRefPorts } from "@/bootstrap/capabilities/work-item-refs";
 import { startCatalogRegistryReconcileOnBoot } from "@/bootstrap/catalog-registry-reconcile";
 import type { RateLimitBypassConfig } from "@/bootstrap/http/wrapPublicRoute";
 import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
@@ -1180,7 +1181,7 @@ function createContainer(): Container {
   // WorkItemCapability for AI tools (task.5282). `core__work_item_query` lists
   // through the Doltgres read path — the same `doltgresWorkItems.list` that
   // `GET /api/v1/work/items` serves (read pool, never writer admission). The
-  // command path for transition stays on the markdown ports. `patch` (story.5096)
+  // `core__work_item_update` (task.5448) is the one write tool. `patch` (story.5096)
   // writes through the SAME Doltgres patch `PATCH /api/v1/work/items/{id}` uses —
   // the runtime image has no markdown `work/` tree, so a markdown patch could never
   // land — attributed to the system principal scheduled runs execute as, under the
@@ -1192,6 +1193,14 @@ function createContainer(): Container {
     moveReadings: moveMetrics.readings,
     links: createCitationLinksPort(() => knowledgeStorePort),
     log: (event) => log.warn(event, "work.items.envelope_degraded"),
+    // The ref ports the HTTP facade wires, so `core__work_item_read` returns the same artifacts and history refs (task.5448).
+    artifacts: workItemArtifacts
+      ? { latest: (id) => workItemArtifacts.artifacts.latest(id) }
+      : undefined,
+    itemRefs: createItemRefPorts({
+      artifacts: workItemArtifacts?.artifacts,
+      history: doltgresWorkItems,
+    }),
     backlogReader: doltgresWorkItems,
     backlogWriter: {
       store: doltgresWorkItems,
