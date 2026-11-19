@@ -5,8 +5,9 @@
  * Module: `@app/api/v1/vcs/push-token`
  * Purpose: Node-scoped, operator-minted push token. An agent with no GitHub account (a node's AI sandbox)
  *   gets a short-lived installation token for ONE node repo, limited to contents + pull_requests write, so it
- *   can push a branch and open a PR. The token comes from the unprivileged node AI App, never the operator
- *   App; only the operator holds either key. No per-node App, machine user or long-lived token exists.
+ *   can push a branch and open a PR. The token comes from the operator App (GH_REVIEW_APP_*), narrowed by GitHub
+ *   to one repo and two permissions; the key never leaves the operator. No new App, machine user or long-lived
+ *   token exists.
  * Scope: Auth → RBAC (node-scoped, node.flight) → resolve repo → refuse the monorepo → mint. Adds no deploy-brain logic.
  * Invariants:
  *   - AUTH_REQUIRED: Bearer token (machine agents) or SIWE session.
@@ -18,8 +19,9 @@
  *     carries secrets; it is refused (403 `in_repo_node_unsupported`).
  *   - FIXED_PERMISSIONS: exactly PUSH_TOKEN_PERMISSIONS on exactly one repo. Without `workflows`, GitHub
  *     refuses any push that changes `.github/workflows`. Merge stays at POST /vcs/merge.
- *   - DEV_APP_NOT_OPERATOR_APP: a minted token acts as the node AI App, which has no ruleset bypass, so it
- *     never inherits the operator App's admin, workflow or merge-queue bypass.
+ *   - IDENTITY_IS_LOGGED: GitHub shows every minted push as the operator App. Who asked is this route's
+ *     terminal log (principal, node, repo, expiry); the node records the run that pushed. The operator App is the
+ *     merge-queue bypass actor, so a holder could skip the queue on a green PR; required checks still apply.
  *   - TOKEN_NEVER_LOGGED: logs carry slug, principal, repo and expiry only. The response is `no-store`.
  *   - CONTRACTS_ARE_TRUTH: input/output parsed through `pushTokenOperation`.
  * Side-effects: IO (catalog read + GitHub installation-token mint via the App).
@@ -167,7 +169,7 @@ export const POST = wrapRouteHandlerWithLogging(
         return fail(
           502,
           "app_not_installed",
-          "node AI App not installed on the node repo",
+          "operator App not installed on the node repo",
           {
             slug,
           }

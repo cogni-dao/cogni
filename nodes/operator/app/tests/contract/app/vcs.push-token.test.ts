@@ -166,8 +166,8 @@ describe("POST /api/v1/vcs/push-token", () => {
       dbState.byId[slug] = { nodeId, slug };
     }
     envState.current = {
-      GH_NODE_AI_APP_ID: "7",
-      GH_NODE_AI_APP_PRIVATE_KEY_BASE64:
+      GH_REVIEW_APP_ID: "7",
+      GH_REVIEW_APP_PRIVATE_KEY_BASE64:
         Buffer.from("private-key").toString("base64"),
       NODE_SUBMODULE_PARENT_OWNER: MONOREPO.owner,
       NODE_SUBMODULE_PARENT_REPO: MONOREPO.repo,
@@ -296,17 +296,13 @@ describe("POST /api/v1/vcs/push-token", () => {
   });
 
   it.each([
-    ["App id", { GH_NODE_AI_APP_ID: undefined }],
-    ["private key", { GH_NODE_AI_APP_PRIVATE_KEY_BASE64: undefined }],
-  ])("503 vcs_not_configured when the node AI App %s is unset", async (_l, unset) => {
-    // Defect: falling back to the operator App's credentials, whose identity carries bypass rights.
+    ["App id", { GH_REVIEW_APP_ID: undefined }],
+    ["private key", { GH_REVIEW_APP_PRIVATE_KEY_BASE64: undefined }],
+  ])("503 vcs_not_configured when the operator App %s is unset", async (_l, unset) => {
+    // Defect: minting with a half-configured App, or an opaque 500 instead of a coded 503.
     grant("node.flight", NODE_A);
     envState.current = {
       ...envState.current,
-      // The operator App's credentials are present: the route must still refuse rather than mint from them.
-      GH_REVIEW_APP_ID: "99",
-      GH_REVIEW_APP_PRIVATE_KEY_BASE64:
-        Buffer.from("operator-key").toString("base64"),
       ...unset,
     };
     const res = await post({ nodeId: SLUG_A });

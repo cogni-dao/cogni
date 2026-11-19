@@ -222,10 +222,6 @@ export const serverSchema = z.object({
   // These are the same env vars used by scheduler-worker for ingestion.
   GH_REVIEW_APP_ID: optionalString,
   GH_REVIEW_APP_PRIVATE_KEY_BASE64: optionalString,
-  // Node AI App - mints one-repo push tokens for agents (POST /api/v1/vcs/push-token). Unprivileged:
-  // Contents + Pull requests write, no ruleset bypass. Optional: the route answers 503 when unset.
-  GH_NODE_AI_APP_ID: optionalString,
-  GH_NODE_AI_APP_PRIVATE_KEY_BASE64: optionalString,
 
   // Node-formation Publish: where new node repos are minted + where the node-template lives.
   // Env-scoped, NOT derived from the operator's own monorepo org (the submodule-PR target) — a
