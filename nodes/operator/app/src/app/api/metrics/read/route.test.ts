@@ -240,6 +240,47 @@ describe("POST /api/metrics/read/api/v1/query", () => {
     expect(params.get("time")).toBe("5");
   });
 
+  it("refuses a comment that hides a second selector behind a carriage return, never forwarded", async () => {
+    for (const query of ["foo #\r or foo", 'foo # x\r or {__name__=~".+"}']) {
+      expect((await call("query", { query })).status).toBe(400);
+      expect(
+        (
+          await call("query", {
+            method: "POST",
+            form: { query },
+          })
+        ).status
+      ).toBe(400);
+    }
+    expect(forward).not.toHaveBeenCalled();
+  });
+
+  it("caps the body by the bytes that actually arrive, not by a header", async () => {
+    const mod = await import("./api/v1/query/route");
+    const res = await mod.POST(
+      new Request("https://operator.example/api/metrics/read/api/v1/query", {
+        method: "POST",
+        headers: {
+          authorization: credential(),
+          "content-type": "application/x-www-form-urlencoded",
+          "content-length": "10",
+        },
+        body: `query=up&pad=${"x".repeat(20_000)}`,
+      }) as never
+    );
+    expect(res.status).toBe(400);
+    expect(forward).not.toHaveBeenCalled();
+  });
+
+  it("is 400 for an over-long range query, never forwarded", async () => {
+    const res = await call("query_range", {
+      query: "up",
+      extra: { start: "0", end: "99999999", step: "1" },
+    });
+    expect(res.status).toBe(400);
+    expect(forward).not.toHaveBeenCalled();
+  });
+
   it("refuses a non-form content type and an oversized body", async () => {
     const mod = await import("./api/v1/query/route");
     const json = await mod.POST(

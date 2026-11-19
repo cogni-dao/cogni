@@ -46,6 +46,28 @@ const refuse = (
     { status, headers: { "Cache-Control": "no-store", ...headers } }
   );
 
+/** The request body as text, or null once more than `maxBytes` actually arrived (a header is never trusted). */
+async function readCappedText(
+  request: Request,
+  maxBytes: number
+): Promise<string | null> {
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 export async function handleNodeMetricsRead(
   kind: NodeMetricsReadKind,
   ctx: Pick<RequestContext, "log">,
@@ -84,11 +106,8 @@ export async function handleNodeMetricsRead(
     const type = request.headers.get("content-type") ?? "";
     if (!type.toLowerCase().startsWith("application/x-www-form-urlencoded"))
       return bad("unsupported_content_type", "form-encoded body required");
-    const length = Number(request.headers.get("content-length") ?? "0");
-    if (length > MAX_FORM_BYTES) return bad("body_too_large", "body too large");
-    const text = await request.text();
-    if (text.length > MAX_FORM_BYTES)
-      return bad("body_too_large", "body too large");
+    const text = await readCappedText(request, MAX_FORM_BYTES);
+    if (text === null) return bad("body_too_large", "body too large");
     // As Prometheus does, a form value wins over the same key in the URL.
     for (const [name, value] of new URLSearchParams(text))
       source.set(name, value);

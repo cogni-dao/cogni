@@ -15,6 +15,9 @@
  *     the same scope it already exposes by serving that lane's `/api/metrics`.
  *   - PARSE_WITH_PROMETHEUS_GRAMMAR: the query is parsed by `@prometheus-io/lezer-promql`, the grammar Prometheus
  *     itself ships. Any error node, an empty query or one over `MAX_QUERY_CHARS` is refused; nothing is repaired.
+ *   - NO_COMMENTS_NO_CONTROLS: a `#` comment or a control character other than tab and newline is refused. The grammar
+ *     ends a comment at `\n` only, Prometheus at `\r` too, so a comment could hide a second, unscoped selector from the
+ *     tree. With none, the forwarded text is exactly what the verified tree describes.
  *   - EVERY_SELECTOR_SCOPED: `node="<uuid>",env="<env>"` is spliced into EVERY VectorSelector (with or without a metric
  *     name or `{}`; inside functions, subqueries, binary operators and `@`/`offset`). PromQL matchers AND, so a series
  *     returned always carries the caller's `node` and `env`, even when the caller wrote `node="other"`. This is
@@ -48,6 +51,9 @@ export const MAX_QUERY_CHARS = 4096;
 export const MAX_SELECTORS = 128;
 /** Longest value of any forwarded parameter other than `query`. */
 export const MAX_PARAM_CHARS = 64;
+/** Longest `query_range` window and most points one range query may ask for (Prometheus' own per-query ceiling). */
+export const MAX_RANGE_SECONDS = 7 * 24 * 3600;
+export const MAX_RANGE_POINTS = 11_000;
 /** The auth header cap and the token cap, as on the scrape routes. */
 const MAX_AUTH_HEADER_LENGTH = 512;
 const MAX_TOKEN_LENGTH = 256;
@@ -140,7 +146,57 @@ export function pickReadParams(
   const missing = REQUIRED_PARAMS[kind].find((name) => !params.has(name));
   if (missing)
     return { ok: false, reason: `missing required parameter ${missing}` };
+  if (kind === "query_range") {
+    const refusal = rangeRefusal(
+      params.get("start") ?? "",
+      params.get("end") ?? "",
+      params.get("step") ?? ""
+    );
+    if (refusal) return { ok: false, reason: refusal };
+  }
   return { ok: true, params };
+}
+
+const DURATION_UNIT_SECONDS: Record<string, number> = {
+  ms: 0.001,
+  s: 1,
+  m: 60,
+  h: 3600,
+  d: 86_400,
+  w: 604_800,
+  y: 31_536_000,
+};
+
+/** A Prometheus timestamp (unix seconds or RFC 3339) in seconds, or null. */
+function parseTimestamp(value: string): number | null {
+  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(value)) return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms / 1000;
+}
+
+/** A Prometheus step (float seconds or a duration such as `1h30m`) in seconds, or null. */
+function parseStep(value: string): number | null {
+  if (/^\d+(\.\d+)?$/.test(value)) return Number(value);
+  if (!/^(\d+(ms|s|m|h|d|w|y))+$/.test(value)) return null;
+  let total = 0;
+  for (const [, n, unit] of value.matchAll(/(\d+)(ms|s|m|h|d|w|y)/g))
+    total += Number(n) * (DURATION_UNIT_SECONDS[unit as string] ?? 0);
+  return total;
+}
+
+/** Why a range query is refused before it reaches the shared datasource, or null. */
+function rangeRefusal(start: string, end: string, step: string): string | null {
+  const from = parseTimestamp(start);
+  const to = parseTimestamp(end);
+  const every = parseStep(step);
+  if (from === null || to === null || every === null || every <= 0)
+    return "start, end and step must be timestamps and a positive step";
+  const span = to - from;
+  if (span < 0) return "end before start";
+  if (span > MAX_RANGE_SECONDS) return "range longer than 7d";
+  if (span / every > MAX_RANGE_POINTS) return "too many points";
+  return null;
 }
 
 // --- PromQL scope injector ---------------------------------------------------------------------------------------
@@ -176,11 +232,24 @@ const MATCHER_NODES = new Set([
   "QuotedLabelName",
 ]);
 
-const hasError = (tree: Tree): boolean => {
+/**
+ * Control characters other than tab and newline: `\r`, `\v`, `\f`, NUL, DEL, the C1 block (U+0080-009F, which has
+ * NEL) and U+2028/2029. Prometheus and the grammar disagree on which of these end a line or a token.
+ */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point
+const FORBIDDEN_CONTROL_RE =
+  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/**
+ * True when the tree has an error node or a `#` comment. The grammar ends a comment only at `\n`; Prometheus also
+ * ends it at `\r`, so `foo #\r or foo` is ONE selector to the grammar and two to Prometheus (an unscoped second
+ * arm). A query with a comment is refused outright, so the text forwarded is exactly the text the tree describes.
+ */
+const hasErrorOrComment = (tree: Tree): boolean => {
   let found = false;
   tree.iterate({
     enter(node) {
-      if (node.type.isError) found = true;
+      if (node.type.isError || node.name === "LineComment") found = true;
       return !found;
     },
   });
@@ -233,11 +302,8 @@ function spliceFor(source: string, selector: SyntaxNode, scope: QueryScope) {
   const parts = childrenOf(matchers);
   const last = parts.filter((c) => MATCHER_NODES.has(c.name)).at(-1);
   if (!last) return { at: close, text: added } as Splice;
-  // A trailing comma is legal (`{a="b",}`): reuse it instead of writing `,,`.
-  let gap = source.slice(last.to, close);
-  for (const comment of parts.filter((c) => c.name === "LineComment"))
-    if (comment.from >= last.to)
-      gap = gap.replace(source.slice(comment.from, comment.to), "");
+  // A trailing comma is legal (`{a="b",}`): reuse it instead of writing `,,`. No comment can sit in the gap.
+  const gap = source.slice(last.to, close);
   return { at: close, text: `${gap.includes(",") ? "" : ","}${added}` };
 }
 
@@ -272,8 +338,9 @@ function carries(
  * Used on the spliced output before it is forwarded, and by the tests to walk an output tree.
  */
 export function everySelectorScoped(query: string, scope: QueryScope): boolean {
+  if (FORBIDDEN_CONTROL_RE.test(query)) return false;
   const tree = parser.parse(query);
-  if (hasError(tree)) return false;
+  if (hasErrorOrComment(tree)) return false;
   return selectorsOf(tree).every(
     (s) =>
       carries(query, s, "node", scope.nodeId) &&
@@ -288,8 +355,9 @@ export function everySelectorScoped(query: string, scope: QueryScope): boolean {
 export function scopePromQuery(query: string, scope: QueryScope): ScopeResult {
   if (query.trim() === "") return { ok: false, reason: "empty" };
   if (query.length > MAX_QUERY_CHARS) return { ok: false, reason: "too_long" };
+  if (FORBIDDEN_CONTROL_RE.test(query)) return { ok: false, reason: "syntax" };
   const tree = parser.parse(query);
-  if (hasError(tree)) return { ok: false, reason: "syntax" };
+  if (hasErrorOrComment(tree)) return { ok: false, reason: "syntax" };
   if (hasFunction(tree, "Info"))
     return { ok: false, reason: "unsupported_function" };
   const selectors = selectorsOf(tree);

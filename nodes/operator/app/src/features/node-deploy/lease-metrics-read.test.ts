@@ -9,6 +9,7 @@ import {
   authenticateNodeMetricsRead,
   everySelectorScoped,
   MAX_QUERY_CHARS,
+  MAX_RANGE_SECONDS,
   MAX_SELECTORS,
   parseNodeBasicAuth,
   pickReadParams,
@@ -61,9 +62,10 @@ describe("scopePromQuery: exact rewrites", () => {
     expect(scoped(`{node!="${NODE}"}`)).toBe(`{node!="${NODE}",${M}}`);
   });
 
-  it("scopes a selector whose braces end in a comment", () => {
-    expect(scoped('foo{a="b" # }\n}')).toBe(`foo{a="b" # }\n,${M}}`);
-    expect(scoped("foo{# c\n}")).toBe(`foo{# c\n${M}}`);
+  it("keeps tabs and newlines between tokens", () => {
+    expect(scoped('foo{a="b",\n\tc="d"}\n or\tbar')).toBe(
+      `foo{a="b",\n\tc="d",${M}}\n or\tbar{${M}}`
+    );
   });
 
   it("does not touch text that only looks like a selector", () => {
@@ -138,6 +140,38 @@ describe("scopePromQuery: refusals", () => {
     expect(scopePromQuery(query, scope)).toEqual({ ok: false, reason });
   });
 
+  // The grammar ends a `#` comment at `\n` only; Prometheus also ends it at `\r`. `foo #\r or foo` is ONE selector to the
+  // grammar and TWO to Prometheus, so a comment (or any control character) must never reach the upstream.
+  it.each([
+    "foo #\r or foo",
+    'foo # x\r or {__name__=~".+"}',
+    "foo # a comment\n",
+    "foo # }\n",
+    'foo{a="b" # }\n}',
+    "foo{# c\n}",
+    "foo\r",
+    "foo\r\nor bar",
+    "foo\u000b or bar",
+    "foo\u000c or bar",
+    "foo\u0000 or bar",
+    "foo\u0007",
+    "foo\u007f",
+    "foo\u0085 or bar",
+    "foo\u2028 or bar",
+    "foo\u2029 or bar",
+    "foo\u009f or bar",
+  ])("refuses a comment or control character: %j", (query) => {
+    expect(scopePromQuery(query, scope)).toEqual({
+      ok: false,
+      reason: "syntax",
+    });
+    expect(everySelectorScoped(`${query}`, scope)).toBe(false);
+  });
+
+  it("refuses a hidden second selector even when the first is already scoped", () => {
+    expect(everySelectorScoped(`foo{${M}} #\r or foo`, scope)).toBe(false);
+  });
+
   it("refuses a query over the length cap, valid or not", () => {
     expect(scopePromQuery("x".repeat(MAX_QUERY_CHARS + 1), scope)).toEqual({
       ok: false,
@@ -187,7 +221,7 @@ describe("every selector in the OUTPUT tree carries both matchers", () => {
     "-(-(-foo))",
     "foo{a='single'}",
     "foo{a=`raw`}",
-    'foo{a="x", # note }\n b="y"}',
+    'foo{a="x",\n b="y"}',
     "foo[5m:] offset -1m",
     "histogram_quantile(0.5, sum by (le) (foo_bucket)) > bool 0.1",
     "foo * on(node) group_left(env) bar",
@@ -288,6 +322,47 @@ describe("parseNodeBasicAuth", () => {
     expect(
       parseNodeBasicAuth(`Basic ${Buffer.from("nocolon").toString("base64")}`)
     ).toBeNull();
+  });
+});
+
+describe("pickReadParams: range bounds", () => {
+  const range = (start: string, end: string, step: string) =>
+    pickReadParams(
+      "query_range",
+      new URLSearchParams({ query: "up", start, end, step })
+    );
+
+  it("accepts a bounded window in unix seconds, RFC 3339 or a duration step", () => {
+    expect(range("1700000000", "1700003600", "15").ok).toBe(true);
+    expect(range("1700000000", "1700003600", "15s").ok).toBe(true);
+    expect(range("1700000000", "1700003600", "1m30s").ok).toBe(true);
+    expect(
+      range("2026-01-01T00:00:00Z", "2026-01-02T00:00:00.5Z", "1m").ok
+    ).toBe(true);
+    expect(range("0", String(MAX_RANGE_SECONDS), "60").ok).toBe(true);
+  });
+
+  it("refuses a window over 7 days, an inverted one, and more than 11000 points", () => {
+    expect(range("0", String(MAX_RANGE_SECONDS + 1), "3600")).toMatchObject({
+      ok: false,
+      reason: "range longer than 7d",
+    });
+    expect(range("10", "5", "1")).toMatchObject({
+      ok: false,
+      reason: "end before start",
+    });
+    expect(range("0", "100000", "1")).toMatchObject({
+      ok: false,
+      reason: "too many points",
+    });
+    expect(range("0", "11000", "1").ok).toBe(true);
+  });
+
+  it("refuses a zero, negative or unparsable step and unparsable times", () => {
+    for (const bad of ["0", "-5", "0s", "abc", "1x", ""])
+      expect(range("0", "100", bad).ok).toBe(false);
+    expect(range("yesterday", "100", "1").ok).toBe(false);
+    expect(range("0", "2026-13-99", "1").ok).toBe(false);
   });
 });
 
