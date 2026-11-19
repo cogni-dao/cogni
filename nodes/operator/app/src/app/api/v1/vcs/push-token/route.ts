@@ -103,7 +103,10 @@ export const POST = wrapRouteHandlerWithLogging(
     const env = serverEnv();
     const minter = createRepoPushTokenMinter(env);
     if (!minter) {
-      return fail(503, "vcs_not_configured", "VCS not configured", { slug });
+      return fail(503, "vcs_not_configured", "VCS not configured", {
+        slug,
+        principalId: sessionUser.id,
+      });
     }
 
     // 4. Resolve the node's OWN repo from its catalog `source_repo` (operator-resolved, anti-spoof).
@@ -114,7 +117,7 @@ export const POST = wrapRouteHandlerWithLogging(
         503,
         "push_target_not_configured",
         "parent repo not configured",
-        { slug }
+        { slug, principalId: sessionUser.id }
       );
     }
     let owner: string;
@@ -138,7 +141,7 @@ export const POST = wrapRouteHandlerWithLogging(
         503,
         "push_target_not_configured",
         "node repo not resolvable",
-        { slug }
+        { slug, principalId: sessionUser.id }
       );
     }
     if (
@@ -175,7 +178,10 @@ export const POST = wrapRouteHandlerWithLogging(
           }
         );
       }
-      return fail(502, "mint_failed", "push token mint failed", { slug });
+      return fail(502, "mint_failed", "push token mint failed", {
+        slug,
+        principalId: sessionUser.id,
+      });
     }
 
     logEvent(

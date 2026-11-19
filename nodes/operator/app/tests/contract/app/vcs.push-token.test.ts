@@ -273,7 +273,7 @@ describe("POST /api/v1/vcs/push-token", () => {
     expect(mockMint).not.toHaveBeenCalled();
   });
 
-  it("502 app_not_installed when the dev App is not installed on the node repo", async () => {
+  it("502 app_not_installed when the operator App is not installed on the node repo", async () => {
     // Defect: an opaque 500 that hides the one fix (install the App), or a retry loop on it.
     grant("node.flight", NODE_A);
     mockMint.mockRejectedValue(

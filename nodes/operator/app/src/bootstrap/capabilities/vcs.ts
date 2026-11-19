@@ -13,6 +13,8 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
+
 import type { VcsCapability } from "@cogni/ai-tools";
 
 import { GitHubVcsAdapter } from "@/adapters/server";
@@ -97,7 +99,7 @@ export function createRepoPushTokenMinter(
   const appId = env.GH_REVIEW_APP_ID;
   const privateKeyBase64 = env.GH_REVIEW_APP_PRIVATE_KEY_BASE64;
   if (!appId || !privateKeyBase64) return null;
-  const key = `${appId}:${privateKeyBase64.length}`;
+  const key = `${appId}:${createHash("sha256").update(privateKeyBase64).digest("hex")}`;
   if (pushTokenMinter?.key !== key) {
     const privateKey = Buffer.from(privateKeyBase64, "base64").toString(
       "utf-8"
