@@ -3,8 +3,8 @@
 
 /**
  * Module: `@app/api/v1/agent/register`
- * Purpose: Machine-actor registration endpoint — mints a user row, a billing
- *   account, and a 30-day HMAC-signed API key for agents that can reach the
+ * Purpose: Machine-actor registration endpoint — mints a user row with its
+ *   external agent principal row, a billing account, and a 30-day HMAC-signed API key for agents that can reach the
  *   node without a browser session.
  * Scope: Instrumented via wrapRouteHandlerWithLogging so every attempt hits
  *   the structured log envelope (request received / request complete) and
@@ -17,11 +17,11 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { users } from "@cogni/db-schema";
 import { registerAgentOperation } from "@cogni/node-contracts";
 import { NextResponse } from "next/server";
 import { issueAgentApiKey } from "@/app/_lib/auth/request-identity";
-import { getContainer, resolveServiceDb } from "@/bootstrap/container";
+import { registerAgentUser } from "@/bootstrap/agent-credentials";
+import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
 
 export const runtime = "nodejs";
@@ -35,14 +35,10 @@ export const POST = wrapRouteHandlerWithLogging(
     }
     const input = parsed.data;
 
-    const db = resolveServiceDb();
     const id = randomUUID();
 
-    await db.insert(users).values({
-      id,
-      name: input.name,
-      walletAddress: null,
-    });
+    // The user row and its external principal row land together (one transaction); key upgrade refuses a user without it.
+    await registerAgentUser({ userId: id, name: input.name });
 
     const container = getContainer();
     const billingAccount =

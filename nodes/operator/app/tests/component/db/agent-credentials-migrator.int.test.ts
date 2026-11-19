@@ -24,6 +24,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { writeExternalPrincipal } from "@cogni-dao/agent-grants";
 import { runCredentialConformance } from "@cogni-dao/agent-grants/conformance";
 import {
   agentRolesHasRoles,
@@ -692,6 +693,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     );
     // Exercise a separate user after preserving all retained credentials/FKs.
     await f.admin`INSERT INTO users(id,name) VALUES ('new-upgrade-user','fixture')`;
+    await writeExternalPrincipal(f.admin, "new-upgrade-user");
     const key = await upgradeSignedKey(live, { userId: "new-upgrade-user" });
     if (!key.ok) throw new Error("historical fixture upgrade failed");
     expect(
@@ -1727,6 +1729,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
       { hasRoles: async () => false }
     );
     await f.admin`INSERT INTO users(id,name) VALUES ('negative-control','fixture')`;
+    await writeExternalPrincipal(f.admin, "negative-control");
     await expect(
       upgradeSignedKey(broken, { userId: "negative-control" })
     ).rejects.toBeInstanceOf(CredentialStoreUnavailableError);
@@ -1812,10 +1815,12 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     );
   });
 
-  const makeUser = async () => {
+  // An outside agent by default (registration writes its external principal row, agent-grants 0.8.0); `human` = no row.
+  const makeUser = async (opts: { human?: boolean } = {}) => {
     const id = randomUUID();
     users.push(id);
     await service`INSERT INTO users(id,name) VALUES (${id},'runner-conformance')`;
+    if (!opts.human) await writeExternalPrincipal(service, id);
     return id;
   };
   const store = () =>
@@ -1830,9 +1835,11 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     async setup(facts) {
       const ids: Record<string, string> = {};
       for (const [name, f] of Object.entries(facts)) {
-        const id = await makeUser();
+        const id = await makeUser({
+          human: f.human === true || f.internal === true,
+        });
         ids[name] = id;
-        const admin = f.roles ? await makeUser() : null;
+        const admin = f.roles ? await makeUser({ human: true }) : null;
         if (f.wallet)
           await service`UPDATE users SET wallet_address = ${`0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`} WHERE id = ${id}`;
         if (f.internal)
@@ -1853,7 +1860,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
         await service`UPDATE agent_credentials SET expires_at = now() - interval '2 hour', renew_until = now() - interval '1 minute' WHERE id = ${credentialId}`;
     },
     async addRoles(userId) {
-      const admin = await makeUser();
+      const admin = await makeUser({ human: true });
       await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${userId}, 'probe:scope', ${admin}, now())`;
     },
     broken: () =>
@@ -1896,7 +1903,7 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     await expect(
       service`INSERT INTO user_bindings(id,user_id,provider,external_id) VALUES (${randomUUID()},${id},'wallet','fixture-wallet')`
     ).rejects.toThrow();
-    const ordinary = await makeUser();
+    const ordinary = await makeUser({ human: true });
     await expect(
       service`INSERT INTO agent_credentials(user_id,token_hash,created_from,expires_at,renew_until) VALUES (${ordinary},'fixture','rotation',now(),now()+interval '1 day')`
     ).rejects.toThrow();

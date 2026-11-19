@@ -17,6 +17,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { writeExternalPrincipal } from "@cogni-dao/agent-grants";
 import { runCredentialConformance } from "@cogni-dao/agent-grants/conformance";
 import {
   agentRolesHasRoles,
@@ -37,10 +38,13 @@ describe("agent credentials (real Postgres)", () => {
   let service: Sql;
   let app: Sql;
   const users: string[] = [];
-  const makeUser = async () => {
+  // An outside agent by default: registration writes its external principal row with the user (ONE_PRINCIPAL_WRITER,
+  // agent-grants 0.8.0), and key upgrade only reads it. `human` = no principal row.
+  const makeUser = async (opts: { human?: boolean } = {}) => {
     const id = randomUUID();
     await service`INSERT INTO users (id, name) VALUES (${id}, ${`cred-${id.slice(0, 6)}`})`;
     users.push(id);
+    if (!opts.human) await writeExternalPrincipal(service, id);
     return id;
   };
   const store = () =>
@@ -93,9 +97,12 @@ describe("agent credentials (real Postgres)", () => {
     async setup(facts) {
       const ids: Record<string, string> = {};
       for (const [name, f] of Object.entries(facts)) {
-        const id = await makeUser();
+        // 0.8.0 facts: `human` (or `internal`, which carries its own row) has no external principal row; everyone else is an agent.
+        const id = await makeUser({
+          human: f.human === true || f.internal === true,
+        });
         ids[name] = id;
-        const admin = f.roles ? await makeUser() : null;
+        const admin = f.roles ? await makeUser({ human: true }) : null;
         if (f.wallet)
           await service`UPDATE users SET wallet_address = ${`0x${randomUUID().replaceAll("-", "").padEnd(40, "0").slice(0, 40)}`} WHERE id = ${id}`;
         if (f.internal)
@@ -116,7 +123,7 @@ describe("agent credentials (real Postgres)", () => {
         await service`UPDATE agent_credentials SET expires_at = now() - interval '2 hour', renew_until = now() - interval '1 minute' WHERE id = ${credentialId}`;
     },
     async addRoles(userId) {
-      const admin = await makeUser();
+      const admin = await makeUser({ human: true });
       await service`INSERT INTO agent_roles (principal_user_id, scope, approved_by, granted_at) VALUES (${userId}, 'probe:scope', ${admin}, now())`;
     },
     broken: () =>
@@ -197,11 +204,11 @@ describe("agent credentials (real Postgres)", () => {
     });
 
     it("only a user with an EXTERNAL agent principal may hold a credential (trigger)", async () => {
-      const plain = await makeUser();
+      const plain = await makeUser({ human: true });
       const insert = (userId: string) =>
         service`INSERT INTO agent_credentials (user_id, token_hash, created_from, expires_at, renew_until)
           VALUES (${userId}, ${randomUUID()}, 'key_upgrade', now() + interval '1 day', now() + interval '2 day')`;
-      const internal = await makeUser();
+      const internal = await makeUser({ human: true });
       await service`INSERT INTO agent_principals (kind, slug, user_id) VALUES ('internal', ${`int-${internal}`}, ${internal})`;
       await expect(insert(plain)).rejects.toThrow(
         /requires an external agent principal/
@@ -236,7 +243,7 @@ describe("agent credentials (real Postgres)", () => {
       });
     });
 
-    it("upgrade writes an external principal on the SAME users.id and creates no second user", async () => {
+    it("upgrade only reads the registration's external principal on the SAME users.id and creates no second user or row", async () => {
       const user = await makeUser();
       const before = (await service`SELECT count(*)::int AS n FROM users`)[0]
         ?.n;
