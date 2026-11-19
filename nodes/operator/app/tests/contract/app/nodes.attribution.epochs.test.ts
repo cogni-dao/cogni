@@ -49,6 +49,10 @@ const authzState = vi.hoisted(() => ({
 
 const mockStore = vi.hoisted(() => ({
   listEpochs: vi.fn(),
+  // story.0076: list + activity read through the bounded @cogni-dao/attribution page port.
+  listEpochsPage: vi.fn(),
+  getEpochActivityPage: vi.fn(),
+  getSelectionForReceipts: vi.fn(),
   getEpoch: vi.fn(),
   getReceiptsForWindow: vi.fn(),
   getReceiptsForEpoch: vi.fn(),
@@ -118,6 +122,7 @@ import * as epochsHandler from "@/app/api/v1/nodes/[id]/attribution/epochs/route
 
 const FINALIZED_EPOCH = {
   id: 7n,
+  nodeId: NODE_ID,
   status: "finalized" as const,
   periodStart: new Date("2026-06-01T00:00:00.000Z"),
   periodEnd: new Date("2026-06-08T00:00:00.000Z"),
@@ -151,6 +156,12 @@ beforeEach(() => {
   );
 
   mockStore.listEpochs.mockResolvedValue([FINALIZED_EPOCH]);
+  mockStore.listEpochsPage.mockResolvedValue({
+    epochs: [FINALIZED_EPOCH],
+    total: 1,
+  });
+  mockStore.getEpochActivityPage.mockResolvedValue({ receipts: [], total: 0 });
+  mockStore.getSelectionForReceipts.mockResolvedValue([]);
   mockStore.getEpoch.mockResolvedValue(FINALIZED_EPOCH);
   mockStore.getReceiptsForWindow.mockResolvedValue([]);
   mockStore.getReceiptsForEpoch.mockResolvedValue([]);
@@ -167,7 +178,7 @@ describe("GET /api/v1/nodes/[id]/attribution/epochs", () => {
       async test({ fetch }) {
         const res = await fetch({ method: "GET" });
         expect(res.status).toBe(401);
-        expect(mockStore.listEpochs).not.toHaveBeenCalled();
+        expect(mockStore.listEpochsPage).not.toHaveBeenCalled();
       },
     });
   });
@@ -181,7 +192,7 @@ describe("GET /api/v1/nodes/[id]/attribution/epochs", () => {
         const res = await fetch({ method: "GET" });
         expect(res.status).toBe(404);
         expect(await res.json()).toEqual({ error: "node_not_found" });
-        expect(mockStore.listEpochs).not.toHaveBeenCalled();
+        expect(mockStore.listEpochsPage).not.toHaveBeenCalled();
       },
     });
   });
@@ -204,7 +215,7 @@ describe("GET /api/v1/nodes/[id]/attribution/epochs", () => {
             resource: `node:${NODE_ID}`,
           })
         );
-        expect(mockStore.listEpochs).not.toHaveBeenCalled();
+        expect(mockStore.listEpochsPage).not.toHaveBeenCalled();
       },
     });
   });
@@ -223,7 +234,11 @@ describe("GET /api/v1/nodes/[id]/attribution/epochs", () => {
         expect(body.total).toBe(1);
         expect(body.epochs[0].id).toBe(EPOCH_ID);
         // Store read is scoped to the RESOLVED nodeId, not the raw slug param.
-        expect(mockStore.listEpochs).toHaveBeenCalledWith(NODE_ID);
+        expect(mockStore.listEpochsPage).toHaveBeenCalledWith(
+          NODE_ID,
+          expect.objectContaining({ offset: 0 }),
+          undefined
+        );
         // Own node → never proxied over HTTP.
         expect(mockEpochsRead.listEpochsForForeignNode).not.toHaveBeenCalled();
       },
@@ -273,7 +288,7 @@ describe("GET /api/v1/nodes/[id]/attribution/epochs", () => {
           FOREIGN_NODE_SLUG,
           { limit: 50, offset: 0 }
         );
-        expect(mockStore.listEpochs).not.toHaveBeenCalled();
+        expect(mockStore.listEpochsPage).not.toHaveBeenCalled();
       },
     });
   });
@@ -384,12 +399,16 @@ describe("GET /api/v1/nodes/[id]/attribution/epochs/[eid]/activity", () => {
         expect(body.epochId).toBe(EPOCH_ID);
         expect(body.total).toBe(0);
         expect(body.events).toEqual([]);
-        expect(mockStore.getReceiptsForWindow).toHaveBeenCalledWith(
+        // One bounded page: window ∪ epoch-selected receipts, scoped to the resolved nodeId.
+        expect(mockStore.getEpochActivityPage).toHaveBeenCalledWith(
           NODE_ID,
-          FINALIZED_EPOCH.periodStart,
-          FINALIZED_EPOCH.periodEnd
+          7n,
+          {
+            periodStart: FINALIZED_EPOCH.periodStart,
+            periodEnd: FINALIZED_EPOCH.periodEnd,
+          },
+          expect.objectContaining({ offset: 0 })
         );
-        expect(mockStore.getReceiptsForEpoch).toHaveBeenCalledWith(NODE_ID, 7n);
       },
     });
   });
