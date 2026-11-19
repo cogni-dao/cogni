@@ -64,10 +64,14 @@ function loadServiceLinksDoc(): unknown {
 
 /** The link targets of THIS operator's deploy environment. */
 export function getServiceLinkTargets(): readonly LinkTarget[] {
-  return parseServiceLinks(
-    loadServiceLinksDoc(),
-    serverEnv().DEPLOY_ENVIRONMENT
-  );
+  try {
+    return parseServiceLinks(
+      loadServiceLinksDoc(),
+      serverEnv().DEPLOY_ENVIRONMENT
+    );
+  } catch {
+    return []; // an unreadable server env lists nothing (fail closed); nothing is cached
+  }
 }
 
 /** The listed target for a node id, or undefined when that node is not listed. */
