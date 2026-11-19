@@ -246,6 +246,10 @@ services:
     # Root cause + fix: bug.5011 / #2387; hub `prod-oom-misdiagnosis-taxonomy`.
     mem_reservation: 512m
     oom_score_adj: -900
+    # story.5159: per-env ceiling, declared in infra/database-budget-profiles.yaml
+    # env_max_connections. Applying a change restarts postgres (command change).
+    command:
+      ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-100}"]
     # bug.5293 root cause: Docker defaults /dev/shm to 64 MiB. Postgres allocates a
     # shared-memory segment per PARALLEL worker there, so any parallel plan over a
     # large table fails `could not resize shared memory segment ... No space left on

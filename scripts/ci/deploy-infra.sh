@@ -594,6 +594,11 @@ render_shared_db_provision_config() {
   printf '%s\n' "$config"
 }
 NODE_DB_PROVISION_CONFIG="$(render_shared_db_provision_config)" || log_fatal "Invalid shared database catalog/budget inputs; refusing infra reconcile"
+# story.5159 - shared Postgres connection ceiling is declared per env in git
+# (infra/database-budget-profiles.yaml env_max_connections); tests/ci-invariants/shared-db-budget-sum.spec.ts reads the same value.
+POSTGRES_MAX_CONNECTIONS="$(yq -r ".env_max_connections.\"${DEPLOY_ENVIRONMENT}\" // 100" "$REPO_ROOT/infra/database-budget-profiles.yaml")"
+[[ "$POSTGRES_MAX_CONNECTIONS" =~ ^[0-9]+$ && "$POSTGRES_MAX_CONNECTIONS" -ge 20 && "$POSTGRES_MAX_CONNECTIONS" -le 500 ]] \
+  || log_fatal "env_max_connections.${DEPLOY_ENVIRONMENT} must be an integer 20..500, got '${POSTGRES_MAX_CONNECTIONS}'"
 
 # G-tier derived inventory: database names are a pure function of the catalog
 # node list. Do not trust the GitHub env secret here; it can lag a new node and
@@ -1458,6 +1463,7 @@ printf '%s=%s\n' COGNI_NODE_ENDPOINTS "${LITELLM_NODE_ENDPOINTS:?LITELLM_NODE_EN
 printf '%s=%s\n' COGNI_DEFAULT_NODE_ID "${COGNI_DEFAULT_NODE_ID:?COGNI_DEFAULT_NODE_ID required}" >> "$RUNTIME_ENV"
 # Multi-node DB provisioning
 append_env_if_set "$RUNTIME_ENV" COGNI_NODE_DBS "${COGNI_NODE_DBS-}"
+append_env_if_set "$RUNTIME_ENV" POSTGRES_MAX_CONNECTIONS "${POSTGRES_MAX_CONNECTIONS-}"
 # Database backup cadence. A systemd timer runs the Compose db-backup profile as
 # a one-shot container; defaults avoid requiring new GitHub Environment secrets.
 printf '%s=%s\n' DB_BACKUP_INTERVAL_SECONDS "${DB_BACKUP_INTERVAL_SECONDS:-86400}" >> "$RUNTIME_ENV"
@@ -2927,7 +2933,7 @@ REMOTE_ENV_VARS=(
   PRIVY_APP_ID PRIVY_APP_SECRET PRIVY_SIGNING_KEY PRIVY_USER_WALLETS_APP_ID
   PRIVY_USER_WALLETS_APP_SECRET PRIVY_USER_WALLETS_SIGNING_KEY
   POLY_WALLET_AEAD_KEY_HEX POLY_WALLET_AEAD_KEY_ID POLY_CLOB_GEO_BLOCK_TOKEN
-  CONNECTIONS_ENCRYPTION_KEY COGNI_NODE_DBS NODE_APP_TARGETS NODE_DB_PROVISION_CONFIG EDGE_ENV_LINES
+  CONNECTIONS_ENCRYPTION_KEY COGNI_NODE_DBS NODE_APP_TARGETS NODE_DB_PROVISION_CONFIG POSTGRES_MAX_CONNECTIONS EDGE_ENV_LINES
   LITELLM_NODE_ENDPOINTS COGNI_DEFAULT_NODE_ID ACTIONS_AUTOMATION_BOT_PAT
   LITELLM_IMAGE OPENFGA_IMAGE COMMIT_SHA DEPLOY_ACTOR K8S_SECRETS_ONLY
   OPERATOR_DATABASE_SERVICE_URL REMOTE_HARDEN_SCRIPT REMOTE_COMPUTE_EGRESS_ALLOWLIST

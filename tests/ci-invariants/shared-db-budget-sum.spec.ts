@@ -5,9 +5,9 @@
  * Module: `@tests/ci-invariants/shared-db-budget-sum`
  * Purpose: Keep the sum of every shared-tier node's role caps under each env's Postgres ceiling.
  * Scope: Declarative catalog + budget-profile arithmetic; mirrors reconcile-node-substrate.sh scaling. Does not read live Postgres or prove admission.
- * Invariants: Caps scale by catalog `copies` / profile `copies`; per env sum <= max_connections - reserve.
+ * Invariants: Caps scale by catalog `copies` / profile `copies`; per env sum <= env_max_connections[env] - reserve.
  * Side-effects: IO (reads infra/catalog and infra/database-budget-profiles.yaml)
- * Links: bug.5637, database-expert axiom 3, noisy-neighbor-database-architecture
+ * Links: bug.5637, story.5159, database-expert axiom 3, noisy-neighbor-database-architecture
  * @internal
  */
 
@@ -18,9 +18,10 @@ import yaml from "yaml";
 
 const root = path.resolve(__dirname, "../..");
 const ENVS = ["candidate-a", "preview", "production"] as const;
-// Shared env Postgres runs the image default. Reserve covers superuser slots, the readonly
-// exporter/Grafana role, support sessions and one migration burst outside node budgets.
-const MAX_CONNECTIONS = 100;
+// The per-env ceiling is declared in infra/database-budget-profiles.yaml `env_max_connections`;
+// deploy-infra.sh passes the same value to the shared Postgres (`-c max_connections`, default 100).
+// Reserve covers superuser slots, the readonly exporter/Grafana role, support sessions and one
+// migration burst outside node budgets.
 const RESERVE = 15;
 
 interface Profile {
@@ -30,9 +31,9 @@ interface Profile {
     service: { connection_limit: number };
   };
 }
-const profiles = yaml.parse(
+const { env_max_connections: envMaxConnections, ...profiles } = yaml.parse(
   readFileSync(path.join(root, "infra/database-budget-profiles.yaml"), "utf8")
-) as Record<string, Profile>;
+) as { env_max_connections: Record<string, number> } & Record<string, Profile>;
 
 const catalogs = readdirSync(path.join(root, "infra/catalog"))
   .filter((f) => f.endsWith(".yaml"))
@@ -60,6 +61,13 @@ function scaled(
 
 describe("shared database budget sum (bug.5637)", () => {
   it.each(ENVS)("%s role caps fit the env Postgres ceiling", (env) => {
+    const maxConnections = envMaxConnections[env];
+    expect(
+      Number.isInteger(maxConnections),
+      `${env}: env_max_connections`
+    ).toBe(true);
+    expect(maxConnections).toBeGreaterThanOrEqual(20);
+    expect(maxConnections).toBeLessThanOrEqual(500);
     let sum = 0;
     for (const node of catalogs) {
       const placement = node.database?.[env];
@@ -81,27 +89,35 @@ describe("shared database budget sum (bug.5637)", () => {
         ) +
         2;
     }
-    expect(sum).toBeLessThanOrEqual(MAX_CONNECTIONS - RESERVE);
+    expect(sum).toBeLessThanOrEqual(maxConnections - RESERVE);
   });
 
-  it("node-template candidate-a caps cover both lanes x (live + spare)", () => {
+  it("only candidate-a raises the ceiling above the image default", () => {
+    expect(envMaxConnections).toEqual({
+      "candidate-a": 200,
+      preview: 100,
+      production: 100,
+    });
+  });
+
+  it("node-template candidate-a caps cover 3 workloads x (live + spare) + 5 test envs + margin", () => {
     const nt = catalogs.find((c) => c.name === "node-template");
     const placement = nt?.database?.["candidate-a"];
     const profile = profiles[placement?.budget_profile ?? ""];
-    expect(placement?.copies).toBe(4);
+    expect(placement?.copies).toBe(12);
     expect(
       scaled(
         profile?.roles.app.connection_limit ?? 0,
         placement?.copies,
         profile?.copies
       )
-    ).toBe(4);
+    ).toBe(12);
     expect(
       scaled(
         profile?.roles.service.connection_limit ?? 0,
         placement?.copies,
         profile?.copies
       )
-    ).toBe(8);
+    ).toBe(24);
   });
 });
