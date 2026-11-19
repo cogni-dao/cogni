@@ -148,7 +148,7 @@
     "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.20.0/cogni-dao-knowledge-store-0.20.0.tgz",
     "@cogni/shared-knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.20.0/cogni-dao-knowledge-store-0.20.0.tgz",
     "@cogni-dao/metrics": "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.18.0/cogni-dao-metrics-0.18.0.tgz",
-    "@cogni-dao/agent-grants": "https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.3.0/cogni-dao-agent-grants-0.3.0.tgz"
+    "@cogni-dao/agent-grants": "https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.8.0/cogni-dao-agent-grants-0.8.0.tgz"
   },
   "devDependencies": {
     "@types/three": "^0.183.1",

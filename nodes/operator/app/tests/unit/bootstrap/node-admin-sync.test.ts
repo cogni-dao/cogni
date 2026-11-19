@@ -503,6 +503,29 @@ describe("extractRepoSpecApprovers (APPROVERS_ONLY)", () => {
     expect(() => extractRepoSpecApprovers(text)).toThrow();
   });
 
+  it("the package-backed reader still reads the approver of a spec with a retired field (spawny-boi)", async () => {
+    const fetchRepoSpec = vi.fn(async () => SPEC_WITH_RETIRED_FIELD);
+    const usersForWallets = vi.fn(async () => ["user-a"]);
+    const reader = new RepoSpecNodeApproverReader({
+      fetchRepoSpec,
+      extractApprovers: extractRepoSpecApprovers,
+      usersForWallets,
+    });
+
+    await expect(reader.approvers(NODE)).resolves.toEqual({
+      status: "read",
+      approverCount: 1,
+      userIds: ["user-a"],
+    });
+    expect(fetchRepoSpec).toHaveBeenCalledWith(
+      "https://github.com/cogni-dao/toks5",
+      ".cogni/repo-spec.yaml"
+    );
+    expect(usersForWallets).toHaveBeenCalledWith([
+      "0xabcdef0123456789abcdef0123456789abcdef01",
+    ]);
+  });
+
   it("maps to the right reason end to end: malformed_spec vs no_approvers, both write nothing", async () => {
     const run = async (text: string) => {
       const authorization = new FakeAuthorizationAdapter();

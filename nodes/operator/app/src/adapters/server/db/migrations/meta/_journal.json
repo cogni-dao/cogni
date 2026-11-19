@@ -463,6 +463,13 @@
       "when": 1795035002013,
       "tag": "0065_node_repo_spec_path",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1795047502412,
+      "tag": "0066_agent_principals_orgs",
+      "breakpoints": true
     }
   ]
 }
