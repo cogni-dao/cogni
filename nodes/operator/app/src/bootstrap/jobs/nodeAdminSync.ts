@@ -39,7 +39,7 @@ import { EVENT_NAMES } from "@/shared/observability";
 export const NODE_ADMIN_SYNC_CONCURRENCY = 3;
 
 /** User ids listed in the event, per direction. A diff is a handful of admins; this is a log-size guard. */
-const MAX_LOGGED_USER_IDS = 20;
+const MAX_LOGGED_USER_IDS = 10;
 
 export interface NodeAdminSyncLog {
   info(fields: Record<string, unknown>, message: string): void;

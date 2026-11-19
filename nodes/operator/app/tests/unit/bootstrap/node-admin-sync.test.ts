@@ -122,6 +122,41 @@ describe("syncNodeAdmin", () => {
     );
   });
 
+  it("report mode names the users it would add or remove, capped at 10 each, and never a wallet", async () => {
+    const authorization = new FakeAuthorizationAdapter();
+    const old = Array.from(
+      { length: 12 },
+      (_, i) => `old-${String(i).padStart(2, "0")}`
+    );
+    const next = Array.from(
+      { length: 12 },
+      (_, i) => `new-${String(i).padStart(2, "0")}`
+    );
+    await seedAdmins(authorization, old);
+    const write = vi.spyOn(authorization, "writeRelation");
+    const del = vi.spyOn(authorization, "deleteRelation");
+    const d = deps(
+      { status: "read", approverCount: 12, userIds: next },
+      authorization,
+      false
+    );
+
+    const result = await syncNodeAdmin(d, NODE);
+
+    expect(result).toMatchObject({
+      outcome: "ok",
+      mode: "report",
+      adds: 12,
+      deletes: 12,
+    });
+    expect(write).not.toHaveBeenCalled();
+    expect(del).not.toHaveBeenCalled();
+    const fields = d.log.info.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(fields.addUserIds).toEqual(next.slice(0, 10));
+    expect(fields.deleteUserIds).toEqual(old.slice(0, 10));
+    expect(JSON.stringify(fields)).not.toMatch(/0x[0-9a-fA-F]{40}/);
+  });
+
   it("write mode applies the diff", async () => {
     const authorization = new FakeAuthorizationAdapter();
     await seedAdmins(authorization, ["old"]);
