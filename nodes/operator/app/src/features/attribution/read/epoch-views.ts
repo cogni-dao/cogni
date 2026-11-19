@@ -23,7 +23,12 @@
 
 import type { AttributionStore } from "@cogni/attribution-ledger";
 import {
-  toEpochDto,
+  buildEpochActivityView as buildSharedEpochActivityView,
+  listEpochsView,
+  persistSelectionUpdates,
+} from "@cogni-dao/attribution";
+import {
+  type toEpochDto,
   toIngestionReceiptDto,
   toSelectionDto,
 } from "@/features/attribution/read/attribution-dto";
@@ -48,9 +53,8 @@ export async function listEpochsForNode(
   nodeId: string,
   page: { limit: number; offset: number }
 ): Promise<{ epochs: ReturnType<typeof toEpochDto>[]; total: number }> {
-  const allEpochs = await store.listEpochs(nodeId);
-  const slice = allEpochs.slice(page.offset, page.offset + page.limit);
-  return { epochs: slice.map(toEpochDto), total: allEpochs.length };
+  // story.0076: the bounded shared view (@cogni-dao/attribution) owns this read.
+  return listEpochsView(store, nodeId, page);
 }
 
 /**
@@ -245,46 +249,25 @@ export async function buildEpochActivityView(
     unresolvedCount: number;
   }) => void
 ): Promise<EpochActivityView | typeof EPOCH_NOT_FOUND> {
-  const epoch = await store.getEpoch(epochId);
-  if (!epoch) return EPOCH_NOT_FOUND;
-
-  const {
-    enriched,
-    receipts,
-    selectionMap,
-    resolvedIdentities,
-    unresolvedGithubCount,
-  } = await loadEnrichedReceipts(store, nodeId, epoch, epochId);
-
-  if (resolvedIdentities.size > 0) {
-    // Fire-and-forget: persist resolved userIds to selection rows for future reads.
-    // Runs AFTER loadEnrichedReceipts returns so `receipts`/`selectionMap` are initialized.
-    const updates: Promise<void>[] = [];
-    for (const r of receipts) {
-      const sel = selectionMap.get(r.receiptId);
-      if (sel && sel.userId === null && r.source === "github") {
-        const resolved = resolvedIdentities.get(r.platformUserId);
-        if (resolved) {
-          updates.push(
-            store.updateSelectionUserId(epochId, r.receiptId, resolved)
-          );
-        }
-      }
-    }
-    // Don't await — background DB updates, response returns immediately.
-    void Promise.allSettled(updates);
-
+  // story.0076: the bounded, read-only shared view (@cogni-dao/attribution) builds the page.
+  // It returns resolutions instead of taking a callback, so nothing reads an unbound result.
+  const result = await buildSharedEpochActivityView(
+    store,
+    nodeId,
+    epochId,
+    epochIdRaw,
+    page
+  );
+  if (!result) return EPOCH_NOT_FOUND;
+  if (result.pendingSelectionUpdates.length > 0) {
+    // Background: fill selection rows so later reads need no resolution.
+    void persistSelectionUpdates(store, result.pendingSelectionUpdates);
+  }
+  if (result.resolvedCount > 0) {
     onIdentityResolved?.({
-      resolvedCount: resolvedIdentities.size,
-      unresolvedCount: unresolvedGithubCount - resolvedIdentities.size,
+      resolvedCount: result.resolvedCount,
+      unresolvedCount: result.unresolvedCount,
     });
   }
-
-  const slice = enriched.slice(page.offset, page.offset + page.limit);
-
-  return {
-    events: slice,
-    epochId: epochIdRaw,
-    total: enriched.length,
-  };
+  return result.view;
 }

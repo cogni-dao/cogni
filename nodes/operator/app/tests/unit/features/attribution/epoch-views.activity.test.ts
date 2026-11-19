@@ -55,6 +55,7 @@ function makeStore(opts: { resolved: Map<string, string> }) {
   const store = {
     getEpoch: vi.fn(async () => ({
       id: EPOCH_ID,
+      nodeId: NODE_ID,
       status: "open",
       periodStart: new Date("2026-11-03T00:00:00.000Z"),
       periodEnd: new Date("2026-11-10T00:00:00.000Z"),
@@ -63,6 +64,15 @@ function makeStore(opts: { resolved: Map<string, string> }) {
     })),
     getReceiptsForWindow: vi.fn(async () => [receipt("r1", "u1")]),
     getReceiptsForEpoch: vi.fn(async () => [receipt("r2", "u2")]),
+    // story.0076: the shared @cogni-dao/attribution activity view reads one bounded page.
+    getEpochActivityPage: vi.fn(async () => ({
+      receipts: [receipt("r1", "u1"), receipt("r2", "u2")],
+      total: 2,
+    })),
+    getSelectionForReceipts: vi.fn(async () => [
+      selection("r1", null),
+      selection("r2", null),
+    ]),
     getSelectionForEpoch: vi.fn(async () => [
       selection("r1", null),
       selection("r2", null),
