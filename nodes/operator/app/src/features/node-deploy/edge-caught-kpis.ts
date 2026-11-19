@@ -19,7 +19,7 @@
  *     its nonce, for the probed host) is read back from Loki. That proves Caddy, Alloy and Loki together
  *     (guard-needs-proven-writer). Lines older than the proven one are therefore ingested.
  *   - WHO_IS_PROBED: with a `host` param, that host is probed (it must be a roster host). With no `host` the count
- *     covers every roster application host, and the operator's OWN env host is probed: one Caddy serves the whole
+ *     covers every roster application host, and the env's operator host is probed: one Caddy serves the whole
  *     env and every site imports the same catch-all snippet, so that one proof covers the env's catch-all and log
  *     path. If it fails, the env-wide count is unknown.
  *   - COUNT_HAS_NO_LINE_CAP: the number is a Loki INSTANT metric query (`sum(count_over_time(... [<window>s]))`),
@@ -36,8 +36,11 @@
  *     `scripts/ci/render-caddyfile.sh --domain` emits application sites. Nothing names a host. The mesh control,
  *     relay and publish hosts are not in the roster: they have no canary, never count, and as a `host` param read
  *     `unprobed_host`.
- *   - OWN_ENV_ONLY: the env domain is the operator's own (`APP_BASE_URL` host), so a param `env` other than the
- *     operator's own env is unknown.
+ *   - EVERY_FLIGHT_ENV: the operator's own env uses its own domain (`APP_BASE_URL` host). Another flight env uses that
+ *     env's operator host, derived from the same root (`hostForEnv("operator", primary, env, rootDomain(domain))`:
+ *     `cognidao.org` → `test.cognidao.org`, `preview.cognidao.org`). Every edge is public, so one operator can probe and
+ *     count every env, including an env whose own operator is down (bug.5650: the candidate operator could not report
+ *     its own outage). A param `env` outside `FLIGHT_ENVS` is unknown.
  *   - ONE_EVENT_PER_WINDOW: every compute emits exactly one `edge_caught_window` event with stable enum fields
  *     (scope, host, env, window, outcome, caught, reason), so a Grafana alert can read Loki. No error text, header
  *     or URL is logged.
@@ -64,6 +67,11 @@ import type {
   LokiReaderPort,
   LokiVectorSample,
 } from "@/ports";
+import {
+  hostForEnv,
+  isFlightEnv,
+  rootDomain,
+} from "@/shared/node-registry/deploy-hosts";
 import { EVENT_NAMES } from "@/shared/observability";
 
 export const EDGE_CAUGHT_ID = "edge.caught@1";
@@ -112,6 +120,22 @@ export function edgeApplicationHosts(
     n.primary ? domain : deep ? `${n.slug}-${domain}` : `${n.slug}.${domain}`
   );
   return [...new Set(hosts.map((h) => h.toLowerCase()))].sort();
+}
+
+/**
+ * The operator host of `env`, given this operator's own env and domain: its own domain for its own env, the same
+ * root's operator host for any other flight env, undefined for an env outside `FLIGHT_ENVS` or with no domain.
+ */
+export function envDomainFor(
+  env: string,
+  ownEnv: string | undefined,
+  ownDomain: string | undefined
+): string | undefined {
+  if (!ownDomain) return undefined;
+  if (env === ownEnv) return ownDomain;
+  return isFlightEnv(env)
+    ? hostForEnv("operator", true, env, rootDomain(ownDomain))
+    : undefined;
 }
 
 export type CanaryVerdict =
@@ -352,7 +376,10 @@ export interface EdgeCaughtWindowEvent {
 }
 
 export interface EdgeCaughtOptions {
-  /** The operator's own env (`DEPLOY_ENVIRONMENT`) and its env domain (the `APP_BASE_URL` host). */
+  /**
+   * The operator's own env (`DEPLOY_ENVIRONMENT`) and its env domain (the `APP_BASE_URL` host). Other flight envs'
+   * operator hosts derive from this domain's root (`envDomainFor`).
+   */
   readonly env: string | undefined;
   readonly domain: string | undefined;
   readonly catalog: EdgeHostCatalogPort;
@@ -415,8 +442,9 @@ export function createEdgeCaughtCalculators(
       const scope = p.host === undefined ? "env" : "host";
       const startedMs = now();
       let probeAtMs = startedMs;
-      // The host probed: the asked host, or the operator's own env host for an env-wide count.
-      const probeHost = p.host ?? options.domain ?? null;
+      // The env's operator host; the host probed is the asked host, or that operator host for an env-wide count.
+      const envDomain = envDomainFor(p.env, options.env, options.domain);
+      const probeHost = p.host ?? envDomain ?? null;
 
       const finish = (outcome: EdgeWindowOutcome): MetricSample => {
         const endedMs = now();
@@ -480,10 +508,10 @@ export function createEdgeCaughtCalculators(
       };
 
       try {
-        if (!options.domain || !options.env || p.env !== options.env)
+        if (!envDomain || !options.env)
           return finish({ kind: "unknown", reason: "env_not_served" });
         const nodes = await ctx.read(() => options.catalog.edgeNodes());
-        const hosts = edgeApplicationHosts(options.domain, nodes);
+        const hosts = edgeApplicationHosts(envDomain, nodes);
         // A host outside the roster (a mesh host) has no canary; an env with no roster host has nothing to probe.
         if (probeHost === null || !hosts.includes(probeHost))
           return finish({ kind: "unknown", reason: "unprobed_host" });

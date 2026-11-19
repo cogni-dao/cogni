@@ -32,6 +32,7 @@ import {
   EDGE_CAUGHT_ID,
   type EdgeCaughtWindowEvent,
   edgeApplicationHosts,
+  envDomainFor,
   hasProbeLine,
   hostLineFilter,
   isCanaryUri,
@@ -699,13 +700,46 @@ describe("edge.caught@1 env-wide (no host)", () => {
 });
 
 describe("edge.caught@1 shared rules", () => {
-  it("is unknown for another env, or when the operator has no env domain", async () => {
+  it("counts another flight env through that env's operator host (bug.5650)", async () => {
+    const prodHost = "cognidao.org";
+    expect(envDomainFor("production", "candidate-a", DOMAIN)).toBe(prodHost);
+    expect(envDomainFor("preview", "candidate-a", DOMAIN)).toBe(
+      "preview.cognidao.org"
+    );
+    expect(envDomainFor("candidate-a", "production", prodHost)).toBe(DOMAIN);
+    expect(envDomainFor("candidate-a", "candidate-a", DOMAIN)).toBe(DOMAIN);
+    expect(envDomainFor("staging", "production", prodHost)).toBeUndefined();
+    expect(envDomainFor("production", "production", undefined)).toBeUndefined();
+
+    const fromProd = harness({
+      env: "production",
+      domain: prodHost,
+      probeLineOnPoll: 1,
+      vector: vec(7),
+    });
+    expect(
+      await compute(fromProd, { env: "candidate-a", windowSeconds: 300 })
+    ).toMatchObject({ value: 7, complete: true });
+    expect(fromProd.probes[0]?.host).toBe(DOMAIN);
+    expect(fromProd.instants[0]?.query).toContain('env="candidate-a"');
+    expect(fromProd.instants[0]?.query).toContain("poly-test");
+  });
+
+  it("is unknown for an env outside the flight envs, a host outside that env's roster, or no env domain", async () => {
     const other = harness({ probeLineOnPoll: 1 });
     expectUnknown(
-      await compute(other, { env: "production", host: HOST }),
+      await compute(other, { env: "staging" }),
       "incomplete_or_invalid_source"
     );
     expect(other.events[0]?.reason).toBe("env_not_served");
+    expect(other.probes).toHaveLength(0);
+
+    const wrongEnvHost = harness({ probeLineOnPoll: 1 });
+    expectUnknown(
+      await compute(wrongEnvHost, { env: "production", host: HOST }),
+      "incomplete_or_invalid_source"
+    );
+    expect(wrongEnvHost.events[0]?.reason).toBe("unprobed_host");
 
     const noDomain = harness({ domain: undefined });
     expectUnknown(await compute(noDomain), "incomplete_or_invalid_source");
