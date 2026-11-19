@@ -275,6 +275,11 @@ ENV_FILE="$RUNTIME_DIR/.env"
 LITELLM_CONFIG="$RUNTIME_DIR/configs/litellm.config.yaml"
 RECEIPT="${COGNI_RECOVERY_RECEIPT:-/var/lib/cogni/runtime-recovery-receipt.json}"
 RUNTIME_COMPOSE=(docker compose --project-name cogni-runtime --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+# story.5159 - the override is active iff the installed .env carries POSTGRES_MAX_CONNECTIONS
+# (written only for a non-default value); preview/production never match.
+if grep -q '^POSTGRES_MAX_CONNECTIONS=' "$ENV_FILE" 2>/dev/null; then
+  RUNTIME_COMPOSE+=(-f "$RUNTIME_DIR/docker-compose.pg-max-connections.yml")
+fi
 
 custody_required() {
   printf 'recovery_state=custody_required\n'
@@ -597,8 +602,11 @@ NODE_DB_PROVISION_CONFIG="$(render_shared_db_provision_config)" || log_fatal "In
 # story.5159 - shared Postgres connection ceiling is declared per env in git
 # (infra/database-budget-profiles.yaml env_max_connections); tests/ci-invariants/shared-db-budget-sum.spec.ts reads the same value.
 POSTGRES_MAX_CONNECTIONS="$(yq -r ".env_max_connections.\"${DEPLOY_ENVIRONMENT}\" // 100" "$REPO_ROOT/infra/database-budget-profiles.yaml")"
-[[ "$POSTGRES_MAX_CONNECTIONS" =~ ^[0-9]+$ && "$POSTGRES_MAX_CONNECTIONS" -ge 20 && "$POSTGRES_MAX_CONNECTIONS" -le 500 ]] \
+[[ "$POSTGRES_MAX_CONNECTIONS" =~ ^[1-9][0-9]*$ && "$POSTGRES_MAX_CONNECTIONS" -ge 20 && "$POSTGRES_MAX_CONNECTIONS" -le 500 ]] \
   || log_fatal "env_max_connections.${DEPLOY_ENVIRONMENT} must be an integer 20..500, got '${POSTGRES_MAX_CONNECTIONS}'"
+# Only a value that differs from the image default adds the compose override (and the .env key);
+# an env at 100 keeps its resolved postgres config unchanged.
+if [[ "$POSTGRES_MAX_CONNECTIONS" == 100 ]]; then POSTGRES_MAX_CONNECTIONS=""; fi
 
 # G-tier derived inventory: database names are a pure function of the catalog
 # node list. Do not trust the GitHub env secret here; it can lag a new node and
@@ -823,6 +831,12 @@ if [[ "${K8S_SECRETS_ONLY:-false}" != "true" ]]; then
   install_cadvisor_binding
   RUNTIME_OBSERVABILITY_ARGS="-f $CADVISOR_OVERRIDE_FILE"
   RUNTIME_COMPOSE="$RUNTIME_COMPOSE $RUNTIME_OBSERVABILITY_ARGS"
+fi
+# story.5159 - postgres max_connections override, present only when the declared value is not 100.
+PG_OVERRIDE_ARGS=""
+if [[ -n "${POSTGRES_MAX_CONNECTIONS:-}" ]]; then
+  PG_OVERRIDE_ARGS="-f /opt/cogni-template-runtime/docker-compose.pg-max-connections.yml"
+  RUNTIME_COMPOSE="$RUNTIME_COMPOSE $PG_OVERRIDE_ARGS"
 fi
 # doltgres presence must be read from the STATIC compose file, not `compose config
 # --services` (which fully validates env interpolation → flakes empty on any unset var
@@ -1517,7 +1531,7 @@ printf '%s=%s\n' DOLTGRES_WRITER_PASSWORD "$DOLTGRES_WRITER_PASSWORD" >> "$RUNTI
 # Publish the complete projection atomically. A failed render leaves the prior
 # installed generation untouched; the last-good receipt therefore continues to
 # describe either the exact installed bytes or a detectable mismatch.
-docker compose --project-name cogni-runtime --env-file "$RUNTIME_ENV" -f "$RUNTIME_COMPOSE_FILE" ${RUNTIME_OBSERVABILITY_ARGS:-} --profile bootstrap config --quiet 2>/dev/null \
+docker compose --project-name cogni-runtime --env-file "$RUNTIME_ENV" -f "$RUNTIME_COMPOSE_FILE" ${RUNTIME_OBSERVABILITY_ARGS:-} ${PG_OVERRIDE_ARGS:-} --profile bootstrap config --quiet 2>/dev/null \
   || log_fatal "Resolved runtime consumer configuration is invalid; installed environment retained"
 chmod 600 "$RUNTIME_ENV"
 mv -f "$RUNTIME_ENV" "$INSTALLED_RUNTIME_ENV"
