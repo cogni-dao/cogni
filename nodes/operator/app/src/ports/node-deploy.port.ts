@@ -55,6 +55,25 @@ export interface WorkloadKey {
 export const keyString = (k: WorkloadKey): string =>
   `${k.nodeId}/${k.env}/${k.workload}`;
 
+/**
+ * A test env's workload key (story.5159): `te` + 6 lowercase letters. One plain label (no hyphen, no digit), so
+ * `<slug>-<key>` is a sibling host the edge guard already admits.
+ */
+export const TEST_ENV_KEY_RE = /^te[a-z]{6}$/;
+export const isTestEnvKey = (workload: string): boolean =>
+  TEST_ENV_KEY_RE.test(workload);
+/**
+ * The env var `testEnvSpec` sets on every test env release spec. The key shape alone also matches real words
+ * (`template`, `terminal`, `telegram`, `temporal`), so anything that ACTS on a row (TTL stop, topology filter)
+ * needs the key shape AND this marker in the stored spec.
+ */
+export const TEST_ENV_MARKER_ENV = "COGNI_TEST_ENV";
+export const isTestEnvSpec = (spec: {
+  readonly name: string;
+  readonly env?: Readonly<Record<string, string>> | undefined;
+}): boolean =>
+  isTestEnvKey(spec.name) && spec.env?.[TEST_ENV_MARKER_ENV] === "1";
+
 export interface ReleaseRow extends WorkloadKey {
   readonly id: string;
   readonly sourceSha: string;

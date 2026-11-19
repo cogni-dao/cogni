@@ -105,6 +105,46 @@ describe("the operator's checked-in canary workload manifest", () => {
     );
   });
 
+  it("a v1 request for a test env key is workload_not_declared: v1 cannot create a test env (story.5159)", () => {
+    expect(() => resolve({ workload: "teqwkzmx" })).toThrow(
+      expect.objectContaining({ code: "workload_not_declared" })
+    );
+  });
+
+  it.each([
+    "teqwkzmx",
+    "main",
+  ])('refuses a manifest that declares the reserved name "%s" (story.5159)', (name) => {
+    const text = CANARY.text.replace(/^ {2}name: canary$/m, `  name: ${name}`);
+    expect(text).not.toBe(CANARY.text);
+    const manifests = [{ path: `.cogni/workloads/${name}.yaml`, text }];
+    // whether or not the reserved workload is the one requested, the whole set is refused
+    for (const workload of [name, "canary-db"])
+      expect(() => resolve({ manifests, workload })).toThrow(
+        expect.objectContaining({
+          code: "workload_manifest_refused",
+          message: expect.stringContaining(`"${name}"`),
+        })
+      );
+  });
+
+  it("an ordinary near-miss name still resolves (te-key shape is exact)", () => {
+    for (const name of ["teqwkzm", "teqwkzmxy", "te-qwkzmx"]) {
+      const text = CANARY.text.replace(
+        /^ {2}name: canary$/m,
+        `  name: ${name}`
+      );
+      expect(() =>
+        resolve({
+          manifests: [{ path: `.cogni/workloads/${name}.yaml`, text }],
+          workload: name,
+        })
+      ).not.toThrow(
+        expect.objectContaining({ code: "workload_manifest_refused" })
+      );
+    }
+  });
+
   it('refuses a manifest with cogni.dev/exclusive: "true" and returns the issue (CD6)', () => {
     const text = CANARY.text.replace(
       'cogni.dev/exclusive: "false"',

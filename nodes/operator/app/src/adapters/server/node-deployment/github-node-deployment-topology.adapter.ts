@@ -13,10 +13,11 @@ import { LEGACY_DEFAULT_NODE_DEPLOYMENT } from "@cogni/repo-spec";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
-import type {
-  NodeDeployedService,
-  NodeDeploymentTopologyPort,
-  StorePort,
+import {
+  isTestEnvSpec,
+  type NodeDeployedService,
+  type NodeDeploymentTopologyPort,
+  type StorePort,
 } from "@/ports";
 
 /** The read half of the node-deploy store this adapter needs (the release view). */
@@ -175,6 +176,9 @@ export class GitHubNodeDeploymentTopologyAdapter
     for (const row of desired) {
       const release = await store.getRelease(row.releaseId);
       if (!release) continue;
+      // A test env (story.5159) is a throwaway copy of the app, not a service of the node's topology. Only a
+      // te key whose spec carries the marker is one: a real workload named `template` stays.
+      if (isTestEnvSpec(release.spec)) continue;
       services.push({
         name: release.spec.name,
         visibility: "http" in release.spec.expose ? "public" : "private",
