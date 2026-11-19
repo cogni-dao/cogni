@@ -9,7 +9,7 @@
  *   - RESOLVER_IS_WIRED: the adapter carries an `entryResolver`, so a patch with cites is never refused as `cites_unsupported`.
  *   - RESOLVER_READS_OFF_THE_WRITER: the resolver reads on its own lazy width-one pool, not the writer or read client.
  *   - BASELINE_IS_INJECTED (story.0033): the adapter carries the caller's `metricBaseline` port; with none given it carries none, so a non-empty `moves` write is refused.
- *   - GATE_FACTS_ARE_WIRED (task.0122): the adapter carries the caller's `prFacts`, `prRepos` and `hubOrigin`, and an inbox-state port that reads on the lock-free read pool, never the width-one writer whose lock the gate already holds.
+ *   - GATE_FACTS_ARE_WIRED (task.0122): the adapter carries the caller's `prFacts`, `prRepos` and `hubOrigin`, and an inbox-state port that reads on the cites pool: never the width-one writer whose lock the gate already holds, and never the read pool, which the adapter retires and replaces after a read error (bug.5649).
  *   - FAILS_WITHOUT_THE_WIRING: removing `entryResolver` from client.ts fails every test here.
  * Side-effects: none
  * Links: src/adapters/server/db/doltgres/client.ts, hub change-history-design
@@ -149,7 +149,7 @@ describe("operator work-items adapter wiring (task.0086)", () => {
     expect(writer?.unsafe).not.toHaveBeenCalled();
   });
 
-  it("carries the gate facts the container injects and reads inbox state on the read pool, not the writer (task.0122)", async () => {
+  it("carries the gate facts the container injects and reads inbox state on the cites pool, not the read pool or the writer (task.0122, bug.5649)", async () => {
     const prFacts = {
       read: vi.fn(async () => ({ head: "a".repeat(40), merged: false })),
     };
@@ -173,10 +173,14 @@ describe("operator work-items adapter wiring (task.0086)", () => {
       unsafe(query: string): PromiseLike<unknown>;
     };
     await sql.unsafe("SELECT state, head_commit FROM knowledge_contributions");
+    const cites = built.find((c) => c.applicationName.includes("cites"));
+    expect(cites?.unsafe).toHaveBeenCalledWith(
+      "SELECT state, head_commit FROM knowledge_contributions"
+    );
     const reader = built.find(
       (c) => c.applicationName === "cogni_work_items_read_app"
     );
-    expect(reader?.unsafe).toHaveBeenCalledWith(
+    expect(reader?.unsafe).not.toHaveBeenCalledWith(
       "SELECT state, head_commit FROM knowledge_contributions"
     );
     const writer = built.find(
