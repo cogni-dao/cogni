@@ -377,6 +377,35 @@ describe("postReviewResultActivity — honest failure (story.5102)", () => {
     );
   });
 
+  it.each([
+    "remote_access_requested",
+    "remote_policy_denied",
+    "remote_unavailable",
+  ])("a failed read of a connected node's hub (%s) reports the reason of the same name (task.5448)", async (errorCode) => {
+    const acts = makeActivities();
+    await acts.postReviewResultActivity(
+      reviewInput({ ok: false, runId: "r-remote", errorCode })
+    );
+    const call = client.updateCheckRun.mock.calls[0]?.[0] as {
+      conclusion: string;
+      title: string;
+      summary: string;
+    };
+    expect(call.conclusion).toBe("failure");
+    expect(call.title).toBe("PR Review: COULD NOT EVALUATE");
+    expect(machineBlock(call.summary)).toMatchObject({
+      couldNotEvaluate: errorCode,
+      conclusion: "failure",
+    });
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "review.could_not_evaluate",
+        reason: errorCode,
+      }),
+      "review.could_not_evaluate"
+    );
+  });
+
   it("any other graph failure code keeps graph_failed and the plain title (bug.5626)", async () => {
     const acts = makeActivities();
     await acts.postReviewResultActivity(

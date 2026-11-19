@@ -74,6 +74,7 @@ pnpm test tests/component/ai/
 - AgentCatalogProvider pattern: listAgents() returns AgentDescriptor[]; AggregatingAgentCatalog fans out to providers
 - GraphExecutorPort pattern: providerId prefixes graphId (e.g., "langgraph:poet"); NamespaceGraphRouter routes to registered providers
 - langgraph/ subdirectory: LangGraphInProcAgentCatalogProvider (discovery) and LangGraphInProcProvider (execution) wire @cogni/langgraph-graphs catalog. InProcProvider passes `responseFormat` through to graph factory and `structuredOutput` back to `GraphFinal`.
+- Review subject (task.5448): a run whose host-validated `codeSubject` is ANOTHER node takes its preamble only from the injected `SubjectGroundingLoader` (that node's index, architect, origin, mission), loses `work_item_read`, and checks tool authority on the subject node; a failed read fails the run before any model call with a typed `remote_*` code. `remote-knowledge-capability.ts` adapts the remote read port to the stock `KnowledgeCapability` (read-only) and maps remote failures to execution error codes.
 - TavilyWebSearchAdapter: HARD_CAPS_ENFORCED_AT_TOOL_BOUNDARY — maxResults capped at 5, title≤120, snippet≤160 chars regardless of caller requests
 
 ## Dependencies

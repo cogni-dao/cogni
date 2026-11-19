@@ -1,0 +1,24 @@
+# Nodes the operator's git-review may call with signed per-call assertions (task.5448).
+#
+# Keyed by the operator's own deploy environment (DEPLOY_ENVIRONMENT). A missing environment
+# section means no targets: a review of any node that is not listed here is refused before it
+# starts. Each target is { alias, node_id, origin }:
+#   - alias    the name the reader tools use (lowercase; the model never sees a URL)
+#   - node_id  the target node's id; MUST equal the `node_id` of its infra/catalog/<slug>.yaml
+#              entry (checked by tests/unit/shared/config/service-links.test.ts)
+#   - origin   the target's canonical https origin, no path and no credentials
+#
+# The operator keeps NO key for a target. It signs a short-lived assertion per call and the
+# target decides with its own switch (https://cognidao.org/knowledge/operator-identity-model).
+candidate-a:
+  targets:
+    - alias: node-template
+      node_id: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
+      origin: https://node-template-test.cognidao.org
+preview:
+  targets: []
+production:
+  targets:
+    - alias: node-template
+      node_id: b927a9dd-6132-4fc9-a51e-e3cee2568e3c
+      origin: https://node-template.cognidao.org

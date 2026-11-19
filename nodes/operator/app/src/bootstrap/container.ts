@@ -115,6 +115,7 @@ import {
   GitHubNodeDeploymentTopologyAdapter,
   GitHubWebhookNormalizer,
   getAppDb,
+  getExecutionScope,
   LangfuseAdapter,
   LiteLlmAdapter,
   type MimirAdapterConfig,
@@ -196,6 +197,7 @@ import { createLivenessAccessor } from "@/bootstrap/capabilities/node-registry";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { createRepoCapability } from "@/bootstrap/capabilities/repo";
 import { createScheduleCapability } from "@/bootstrap/capabilities/schedule";
+import { createScopedKnowledgeCapability } from "@/bootstrap/capabilities/scoped-knowledge";
 import { createVcsCapability } from "@/bootstrap/capabilities/vcs";
 import { createWebSearchCapability } from "@/bootstrap/capabilities/web-search";
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
@@ -211,6 +213,7 @@ import { resolveNodeKnowledgeRemoteUrl } from "@/bootstrap/knowledge-mirror";
 import { startNodeAdminSyncOnBoot } from "@/bootstrap/node-admin-sync";
 import { createGoalPrometheusReader } from "@/bootstrap/observability.factory";
 import { startProcessHealthPublisher } from "@/bootstrap/publishers";
+import { remoteKnowledgeCapabilityFor } from "@/bootstrap/review/remote-knowledge";
 import {
   startGovernanceSyncOnBoot,
   startMetricsSyncOnBoot,
@@ -270,6 +273,7 @@ import type {
   WorkItemsContentPort,
 } from "@/ports/server";
 import {
+  findServiceLinkTarget,
   getDaoTreasuryAddress,
   getEmissionsHolderAddress,
   getGithubRepo,
@@ -630,6 +634,15 @@ export async function getTemporalWorkflowClient(): Promise<{
     })();
   }
   return _workflowClientPromise;
+}
+
+/** The running graph's host-validated code subject, or undefined outside a run (task.5448). */
+function runCodeSubject() {
+  try {
+    return getExecutionScope().codeSubject;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Lazy singleton for webhook registrations (avoids import cost at container init). */
@@ -1196,6 +1209,20 @@ function createContainer(): Container {
       }),
     nodePublicOrigin: env.APP_BASE_URL,
     knowledgeCapability,
+    // task.5448: the review reader tools follow the run's code subject (local hub for the operator's own
+    // node, the signed remote reader of a listed node otherwise; never the operator hub for another node).
+    scopedKnowledgeCapability: createScopedKnowledgeCapability({
+      local: knowledgeCapability,
+      nodeId: getNodeId(),
+      getSubjectNodeId: () => runCodeSubject()?.nodeId,
+      remoteFor: (subjectNodeId) => remoteKnowledgeCapabilityFor(subjectNodeId),
+    }),
+    readerNodePublicOrigin: () => {
+      const subject = runCodeSubject();
+      return subject && subject.nodeId !== getNodeId()
+        ? findServiceLinkTarget(subject.nodeId)?.origin
+        : undefined;
+    },
     edoCapability,
     metricsCapability,
     webSearchCapability,

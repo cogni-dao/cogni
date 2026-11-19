@@ -28,6 +28,9 @@
  *     operator's provider account is out of credit) reports reason `unfunded`, not `graph_failed`,
  *     and its check title is "PR Review: COULD NOT EVALUATE (em dash) provider out of credit". Other
  *     graph failures keep `graph_failed`.
+ *   - REMOTE_READ_IS_NOT_A_VERDICT (task.5448): a review of a connected node whose hub read ended with
+ *     `remote_access_requested`, `remote_policy_denied` or `remote_unavailable` reports the could-not-evaluate
+ *     reason of the SAME name, not `graph_failed`: the target's switch, not the PR, decided the outcome.
  *   - CHECK_IS_REQUEST_BOUND: a request-bound review's check summary ends with one machine block
  *     (requestId, operator buildSha, model, citations, evidence). The buildSha is the serving
  *     operator's (graph host field, else the pr-context build) — never this worker's.
@@ -74,6 +77,16 @@ import { translateHttpError } from "./index.js";
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/**
+ * Graph error codes of a failed read of ANOTHER node's hub (`AI_EXECUTION_ERROR_CODES` in
+ * `@cogni/ai-core`). Each one is its own could-not-evaluate reason (task.5448).
+ */
+const REMOTE_READ_REASONS: ReadonlySet<string> = new Set([
+  "remote_access_requested",
+  "remote_policy_denied",
+  "remote_unavailable",
+]);
 
 export interface ReviewActivityDeps {
   /** HTTP client for the operator's internal review GitHub plane. */
@@ -519,7 +532,10 @@ export function evaluateGraphResult(
         : !graphResult.ok
           ? graphResult.errorCode === "provider_unfunded"
             ? COULD_NOT_EVALUATE_UNFUNDED
-            : "graph_failed"
+            : graphResult.errorCode &&
+                REMOTE_READ_REASONS.has(graphResult.errorCode)
+              ? graphResult.errorCode
+              : "graph_failed"
           : !structured
             ? "no_structured_output"
             : structured.noCodeRead === true

@@ -434,6 +434,11 @@ export const serverSchema = z.object({
   // is the configured canonical issuer.
   IDENTITY_ATTESTATION_PRIVATE_KEY: optionalString,
 
+  // git-review signs per-call assertions to linked nodes (task.5448): operator-only Ed25519
+  // seed, 64 hex characters. Separate from the attestation key. A review of another node is
+  // refused with a typed 503 when unset; the operator's own reviews never read it.
+  GIT_REVIEW_SIGNING_SEED: optionalString,
+
   // GitHub OAuth client used by the identity broker to AUTHENTICATE a GitHub
   // account for a relying node. One credential pair PER ENVIRONMENT — never per
   // node (a node fleet cannot be served by GitHub's callback-URL cardinality, and

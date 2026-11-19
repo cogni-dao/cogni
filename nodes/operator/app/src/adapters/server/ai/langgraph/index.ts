@@ -29,6 +29,9 @@ export {
   type CompletionUnitAdapter,
   LANGGRAPH_PROVIDER_ID,
   LangGraphInProcProvider,
+  type SubjectGrounding,
+  type SubjectGroundingLoader,
+  selectArchitectEntryId,
 } from "./inproc.provider";
 // Discovery-only provider (no execution deps)
 export {

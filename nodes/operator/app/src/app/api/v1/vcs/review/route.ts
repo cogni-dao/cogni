@@ -16,8 +16,11 @@
  *     billing account (resolved in the facade).
  *   - NO_REPO_FROM_AGENT: owner/repo come from `resolveNodeRepo`, never the body.
  *   - STABLE_REVIEW_ID: a review of the same head already running → 409 `review_running`.
- *   - V0_OPERATOR_ONLY (story.5102): code reads are authorized on the operator only, so a review of
- *     any other node is refused up front with 422 `review_node_unsupported`.
+ *   - SUBJECT_IS_SELF_OR_LISTED (task.5448, replaces V0_OPERATOR_ONLY of story.5102): the operator's own node is
+ *     reviewed as before. Any other node must be a listed service-link target (`.cogni/service-links.yaml`),
+ *     else 422 `review_node_unsupported` before dispatch. A listed node also needs the git-review signing seed
+ *     (503 `review_signer_unavailable`) and the remote reader (503 `review_remote_reader_unavailable`); both are
+ *     checked before dispatch. The requesting developer needs `node.flight` on the reviewed node.
  *   - CONTRACTS_ARE_TRUTH: input/output parsed through `reviewOperation`.
  * Side-effects: IO (DB read, OpenFGA check, GitHub reads, Temporal start)
  * Links: packages/node-contracts/src/vcs.review.v1.contract.ts, story.5102,
@@ -32,7 +35,9 @@ import { getSessionUser } from "@/app/_lib/auth/session";
 import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createOperatorDeployPlane } from "@/bootstrap/capabilities/operator-deploy-plane";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
-import { getNodeId } from "@/shared/config";
+import { getGitReviewSigner } from "@/bootstrap/review/git-review-signer";
+import { getRemoteReaderRegistry } from "@/bootstrap/review/remote-knowledge";
+import { findServiceLinkTarget, getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import { EVENT_NAMES, logEvent } from "@/shared/observability";
 
@@ -98,14 +103,40 @@ export const POST = wrapRouteHandlerWithLogging(
       );
     }
 
-    // V0_OPERATOR_ONLY: the reviewer's code reads are authorized on this node only.
+    // SUBJECT_IS_SELF_OR_LISTED (task.5448): the operator's own node reviews exactly as before. Any other node
+    // must be a listed service-link target, and its review needs the signer and the remote reader, all checked
+    // here, before dispatch. Authority on the subject was checked above (`node.flight` on the named node).
     if (rbac.node.nodeId !== getNodeId()) {
-      return fail(
-        422,
-        "review_node_unsupported",
-        "v0 reviews operator PRs only",
-        { prNumber }
-      );
+      const target = findServiceLinkTarget(rbac.node.nodeId);
+      if (!target) {
+        return fail(
+          422,
+          "review_node_unsupported",
+          "this node is not linked for reviews",
+          { prNumber }
+        );
+      }
+      // The reader must expose `index` (grounding reads it first), not only exist.
+      if (!getRemoteReaderRegistry().available(target)) {
+        return fail(
+          503,
+          "review_remote_reader_unavailable",
+          "linked-node reader not available",
+          { prNumber }
+        );
+      }
+      const signer = await getGitReviewSigner({
+        seedHex: serverEnv().GIT_REVIEW_SIGNING_SEED,
+        appBaseUrl: serverEnv().APP_BASE_URL,
+      });
+      if (!signer.ok) {
+        return fail(
+          503,
+          "review_signer_unavailable",
+          "review signing key not available",
+          { prNumber, reason: signer.reason }
+        );
+      }
     }
 
     // NO_REPO_FROM_AGENT: one resolution path for every node (operator → parent monorepo).

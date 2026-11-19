@@ -32,6 +32,12 @@ import { isLlmError } from "./llm-errors";
  * - provider_unfunded: The OPERATOR's provider account is out of credit (OpenRouter 402).
  *   Operator-fault and money-fixable, so it is its own code: a starved run is not a
  *   verdict and not an outage (bug.5626, starvation-not-a-verdict).
+ * - remote_access_requested: A read of ANOTHER node's hub answered 401 and one signed access ask went out;
+ *   an admin of that node must turn it On (task.5448). Not a fault of this node and not a verdict.
+ * - remote_policy_denied: The other node's hub refused the read (403, or a 401 with no ask sent), such as
+ *   git-review turned Off there. Never retried (task.5448).
+ * - remote_unavailable: The other node's hub could not be read (5xx, timeout, network, oversize body).
+ *   Retryable (task.5448).
  */
 export const AI_EXECUTION_ERROR_CODES = [
   "invalid_request",
@@ -43,6 +49,9 @@ export const AI_EXECUTION_ERROR_CODES = [
   "insufficient_credits",
   "provider_unavailable",
   "provider_unfunded",
+  "remote_access_requested",
+  "remote_policy_denied",
+  "remote_unavailable",
 ] as const;
 
 export type AiExecutionErrorCode = (typeof AI_EXECUTION_ERROR_CODES)[number];

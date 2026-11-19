@@ -104,6 +104,10 @@ export const SUBSTRATE_RESERVED_KEYS: ReadonlySet<string> = new Set<string>([
   // relying node, so a self-serve write does not fail loudly — it silently
   // invalidates every attestation on every node at once (task.5024).
   "IDENTITY_ATTESTATION_PRIVATE_KEY",
+  // Operator-only Ed25519 seed signing git-review's per-call assertions to linked nodes. Its
+  // public half is published at /.well-known/jwks.json and trusted by each linked node, so a
+  // self-serve write would silently break every linked-node review (task.5448).
+  "GIT_REVIEW_SIGNING_SEED",
 ]);
 
 /**
@@ -234,6 +238,7 @@ export const OFF_CLUSTER_WORKLOAD_DENIED_KEYS: ReadonlySet<string> = new Set([
   // and its public half is pinned fleet-wide (task.5024); the review App key
   // is one GitHub App installed across every node repo.
   "IDENTITY_ATTESTATION_PRIVATE_KEY",
+  "GIT_REVIEW_SIGNING_SEED", // signs git-review's calls to linked nodes (task.5448)
   "GH_REVIEW_APP_ID",
   "GH_REVIEW_APP_PRIVATE_KEY_BASE64",
   // Substrate-owned database role material (https://cognidao.org/knowledge/secrets-management Invariant 15).

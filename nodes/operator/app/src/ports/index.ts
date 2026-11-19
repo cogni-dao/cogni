@@ -484,6 +484,14 @@ export type {
   ReceiptDeliveryTarget,
 } from "./receipt-delivery.port";
 export type {
+  RemoteIndexRow,
+  RemoteKnowledgeFailure,
+  RemoteKnowledgeFailureCode,
+  RemoteKnowledgeReadPort,
+  RemoteKnowledgeTarget,
+} from "./remote-knowledge.port";
+export { isRemoteKnowledgeFailure } from "./remote-knowledge.port";
+export type {
   ReviewCheckFacts,
   ReviewKpiRepo,
   ReviewKpiSourcePort,

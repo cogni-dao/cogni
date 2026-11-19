@@ -8,7 +8,8 @@
  * Invariants:
  *   - REVIEW_IS_DEV_TRIGGERED / STABLE_REVIEW_ID: starts PrReviewWorkflow as pr-review:{owner}/{repo}/{pr}/{headSha}.
  *   - ONE_ACTOR_ONE_ACCOUNT: actor = payer = requestedBy = the session user and their own billing account.
- *   - V0_OPERATOR_ONLY: a non-operator node is refused with 422 review_node_unsupported before any read.
+ *   - SUBJECT_IS_SELF_OR_LISTED (task.5448): a node that is not a listed link target is refused with 422
+ *     review_node_unsupported before any read; a listed node needs the signer and reader (typed 503s before dispatch).
  *   - CONTRACTS_ARE_TRUTH: 202 matches reviewOperation.output.
  * Side-effects: none
  * Links: nodes/operator/app/src/app/api/v1/vcs/review/route.ts,
@@ -28,6 +29,17 @@ const BILLING_ACCOUNT_ID = "33333333-3333-4333-8333-333333333333";
 const HEAD_SHA = "a".repeat(40);
 const BASE_SHA = "b".repeat(40);
 
+const mockFindLinkTarget = vi.hoisted(() => vi.fn());
+const mockSigner = vi.hoisted(() => vi.fn());
+/** The transport factory the shared package would export; `undefined` = the package has none. */
+const mockTransportFactory = vi.hoisted(() => vi.fn());
+const readerWith = (extra: Record<string, unknown>) => ({
+  originOf: () => "https://node-template-test.cognidao.org",
+  get: vi.fn(),
+  list: vi.fn(),
+  search: vi.fn(),
+  ...extra,
+});
 const mockGate = vi.hoisted(() => vi.fn());
 const mockResolveNodeRepo = vi.hoisted(() => vi.fn());
 const mockResolvePullRequest = vi.hoisted(() => vi.fn());
@@ -81,7 +93,27 @@ vi.mock("@/bootstrap/otel", () => ({
 vi.mock("@/shared/config", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/config")>()),
   getNodeId: () => OPERATOR_NODE_ID,
+  findServiceLinkTarget: (nodeId: string) => mockFindLinkTarget(nodeId),
 }));
+vi.mock("@/bootstrap/review/git-review-signer", () => ({
+  getGitReviewSigner: () => mockSigner(),
+}));
+// The REAL registry over a per-test factory: the route's gate is `available(target)`, which builds the reader.
+vi.mock("@/bootstrap/review/remote-knowledge", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/bootstrap/review/remote-knowledge")
+    >();
+  return {
+    ...actual,
+    getRemoteReaderRegistry: () =>
+      actual.createRemoteReaderRegistry({
+        factory: mockTransportFactory() as never,
+        authorizationHeader: async () => "Bearer test",
+        log: { info: vi.fn(), warn: vi.fn() },
+      }),
+  };
+});
 vi.mock("@/shared/env", () => ({
   serverEnv: () => ({
     NODE_SUBMODULE_PARENT_OWNER: "cogni-test-org",
@@ -148,6 +180,10 @@ describe("POST /api/v1/vcs/review", () => {
       defaultVirtualKeyId: "vk-developer",
     });
     mockWorkflowStart.mockResolvedValue(undefined);
+    mockFindLinkTarget.mockReturnValue(undefined);
+    mockSigner.mockResolvedValue({ ok: true, signer: {} });
+    // A transport WITH index, as a release that supports reviews of linked nodes would build.
+    mockTransportFactory.mockReturnValue(() => readerWith({ index: vi.fn() }));
   });
 
   it("202: starts the stable-id workflow with actor = payer = requestedBy = session user", async () => {
@@ -235,7 +271,7 @@ describe("POST /api/v1/vcs/review", () => {
     expect(mockWorkflowStart).not.toHaveBeenCalled();
   });
 
-  it("422: refuses a non-operator node (v0) before any repo or PR read", async () => {
+  it("422: refuses a node that is not a listed link target before any repo or PR read", async () => {
     mockGate.mockResolvedValue({
       ok: true,
       node: { nodeId: OTHER_NODE_ID, slug: "poly" },
@@ -248,6 +284,99 @@ describe("POST /api/v1/vcs/review", () => {
     expect(mockResolveNodeRepo).not.toHaveBeenCalled();
     expect(mockResolvePullRequest).not.toHaveBeenCalled();
     expect(mockWorkflowStart).not.toHaveBeenCalled();
+  });
+
+  describe("a listed link target (task.5448)", () => {
+    beforeEach(() => {
+      mockGate.mockResolvedValue({
+        ok: true,
+        node: { nodeId: OTHER_NODE_ID, slug: "node-template" },
+      });
+      mockFindLinkTarget.mockImplementation((nodeId: string) =>
+        nodeId === OTHER_NODE_ID
+          ? {
+              alias: "node-template",
+              nodeId: OTHER_NODE_ID,
+              origin: "https://node-template-test.cognidao.org",
+            }
+          : undefined
+      );
+      mockResolveNodeRepo.mockResolvedValue({
+        owner: "cogni-dao",
+        repo: "node-template",
+      });
+    });
+
+    it("202: starts the review with the operator as host node and the listed node as code subject", async () => {
+      const res = await post({ nodeId: "node-template", prNumber: 7 });
+      expect(res.status).toBe(202);
+      const [, options] = mockWorkflowStart.mock.calls[0] as [
+        string,
+        { args: [Record<string, unknown>] },
+      ];
+      expect(options.args[0]).toMatchObject({
+        nodeId: OPERATOR_NODE_ID,
+        owner: "cogni-dao",
+        repo: "node-template",
+        codeSubject: {
+          nodeId: OTHER_NODE_ID,
+          owner: "cogni-dao",
+          repo: "node-template",
+          baseSha: BASE_SHA,
+          headSha: HEAD_SHA,
+        },
+      });
+    });
+
+    it("503 review_signer_unavailable: a missing seed refuses the review before dispatch", async () => {
+      mockSigner.mockResolvedValue({ ok: false, reason: "seed_missing" });
+      const res = await post({ nodeId: "node-template", prNumber: 7 });
+      expect(res.status).toBe(503);
+      await expect(res.json()).resolves.toMatchObject({
+        errorCode: "review_signer_unavailable",
+      });
+      expect(mockResolveNodeRepo).not.toHaveBeenCalled();
+      expect(mockResolvePullRequest).not.toHaveBeenCalled();
+      expect(mockWorkflowStart).not.toHaveBeenCalled();
+    });
+
+    it("503 review_remote_reader_unavailable: the shared package has no transport factory", async () => {
+      mockTransportFactory.mockReturnValue(undefined);
+      const res = await post({ nodeId: "node-template", prNumber: 7 });
+      expect(res.status).toBe(503);
+      await expect(res.json()).resolves.toMatchObject({
+        errorCode: "review_remote_reader_unavailable",
+      });
+      expect(mockResolveNodeRepo).not.toHaveBeenCalled();
+      expect(mockWorkflowStart).not.toHaveBeenCalled();
+    });
+
+    it("503 review_remote_reader_unavailable: a factory whose reader has NO index (ai-tools 0.15 through 0.17)", async () => {
+      mockTransportFactory.mockReturnValue(() => readerWith({}));
+      const res = await post({ nodeId: "node-template", prNumber: 7 });
+      expect(res.status).toBe(503);
+      await expect(res.json()).resolves.toMatchObject({
+        errorCode: "review_remote_reader_unavailable",
+      });
+      expect(mockResolveNodeRepo).not.toHaveBeenCalled();
+      expect(mockWorkflowStart).not.toHaveBeenCalled();
+    });
+
+    it("the operator's own review never needs the signer or the reader", async () => {
+      mockGate.mockResolvedValue({
+        ok: true,
+        node: { nodeId: OPERATOR_NODE_ID, slug: "operator" },
+      });
+      mockSigner.mockResolvedValue({ ok: false, reason: "seed_missing" });
+      mockTransportFactory.mockReturnValue(undefined);
+      mockResolveNodeRepo.mockResolvedValue({
+        owner: "cogni-test-org",
+        repo: "cogni-monorepo",
+      });
+      const res = await post({ nodeId: "operator", prNumber: 165 });
+      expect(res.status).toBe(202);
+      expect(mockSigner).not.toHaveBeenCalled();
+    });
   });
 
   it("409 review_running: a review of the same head is already running", async () => {

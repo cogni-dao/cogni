@@ -84,6 +84,14 @@ seeded node-template IDENTITY_ATTESTATION_PRIVATE_KEY && r=1
 seeded poly IDENTITY_ATTESTATION_PRIVATE_KEY && r=1
 assert "$r" "identity attestation key auto-materializes only to operator"
 
+# git-review signing seed (task.5448): same custody. Operator bank only, 64 hex characters.
+r=0
+seeded operator GIT_REVIEW_SIGNING_SEED || r=1
+seeded node-template GIT_REVIEW_SIGNING_SEED && r=1
+seeded poly GIT_REVIEW_SIGNING_SEED && r=1
+[[ "$(val_for operator GIT_REVIEW_SIGNING_SEED)" =~ ^[0-9a-f]{64}$ ]] || r=1
+assert "$r" "git-review signing seed auto-materializes only to operator as 64 hex chars"
+
 # 1. AUTH_SECRET distinct per node (the headline isolation invariant).
 nt_auth=$(val_for node-template AUTH_SECRET); cn_auth=$(val_for poly AUTH_SECRET)
 r=0; [[ -n "$nt_auth" && -n "$cn_auth" && "$nt_auth" != "$cn_auth" ]] || r=1

@@ -17,6 +17,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AI_EXECUTION_ERROR_CODES,
   AiExecutionError,
   LlmError,
   normalizeErrorToExecutionCode,
@@ -58,6 +59,17 @@ describe("normalizeErrorToExecutionCode — fault-party before bucket", () => {
         new AiExecutionError("insufficient_credits")
       )
     ).toBe("insufficient_credits");
+  });
+
+  it.each([
+    "remote_access_requested",
+    "remote_policy_denied",
+    "remote_unavailable",
+  ] as const)("keeps the typed code of a failed read of another node's hub: %s (task.5448)", (code) => {
+    expect(AI_EXECUTION_ERROR_CODES).toContain(code);
+    expect(normalizeErrorToExecutionCode(new AiExecutionError(code))).toBe(
+      code
+    );
   });
 
   it("only genuinely-unknown provider 4xx (non-402) falls to internal — the alarm bucket", () => {
