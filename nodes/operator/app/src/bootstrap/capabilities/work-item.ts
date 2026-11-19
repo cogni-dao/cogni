@@ -16,8 +16,7 @@
  *     Doltgres store's status ladder gates it (409 `gate_unmet`) and there is no second, ungated write path.
  *   - PATCH_ON_THE_LIVE_BACKLOG (story.5096): when `backlogWriter` is wired, `patch` goes
  *     through the SAME Doltgres `patch` that `PATCH /api/v1/work/items/{id}` uses, attributed
- *     to `backlogWriter.principalId`. The store's own authority applies unchanged (a
- *     non-creator may set only triage fields priority/rank/labels/scores). Without it, `patch`
+ *     to `backlogWriter.principalId`. The store's own authority applies unchanged. Without it, `patch`
  *     stays on the markdown ports, which have no compare-and-set for callers.
  *     Priority (including 0/1) carries no extra node-admin gate (task.5306).
  *   - PATCH_REASON_AND_CITES (task.0086): the required `reason` and the optional `cites` are forwarded to the Doltgres store, the one enforcer;

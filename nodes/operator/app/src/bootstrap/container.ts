@@ -1185,7 +1185,7 @@ function createContainer(): Container {
   // writes through the SAME Doltgres patch `PATCH /api/v1/work/items/{id}` uses —
   // the runtime image has no markdown `work/` tree, so a markdown patch could never
   // land — attributed to the system principal scheduled runs execute as, under the
-  // store's unchanged authority (non-creator ⇒ triage fields only) and with the
+  // store's unchanged authority and with the
   // caller's optional `expectedRevision` as compare-and-set.
   const workItemCapability = createWorkItemCapability({
     workItemQuery: workItemAdapter,

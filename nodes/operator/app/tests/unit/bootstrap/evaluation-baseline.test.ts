@@ -83,4 +83,41 @@ describe("operator shared evaluation binding", () => {
     );
     expect(update?.contract.requires).toBe("node.collaborate");
   });
+
+  describe("core__work_item_update surface is narrowed to the retired transition tool's", () => {
+    const update = OPERATOR_CORE_TOOL_BUNDLE.find(
+      (tool) => tool.contract.name === "core__work_item_update"
+    );
+    const base = { id: "task.5111", reason: "triage the item" };
+    const parse = (set: Record<string, unknown>) =>
+      update?.contract.inputSchema.safeParse({ ...base, set }).success;
+
+    it.each([
+      ["priority", { priority: 2 }],
+      ["rank", { rank: 3 }],
+      ["labels", { labels: ["a"] }],
+      ["summary", { summary: "s" }],
+      ["status needs_research", { status: "needs_research" }],
+      ["status needs_design", { status: "needs_design" }],
+    ])("accepts set.%s", (_name, set) => {
+      expect(parse(set)).toBe(true);
+    });
+
+    it.each([
+      ["title", { title: "t" }],
+      ["outcome", { outcome: "o" }],
+      ["pr", { pr: "https://example.test/pr/1" }],
+      ["deployVerified", { deployVerified: true }],
+      ["projectId", { projectId: "story.1" }],
+      ["parentId", { parentId: "story.1" }],
+      ["status needs_implement", { status: "needs_implement" }],
+      ["status done", { status: "done" }],
+      ["status cancelled", { status: "cancelled" }],
+      ["status needs_triage", { status: "needs_triage" }],
+      ["a field alongside an allowed one", { priority: 2, title: "t" }],
+      ["an empty set", {}],
+    ])("rejects set.%s", (_name, set) => {
+      expect(parse(set)).toBe(false);
+    });
+  });
 });
