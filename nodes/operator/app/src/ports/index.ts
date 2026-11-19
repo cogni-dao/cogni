@@ -371,10 +371,14 @@ export {
   consecutiveFailures,
   DnsZoneIdentityError,
   IN_FLIGHT_PHASES,
+  isTestEnvKey,
+  isTestEnvSpec,
   keyString,
   MAX_ATTEMPT_STEPS,
   PayerError,
   SERVED_ATTEMPT_PHASES,
+  TEST_ENV_KEY_RE,
+  TEST_ENV_MARKER_ENV,
   withResolvedImage,
 } from "./node-deploy.port";
 export type {

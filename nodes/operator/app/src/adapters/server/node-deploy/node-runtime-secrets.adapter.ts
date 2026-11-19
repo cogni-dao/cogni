@@ -247,15 +247,31 @@ export class EsoNodeRuntimeSecrets implements NodeRuntimeSecretsPort {
       }
       const actual = existing.spec as { dataFrom?: unknown[] } | undefined;
       // `dataFrom` must be gone: a leftover `extract` would render the WHOLE bucket again.
-      if (!covers(existing.spec, spec) || (actual?.dataFrom?.length ?? 0) > 0)
+      if (!covers(existing.spec, spec) || (actual?.dataFrom?.length ?? 0) > 0) {
+        // One ExternalSecret serves every workload of the node (app, canary, test envs). Workloads at
+        // different SHAs can want different key sets, so a rewrite only ever ADDS keys: shrinking it
+        // would strip a key a sibling still needs (story.5159: a te lane removed the app's key).
+        const kept = (
+          (existing.spec as { data?: { secretKey?: unknown }[] } | undefined)
+            ?.data ?? []
+        )
+          .map((d) => d.secretKey)
+          .filter(
+            (k): k is string =>
+              typeof k === "string" &&
+              ENV_NAME.test(k) &&
+              isOffClusterWorkloadSecretKey(k)
+          );
+        const merged = desiredSpec(env, slug, [...new Set([...keys, ...kept])]);
         await this.custom.replaceNamespacedCustomObject(
           GROUP,
           VERSION,
           ns,
           PLURAL,
           name,
-          body(existing.metadata?.resourceVersion)
+          { ...body(existing.metadata?.resourceVersion), spec: merged }
         );
+      }
     } catch (error) {
       throw new NodeRuntimeSecretsError(
         "unavailable",

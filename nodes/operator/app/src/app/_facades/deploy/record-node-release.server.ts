@@ -42,6 +42,11 @@
  *     `placement_country_refused` when the set names a fleet-refused country, and 409
  *     `placement_source_conflict` when the node's image-catalog row also has
  *     `required_placement_countries.<env>` (one writer, CD4). No release row is written.
+ *   - TEST_ENV (story.5159): with a `testEnv` input (only `POST /api/v2/test-envs` passes one) the writer resolves the
+ *     node's declared `app`, copies it under the key `te<6 letters>` on its own host (`test-env.ts`), refuses a
+ *     copy that is not a plain stateless http app (422 `test_env_unsupported`), refuses over the cap (409
+ *     `test_env_cap`, counted before any side effect and again after the row exists, so racing requests cannot
+ *     leave more than `cap`), and returns the host. Without `testEnv` the v1 path is byte for byte unchanged.
  *   - G4_STATE_ADMISSION: a new production `state` workload is refused 422 `state_admission_refused`
  *     until the off-provider backup debt row closes; the only exception is the operator node's own
  *     `canary-db`.
@@ -71,6 +76,12 @@ import {
   readWorkloadDeclarations,
   type WorkloadDeclarationsRead,
 } from "@/features/node-deploy/read-declarations";
+import {
+  TEST_ENV_SOURCE_WORKLOAD,
+  TestEnvRefusal,
+  testEnvSlots,
+  testEnvSpec,
+} from "@/features/node-deploy/test-env";
 import type { ResolvedNodeSource } from "@/ports";
 import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
@@ -101,6 +112,18 @@ export interface RecordNodeReleaseInput {
     info(fields: object, msg: string): void;
   };
   readonly reqId?: string;
+  /**
+   * Record a TEST ENV of the node's `app` instead of the named workload (story.5159, `POST /api/v2/test-envs`).
+   * `key` is the new workload key (`te<6 letters>`), `cap` how many test envs the node may hold. ABSENT on every
+   * v1 call, so the v1 path below is unchanged.
+   */
+  readonly testEnv?:
+    | {
+        readonly key: string;
+        readonly label?: string | undefined;
+        readonly cap: number;
+      }
+    | undefined;
 }
 
 export type RecordNodeReleaseResult =
@@ -108,6 +131,8 @@ export type RecordNodeReleaseResult =
       readonly ok: true;
       readonly releaseId: string;
       readonly desiredState: string;
+      /** The recorded spec's public host (set on a test env; v1 callers ignore it). */
+      readonly host?: string | undefined;
     }
   | {
       readonly ok: false;
@@ -197,7 +222,8 @@ export async function recordNodeRelease(
       secretsCatalogText: read.secretsCatalogText,
       nodeId: node.id,
       env,
-      workload,
+      // A test env copies the node's declared `app` manifest; v1 resolves the workload it was asked for.
+      workload: input.testEnv ? TEST_ENV_SOURCE_WORKLOAD : workload,
       pendingImage,
       sourceRepository: `${source.owner}/${source.repo}`,
     });
@@ -224,6 +250,23 @@ export async function recordNodeRelease(
       });
   }
 
+  let recordedWorkload = workload;
+  if (input.testEnv) {
+    try {
+      spec = testEnvSpec(spec, {
+        key: input.testEnv.key,
+        slug: node.slug,
+        binding: workloadZone,
+        label: input.testEnv.label,
+      });
+    } catch (error) {
+      if (error instanceof TestEnvRefusal)
+        return refused(422, { error: error.code, message: error.message });
+      throw error;
+    }
+    recordedWorkload = input.testEnv.key;
+  }
+
   // G4: no NEW production state until the off-provider backup debt row closes (hub
   // node-service-delivery, debt ledger). `canary-db` is the one canary-only exception: it holds
   // canary boot rows, no user data. Lift this guard when that debt row closes.
@@ -246,6 +289,17 @@ export async function recordNodeRelease(
       workload,
     });
     if (existing) return refused(409, { error: "state_workload_exists" });
+  }
+
+  // CAP (story.5159): a refusal, never a queue. Counted before any side effect (secret generation, the row).
+  if (input.testEnv) {
+    const held = await testEnvSlots(store, node.id, env);
+    if (held.length >= input.testEnv.cap)
+      return refused(409, {
+        error: "test_env_cap",
+        cap: input.testEnv.cap,
+        running: held.length,
+      });
   }
 
   const recipes = generatedSecretRecipes({
@@ -325,10 +379,36 @@ export async function recordNodeRelease(
   const { release, desired } = await store.recordRelease({
     nodeId: node.id,
     env,
-    workload,
+    workload: recordedWorkload,
     sourceSha,
     spec,
     createdBy: input.createdBy,
   });
-  return { ok: true, releaseId: release.id, desiredState: desired.state };
+  // CAP RACE (story.5159): two requests can both pass the count above. After the row exists, recount and rank
+  // the held rows (updatedAt, key). A request ranked past the cap stops its own row and is refused, so racing
+  // requests cannot leave more than `cap` rows. Residual: two POSTs whose commit order differs from their
+  // `updatedAt` order can both pass; the role connection limit (bug.5637) then refuses connections, never data.
+  if (input.testEnv) {
+    const held = await testEnvSlots(store, node.id, env);
+    const rank = held.findIndex((d) => d.workload === recordedWorkload);
+    if (rank >= input.testEnv.cap) {
+      await store.requestStop(
+        { nodeId: node.id, env, workload: recordedWorkload },
+        { by: "system:test-env-cap", releaseId: release.id }
+      );
+      return refused(409, {
+        error: "test_env_cap",
+        cap: input.testEnv.cap,
+        running: held.length - 1,
+      });
+    }
+  }
+  return {
+    ok: true,
+    releaseId: release.id,
+    desiredState: desired.state,
+    ...(input.testEnv && "http" in spec.expose
+      ? { host: spec.expose.http.host }
+      : {}),
+  };
 }
