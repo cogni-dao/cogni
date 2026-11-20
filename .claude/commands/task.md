@@ -16,7 +16,7 @@ curl -X POST $BASE/api/v1/work/items \
     "type": "task",
     "title": "<one-line scope>",
     "projectId": "proj.<parent>",
-    "specRefs": ["<spec-id>"],
+    "specRefs": ["knowledge:<atom-id>"],
     "summary": "<acceptance criteria; reference invariants by name>",
     "outcome": "<what user/system capability ships when this PR merges>"
   }'
@@ -27,7 +27,7 @@ Server allocates the id (`task.5XXX+`). Status defaults to `needs_triage`; `/tri
 ## Rules
 
 - **ONE_TASK_ONE_PR.** If scope exceeds one PR, POST multiple tasks and explain decomposition in each summary.
-- **SCOPE_FROM_SPEC.** Reference governing spec invariants in `specRefs`. If contracts change and no spec exists, run `/spec` first.
+- **SCOPE_FROM_SPEC.** Reference governing design atoms in `specRefs` as `knowledge:<atom-id>` (any other form is a 400). If contracts change and no spec exists, run `/spec` first.
 - **Be terse.** Detailed plan + invariants land in `/design`. The task POST is acceptance criteria + scope, not a design doc.
 
 ## Next

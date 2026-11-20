@@ -26,7 +26,7 @@ import {
   GOAL_LIST_NAME,
   KNOWLEDGE_READ_NAME,
   WORK_ITEM_QUERY_NAME,
-  WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 import {
   type BaseMessage,
@@ -81,6 +81,20 @@ const PATCH_FIELDS = [
 type Snapshot = Partial<Record<(typeof PATCH_FIELDS)[number], unknown>>;
 
 const same = isDeepStrictEqual;
+
+/** A landed `core__work_item_update` returns the updated item (it has an `id`); a refusal is `success:false` or an `error`. */
+const landed = (v: Record<string, unknown>): boolean =>
+  v.success !== false &&
+  typeof v.error !== "string" &&
+  typeof v.id === "string";
+
+/** The `set` object of a `core__work_item_update` call; empty when the model sent none. */
+const setOf = (
+  args: Record<string, unknown> | undefined
+): Record<string, unknown> =>
+  args?.set && typeof args.set === "object"
+    ? (args.set as Record<string, unknown>)
+    : {};
 
 /** Tool-call args keyed by tool_call id, from every AI message in the transcript. */
 function toolCallArgs(
@@ -188,22 +202,22 @@ export function cycleScores(messages: readonly BaseMessage[]) {
         seen.set(it.id, snap);
         queryReadIds.add(it.id);
       }
-    } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
-      const args = call?.args;
-      if (args?.action !== "patch") continue;
+    } else if (m.name === WORK_ITEM_UPDATE_NAME && landed(v)) {
+      // core__work_item_update mirrors the PATCH route: the fields sent are the keys of `set`.
+      const sentSet = setOf(call?.args);
       patches++;
       const prior = seen.get(String(v.id));
-      const sent = PATCH_FIELDS.filter((f) => f in args);
+      const sent = PATCH_FIELDS.filter((f) => f in sentSet);
       if (!prior || sent.length === 0 || !sent.every((f) => f in prior)) {
         unknownBaselinePatches++;
-      } else if (sent.every((f) => same(prior[f], args[f]))) {
+      } else if (sent.every((f) => same(prior[f], sentSet[f]))) {
         identicalPatches++;
       } else {
         novelPatches++;
       }
       // A later patch in the same run compares against what this one wrote.
       const next: Snapshot = { ...prior };
-      for (const f of sent) next[f] = args[f];
+      for (const f of sent) next[f] = sentSet[f];
       seen.set(String(v.id), next);
     } else if (m.name === EDO_DECIDE_NAME && call?.name === EDO_DECIDE_NAME) {
       const a = call.args;
@@ -284,7 +298,7 @@ export function cycleTelemetry(
       else toolErrorCount++;
     } else if (m.name === GOAL_LIST_NAME && Array.isArray(v.goals)) {
       goalIds = v.goals.map((g: { id?: unknown }) => String(g?.id));
-    } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
+    } else if (m.name === WORK_ITEM_UPDATE_NAME && landed(v)) {
       changedItemIds.push(String(v.id));
     } else if (m.name === EDO_DECIDE_NAME) {
       const id = (v.entry as { id?: unknown } | undefined)?.id;

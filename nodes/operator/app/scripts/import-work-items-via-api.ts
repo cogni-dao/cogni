@@ -12,7 +12,12 @@
 
 import { execSync } from "node:child_process";
 
-import type { WorkItem } from "@cogni/work-items";
+import {
+  parseSpecRef,
+  SPEC_REF_PREFIX,
+  SpecRefsInputSchema,
+  type WorkItem,
+} from "@cogni/work-items";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
 
 const VALID_TYPES = new Set(["task", "bug", "story", "spike", "subtask"]);
@@ -41,6 +46,22 @@ function normalizeStatus(s: string | undefined): string | undefined {
   return undefined;
 }
 
+/**
+ * SPEC_REFS_TYPED (story.0069): the API takes only `knowledge:<atom-id>`. A bare atom id in the markdown is prefixed; an entry that is
+ * still not an atom id (a URL, a path) stops the import by name, so no item is filed with a link the store would refuse.
+ */
+function toSpecRefs(id: string, refs: readonly string[]): string[] {
+  const typed = refs.map((ref) =>
+    parseSpecRef(ref) !== null ? ref : `${SPEC_REF_PREFIX}${ref}`
+  );
+  const parsed = SpecRefsInputSchema.safeParse(typed);
+  if (!parsed.success)
+    throw new Error(
+      `${id}: specRefs must be knowledge:<atom-id>; got ${JSON.stringify(refs)}`
+    );
+  return parsed.data;
+}
+
 function buildBody(item: WorkItem): Record<string, unknown> {
   const body: Record<string, unknown> = {
     id: item.id,
@@ -53,7 +74,7 @@ function buildBody(item: WorkItem): Record<string, unknown> {
   if (item.node && item.node !== "shared") body.node = item.node;
   if (item.projectId) body.projectId = item.projectId;
   if (item.parentId) body.parentId = item.parentId;
-  if (item.specRefs?.length) body.specRefs = item.specRefs;
+  if (item.specRefs?.length) body.specRefs = toSpecRefs(item.id, item.specRefs);
   if (item.labels?.length) body.labels = item.labels;
   if (typeof item.priority === "number") body.priority = item.priority;
   if (typeof item.rank === "number") body.rank = item.rank;

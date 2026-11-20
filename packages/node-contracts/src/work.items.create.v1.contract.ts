@@ -12,12 +12,16 @@
  *   - status is "needs_triage" or absent (CREATE_IS_TRIAGE_ONLY, task.0122): triage routes new work
  *   - node defaults to "shared"
  *   - MOVES_SERVER_PINS_BASELINE (story.0033): `moves` is `[{ metricId, direction }]`, at most 3; the store pins each new entry's baseline, so a create never carries one.
+ *   - SPEC_REFS_TYPED (story.0069, task.5448): `specRefs` entries are `knowledge:<atom-id>` (the package's `SpecRefsInputSchema`); a URL, a path or a bare id is a 400, never stored.
  * Side-effects: none
  * Links: /api/v1/work/items route, https://node-template.cognidao.org/knowledge/work-items-port-contract
  * @internal
  */
 
-import { WorkItemMovesInputSchema } from "@cogni/work-items";
+import {
+  SpecRefsInputSchema,
+  WorkItemMovesInputSchema,
+} from "@cogni/work-items";
 import { z } from "zod";
 
 import {
@@ -60,7 +64,8 @@ export const workItemsCreateOperation = {
     // story.0033: a new item names the metrics it moves when it is filed. The server pins each baseline.
     moves: WorkItemMovesInputSchema.optional(),
     labels: z.array(z.string()).optional(),
-    specRefs: z.array(z.string()).optional(),
+    // SPEC_REFS_TYPED (story.0069): `knowledge:<atom-id>` only; any other entry is a 400. A PR goes in `pr`, atoms you only read go in `cites`.
+    specRefs: SpecRefsInputSchema.optional(),
     assignees: z.array(SubjectRefSchema).optional(),
   }),
   output: WorkItemDtoSchema,

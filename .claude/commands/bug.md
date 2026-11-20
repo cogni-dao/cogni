@@ -27,7 +27,7 @@ curl -X POST $BASE/api/v1/work/items \
     "type": "bug",
     "title": "<one-line symptom>",
     "priority": 1,
-    "specRefs": ["<spec-id-if-violated>"],
+    "specRefs": ["knowledge:<atom-id-if-violated>"],
     "summary": "OBSERVED: <what happens, with file:line>\nEXPECTED: <what should happen>\nREPRO: <steps>\nIMPACT: <who/severity>",
     "outcome": "Success is when <human|AI> can <do the broken thing without seeing the failure>."
   }'
