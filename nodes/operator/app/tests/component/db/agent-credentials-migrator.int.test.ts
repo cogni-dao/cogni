@@ -255,9 +255,13 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
 
   afterAll(async () => {
     const errors: unknown[] = [];
-    const finalize = async (name: string, work: () => PromiseLike<unknown>) => {
+    const finalize = async (
+      name: string,
+      work: () => PromiseLike<unknown>,
+      timeout = 5_000
+    ) => {
       try {
-        await phase(name, work, 5_000);
+        await phase(name, work, timeout);
       } catch (error) {
         errors.push(error);
       }
@@ -278,15 +282,22 @@ describe("actual operator migration runner", { timeout: 30_000 }, () => {
     await finalize("final/control", async () => {
       await control?.end({ timeout: 1 });
     });
-    await finalize("final/container", async () => {
-      await container?.stop();
-    });
+    // bug.5657: stop is SIGKILL + remove-with-volumes on the runner's Docker daemon, observed at
+    // 1.8-3.0s when healthy and past 5s on loaded runners. It owns no migration behavior, so its
+    // budget is slack, not a 5s assertion; a real hang still fails at this deadline.
+    await finalize(
+      "final/container",
+      async () => {
+        await container?.stop();
+      },
+      30_000
+    );
     await finalize("final/temp", async () => {
       if (temp) await rm(temp, { recursive: true, force: true });
     });
     if (errors.length)
       throw new AggregateError(errors, "fixture finalization failed");
-  }, 30_000);
+  }, 60_000);
 
   function killGroup(child: ReturnType<typeof spawn>) {
     if (!child.pid) return;
