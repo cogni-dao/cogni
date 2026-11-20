@@ -112,6 +112,7 @@ export * from "./users.ownership.v1.contract";
 export * from "./users.profile.v1.contract";
 export * from "./vcs.flight.v1.contract";
 export * from "./vcs.merge.v1.contract";
+export * from "./vcs.push-token.v1.contract";
 export * from "./vcs.review.v1.contract";
 // ── VCS ─────────────────────────────────────────────────────────────────────
 export * from "./vcs.run-ci.v1.contract";
