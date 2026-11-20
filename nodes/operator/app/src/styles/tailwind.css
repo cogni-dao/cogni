@@ -218,3 +218,18 @@
     --sidebar-accent-foreground: 220 9% 93.5%;
   }
 }
+
+/* The baseline ReUI badge pairs fill-only foregrounds with transparent variants.
+   Keep their text legible under this node's shared theme without editing the kit. */
+@layer utilities {
+  [data-slot="badge"][class~="text-destructive-foreground"][class~="bg-destructive/10"],
+  [data-slot="badge"][class~="text-destructive-foreground"][class~="bg-background"],
+  [data-slot="badge"][class~="text-invert-foreground"][class~="bg-background"] {
+    color: hsl(var(--foreground));
+  }
+
+  /* The shared destructive button's translucent hover misses contrast in dark mode. */
+  .bg-destructive.text-destructive-foreground:hover {
+    background-color: hsl(var(--destructive));
+  }
+}
