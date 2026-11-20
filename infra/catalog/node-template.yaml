@@ -28,7 +28,7 @@ envs: [candidate-a, production]
 database:
   # bug.5637 — two candidate lanes (workloads app + canary, task.5480) x (live + spare) = 4
   # simultaneous copies on the same roles. Bump this when a lane is added.
-  candidate-a: { tier: shared, budget_profile: shared-default-v1, copies: 4 }
+  candidate-a: { tier: shared, budget_profile: shared-default-v1, copies: 12 }
   production: { tier: shared, budget_profile: shared-default-v1 }
 deployment_provider:
   candidate-a: akash

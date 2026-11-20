@@ -103,9 +103,11 @@ describe("shared database budget sum (bug.5637)", () => {
     expect(roleCapSum(env)).toBeLessThanOrEqual(maxConnections - RESERVE);
   });
 
-  it.each(
-    ENVS
-  )("%s current catalog also fits the image-default ceiling of 100", (env) => {
+  // candidate-a is deliberately sized for the raised 200 ceiling (per-dev test envs, story.5159).
+  it.each([
+    "preview",
+    "production",
+  ] as const)("%s current catalog also fits the image-default ceiling of 100", (env) => {
     expect(roleCapSum(env)).toBeLessThanOrEqual(100 - RESERVE);
   });
 
@@ -117,24 +119,31 @@ describe("shared database budget sum (bug.5637)", () => {
     });
   });
 
-  it("node-template candidate-a caps cover both lanes x (live + spare)", () => {
+  it("node-template candidate-a caps cover 3 workloads x (live + spare) + 5 test envs", () => {
     const nt = catalogs.find((c) => c.name === "node-template");
     const placement = nt?.database?.["candidate-a"];
     const profile = profiles[placement?.budget_profile ?? ""];
-    expect(placement?.copies).toBe(4);
+    expect(placement?.copies).toBe(12);
     expect(
       scaled(
         profile?.roles.app.connection_limit ?? 0,
         placement?.copies,
         profile?.copies
       )
-    ).toBe(4);
+    ).toBe(12);
     expect(
       scaled(
         profile?.roles.service.connection_limit ?? 0,
         placement?.copies,
         profile?.copies
       )
-    ).toBe(8);
+    ).toBe(24);
+  });
+
+  it("shared app nodes on candidate-a cover live + spare + 5 test envs", () => {
+    for (const name of ["beacon", "levelup", "red", "toks5"]) {
+      const c = catalogs.find((n) => n.name === name);
+      expect(c?.database?.["candidate-a"]?.copies, name).toBe(7);
+    }
   });
 });
