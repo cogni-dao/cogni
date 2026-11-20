@@ -59,7 +59,7 @@
     "@cogni/scheduler-core": "workspace:*",
     "@cogni/scheduling": "https://github.com/cogni-dao/node-template/releases/download/scheduling-v0.1.0/cogni-dao-scheduling-0.1.0.tgz",
     "@cogni/substrate-health": "https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz",
-    "@cogni/ui-theme": "https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.0/cogni-dao-ui-theme-0.1.0.tgz",
+    "@cogni/ui-theme": "https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.1/cogni-dao-ui-theme-0.1.1.tgz",
     "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.15.0/cogni-dao-work-items-0.15.0.tgz",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/modifiers": "^9.0.0",

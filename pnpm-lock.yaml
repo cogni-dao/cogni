@@ -461,8 +461,8 @@ importers:
         specifier: https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz
         version: '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz'
       '@cogni/ui-theme':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.0/cogni-dao-ui-theme-0.1.0.tgz
-        version: '@cogni-dao/ui-theme@https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.0/cogni-dao-ui-theme-0.1.0.tgz'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.1/cogni-dao-ui-theme-0.1.1.tgz
+        version: '@cogni-dao/ui-theme@https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.1/cogni-dao-ui-theme-0.1.1.tgz'
       '@cogni/work-items':
         specifier: https://github.com/cogni-dao/node-template/releases/download/work-items-v0.15.0/cogni-dao-work-items-0.15.0.tgz
         version: '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.15.0/cogni-dao-work-items-0.15.0.tgz'
@@ -2029,9 +2029,9 @@ packages:
     resolution: {integrity: sha512-cRnzkeY22GRM42pAuvLMWlLf0U0m0uaLp/gjBk3DyFvJhywRmhQbYKp6hN2xGCPUUWf3dcbgK5zzHd/7+jzHww==, tarball: https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz}
     version: 0.3.0
 
-  '@cogni-dao/ui-theme@https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.0/cogni-dao-ui-theme-0.1.0.tgz':
-    resolution: {integrity: sha512-l/ZI+83CixCbWZfdp53NKp2SEFoLowOh4FjzmZJ3lt+Ty0p5TVY0PfFcpWdyqF2365g4+uFzqoGwnyJgGm9K4w==, tarball: https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.0/cogni-dao-ui-theme-0.1.0.tgz}
-    version: 0.1.0
+  '@cogni-dao/ui-theme@https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.1/cogni-dao-ui-theme-0.1.1.tgz':
+    resolution: {integrity: sha512-iHh1KXmkHBlzZFevgHr4sTnC6N0I3G58CB2jXLtqGZGonnoTm6Y9lmDsprgcOU6Srvn2M89dsihjIPOrcdGmXg==, tarball: https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.1/cogni-dao-ui-theme-0.1.1.tgz}
+    version: 0.1.1
     hasBin: true
 
   '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.15.0/cogni-dao-work-items-0.15.0.tgz':
@@ -13767,7 +13767,7 @@ snapshots:
 
   '@cogni-dao/substrate-health@https://github.com/cogni-dao/node-template/releases/download/substrate-health-v0.3.0/cogni-dao-substrate-health-0.3.0.tgz': {}
 
-  '@cogni-dao/ui-theme@https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.0/cogni-dao-ui-theme-0.1.0.tgz': {}
+  '@cogni-dao/ui-theme@https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.1/cogni-dao-ui-theme-0.1.1.tgz': {}
 
   '@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.15.0/cogni-dao-work-items-0.15.0.tgz':
     dependencies:
