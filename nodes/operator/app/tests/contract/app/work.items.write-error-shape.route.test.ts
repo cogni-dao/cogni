@@ -367,7 +367,7 @@ describe("work-item write error shape (bug.5408)", () => {
         reason: "Raise priority",
         set: { priority: 2 },
       },
-      expect.any(String)
+      { actor: TEST_SESSION_USER_1.id }
     );
     expect(logWarn).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "revision_conflict" }),

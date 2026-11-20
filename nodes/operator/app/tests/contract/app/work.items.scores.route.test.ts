@@ -249,7 +249,7 @@ describe("work-item scores HTTP boundary (story.5111)", () => {
     });
     expect(store.create).toHaveBeenCalledWith(
       expect.objectContaining({ scores: created }),
-      expect.any(String)
+      { actor: TEST_SESSION_USER_1.id }
     );
 
     await testApiHandler({
@@ -277,7 +277,7 @@ describe("work-item scores HTTP boundary (story.5111)", () => {
     });
     expect(store.patch).toHaveBeenLastCalledWith(
       expect.objectContaining({ set: { scores: null } }),
-      expect.any(String)
+      { actor: TEST_SESSION_USER_1.id }
     );
   });
 });
