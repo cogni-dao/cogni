@@ -16,6 +16,12 @@ export {
   type PrivyCosmosSignerConfig,
 } from "./privy-cosmos-signer.adapter.js";
 export {
+  createPrivyNodeWalletProvisioner,
+  type NodeWalletProvisioner,
+  type PrivyNodeWalletProvisionerConfig,
+  type ProvisionedNodeWallet,
+} from "./privy-node-wallet-provisioner.adapter.js";
+export {
   PrivyOperatorWalletAdapter,
   type PrivyOperatorWalletConfig,
 } from "./privy-operator-wallet.adapter.js";

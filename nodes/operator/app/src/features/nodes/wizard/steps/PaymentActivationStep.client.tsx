@@ -50,6 +50,7 @@ import { Button } from "@/components";
 import { LaunchPackCopyButton } from "../LaunchPackCopyButton.client";
 import { StepSection } from "../StepSection";
 import type { WizardStepProps } from "../types";
+import { NodeWalletCreate } from "./NodeWalletCreate.client";
 
 /** Default payment activation economics: 95% provider top-up / 5% DAO margin. */
 const DEFAULT_MARKUP_FACTOR = 1.10803324099723;
@@ -481,7 +482,9 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
           totalAllocation: SPLIT_TOTAL_ALLOCATION,
           distributionIncentive: 0,
         },
-        operator,
+        // SPLIT_CONTROLLER_IS_DAO (node-formation-contract invariant 5): the node DAO controls the Split,
+        // not the operator wallet. The operator wallet is a recipient only.
+        treasury,
         walletAddress as Address,
       ],
     });
@@ -708,7 +711,7 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
             detail={
               isReady
                 ? "Wallet and DAO treasury were read from the node repo-spec on main."
-                : "Write operator_wallet.address in the node repo-spec, merge it to main, then read it here."
+                : "Create the node wallet here (its repo-spec PR writes operator_wallet.address), merge it to main, then read it here."
             }
           />
           <ChecklistRow
@@ -778,6 +781,15 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
               </p>
             ) : null}
 
+            {node.status === "published" && !node.operatorWalletAddress ? (
+              <NodeWalletCreate
+                nodeId={node.id}
+                slug={node.slug}
+                nodeRepoUrl={node.nodeRepoUrl}
+                pendingWalletAddress={node.pendingNodeWalletAddress ?? null}
+              />
+            ) : null}
+
             <Button
               type="button"
               onClick={readNodeRepoSpec}
@@ -825,9 +837,10 @@ export function PaymentActivationStep({ node }: WizardStepProps): ReactElement {
                   <p className="font-medium">What your wallet confirms</p>
                   <p className="text-muted-foreground">
                     One Base transaction deploys a 0xSplits contract. Your
-                    wallet pays gas and is recorded as the creator; the node
-                    operator wallet becomes the Split controller. This does not
-                    make your wallet the node owner or treasury.
+                    wallet pays gas and is recorded as the creator; the node DAO
+                    becomes the Split controller and the node wallet is a
+                    recipient. This does not make your wallet the node owner or
+                    treasury.
                   </p>
                 </div>
               </div>
