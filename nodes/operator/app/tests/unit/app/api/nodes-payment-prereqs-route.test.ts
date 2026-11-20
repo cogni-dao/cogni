@@ -49,7 +49,6 @@ const envState = vi.hoisted(() => ({
 
 const mockFetchFileText = vi.hoisted(() => vi.fn());
 const mockGetBytecode = vi.hoisted(() => vi.fn());
-const mockLogEvent = vi.hoisted(() => vi.fn());
 const mockLog = vi.hoisted(() => ({
   child: vi.fn().mockReturnThis(),
   error: vi.fn(),
@@ -88,7 +87,6 @@ vi.mock("@/shared/observability", () => ({
     reqId: "req-1",
     routeId: "v1.nodes.payment-prereqs",
   }),
-  logEvent: mockLogEvent,
   makeLogger: () => mockLog,
 }));
 vi.mock("viem", async (importOriginal) => ({
@@ -167,8 +165,12 @@ async function call() {
 }
 
 function terminalEvent() {
-  expect(mockLogEvent).toHaveBeenCalledTimes(1);
-  return mockLogEvent.mock.calls[0]?.[2] as Record<string, unknown>;
+  const calls = mockLog.info.mock.calls.filter(
+    (call) =>
+      (call[0] as { event?: string }).event === "node.payment_prereqs.complete"
+  );
+  expect(calls).toHaveLength(1);
+  return calls[0]?.[0] as Record<string, unknown>;
 }
 
 describe("POST /api/v1/nodes/[id]/payment-prereqs", () => {

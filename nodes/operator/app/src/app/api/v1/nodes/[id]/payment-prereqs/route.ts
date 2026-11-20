@@ -47,7 +47,6 @@ import { serverEnv } from "@/shared/env";
 import {
   createRequestContext,
   EVENT_NAMES,
-  logEvent,
   makeLogger,
 } from "@/shared/observability";
 
@@ -102,42 +101,49 @@ async function handlePaymentPrereqs(
   let nodeId: string | undefined;
   let previousStatus: string | undefined;
 
-  // ONE_TERMINAL_EVENT: every exit goes through `finish`.
+  type TerminalFields = {
+    outcome: PrereqOutcome;
+    nextStatus?: string;
+    missingKey?: string;
+    errorCode?: string;
+  };
+
+  // ONE_TERMINAL_EVENT: every exit goes through `emit` (directly or via `finish`). `logEvent` only
+  // accepts the shared EventName union, so the operator-local registry constant is logged directly
+  // (same as activate-distributions).
+  const emit = (status: number, fields: TerminalFields): void => {
+    ctx.log.info(
+      {
+        event: EVENT_NAMES.NODE_PAYMENT_PREREQS_COMPLETE,
+        reqId: ctx.reqId,
+        routeId: ctx.routeId,
+        nodeId,
+        outcome: fields.outcome,
+        missingKey: fields.missingKey,
+        previousStatus,
+        nextStatus: fields.nextStatus ?? previousStatus,
+        status,
+        ...(fields.errorCode ? { errorCode: fields.errorCode } : {}),
+        durationMs: Math.round(performance.now() - startTime),
+      },
+      "payment-prereqs: complete"
+    );
+  };
   const finish = (
     status: number,
     body: Record<string, unknown>,
-    fields: {
-      outcome: PrereqOutcome;
-      nextStatus?: string;
-      missingKey?: string;
-      errorCode?: string;
-    }
+    fields: TerminalFields
   ): NextResponse => {
-    logEvent(ctx.log, EVENT_NAMES.NODE_PAYMENT_PREREQS_COMPLETE, {
-      reqId: ctx.reqId,
-      routeId: ctx.routeId,
-      nodeId,
-      outcome: fields.outcome,
-      missingKey: fields.missingKey,
-      previousStatus,
-      nextStatus: fields.nextStatus ?? previousStatus,
-      status,
-      ...(fields.errorCode ? { errorCode: fields.errorCode } : {}),
-      durationMs: Math.round(performance.now() - startTime),
-    });
+    emit(status, fields);
     return NextResponse.json(body, { status });
   };
 
   try {
     const auth = await resolveRouteIdentity(getSessionUser);
     if (!auth.ok) {
-      logEvent(ctx.log, EVENT_NAMES.NODE_PAYMENT_PREREQS_COMPLETE, {
-        reqId: ctx.reqId,
-        routeId: ctx.routeId,
+      emit(auth.response.status, {
         outcome: "error",
-        status: auth.response.status,
         errorCode: "unauthorized",
-        durationMs: Math.round(performance.now() - startTime),
       });
       return auth.response;
     }
