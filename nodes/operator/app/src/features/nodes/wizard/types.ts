@@ -24,6 +24,8 @@ export interface WizardNode {
   readonly chainId: number | null;
   readonly operatorWalletAddress: string | null;
   readonly splitAddress: string | null;
+  /** Wallet the wizard created for this node (public address), pending its repo-spec PR (story.0083). */
+  readonly pendingNodeWalletAddress?: string | null;
   readonly publishPrUrl: string | null;
   readonly failureReason: string | null;
   /** Precomputed server-side so client steps stay presentational. */

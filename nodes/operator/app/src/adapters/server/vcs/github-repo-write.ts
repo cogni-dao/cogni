@@ -91,9 +91,11 @@ import {
   nextFreeNodePort,
   type PlacementProvider,
   parseCatalogPlacement,
+  readSpecOperatorWalletAddress,
   renderCatalog,
   renderDistributionActivationSpec,
   renderNodeAppWorkloadManifest,
+  renderNodeWalletSpec,
   renderPaymentsActivationSpec,
   renderRepoSpec,
   schedulerEndpointPatchPath,
@@ -3750,6 +3752,124 @@ export class GitHubRepoWriter implements DeployPlanePort {
         },
       ],
       message: `feat(payments): activate ${slug} payment rails`,
+      branch,
+      pr: { title, body },
+    });
+    await this.updatePrBody(octokit, owner, repo, result.prNumber, title, body);
+    return { status: "pr_opened", ...result };
+  }
+
+  /**
+   * Record the wallet the wizard created for the node in the NODE'S OWN repo (story.0083): read
+   * `.cogni/repo-spec.yaml` on `main`, splice in `operator_wallet.address` and nothing else, and open
+   * (or reuse) a PR carrying that one-file change.
+   *
+   * ADDRESS_ONLY: writes ONLY `operator_wallet.address`. The payment-prereqs route reads it back from
+   * `main` after the merge; this PR is the only path from the wizard's wallet into git.
+   * NEVER_OVERWRITE: a spec on `main` that already names a DIFFERENT wallet is a typed 409
+   * `wallet_already_declared`; the same wallet is `no_changes`.
+   * IDEMPOTENT: an open PR on the same branch that already carries this address is reused; a stale
+   * one is force-updated through the same upsert path.
+   */
+  async openNodeWalletPr(input: {
+    owner: string;
+    repo: string;
+    slug: string;
+    walletAddress: string;
+  }): Promise<
+    | { status: "pr_opened"; prNumber: number; prUrl: string }
+    | { status: "no_changes" }
+  > {
+    const { owner, repo, slug, walletAddress } = input;
+    const octokit = await this.getOctokit(owner, repo);
+    const branch = `cogni-operator/node-wallet-${slug}`;
+    const title = `feat(payments): declare ${slug} operator wallet`;
+    const body =
+      `Declares \`${slug}\`'s operator wallet. Writes one fact into \`.cogni/repo-spec.yaml\`: ` +
+      `\`operator_wallet.address\` = \`${walletAddress}\`.\n\n` +
+      "The wallet was created by the node owner from the operator wizard and is owned by a key that " +
+      "lives only in the node owner's browser recovery file. The operator never holds that key. " +
+      "After this merges, the wizard's payment prerequisites step reads the address from `main`.\n\n" +
+      "_Authored automatically by cogni-operator when the node owner created the node wallet._";
+
+    const currentSpec = await this.fetchFileText({
+      owner,
+      repo,
+      path: ".cogni/repo-spec.yaml",
+      ref: "main",
+    });
+    if (currentSpec === null) {
+      throw deployPlaneError(
+        "repo_spec_missing",
+        `node repo-spec not found at ${owner}/${repo}:.cogni/repo-spec.yaml`,
+        422
+      );
+    }
+
+    const declared = readSpecOperatorWalletAddress(currentSpec);
+    if (declared !== null) {
+      if (declared.toLowerCase() === walletAddress.toLowerCase()) {
+        return { status: "no_changes" };
+      }
+      throw deployPlaneError(
+        "wallet_already_declared",
+        `${owner}/${repo} repo-spec already declares a different operator_wallet.address`,
+        409
+      );
+    }
+
+    const nextSpec = renderNodeWalletSpec(currentSpec, walletAddress);
+
+    const existingPr = await this.findOpenPrForBranch(octokit, owner, repo, {
+      branch,
+      title,
+    });
+    if (existingPr) {
+      const pendingSpec = await this.fetchFileText({
+        owner,
+        repo,
+        path: ".cogni/repo-spec.yaml",
+        ref: branch,
+      });
+      const pendingAddress =
+        pendingSpec === null
+          ? null
+          : readSpecOperatorWalletAddress(pendingSpec);
+      if (
+        pendingAddress !== null &&
+        pendingAddress.toLowerCase() === walletAddress.toLowerCase()
+      ) {
+        await this.updatePrBody(
+          octokit,
+          owner,
+          repo,
+          existingPr.prNumber,
+          title,
+          body
+        );
+        return { status: "pr_opened", ...existingPr };
+      }
+    }
+
+    const { baseCommitSha, baseTreeSha } = await this.resolveMainBase(
+      octokit,
+      owner,
+      repo
+    );
+    const blobSha = await this.createBlob(octokit, owner, repo, nextSpec);
+
+    const result = await this.commitTreeAndOpenPr(octokit, owner, repo, slug, {
+      baseCommitSha,
+      baseTreeSha,
+      entries: [
+        {
+          path: ".cogni/repo-spec.yaml",
+          mode: "100644",
+          type: "blob",
+          sha: blobSha,
+        },
+      ],
+      message: title,
       branch,
       pr: { title, body },
     });

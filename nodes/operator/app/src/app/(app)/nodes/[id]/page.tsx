@@ -241,6 +241,7 @@ export default async function NodeDashboardPage({
             chainId: node.chainId,
             operatorWalletAddress: node.operatorWalletAddress,
             splitAddress: node.splitAddress,
+            pendingNodeWalletAddress: node.pendingNodeWalletAddress,
             publishPrUrl: node.publishPrUrl,
             failureReason: node.failureReason,
             nodeRepoUrl,
