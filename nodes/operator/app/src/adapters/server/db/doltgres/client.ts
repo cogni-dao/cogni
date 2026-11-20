@@ -28,7 +28,8 @@ import {
 } from "@cogni/shared-knowledge-store/adapters/doltgres";
 import type { MetricBaselinePort, PrFactsPort } from "@cogni/work-items";
 import {
-  DoltgresWorkItemAdapter,
+  createDoltgresWorkItemStore,
+  type DoltgresWorkItemAdapter,
   OPERATOR_ID_FLOOR,
 } from "@cogni/work-items/adapters/doltgres";
 import type { Sql } from "postgres";
@@ -152,7 +153,7 @@ export function getDoltgresWorkItemsAdapter(
   } = {}
 ): DoltgresWorkItemAdapter {
   if (!_adapter)
-    _adapter = new DoltgresWorkItemAdapter(getDoltgresSql(), {
+    _adapter = createDoltgresWorkItemStore(getDoltgresSql(), {
       idFloor: OPERATOR_ID_FLOOR,
       writerLockProtocol: "database",
       readConnectionBudget: 4,
@@ -174,11 +175,13 @@ export function getDoltgresWorkItemsAdapter(
       }),
       // story.0033: a `moves` entry pins the metric's latest good observation as its baseline.
       // Absent ⇒ a non-empty `moves` write is refused (`MovesUnsupportedError`), nothing written.
-      ...(deps.metricBaseline ? { metricBaseline: deps.metricBaseline } : {}),
-      // task.0122: gate facts. An inbox's head and merge state is a plain SELECT on committed main, so it rides the read pool.
-      ...(deps.prFacts ? { prFacts: deps.prFacts } : {}),
+      metricBaseline: deps.metricBaseline ?? null,
+      prFacts: deps.prFacts ?? null,
+      // task.0122 gate facts, bug.5649: the inbox read rides the cites pool, never the read pool. The adapter retires and
+      // replaces its read pool after a read error, but this closure kept the first pool, so every inbox read after the first
+      // retirement hit an ended pool and each design-path move answered 503 gate_facts_unavailable.
       inboxes: createDoltgresInboxStates({
-        unsafe: (query) => getDoltgresReadSql().unsafe(query),
+        unsafe: (query) => getDoltgresCitesSql().unsafe(query),
       }),
       ...(deps.prRepos?.length ? { prRepos: deps.prRepos } : {}),
       ...(deps.hubOrigin ? { hubOrigin: deps.hubOrigin } : {}),
