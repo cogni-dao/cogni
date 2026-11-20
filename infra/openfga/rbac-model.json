@@ -150,25 +150,6 @@
           "computedUserset": {
             "relation": "env_manager"
           }
-        },
-        "pusher": {
-          "union": {
-            "child": [
-              {
-                "this": {}
-              },
-              {
-                "computedUserset": {
-                  "relation": "admin"
-                }
-              }
-            ]
-          }
-        },
-        "can_push": {
-          "computedUserset": {
-            "relation": "pusher"
-          }
         }
       },
       "metadata": {
@@ -211,16 +192,6 @@
             ]
           },
           "env_manager": {
-            "directly_related_user_types": [
-              {
-                "type": "user"
-              },
-              {
-                "type": "agent"
-              }
-            ]
-          },
-          "pusher": {
             "directly_related_user_types": [
               {
                 "type": "user"
