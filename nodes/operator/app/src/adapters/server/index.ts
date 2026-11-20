@@ -33,7 +33,11 @@ export type {
   ExecutionScope,
 } from "./ai/execution-scope";
 // Execution scope (ALS) — per-run billing + actor context for tools
-export { getExecutionScope, runInScope } from "./ai/execution-scope";
+export {
+  findExecutionScope,
+  getExecutionScope,
+  runInScope,
+} from "./ai/execution-scope";
 export {
   type CompletionStreamFn,
   type CompletionStreamParams,
