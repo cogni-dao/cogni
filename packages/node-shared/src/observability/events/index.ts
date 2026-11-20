@@ -54,6 +54,12 @@ export const EVENT_NAMES = {
   // Work-item PR repo pin at boot (task.0122): unset or malformed leaves it unpinned; entries that are not owner/repo are ignored. Once at boot, never per request.
   ADAPTER_WORK_ITEMS_PR_REPO_UNPINNED: "adapter.work_items.pr_repo_unpinned",
   ADAPTER_WORK_ITEMS_PR_REPO_IGNORED: "adapter.work_items.pr_repo_ignored",
+  // Agent atom read counters (story.0061): one line per flush with key and read counts; a drop or a failed flush with its count. Never ids.
+  KNOWLEDGE_READ_COUNTS_FLUSHED: "knowledge.read_counts_flushed",
+  KNOWLEDGE_READ_COUNT_WRITE_FAILED: "knowledge.read_count_write_failed",
+  // A citing patch's (atom, item) pairs recorded, or not recorded (story.0061): counts and reason only.
+  KNOWLEDGE_CITE_PAIRS_RECORDED: "knowledge.cite_pairs_recorded",
+  KNOWLEDGE_CITE_PAIRS_WRITE_FAILED: "knowledge.cite_pairs_write_failed",
   // AI Domain - Server
   AI_COMPLETION: "ai.completion",
   AI_LLM_CALL: "ai.llm_call",

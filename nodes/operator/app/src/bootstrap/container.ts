@@ -88,6 +88,11 @@ import type {
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
 import type { GoalsProgress, MetricService } from "@cogni-dao/metrics";
 import {
+  CitePairRecorder,
+  KnowledgeReadCounter as PostgresKnowledgeReadCounter,
+  type UsageLogEvent,
+} from "@cogni-dao/metrics/usage";
+import {
   Client as TemporalClient,
   Connection as TemporalConnection,
   type WorkflowClient,
@@ -111,6 +116,7 @@ import {
   DrizzleScheduleUserAdapter,
   DrizzleThreadPersistenceAdapter,
   EvmRpcOnChainVerifierAdapter,
+  findExecutionScope,
   GITHUB_ADAPTER_VERSION,
   GitHubNodeDeploymentTopologyAdapter,
   GitHubWebhookNormalizer,
@@ -155,6 +161,7 @@ import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { DrizzleWorkItemSessionAdapter } from "@/adapters/server/db/work-item-session.adapter";
 import { createHttpEpochsRead } from "@/adapters/server/ingestion/http-epochs-read";
 import { createHttpReceiptDelivery } from "@/adapters/server/ingestion/http-receipt-delivery";
+import { withReadCounting } from "@/adapters/server/knowledge-usage/counting-knowledge-capability";
 import { CompositeNodeRegistryAdapter } from "@/adapters/server/node-registry/composite-node-registry.adapter";
 import { DbNodeRegistryAdapter } from "@/adapters/server/node-registry/db-node-registry.adapter";
 import { LiveNodeRegistryAdapter } from "@/adapters/server/node-registry/live-node-registry.adapter";
@@ -239,6 +246,7 @@ import type {
   DataSourceRegistration,
   EpochsRead,
   GovernanceStatusPort,
+  KnowledgeReadCounter,
   LangfusePort,
   LlmService,
   MetricsQueryPort,
@@ -294,6 +302,7 @@ import { resolveNodeCatalogSource } from "@/shared/node-registry/catalog-source"
 import { envForApex } from "@/shared/node-registry/deploy-hosts";
 import { baseDomain } from "@/shared/node-registry/resolve";
 import {
+  logEvent,
   makeLogger,
   EVENT_NAMES as OPERATOR_EVENT_NAMES,
 } from "@/shared/observability";
@@ -400,6 +409,8 @@ export interface Container {
   workItemQuery: WorkItemQueryPort;
   /** Doltgres-backed work-items API surface — task.0423 v0. Throws if DOLTGRES_URL is unset. */
   doltgresWorkItems: WorkItemsContentPort;
+  /** Write-time daily counters of agent atom reads (story.0061): batched, never blocks or fails the caller. */
+  knowledgeReadCounter: KnowledgeReadCounter;
   /** Review and validation artifacts of work items (task.0028): the item store and the insert-only artifact store. Undefined when DOLTGRES_URL is unset. */
   workItemArtifacts: WorkItemArtifactDeps | undefined;
   /** Operator-local active work-item coordination sessions. */
@@ -845,6 +856,21 @@ function createContainer(): Container {
 
   // Service DB (BYPASSRLS) for worker adapters
   const serviceDb = getServiceDb();
+
+  // story.0061: the shared usage writers log through this node's registered events.
+  const usageLog = log.child({ component: "KnowledgeUsage" });
+  const logUsage = ({ event, ...fields }: UsageLogEvent) =>
+    logEvent(usageLog, event, fields);
+  const knowledgeReadCounter = new PostgresKnowledgeReadCounter(
+    serviceDb.$client,
+    logUsage
+  );
+  const flushReadCounts = () => {
+    void knowledgeReadCounter.flush();
+  };
+  process.on("SIGTERM", flushReadCounts);
+  process.on("SIGINT", flushReadCounts);
+
   const paymentAttemptServiceRepository =
     new ServiceDrizzlePaymentAttemptRepository(serviceDb);
   const workItemSessions = getWorkItemSessionPort();
@@ -1024,6 +1050,15 @@ function createContainer(): Container {
           evaluateAt: g.evaluateAt ? g.evaluateAt.toISOString() : null,
         })),
     };
+    // After the listActiveGoals assignment, so the spread keeps it (story.0061).
+    knowledgeCapability = withReadCounting(
+      knowledgeCapability,
+      knowledgeReadCounter,
+      () => {
+        const scope = findExecutionScope();
+        return scope ? { principalId: scope.actorUserId } : undefined;
+      }
+    );
     const edoResolver = new DoltgresEdoResolverAdapter({
       sql: doltClient,
       store: knowledgePort,
@@ -1162,6 +1197,23 @@ function createContainer(): Container {
       create: notConfigured,
       patch: notConfigured,
       delete: notConfigured,
+    };
+  }
+
+  // story.0061: a successful patch also records the (atom, item) pairs it cites; the route and the agent tool share
+  // this patch, and the record never fails or delays it.
+  {
+    const citePairs = new CitePairRecorder(serviceDb.$client, logUsage);
+    const leased = doltgresWorkItems;
+    doltgresWorkItems = {
+      ...leased,
+      async patch(input, principalId) {
+        const item = await leased.patch(input, principalId);
+        if (input.cites?.length) {
+          citePairs.record(item.id, item.revision, input.cites);
+        }
+        return item;
+      },
     };
   }
 
@@ -1491,6 +1543,7 @@ function createContainer(): Container {
     toolSource,
     knowledgeContributionService,
     knowledgeStorePort,
+    knowledgeReadCounter,
     goalMetrics,
     goalProgress,
     edoCapability,

@@ -73,6 +73,11 @@ export function getExecutionScope(): ExecutionScope {
   return scope;
 }
 
+/** The current execution scope, or undefined outside runInScope. For observers that must never throw (story.0061). */
+export function findExecutionScope(): ExecutionScope | undefined {
+  return executionScopeStorage.getStore();
+}
+
 /**
  * Run a function within an execution scope.
  * Sets billing + abort for the duration of the call (and all async continuations).

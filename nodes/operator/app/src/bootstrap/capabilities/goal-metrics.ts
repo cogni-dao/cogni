@@ -43,6 +43,7 @@ import {
   createGoalSource,
   createGoalMetrics as createPublishedGoalMetrics,
 } from "@cogni-dao/metrics/knowledge";
+import { createKnowledgeUsageCalculator } from "@cogni-dao/metrics/usage";
 import type { Sql } from "postgres";
 import {
   DeliveryKpiSource,
@@ -116,6 +117,8 @@ export function createGoalMetrics(deps: {
     ...rest,
     node: getNodeId(),
     nodeCalculators: [
+      // story.0061: the read-miss KPI over this node's own `knowledge_read_daily` (`knowledge.usage@1`).
+      createKnowledgeUsageCalculator(rest.observationsSql),
       ...createDeliveryCalculators(deliverySource, { controlHost, snapshots }),
       // task.5498: the candidate queue (`delivery.candidate-backlog@1`). The node repo is its catalog
       // `source_repo`; GitHub is read through the same review App as the review KPIs (no new credential).

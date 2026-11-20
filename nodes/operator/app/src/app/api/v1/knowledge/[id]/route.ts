@@ -19,6 +19,7 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer } from "@/bootstrap/container";
 import { wrapRouteHandlerWithLogging } from "@/bootstrap/http";
+import { countAgentRead } from "../_usage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,7 +31,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     routeId: "knowledge.get",
     auth: { mode: "required", getSessionUser },
   },
-  async (ctx, _request, sessionUser, context) => {
+  async (ctx, request, sessionUser, context) => {
     if (!sessionUser) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
@@ -50,6 +51,7 @@ export const GET = wrapRouteHandlerWithLogging<{
     const { id } = await context.params;
 
     const entry = await port.getKnowledge(id);
+    countAgentRead(request, sessionUser, id, entry ? "ok" : "fail");
     if (!entry) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
