@@ -12,19 +12,13 @@
  *     when wired — in operator that is the Doltgres read path `GET /api/v1/work/items`
  *     uses (read pool, never writer admission). The runtime image carries no `work/`
  *     tree, so a markdown-bound query always saw an empty backlog.
- *   - WRITES_NOT_WIDENED: `transitionStatus` keeps its lookup + command on
- *     `workItemQuery` / `workItemCommand`; rebinding reads does not route writes anywhere new.
- *   - PATCH_ON_THE_LIVE_BACKLOG (story.5096): when `backlogWriter` is wired, `patch` goes
- *     through the SAME Doltgres `patch` that `PATCH /api/v1/work/items/{id}` uses, attributed
- *     to `backlogWriter.principalId`. The store's own authority applies unchanged (a
- *     non-creator may set only triage fields priority/rank/labels/scores). Without it, `patch`
- *     stays on the markdown ports, which have no compare-and-set for callers.
- *     Priority (including 0/1) carries no extra node-admin gate (task.5306).
- *   - PATCH_REASON_AND_CITES (task.0086): the required `reason` and the optional `cites` are forwarded to the Doltgres store, the one enforcer;
- *     the markdown fallback (development only) has no history and ignores both.
- *   - PATCH_CAS_PASSTHROUGH: a caller `expectedRevision` is forwarded as the store's
- *     compare-and-set; the store's `WorkItemRevisionConflictError` becomes the ai-tools
- *     `WorkItemPatchConflictError` (nothing written). Absent ⇒ unconditioned patch.
+ *   - LEGACY_METADATA_ONLY: no host-bound actor/requester/run reaches this capability. Until
+ *     task.0175 supplies the shared binding, only the prior released metadata fields may write
+ *     as the existing system principal: priority, rank, labels, summary, scores. New status/fields
+ *     fail closed before store admission. This is not status-transition proof.
+ *   - PATCH_REASON_CITES_CAS: forwards id/reason/cites/revision/set to the released Doltgres
+ *     patch, translating only its revision conflict. Gate errors propagate unchanged.
+ *   - NO_MARKDOWN_WRITE_FALLBACK: missing Doltgres writer refuses every patch.
  *   - MOVES_READ_AT_READ_TIME (story.0033): a `query` that returns exactly one item adds each move's baseline, current reading and verdict
  *     from `moveReadings`; a list or page read returns the stored moves only, so a page costs no metric lookup.
  *   - ONE_ITEM_ENVELOPE (task.0118): `read` (the `core__work_item_read` path) is the single-item envelope: it also adds each move's metric, KPI
@@ -41,15 +35,15 @@ import {
   type WorkItemInfo,
   WorkItemPatchConflictError,
   type WorkItemQueryParams,
-  type WorkItemTransitionResult,
 } from "@cogni/shared-ai-tools";
 import type {
   ActorKind,
   EnvelopeDegradedEvent,
+  ItemArtifactsPort,
   ItemLinksPort,
+  ItemRefPorts,
   MoveReadingPort,
   WorkItem,
-  WorkItemCommandPort,
   WorkItemQueryPort,
   WorkItemStatus,
   WorkItemType,
@@ -70,9 +64,8 @@ import {
  * Dependencies for creating the work item capability.
  */
 export interface WorkItemCapabilityDeps {
-  /** Lookup port for the command path (transition/patch), and the `query` fallback. */
+  /** Fallback query port when the Doltgres reader is absent. */
   readonly workItemQuery: WorkItemQueryPort;
-  readonly workItemCommand: WorkItemCommandPort;
   /**
    * Read-only list port for `query`. When set, `query` lists through it instead of
    * `workItemQuery`. Structural `list` only — a store's richer list result (e.g.
@@ -83,11 +76,13 @@ export interface WorkItemCapabilityDeps {
   readonly moveReadings?: MoveReadingPort | undefined;
   /** First page of an item's citation links (`read` with `includeLinks`); absent reads `unavailable`. */
   readonly links?: ItemLinksPort | undefined;
+  readonly refs?: ItemRefPorts | undefined;
+  readonly artifacts?: ItemArtifactsPort | undefined;
   /** One event per degraded envelope part (chain or links). */
   readonly log?: ((event: EnvelopeDegradedEvent) => void) | undefined;
   /**
    * Doltgres write path for `patch` (the store behind `PATCH /api/v1/work/items/{id}`).
-   * When set, `patch` writes there as `principalId` instead of the markdown ports.
+   * When set, `patch` writes there as `principalId` (the bare actor id; the store adds the `actor:` tag) instead of the markdown ports.
    */
   readonly backlogWriter?: {
     readonly store: Pick<WorkItemsDoltgresPort, "patch">;
@@ -117,7 +112,7 @@ function toWorkItemInfo(item: WorkItem): WorkItemInfo {
 export function createWorkItemCapability(
   deps: WorkItemCapabilityDeps
 ): WorkItemCapability {
-  const { workItemQuery, workItemCommand } = deps;
+  const { workItemQuery } = deps;
   const reader = deps.backlogReader ?? workItemQuery;
 
   async function listPage(params: WorkItemQueryParams) {
@@ -153,25 +148,33 @@ export function createWorkItemCapability(
     return judgeMoveSummaries([only], deps.moveReadings);
   }
 
-  /** The patch `set` without explicit-undefined keys (the route facade drops them the same way). */
-  const definedOnly = (set: object): object =>
-    Object.fromEntries(Object.entries(set).filter(([, v]) => v !== undefined));
-
   return {
     /**
      * THE single-item envelope (task.0118), the shape `GET /api/v1/work/items/{id}` serves: the item with each
      * move's readings, verdict and metric, KPI and goal, and with `includeLinks` the first page of citation links.
      */
-    async read(id, options): Promise<WorkItemInfo | null> {
+    async read(id, options) {
       const result = await listPage({ ids: [id], limit: 1 });
-      const item = result.items
-        .map(toWorkItemInfo)
-        .find((entry) => entry.id === id);
+      const matches = result.items.filter((entry) => entry.id === id);
+      if (matches.length > 1)
+        throw new Error("work_source_unavailable: ambiguous item");
+      const item = matches[0] ? toWorkItemInfo(matches[0]) : undefined;
       if (!item) return null;
+      if (!Number.isSafeInteger(item.revision)) {
+        throw new Error(
+          "work_source_revision_unavailable: exact item has no numeric revision"
+        );
+      }
       return composeItemEnvelope(
         item,
-        { readings: deps.moveReadings, links: deps.links, log: deps.log },
-        { includeLinks: options?.includeLinks === true }
+        {
+          readings: deps.moveReadings,
+          links: deps.links,
+          artifacts: deps.artifacts,
+          ...deps.refs,
+          log: deps.log,
+        },
+        options
       );
     },
 
@@ -190,28 +193,17 @@ export function createWorkItemCapability(
       return withMoveReadings(result.items.map(toWorkItemInfo));
     },
 
-    async transitionStatus(input): Promise<WorkItemTransitionResult> {
-      const current = await workItemQuery.get(toWorkItemId(input.id));
-      if (!current) {
-        throw new Error(`Work item not found: ${input.id}`);
-      }
-
-      const updated = await workItemCommand.transitionStatus({
-        id: toWorkItemId(input.id),
-        expectedRevision: String(current.revision),
-        toStatus: input.toStatus as WorkItemStatus,
-        ...(input.reason && { reason: input.reason }),
-      });
-
-      return {
-        id: updated.id,
-        previousStatus: current.status,
-        newStatus: updated.status,
-        revision: updated.revision as number,
-      };
-    },
-
     async patch(input): Promise<WorkItemInfo> {
+      const allowed = new Set([
+        "priority",
+        "rank",
+        "labels",
+        "summary",
+        "scores",
+      ]);
+      if (Object.keys(input.set).some((key) => !allowed.has(key))) {
+        throw new Error("work item update field requires a verified run actor");
+      }
       const writer = deps.backlogWriter;
       if (writer) {
         try {
@@ -223,7 +215,7 @@ export function createWorkItemCapability(
               cites: input.cites,
               set: input.set,
             }),
-            writer.principalId
+            { actor: writer.principalId }
           );
           return toWorkItemInfo(updated);
         } catch (e) {
@@ -238,25 +230,9 @@ export function createWorkItemCapability(
         }
       }
 
-      if (input.expectedRevision !== undefined) {
-        throw new Error(
-          "expectedRevision requires the Doltgres backlog writer (not wired)"
-        );
-      }
-      const current = await workItemQuery.get(toWorkItemId(input.id));
-      if (!current) {
-        throw new Error(`Work item not found: ${input.id}`);
-      }
-
-      const updated = await workItemCommand.patch({
-        id: toWorkItemId(input.id),
-        expectedRevision: String(current.revision),
-        set: definedOnly(input.set) as NonNullable<
-          Parameters<typeof workItemCommand.patch>[0]["set"]
-        >,
-      });
-
-      return toWorkItemInfo(updated);
+      throw new Error(
+        "Doltgres backlog writer required for attributed work item updates"
+      );
     },
   };
 }

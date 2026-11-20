@@ -43,7 +43,7 @@ import {
   type KpiReaderRegistry,
   stepGraphIdFromTags,
   successCriterionFromTags,
-} from "@cogni/knowledge-store";
+} from "@cogni/operator-knowledge-store";
 
 const GOAL_LOOP_SOURCE_REF = (hypothesisId: string) =>
   `goal-loop:${hypothesisId}` as const;

@@ -52,14 +52,14 @@ import {
   createContributionService,
   defaultCanMergeKnowledge,
   shapeGate,
-} from "@cogni/knowledge-store";
+} from "@cogni/operator-knowledge-store";
 import {
   buildDoltgresClient,
   createDoltgresPusher,
   DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
   wrapPushSafe,
-} from "@cogni/knowledge-store/adapters/doltgres";
+} from "@cogni/operator-knowledge-store/adapters/doltgres";
 import { DoltgresWorkItemAdapter } from "@cogni/work-items/adapters/doltgres";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

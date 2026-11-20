@@ -25,7 +25,7 @@
 import {
   DomainNotRegisteredError,
   HypothesisMissingEvaluateAtError,
-} from "@cogni/knowledge-store";
+} from "@cogni/operator-knowledge-store";
 import { NextResponse } from "next/server";
 import { ZodError, z } from "zod";
 import { startGoal } from "@/app/_facades/goal-loop/start.server";

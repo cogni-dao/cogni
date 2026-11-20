@@ -9,7 +9,7 @@
  *   - OPERATOR_CATALOG_IS_LOCAL
  *   - COGNI_QUALIFICATION_IS_TEMPORARY: the operator qualifies the shared Cogni mechanism in this workspace
  *     (story.5116, Derek 2026-10-26); node-template adopts the proven version through node-sync-prs.
- *     The shared release baseline is still verified present so the pin stays honest.
+ *     The operator catalog owns the runtime selection during qualification.
  * Side-effects: none
  * Links: hub adopt-node-package-release, story.5111, story.5116
  * @public
@@ -22,12 +22,9 @@ import {
   OPERATOR_LANGGRAPH_GRAPH_IDS,
 } from "@cogni/langgraph-graphs";
 
-import { LANGGRAPH_CATALOG as SHARED_LANGGRAPH_CATALOG } from "@cogni/shared-langgraph-graphs";
-
-if (!SHARED_LANGGRAPH_CATALOG["work-prioritizer"])
-  throw new Error("Shared evaluation release is missing work-prioritizer");
 const cogniWorkReview = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
-if (!cogniWorkReview) throw new Error("Operator Cogni graph is missing work-prioritizer");
+if (!cogniWorkReview)
+  throw new Error("Operator Cogni graph is missing work-prioritizer");
 export const LANGGRAPH_CATALOG: LangGraphCatalog = {
   ...OPERATOR_LANGGRAPH_CATALOG,
   "work-prioritizer": cogniWorkReview,

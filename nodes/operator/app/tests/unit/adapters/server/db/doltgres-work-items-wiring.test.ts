@@ -26,7 +26,7 @@ const { built, resolverSql, inboxSql, resolver } = vi.hoisted(() => ({
   resolver: { resolve: undefined as unknown as EntryResolver["resolve"] },
 }));
 
-vi.mock("@cogni/knowledge-store/adapters/doltgres", () => ({
+vi.mock("@cogni/operator-knowledge-store/adapters/doltgres", () => ({
   buildDoltgresClient: vi.fn(
     (opts: { applicationName: string; max?: number }) => {
       const refuse = () => {

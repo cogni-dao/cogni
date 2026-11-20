@@ -31,8 +31,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cogni/knowledge-base": "workspace:*",
-    "drizzle-orm": "^0.44.7"
+    "@cogni/knowledge-base": "https://github.com/cogni-dao/node-template/releases/download/knowledge-base-v0.6.0/cogni-dao-knowledge-base-0.6.0.tgz",
+    "drizzle-orm": "^0.44.7",
+    "@cogni/knowledge-store": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.5.1",

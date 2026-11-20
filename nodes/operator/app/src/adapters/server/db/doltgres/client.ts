@@ -21,7 +21,7 @@
  * @internal
  */
 
-import { buildDoltgresClient } from "@cogni/knowledge-store/adapters/doltgres";
+import { buildDoltgresClient } from "@cogni/operator-knowledge-store/adapters/doltgres";
 import {
   createDoltgresEntryResolver,
   createDoltgresInboxStates,

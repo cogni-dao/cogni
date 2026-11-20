@@ -33,7 +33,7 @@ import {
   JUDGE_KPI_ID,
   type LoopBudget,
   METRIC_STRATEGY_PREFIX,
-} from "@cogni/knowledge-store";
+} from "@cogni/operator-knowledge-store";
 import {
   DEFAULT_GOAL_STEP_GRAPH_ID,
   GoalLoopWorkflowInputSchema,

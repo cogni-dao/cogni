@@ -18,8 +18,8 @@
  * @internal
  */
 
-import type { KnowledgeStorePort } from "@cogni/knowledge-store";
-import { isWorkItemEndpointId } from "@cogni/knowledge-store";
+import type { KnowledgeStorePort } from "@cogni/operator-knowledge-store";
+import { isWorkItemEndpointId } from "@cogni/operator-knowledge-store";
 import { describeCitation } from "@cogni/shared-knowledge-store";
 import { CitationLinksPageSchema, type ItemLinksPort } from "@cogni/work-items";
 

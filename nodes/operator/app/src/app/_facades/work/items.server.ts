@@ -33,9 +33,11 @@ import type {
   WorkItemId,
   WorkQuery,
   WorkSummaryReadOptions,
+  WriteAttribution,
 } from "@cogni/work-items";
 import {
   composeItemEnvelope,
+  createItemRefPorts,
   judgeMoveSummaries,
   toWorkItemDto,
   toWorkItemId,
@@ -44,7 +46,6 @@ import {
 
 import { createCitationLinksPort } from "@/bootstrap/capabilities/citation-links";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
-import { createItemRefPorts } from "@/bootstrap/capabilities/work-item-refs";
 import { getContainer } from "@/bootstrap/container";
 
 /**
@@ -455,12 +456,12 @@ async function withItemEnvelope(
   );
 }
 
-function authorTagFromSession(user: {
+/** The authenticated user's stable ID; the store adds the `actor:` tag. */
+function attributionFromSession(user: {
   id: string;
   displayName: string | null;
-}): string {
-  const handle = user.displayName?.trim() || user.id;
-  return `actor:${handle}`;
+}): WriteAttribution {
+  return { actor: user.id };
 }
 
 type StripUndefined<T> = {
@@ -682,7 +683,7 @@ export async function createWorkItem(
         ...(input.scores !== undefined && { scores: input.scores }),
         ...(input.moves !== undefined && { moves: input.moves }),
       },
-      authorTagFromSession(sessionUser)
+      attributionFromSession(sessionUser)
     );
     return await withMoveReadings(toDto(created));
   } catch (e) {
@@ -706,7 +707,7 @@ export async function patchWorkItem(
         reason: input.reason,
         ...(input.cites !== undefined && { cites: input.cites }),
       },
-      authorTagFromSession(sessionUser)
+      attributionFromSession(sessionUser)
     );
     if (!patched) throw new WorkItemNotFoundError(input.id);
     return await withMoveReadings(toDto(patched));
@@ -723,7 +724,7 @@ export async function deleteWorkItem(
   try {
     return await container.doltgresWorkItems.delete(
       toWorkItemId(id),
-      authorTagFromSession(sessionUser)
+      attributionFromSession(sessionUser)
     );
   } catch (e) {
     throw mapStoreError(e);

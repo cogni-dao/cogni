@@ -19,6 +19,16 @@
  */
 
 import {
+  ContributionAppendCommitRequestSchema,
+  ContributionCloseRequestSchema,
+  ContributionMergeCheckRequestSchema,
+  ContributionMergeCheckResponseSchema,
+  ContributionMergeRequestSchema,
+  ContributionsCreateRequestSchema,
+  ContributionsListQuerySchema,
+} from "@cogni/node-contracts";
+import type { SessionUser } from "@cogni/node-shared";
+import {
   CitationTargetNotFoundError,
   CitationTypeMismatchError,
   ContributionConflictError,
@@ -36,17 +46,7 @@ import {
   KnowledgeWriteScopeRequiredError,
   type PrincipalAuthSource,
   sessionUserToPrincipal,
-} from "@cogni/knowledge-store";
-import {
-  ContributionAppendCommitRequestSchema,
-  ContributionCloseRequestSchema,
-  ContributionMergeCheckRequestSchema,
-  ContributionMergeCheckResponseSchema,
-  ContributionMergeRequestSchema,
-  ContributionsCreateRequestSchema,
-  ContributionsListQuerySchema,
-} from "@cogni/node-contracts";
-import type { SessionUser } from "@cogni/node-shared";
+} from "@cogni/operator-knowledge-store";
 import { calculatorShape } from "@cogni-dao/metrics";
 import {
   displayFits,

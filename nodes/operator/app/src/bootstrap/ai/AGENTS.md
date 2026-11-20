@@ -58,3 +58,7 @@ AI tool bindings and tool source factory. Wires tool implementations with inject
 ## Notes
 
 - Per TOOL_BINDING_REQUIRED: createBoundToolSource throws if any catalog tool lacks binding
+
+## Temporary release compatibility restriction
+
+Published 0.24 update/read contracts are composed once. The update keeps `node.collaborate` and permits only previously released metadata fields (priority, rank, labels, summary, scores) through the existing store/system actor. Status and other fields fail before writer admission. Published EDO decide is paired with its released implementation but refuses writes: the runtime adapter currently discards invocation actorId/subjectId/runId, and the private EDO writer cannot record them or honor confidencePct. task.0175 must supply shared, genuine host attribution before lifting these restrictions. No artifact-record tool is registered. This migration does not close the parent story or prove an admitted status/EDO write.

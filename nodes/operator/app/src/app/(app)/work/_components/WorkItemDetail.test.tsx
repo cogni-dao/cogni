@@ -3,8 +3,8 @@
 
 /**
  * Module: `@app/(app)/work/_components/WorkItemDetail.test`
- * Purpose: Proves every route-backed detail state exposes explicit accessible sheet semantics.
- * Scope: WorkItemDetail rendering only.
+ * Purpose: Proves the binding names every route-backed detail state as an accessible sheet through the package view's header slots.
+ * Scope: WorkItemDetail binding only; the sections and their reads are proven in the package (PACKAGE_ONLY_PROOF, story.0085).
  * Side-effects: DOM rendering in happy-dom
  * Links: bug.5355, ./WorkItemDetail.tsx
  */
@@ -13,17 +13,20 @@
 
 import "@testing-library/jest-dom/vitest";
 
+import { WorkItemReadError } from "@cogni/knowledge-base-ui/work-item";
 import type { WorkItemDto } from "@cogni/node-contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { WorkItemFetchError } from "../_api/fetchWorkItems";
 import { WorkItemDetail } from "./WorkItemDetail";
 
-vi.mock("../../_components/EntityCitationLinks", () => ({
-  EntityCitationLinks: () => null,
-}));
+// The view reads Links and Expectations through the package client; no node server runs here.
+beforeEach(() => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(
+    async () => new Response("{}", { status: 503 })
+  );
+});
 
 const item: WorkItemDto = {
   id: "bug.5355",
@@ -45,6 +48,7 @@ const clients = new Set<QueryClient>();
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   for (const client of clients) client.clear();
   clients.clear();
 });
@@ -74,65 +78,36 @@ describe("WorkItemDetail accessibility states", () => {
     renderDetail({ isLoading: true });
 
     expect(
-      screen.getByRole("heading", { name: "Loading work item" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Loading details for bug.5355")
+      screen.getByRole("dialog", { name: "Loading work item" })
     ).toBeInTheDocument();
   });
 
   it("labels only a typed 404 as not found", () => {
-    renderDetail({
-      error: new WorkItemFetchError("not_found", "missing", 404),
-    });
+    renderDetail({ error: new WorkItemReadError("item", 404) });
 
     expect(
-      screen.getByRole("heading", { name: "Work item not found" })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Work item bug.5355 does not exist or is not visible to you"
-      )
+      screen.getByRole("dialog", { name: "Work item not found" })
     ).toBeInTheDocument();
   });
 
-  it.each([
-    "auth",
-    "busy",
-    "server",
-    "network",
-    "unexpected",
-  ] as const)("labels %s failures as operational", (kind) => {
-    renderDetail({ error: new WorkItemFetchError(kind, "failed") });
+  it.each([401, 409, 503, 500])("labels HTTP %s as operational", (status) => {
+    renderDetail({ error: new WorkItemReadError("item", status) });
 
     expect(
-      screen.getByRole("heading", { name: "Unable to load work item" })
+      screen.getByRole("dialog", { name: "Unable to load work item" })
     ).toBeInTheDocument();
     expect(
-      screen.getByText("The work-item request failed and can be retried")
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("heading", { name: "Work item not found" })
+      screen.queryByRole("dialog", { name: "Work item not found" })
     ).not.toBeInTheDocument();
   });
 
-  it("labels the loaded item with its title and exact id", () => {
+  it("labels the loaded item with its title", () => {
     renderDetail({ item });
 
     expect(
-      screen.getByRole("heading", {
+      screen.getByRole("dialog", {
         name: "Give every work item a human permalink",
       })
     ).toBeInTheDocument();
-    expect(screen.getByText("Details for bug.5355")).toBeInTheDocument();
-  });
-
-  it("titles the scores block Evaluation, never do-it-now", () => {
-    renderDetail({
-      item: { ...item, scores: { goal: { v: 3 }, agent: { v: 2 } } },
-    });
-
-    expect(screen.getByText("Evaluation")).toBeInTheDocument();
-    expect(document.body.innerHTML).not.toMatch(/do-it-now/i);
   });
 });

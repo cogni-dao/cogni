@@ -62,7 +62,7 @@ export const POST = wrapRouteHandlerWithLogging<{
     return respond(
       ctx,
       startedAt,
-      await recordWorkItemArtifact(deps, id, sessionUser.id, body)
+      await recordWorkItemArtifact(deps, id, { actor: sessionUser.id }, body)
     );
   }
 );

@@ -23,17 +23,17 @@
  */
 
 import {
-  buildKnowledgeGraph,
-  type KnowledgeGraphModel,
-  type KnowledgeStorePort,
-} from "@cogni/knowledge-store";
-import {
   type DomainsListResponse,
   DomainsListResponseSchema,
   type KnowledgeListResponse,
   KnowledgeListResponseSchema,
   type KnowledgeRow,
 } from "@cogni/node-contracts";
+import {
+  buildKnowledgeGraph,
+  type KnowledgeGraphModel,
+  type KnowledgeStorePort,
+} from "@cogni/operator-knowledge-store";
 import { toKnowledgeRow } from "@cogni/shared-knowledge-store";
 import { unstable_cache } from "next/cache";
 

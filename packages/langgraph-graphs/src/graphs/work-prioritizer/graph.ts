@@ -26,7 +26,7 @@ import {
   GOAL_LIST_NAME,
   KNOWLEDGE_READ_NAME,
   WORK_ITEM_QUERY_NAME,
-  WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 import {
   type BaseMessage,
@@ -188,9 +188,15 @@ export function cycleScores(messages: readonly BaseMessage[]) {
         seen.set(it.id, snap);
         queryReadIds.add(it.id);
       }
-    } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
-      const args = call?.args;
-      if (args?.action !== "patch") continue;
+    } else if (
+      m.name === WORK_ITEM_UPDATE_NAME &&
+      typeof v.id === "string" &&
+      typeof v.revision === "number" &&
+      typeof v.status === "string" &&
+      v.success !== false
+    ) {
+      const args = call?.args?.set as Record<string, unknown> | undefined;
+      if (!args || typeof args !== "object") continue;
       patches++;
       const prior = seen.get(String(v.id));
       const sent = PATCH_FIELDS.filter((f) => f in args);
@@ -284,7 +290,13 @@ export function cycleTelemetry(
       else toolErrorCount++;
     } else if (m.name === GOAL_LIST_NAME && Array.isArray(v.goals)) {
       goalIds = v.goals.map((g: { id?: unknown }) => String(g?.id));
-    } else if (m.name === WORK_ITEM_TRANSITION_NAME && v.success === true) {
+    } else if (
+      m.name === WORK_ITEM_UPDATE_NAME &&
+      typeof v.id === "string" &&
+      typeof v.revision === "number" &&
+      typeof v.status === "string" &&
+      v.success !== false
+    ) {
       changedItemIds.push(String(v.id));
     } else if (m.name === EDO_DECIDE_NAME) {
       const id = (v.entry as { id?: unknown } | undefined)?.id;

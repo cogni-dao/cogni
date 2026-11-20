@@ -18,7 +18,7 @@
 import {
   GOAL_TAG_KEYS,
   successCriterionFromTags,
-} from "@cogni/knowledge-store";
+} from "@cogni/operator-knowledge-store";
 import { WorkflowExecutionAlreadyStartedError } from "@temporalio/client";
 import { describe, expect, it, vi } from "vitest";
 

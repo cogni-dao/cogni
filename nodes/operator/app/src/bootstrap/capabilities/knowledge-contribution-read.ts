@@ -11,7 +11,7 @@
  * @internal
  */
 import type { KnowledgeContributionReadCapability } from "@cogni/ai-tools";
-import type { ContributionService } from "@cogni/knowledge-store";
+import type { ContributionService } from "@cogni/operator-knowledge-store";
 import { getExecutionScope } from "@/adapters/server";
 
 export function createKnowledgeContributionReadCapability(deps: {

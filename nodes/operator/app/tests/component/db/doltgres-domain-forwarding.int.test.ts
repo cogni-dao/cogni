@@ -20,12 +20,12 @@ import {
   type KnowledgeStorePort,
   KnowledgeWriteOutcomeUnknownError,
   KnowledgeWriteScopeRequiredError,
-} from "@cogni/knowledge-store";
+} from "@cogni/operator-knowledge-store";
 import {
   buildDoltgresClient,
   DoltBranchSessionRunner,
   DoltgresKnowledgeStoreAdapter,
-} from "@cogni/knowledge-store/adapters/doltgres";
+} from "@cogni/operator-knowledge-store/adapters/doltgres";
 import { DomainNotEmptyError as PublishedNonempty } from "@cogni/shared-knowledge-store";
 import * as operations from "@cogni/shared-knowledge-store/adapters/doltgres";
 import postgres, { type Sql } from "postgres";
@@ -84,7 +84,7 @@ describe("installed domain artifacts", () => {
     ).toBe(canonical);
     for (const consumer of [
       "@cogni/ai-tools",
-      "@cogni/knowledge-store",
+      "@cogni/operator-knowledge-store",
       "@cogni/node-contracts",
     ]) {
       const consumerRequire = createRequire(import.meta.resolve(consumer));
@@ -104,7 +104,7 @@ describe("installed domain artifacts", () => {
       "../package.json"
     );
     expect(JSON.parse(readFileSync(packagePath, "utf8")).version).toBe(
-      "0.20.0"
+      "0.24.0"
     );
     const shared = await import("@cogni/shared-knowledge-store/contracts");
     const contracts = await import("@cogni/node-contracts");
@@ -127,7 +127,7 @@ describe("installed domain artifacts", () => {
         receipt: "operator-domain-artifact-binding",
         canonical,
         toolEntry,
-        knowledgeVersion: "0.20.0",
+        knowledgeVersion: "0.24.0",
       })
     );
   });
