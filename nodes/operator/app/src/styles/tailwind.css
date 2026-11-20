@@ -191,7 +191,7 @@
  */
 @layer base {
   :root {
-    --primary: 217 71% 50%;
+    --primary: 217 71% 45%;
     --primary-foreground: 0 0% 100%;
     --ring: 217 71% 50%;
     --accent-from: 217 71% 50%;
