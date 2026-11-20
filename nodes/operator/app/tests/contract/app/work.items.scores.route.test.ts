@@ -140,7 +140,10 @@ const json = (body: unknown) => ({
 describe("work-item scores HTTP boundary (story.5111)", () => {
   beforeEach(() => {
     sqlCalls.mockReset();
-    vi.mocked(session.getSessionUser).mockResolvedValue(TEST_SESSION_USER_1);
+    vi.mocked(session.getSessionUser).mockResolvedValue({
+      ...TEST_SESSION_USER_1,
+      displayName: "Test User",
+    });
     state.store = realAdapterOverStubSql();
   });
 

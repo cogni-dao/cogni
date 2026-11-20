@@ -456,12 +456,12 @@ async function withItemEnvelope(
   );
 }
 
-/** The session caller as the store's write attribution (task.0133): the bare handle; the store adds the `actor:` tag. */
+/** The authenticated user's stable ID; the store adds the `actor:` tag. */
 function attributionFromSession(user: {
   id: string;
   displayName: string | null;
 }): WriteAttribution {
-  return { actor: user.displayName?.trim() || user.id };
+  return { actor: user.id };
 }
 
 type StripUndefined<T> = {
