@@ -15,13 +15,13 @@
 
 import { Github } from "lucide-react";
 import type { ReactElement } from "react";
-import { SidebarTrigger } from "@/components";
+import { SidebarTrigger, TopBar } from "@/components";
 import { TreasuryBadge } from "@/features/treasury/components/TreasuryBadge";
 import { AccountSlot } from "./AccountSlot";
 
 export function AppTopBar(): ReactElement {
   return (
-    <header className="flex h-16 w-full shrink-0 items-center justify-between border-b bg-sidebar px-3 md:px-6">
+    <TopBar className="flex h-16 w-full shrink-0 items-center justify-between px-3 md:px-6">
       <div className="flex items-center gap-3">
         <SidebarTrigger />
         <TreasuryBadge />
@@ -39,6 +39,6 @@ export function AppTopBar(): ReactElement {
 
         <AccountSlot />
       </div>
-    </header>
+    </TopBar>
   );
 }

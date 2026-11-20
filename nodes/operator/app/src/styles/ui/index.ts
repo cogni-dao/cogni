@@ -51,6 +51,7 @@ export {
   pageShell,
   row,
   section,
+  topBar,
   twoColumn,
 } from "./layout";
 

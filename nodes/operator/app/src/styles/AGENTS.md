@@ -37,7 +37,7 @@ Design system with single token pipeline: colors in CSS vars, spacing/sizing in 
 
 ## Public Surface
 
-- **Exports:** Design token name arrays, TypeScript types, CVA styling factories
+- **Exports:** Design token name arrays, TypeScript types, CVA styling factories including `topBar` chrome
 - **Files considered API:** ui.ts, ui/index.ts, theme.ts
 
 ## Responsibilities
