@@ -3,10 +3,8 @@
 
 /**
  * Module: `@cogni/operator-wallet/adapters/privy/privy-node-wallet-provisioner`
- * Purpose: Create (or find) a Privy wallet whose OWNER is a P-256 public key supplied by the node
- *   owner's browser (story.0083). The operator holds only the Privy app secret, which can create and
- *   list wallets but cannot sign, change the owner, add a signer, change a policy or export a key.
- * Scope: Wallet creation + owner-key lookup only. Never receives, derives or returns key material.
+ * Purpose: Create or find a Privy wallet owned by a P-256 public key from the node owner's browser (story.0083).
+ * Scope: Wallet creation + owner-key lookup only. Does not receive, derive or return key material, and does not sign.
  * Invariants:
  *   - OWNER_IS_THE_BROWSER_KEY: `owner.public_key` is the only owner ever set; no `owner_id`, no
  *     `additional_signers`, no `policy_ids` (this step grants no signer).
