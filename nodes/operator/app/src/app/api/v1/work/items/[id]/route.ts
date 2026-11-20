@@ -9,6 +9,7 @@
  * Reason + cites (task.0086): a missing or over-cap reason is HTTP 400 `invalid input` with an issue at `reason`; an unknown cite id or a closed inbox is HTTP 400 `cite_unresolved`; cites with no resolver wired is HTTP 400 `cites_unsupported`; a resolver failure is HTTP 503. Nothing is written in each case.
  * Moves (story.0033): `set.moves` with an unknown or deprecated metric id is HTTP 400 `cite_unresolved` with an issue at `set.moves`; a bad list is HTTP 400 `moves_invalid`; a non-empty list with no metric wiring is HTTP 400 `moves_unsupported`; a baseline failure is HTTP 503 `metric_baseline_unavailable`. The client never sets a baseline: the server pins it. The GET, PATCH response adds each move's baseline, current reading and verdict.
  * Envelope (task.0118): GET returns each `moves` entry with its metric, KPI and goal; `?include=links` adds the first page of citation links (same read as /api/v1/citations/{id}); an unknown include is HTTP 400.
+ * Read core (story.0085): `handleWorkItemGet` from @cogni/work-items parses `include`/`artifact`, refuses 400/404 and returns the one terminal event; this route keeps only auth and the store read.
  * Side-effects: IO (HTTP response, filesystem read via port, Doltgres read/write/delete)
  * Links: contracts/work.items.{get,patch,delete}.v1.contract
  * @public
@@ -19,6 +20,7 @@ import {
   workItemsGetOperation,
   workItemsPatchOperation,
 } from "@cogni/node-contracts";
+import { handleWorkItemGet } from "@cogni/work-items";
 import { NextResponse } from "next/server";
 
 import {
@@ -46,45 +48,16 @@ export const GET = wrapRouteHandlerWithLogging<{
     if (!context) throw new Error("context required for dynamic routes");
     const { id } = await context.params;
 
-    // `?include=links,artifacts,history` (comma list) and `?artifact=<id>`: optional envelope parts. Unknown parts are a 400, not ignored.
-    const params = new URL(request.url).searchParams;
-    const requested = params
-      .getAll("include")
-      .flatMap((value) => value.split(","))
-      .filter(Boolean);
-    const artifact = params.get("artifact");
-    const input = workItemsGetOperation.input.safeParse({
-      id,
-      ...(requested.length && { include: requested }),
-      ...(artifact !== null && { artifact }),
-    });
-    if (!input.success) {
-      return NextResponse.json(
-        { error: "invalid input", issues: input.error.issues },
-        { status: 400 }
-      );
-    }
-
-    const item = await getWorkItem(id, {
+    // The package owns the `include`/`artifact` parse, the 400/404/503/499 refusals and the one terminal event (story.0085).
+    const result = await handleWorkItemGet(id, {
+      searchParams: new URL(request.url).searchParams,
       signal: request.signal,
-      includeLinks: input.data.include?.includes("links") ?? false,
-      includeArtifacts: input.data.include?.includes("artifacts") ?? false,
-      includeHistory: input.data.include?.includes("history") ?? false,
-      ...(input.data.artifact !== undefined && {
-        artifactId: input.data.artifact,
-      }),
+      read: (itemId, options) =>
+        getWorkItem(itemId, { signal: request.signal, ...options }),
+      toBody: (item) => workItemsGetOperation.output.parse(item),
     });
-
-    if (!item) {
-      return NextResponse.json(
-        { error: `Work item not found: ${id}` },
-        { status: 404 }
-      );
-    }
-
-    ctx.log.info({ workItemId: id }, "work.items.get_success");
-
-    return NextResponse.json(workItemsGetOperation.output.parse(item));
+    ctx.log.info(result.event, result.event.event);
+    return NextResponse.json(result.body, { status: result.status });
   }
 );
 

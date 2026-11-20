@@ -87,7 +87,7 @@ export interface WorkItemCapabilityDeps {
   readonly log?: ((event: EnvelopeDegradedEvent) => void) | undefined;
   /**
    * Doltgres write path for `patch` (the store behind `PATCH /api/v1/work/items/{id}`).
-   * When set, `patch` writes there as `principalId` instead of the markdown ports.
+   * When set, `patch` writes there as `principalId` (the bare actor id; the store adds the `actor:` tag) instead of the markdown ports.
    */
   readonly backlogWriter?: {
     readonly store: Pick<WorkItemsDoltgresPort, "patch">;
@@ -223,7 +223,7 @@ export function createWorkItemCapability(
               cites: input.cites,
               set: input.set,
             }),
-            writer.principalId
+            { actor: writer.principalId }
           );
           return toWorkItemInfo(updated);
         } catch (e) {

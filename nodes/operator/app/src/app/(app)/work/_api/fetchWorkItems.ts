@@ -3,7 +3,7 @@
 
 /**
  * Module: `@app/(app)/work/_api/fetchWorkItems`
- * Purpose: Client-side fetch wrappers for bounded work summary pages, the work board and exact-item reads.
+ * Purpose: Client-side fetch wrappers for bounded work summary pages and the work board, and the one item-view read client (`workItemClient`).
  * Scope: Calls the summaries, board and item endpoints with type-safe contracts. Does not implement business logic.
  * Invariants:
  *   - Failures stay typed (`WorkItemFetchError` carries the HTTP status; the package hooks retry only 5xx and network failures) so only HTTP 404 can render not-found.
@@ -13,10 +13,8 @@
  * @internal
  */
 
-import type {
-  WorkItemDto,
-  WorkItemSummariesListOutput,
-} from "@cogni/node-contracts";
+import { createWorkItemClient } from "@cogni/knowledge-base-ui/work-item";
+import type { WorkItemSummariesListOutput } from "@cogni/node-contracts";
 import type { WorkBoardColumns } from "@cogni/work-items";
 
 export type WorkItemFetchErrorKind =
@@ -97,34 +95,8 @@ export function fetchWorkBoard(
   return getJson(`/api/v1/work/board?${params}`, signal);
 }
 
-export async function fetchWorkItem(
-  id: string,
-  signal?: AbortSignal
-): Promise<WorkItemDto> {
-  let response: Response;
-  try {
-    response = await fetch(`/api/v1/work/items/${encodeURIComponent(id)}`, {
-      method: "GET",
-      ...(signal && { signal }),
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      cache: "no-store",
-    });
-  } catch {
-    throw new WorkItemFetchError(
-      "network",
-      "Unable to reach the work-item service"
-    );
-  }
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({
-      error: "Failed to fetch work item",
-    }));
-    throw new WorkItemFetchError(
-      classifyWorkItemFetchStatus(response.status),
-      error.error || `HTTP ${response.status}`,
-      response.status
-    );
-  }
-  return response.json() as Promise<WorkItemDto>;
-}
+/**
+ * The one item read for the item view (story.0085): the package client reads every part the view draws
+ * (`WORK_ITEM_VIEW_INCLUDES`) and parses it with the work-items schema. A failed read throws `WorkItemReadError` with the HTTP `status`.
+ */
+export const workItemClient = createWorkItemClient();

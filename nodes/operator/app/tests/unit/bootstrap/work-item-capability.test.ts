@@ -354,7 +354,7 @@ describe("createWorkItemCapability", () => {
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
       workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: { store, principalId: "system" },
     });
 
     const result = await cap.patch({
@@ -371,7 +371,7 @@ describe("createWorkItemCapability", () => {
         reason: "Raise the rank",
         set: { priority: 2, rank: 2 },
       },
-      "actor:system"
+      { actor: "system" }
     );
     expect(result).toMatchObject({ priority: 2, rank: 2, revision: 5 });
     expect(md.query.get).not.toHaveBeenCalled();
@@ -384,7 +384,7 @@ describe("createWorkItemCapability", () => {
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
       workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: { store, principalId: "system" },
     });
 
     await cap.patch({
@@ -395,7 +395,7 @@ describe("createWorkItemCapability", () => {
 
     expect(store.patch).toHaveBeenCalledWith(
       { id: "task.5282", reason: "Label it", set: { labels: ["x"] } },
-      "actor:system"
+      { actor: "system" }
     );
   });
 
@@ -408,7 +408,7 @@ describe("createWorkItemCapability", () => {
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
       workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: { store, principalId: "system" },
     });
 
     await expect(
@@ -429,7 +429,7 @@ describe("createWorkItemCapability", () => {
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
       workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: { store, principalId: "system" },
     });
 
     const err = await cap
@@ -458,7 +458,7 @@ describe("createWorkItemCapability", () => {
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
       workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: { store, principalId: "system" },
     });
 
     await expect(
@@ -496,7 +496,7 @@ describe("createWorkItemCapability", () => {
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
       workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: { store, principalId: "system" },
     });
 
     const result = await cap.patch({
@@ -507,7 +507,7 @@ describe("createWorkItemCapability", () => {
 
     expect(store.patch).toHaveBeenCalledWith(
       { id: "task.5282", reason: "Set priority", set: { priority } },
-      "actor:system"
+      { actor: "system" }
     );
     expect(result.id).toBe("task.5282");
   });
@@ -529,7 +529,7 @@ describe("shared evaluation capability adoption", () => {
     const capability = createWorkItemCapability({
       workItemQuery: query,
       workItemCommand: command,
-      backlogWriter: { store, principalId: "actor:test" },
+      backlogWriter: { store, principalId: "test" },
     });
     const result = await capability.patch({
       id: scored.id,
@@ -544,7 +544,7 @@ describe("shared evaluation capability adoption", () => {
         reason: "Score it",
         set: { scores },
       },
-      "actor:test"
+      { actor: "test" }
     );
     expect(result).toMatchObject({
       scores,

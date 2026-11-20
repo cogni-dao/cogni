@@ -41,6 +41,9 @@ export const EVENT_NAMES = {
   // The success twins: one terminal event per accepted create or patch, ids and counts only.
   WORK_ITEMS_CREATE_SUCCESS: "work.items.create_success",
   WORK_ITEMS_PATCH_SUCCESS: "work.items.patch_success",
+  // GET /api/v1/work/items/{id}: one terminal event per read, named by `@cogni/work-items` `WORK_ITEM_READ_EVENTS` (story.0085); a parity test pins them.
+  WORK_ITEMS_GET_SUCCESS: "work.items.get_success",
+  WORK_ITEMS_GET_REFUSED: "work.items.get_refused",
   // An item envelope part (links, artifacts, readings) that could not be read in time or failed: the envelope is served without it and marked unavailable. One warn per degraded part.
   WORK_ITEMS_ENVELOPE_DEGRADED: "work.items.envelope_degraded",
   // The work-items store's own signals (task.0122): a stage that ran slow or failed, the status gate's PR read failing, a retired flag written.

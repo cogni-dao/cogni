@@ -1195,7 +1195,7 @@ function createContainer(): Container {
     backlogReader: doltgresWorkItems,
     backlogWriter: {
       store: doltgresWorkItems,
-      principalId: `actor:${COGNI_SYSTEM_PRINCIPAL_USER_ID}`,
+      principalId: COGNI_SYSTEM_PRINCIPAL_USER_ID,
     },
   });
 
