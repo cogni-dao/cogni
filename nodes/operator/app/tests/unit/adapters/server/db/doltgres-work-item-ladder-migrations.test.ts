@@ -3,12 +3,12 @@
 
 /**
  * Module: `@tests/unit/adapters/server/db/doltgres-work-item-ladder-migrations`
- * Purpose: Pins the three operator Doltgres migrations the artifact ladder release needs (task.0149): `work_item_artifacts` (0011), its sequence and revision columns (0012), and `work_items.status_revision` plus the `needs_merge` to `needs_closeout` rewrite (0013).
+ * Purpose: Pins the operator Doltgres artifact ladder migrations (0011–0013) and the adopted artifact run attribution columns (0014).
  * Scope: Reads the checked-in migrations, journal, snapshots and the operator's drizzle tables. No database.
  * Invariants:
- *   - JOURNAL_CONTINUES: idx 11, 12 and 13 follow 0010 with strictly increasing `when` (a lower `when` silently no-ops on a deployed database).
+ *   - JOURNAL_CONTINUES: idx 11 through 14 follow 0010 with strictly increasing `when` (a lower `when` silently no-ops on a deployed database).
  *   - SNAPSHOT_CHAIN: each new snapshot chains from the one before it, starting at the operator's 0010 id.
- *   - SCHEMA_MATCHES: the final snapshot's `work_item_artifacts` and `work_items.status_revision` equal the drizzle tables the released `@cogni-dao/work-items` reads and writes.
+ *   - SCHEMA_MATCHES: the ladder's 0013 snapshot matches the workspace Drizzle tables; 0014's released schema adoption is outside this source-aliased assertion.
  *   - LEGACY_QUEUE_FOLLOWS_THE_LADDER: 0013 backfills `status_revision` to `revision` and sends `needs_merge` rows to `needs_closeout`, the next stage after merge.
  * Side-effects: none (filesystem reads)
  * Links: .claude/skills/schema-update/SKILL.md, hub work-status-ladder
@@ -39,9 +39,10 @@ const TAGS = [
   "0011_work_item_artifacts",
   "0012_work_item_artifact_sequence",
   "0013_work_item_status_ladder",
+  "0014_watery_johnny_blaze",
 ] as const;
 
-describe("operator work-item ladder migrations 0011 to 0013", () => {
+describe("operator work-item ladder migrations 0011 to 0014", () => {
   const journal = json("meta/_journal.json") as {
     entries: { idx: number; when: number; tag: string }[];
   };
@@ -53,6 +54,7 @@ describe("operator work-item ladder migrations 0011 to 0013", () => {
       [11, TAGS[0]],
       [12, TAGS[1]],
       [13, TAGS[2]],
+      [14, TAGS[3]],
     ]);
     for (let i = 1; i < tail.length; i++)
       expect(tail[i]?.when).toBeGreaterThan(tail[i - 1]?.when ?? Infinity);
@@ -65,7 +67,7 @@ describe("operator work-item ladder migrations 0011 to 0013", () => {
   });
 
   it("chains its snapshots from the operator's 0010 id", () => {
-    const ids = ["0010", "0011", "0012", "0013"].map(
+    const ids = ["0010", "0011", "0012", "0013", "0014"].map(
       (n) => json(`meta/${n}_snapshot.json`) as Snapshot
     );
     for (let i = 1; i < ids.length; i++) {
