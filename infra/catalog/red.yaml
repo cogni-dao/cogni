@@ -16,7 +16,7 @@ production_branch: deploy/production-red
 # candidate after the proof is the ordinary env verb ({env:candidate-a, present:false}).
 envs: [candidate-a, production]
 database:
-  candidate-a: { tier: shared, budget_profile: shared-default-v1 }
+  candidate-a: { tier: shared, budget_profile: shared-default-v1, copies: 7 }
   production: { tier: shared, budget_profile: shared-default-v1 }
 reliability_validation:
   candidate-a: { role: shared-control }

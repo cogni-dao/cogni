@@ -477,7 +477,7 @@ echo "  ok  scope guards hold"
   yq -i '.deployment_provider."candidate-a" = "k3s"' "$fixture/infra/catalog/red.yaml"
   [[ "$(render_shared_db_provision_config | jq -r 'keys | join(",")')" == operator,red ]] \
     || fail "self-controlled shared node skipped"
-  [[ "$(render_shared_db_provision_config | jq -r '.red.DB_APP_CONNECTION_LIMIT')" == 2 ]]
+  [[ "$(render_shared_db_provision_config | jq -r '.red.DB_APP_CONNECTION_LIMIT')" == 7 ]]  # candidate-a copies 7 (story.5159)
   cp "$real_repo/infra/catalog/red.yaml" "$fixture/infra/catalog/"
   [[ "$(jq -r '.operator.DB_BUDGET_PROFILE' <<<"$NODE_DB_PROVISION_CONFIG")" == operator-control-v1 ]]
   [[ "$(jq -r '.operator.DB_SERVICE_CONNECTION_LIMIT' <<<"$NODE_DB_PROVISION_CONFIG")" == 15 ]]
