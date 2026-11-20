@@ -23,7 +23,7 @@
  * @public
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { createPublicClient, http } from "viem";
 import { base } from "viem/chains";
@@ -263,7 +263,10 @@ async function handlePaymentPrereqs(
       });
     } catch (err) {
       ctx.log.warn(
-        { routeId: ctx.routeId, err: err instanceof Error ? err.message : "" },
+        {
+          routeId: ctx.routeId,
+          errClass: err instanceof Error ? err.name : "unknown",
+        },
         "payment-prereqs: repo-spec read failed"
       );
       return finish(
@@ -368,7 +371,10 @@ async function handlePaymentPrereqs(
       }
     } catch (err) {
       ctx.log.warn(
-        { routeId: ctx.routeId, err: err instanceof Error ? err.message : "" },
+        {
+          routeId: ctx.routeId,
+          errClass: err instanceof Error ? err.name : "unknown",
+        },
         "payment-prereqs: dao code check failed"
       );
       return finish(
@@ -383,7 +389,16 @@ async function handlePaymentPrereqs(
       const rows = await db
         .update(nodes)
         .set({ ...plan.columns, updatedAt: new Date() })
-        .where(and(eq(nodes.id, node.id), eq(nodes.status, "wallet_ready")))
+        .where(
+          and(
+            eq(nodes.id, node.id),
+            eq(nodes.status, "wallet_ready"),
+            // The target columns must still be NULL: never overwrite a value a concurrent call wrote.
+            ...(Object.keys(plan.columns) as (keyof typeof plan.columns)[]).map(
+              (column) => isNull(nodes[column])
+            )
+          )
+        )
         .returning();
       const updated = rows[0];
       if (!updated) {
@@ -440,7 +455,10 @@ async function handlePaymentPrereqs(
     );
   } catch (err) {
     ctx.log.error(
-      { routeId: ctx.routeId, err: err instanceof Error ? err.message : "" },
+      {
+        routeId: ctx.routeId,
+        errClass: err instanceof Error ? err.name : "unknown",
+      },
       "payment-prereqs: unexpected failure"
     );
     return finish(

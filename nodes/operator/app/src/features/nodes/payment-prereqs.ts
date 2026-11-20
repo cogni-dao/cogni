@@ -191,6 +191,8 @@ interface PaymentPrereqRow {
   readonly daoAddress: string | null;
   readonly pluginAddress: string | null;
   readonly signalAddress: string | null;
+  /** Set once the payment Split is deployed; it was built from the recorded wallet. */
+  readonly splitAddress?: string | null;
 }
 
 /** What the route should do with the row, given its status (decided BEFORE any git read). */
@@ -239,10 +241,19 @@ export function planPrereqRecord(
   row: PaymentPrereqRow,
   git: PaymentPrereqAddresses
 ): PrereqRecordPlan {
-  const mismatchedKeys = ADDRESS_KEYS.filter((key) => {
-    const current = row[key];
-    return current != null && current.toLowerCase() !== git[key].toLowerCase();
-  });
+  const mismatchedKeys: (keyof PaymentPrereqAddresses)[] = ADDRESS_KEYS.filter(
+    (key) => {
+      const current = row[key];
+      return (
+        current != null && current.toLowerCase() !== git[key].toLowerCase()
+      );
+    }
+  );
+  // A deployed Split was built from the recorded wallet: filling a NULL wallet column now would
+  // let the repo-spec silently define a different one. Refuse; never back-fill under a Split.
+  if (row.splitAddress != null && row.operatorWalletAddress == null) {
+    mismatchedKeys.push("operatorWalletAddress");
+  }
   if (mismatchedKeys.length > 0) return { kind: "mismatch", mismatchedKeys };
 
   if (row.status === "published") return { kind: "record_and_advance" };

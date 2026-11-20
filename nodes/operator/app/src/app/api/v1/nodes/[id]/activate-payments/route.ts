@@ -173,15 +173,19 @@ export async function POST(_request: Request, routeArgs: RouteParams) {
       path: location.path,
       ref: "main",
     });
-    if (specText !== null) {
-      declaredWallet = extractOperatorWalletConfig(
-        parseRepoSpec(specText)
-      )?.address;
+    if (specText === null) {
+      return NextResponse.json(
+        { error: "node repo-spec read failed", reason: "repo_spec_unreadable" },
+        { status: 502 }
+      );
     }
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : "unknown";
+    declaredWallet = extractOperatorWalletConfig(
+      parseRepoSpec(specText)
+    )?.address;
+  } catch {
+    // Fixed reason: upstream error text can embed hosts or credentials.
     return NextResponse.json(
-      { error: "node repo-spec read failed", reason },
+      { error: "node repo-spec read failed", reason: "repo_spec_unreadable" },
       { status: 502 }
     );
   }

@@ -119,6 +119,9 @@ function describePrereqError(status: number, body: PrereqResponseBody): string {
       typeof body.reason === "string" ? ` (${body.reason})` : ""
     }. Fix it on main, then read again.`;
   }
+  if (body.error === "repo_spec_invalid") {
+    return "The node repo-spec on main could not be parsed. Fix it on main, then read again.";
+  }
   if (body.error === "prereq_mismatch") {
     return "The node repo-spec on main disagrees with the addresses already recorded for this node. The operator never overwrites them; compare the addresses below.";
   }

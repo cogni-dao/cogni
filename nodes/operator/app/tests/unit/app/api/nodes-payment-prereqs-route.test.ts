@@ -34,6 +34,7 @@ type Row = {
   daoAddress: string | null;
   pluginAddress: string | null;
   signalAddress: string | null;
+  splitAddress?: string | null;
 };
 
 const dbState = vi.hoisted(() => ({
@@ -355,6 +356,44 @@ describe("POST /api/v1/nodes/[id]/payment-prereqs", () => {
     expect(dbState.patch).not.toHaveProperty("status");
     expect(dbState.patch).not.toHaveProperty("operatorWalletAddress");
     expect(dbState.updateWhere?.params).toContain("wallet_ready");
+    // The target columns must still be NULL at write time.
+    expect(dbState.updateWhere?.sql).toContain('"plugin_address" is null');
+    expect(dbState.updateWhere?.sql).toContain('"signal_address" is null');
+    expect(dbState.updateWhere?.sql).not.toContain('"dao_address" is null');
+  });
+
+  it("a deployed Split with a NULL row wallet: 409 prereq_mismatch, never back-fills", async () => {
+    dbState.current = baseRow({
+      status: "wallet_ready",
+      operatorWalletAddress: null,
+      splitAddress: "0x6666666666666666666666666666666666666666",
+    });
+    const { status, body } = await call();
+    expect(status).toBe(409);
+    expect(body.error).toBe("prereq_mismatch");
+    expect(body.mismatchedKeys).toEqual(["operatorWalletAddress"]);
+    expect(dbState.patch).toBeUndefined();
+  });
+
+  it("logs only the error class when the repo read fails, never the message", async () => {
+    mockFetchFileText.mockRejectedValue(
+      new Error("HttpRequestError: https://rpc.example/v2/SECRET-KEY failed")
+    );
+    const { status } = await call();
+    expect(status).toBe(502);
+    expect(JSON.stringify(mockLog.warn.mock.calls)).not.toContain("SECRET-KEY");
+    expect(mockLog.warn.mock.calls[0]?.[0]).toMatchObject({
+      errClass: "Error",
+    });
+  });
+
+  it("logs only the error class when the DAO code check fails", async () => {
+    mockGetBytecode.mockRejectedValue(
+      new Error("HttpRequestError: https://rpc.example/v2/SECRET-KEY failed")
+    );
+    const { status } = await call();
+    expect(status).toBe(502);
+    expect(JSON.stringify(mockLog.warn.mock.calls)).not.toContain("SECRET-KEY");
   });
 
   it("wallet_ready + a differing non-null address: 409 prereq_mismatch", async () => {
