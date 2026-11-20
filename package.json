@@ -25,6 +25,7 @@
     "check:docs:metadata": "node scripts/validate-docs-metadata.mjs",
     "check:docs:sync-manifest": "node scripts/validate-sync-manifest-refs.mjs",
     "check:root-layout": "pnpm tsx scripts/check-root-layout.ts",
+    "check:design-tokens": "pnpm --filter operator exec ui-theme-check src/styles/tailwind.css",
     "check:node-port-unique": "bash scripts/ci/next-free-node-port.sh --check",
     "node-port:next": "bash scripts/ci/next-free-node-port.sh",
     "gen:caddyfile": "bash scripts/ci/render-caddyfile.sh > infra/compose/edge/configs/Caddyfile.tmpl",
