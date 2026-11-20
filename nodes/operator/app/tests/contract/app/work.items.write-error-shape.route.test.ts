@@ -21,7 +21,7 @@ import {
   KnowledgeWriteConflictError,
   KnowledgeWriteOutcomeUnknownError,
   KnowledgeWriteScopeRequiredError,
-} from "@cogni/knowledge-store";
+} from "@cogni/operator-knowledge-store";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";

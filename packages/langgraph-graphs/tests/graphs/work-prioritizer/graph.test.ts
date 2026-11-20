@@ -23,9 +23,9 @@ import {
   KNOWLEDGE_READ_NAME,
   knowledgeReadContract,
   knowledgeSearchContract,
-  WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_UPDATE_NAME,
   workItemQueryContract,
-  workItemTransitionContract,
+  workItemUpdateContract,
 } from "@cogni/ai-tools";
 import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
@@ -46,6 +46,23 @@ import type {
   ToolExecFn,
 } from "../../../src/inproc/types";
 
+const updatedItem = (id: string) => ({
+  id,
+  type: "task",
+  title: "Prioritize",
+  status: "needs_implement",
+  node: "operator",
+  assignees: [],
+  externalRefs: [],
+  actor: "either",
+  labels: [],
+  specRefs: [],
+  revision: 5,
+  deployVerified: false,
+  createdAt: "2026-11-20T00:00:00Z",
+  updatedAt: "2026-11-20T00:00:00Z",
+});
+
 const REPORT =
   "Changed task.1 priority 3→2 (goal-ai-work-converges). Proposal: bug.2 → p1 (goal-fleet-pays-itself).";
 
@@ -62,22 +79,22 @@ function scriptedCompletion(prompts: string[], then: Then): CompletionFn {
       { id: "c1", name: GOAL_LIST_NAME, args: {} },
       {
         id: "c2",
-        name: WORK_ITEM_TRANSITION_NAME,
+        name: WORK_ITEM_UPDATE_NAME,
         args: {
-          action: "patch",
           id: "task.1",
-          priority: 2,
           expectedRevision: 4,
+          reason: "Prioritize current backlog",
+          set: { priority: 2 },
         },
       },
       {
         id: "c3",
-        name: WORK_ITEM_TRANSITION_NAME,
+        name: WORK_ITEM_UPDATE_NAME,
         args: {
-          action: "patch",
           id: "bug.2",
-          priority: 1,
           expectedRevision: 1,
+          reason: "Prioritize current backlog",
+          set: { priority: 1 },
         },
       },
     ],
@@ -166,22 +183,16 @@ const fakeExec: (emit: (e: AiEvent) => void) => ToolExecFn =
         },
       };
     }
-    const a = args as { id: string; priority: number };
-    return a.priority <= 1
+    const a = args as { id: string; set: { priority: number } };
+    return a.set.priority <= 1
       ? {
           ok: false,
           errorCode: "execution",
-          safeMessage: `authz_denied: priority ${a.priority} requires node admin`,
+          safeMessage: `authz_denied: priority ${a.set.priority} requires node admin`,
         }
       : {
           ok: true,
-          value: {
-            success: true,
-            action: "patch",
-            id: a.id,
-            message: "ok",
-            revision: 5,
-          },
+          value: { ...updatedItem(a.id), id: a.id, message: "ok", revision: 5 },
         };
   };
 
@@ -204,7 +215,7 @@ describe("work-prioritizer mission-loop agent", () => {
       toolContracts: [
         goalListContract,
         workItemQueryContract,
-        workItemTransitionContract,
+        workItemUpdateContract,
         knowledgeReadContract,
         knowledgeSearchContract,
         edoDecideContract,
@@ -308,12 +319,12 @@ describe("work-prioritizer mission-loop agent", () => {
             ? [
                 {
                   id: "patch",
-                  name: WORK_ITEM_TRANSITION_NAME,
+                  name: WORK_ITEM_UPDATE_NAME,
                   args: {
-                    action: "patch",
                     id: "task.1",
-                    rank: 0,
                     expectedRevision: 1,
+                    reason: "Prioritize current backlog",
+                    set: { rank: 0 },
                   },
                 },
               ]
@@ -367,15 +378,14 @@ describe("work-prioritizer mission-loop agent", () => {
                   totalFound: 1,
                 }
               : {
-                  success: true,
-                  action: "patch",
+                  ...updatedItem("task.1"),
                   id: "task.1",
                   revision: 2,
                   message: "ok",
                 },
         };
       },
-      toolContracts: [knowledgeReadContract, workItemTransitionContract],
+      toolContracts: [knowledgeReadContract, workItemUpdateContract],
       request: {
         runId: "guidance-run",
         messages: [{ role: "user", content: "Review priorities" }],
@@ -390,7 +400,7 @@ describe("work-prioritizer mission-loop agent", () => {
     }
     const result = await final;
     expect(result.ok).toBe(true);
-    expect(executed).toEqual([KNOWLEDGE_READ_NAME, WORK_ITEM_TRANSITION_NAME]);
+    expect(executed).toEqual([KNOWLEDGE_READ_NAME, WORK_ITEM_UPDATE_NAME]);
     expect(result.structuredOutput?.telemetry).toMatchObject({
       knowledgeReads: 1,
       guidanceReceipts: [
@@ -489,13 +499,13 @@ describe("work-prioritizer mission-loop agent", () => {
       tool(EDO_DECIDE_NAME, "d", { committed: true }),
     ];
     const writes = [1, 2, 3, 4, 5].flatMap((n) => [
-      ai(WORK_ITEM_TRANSITION_NAME, `p${n}`, {
-        action: "patch",
+      ai(WORK_ITEM_UPDATE_NAME, `p${n}`, {
         id: `task.${n}`,
-        rank: n,
+        reason: "Prioritize current backlog",
+        set: { rank: n },
       }),
-      tool(WORK_ITEM_TRANSITION_NAME, `p${n}`, {
-        success: true,
+      tool(WORK_ITEM_UPDATE_NAME, `p${n}`, {
+        ...updatedItem(`task.${n}`),
         id: `task.${n}`,
       }),
     ]);
@@ -541,12 +551,15 @@ describe("work-prioritizer mission-loop agent", () => {
           { id: "task.1", scores: { value: 5, evidence: { a: 1, b: 2 } } },
         ],
       }),
-      ai(WORK_ITEM_TRANSITION_NAME, "p", {
-        action: "patch",
+      ai(WORK_ITEM_UPDATE_NAME, "p", {
         id: "task.1",
-        scores: { evidence: { b: 2, a: 1 }, value: 5 },
+        reason: "Prioritize current backlog",
+        set: { scores: { evidence: { b: 2, a: 1 }, value: 5 } },
       }),
-      tool(WORK_ITEM_TRANSITION_NAME, "p", { success: true, id: "task.1" }),
+      tool(WORK_ITEM_UPDATE_NAME, "p", {
+        ...updatedItem("task.1"),
+        id: "task.1",
+      }),
     ]);
     expect(reordered).toMatchObject({
       identicalPatches: 1,
@@ -602,62 +615,75 @@ describe("work-prioritizer mission-loop agent", () => {
       ai([
         {
           id: "p1",
-          name: WORK_ITEM_TRANSITION_NAME,
+          name: WORK_ITEM_UPDATE_NAME,
           args: {
-            action: "patch",
             id: "story.1",
-            priority: 2,
-            labels: ["a"],
             expectedRevision: 3,
+            reason: "Prioritize current backlog",
+            set: { priority: 2, labels: ["a"] },
           },
         },
         {
           id: "p2",
-          name: WORK_ITEM_TRANSITION_NAME,
-          args: { action: "patch", id: "bug.2", rank: 0, expectedRevision: 1 },
+          name: WORK_ITEM_UPDATE_NAME,
+          args: {
+            id: "bug.2",
+            expectedRevision: 1,
+            reason: "Prioritize current backlog",
+            set: { rank: 0 },
+          },
         },
         {
           id: "p3",
-          name: WORK_ITEM_TRANSITION_NAME,
-          args: { action: "patch", id: "bug.2", rank: 0, expectedRevision: 2 },
+          name: WORK_ITEM_UPDATE_NAME,
+          args: {
+            id: "bug.2",
+            expectedRevision: 2,
+            reason: "Prioritize current backlog",
+            set: { rank: 0 },
+          },
         },
         {
           id: "p4",
-          name: WORK_ITEM_TRANSITION_NAME,
-          args: { action: "patch", id: "task.7", rank: 0 },
+          name: WORK_ITEM_UPDATE_NAME,
+          args: {
+            id: "task.7",
+            reason: "Prioritize current backlog",
+            set: { rank: 0 },
+          },
         },
         {
           id: "p5",
-          name: WORK_ITEM_TRANSITION_NAME,
-          args: { action: "patch", id: "story.1", rank: 9 },
+          name: WORK_ITEM_UPDATE_NAME,
+          args: {
+            id: "story.1",
+            reason: "Prioritize current backlog",
+            set: { rank: 9 },
+          },
         },
       ]),
-      tool("p1", WORK_ITEM_TRANSITION_NAME, {
-        success: true,
-        action: "patch",
+      tool("p1", WORK_ITEM_UPDATE_NAME, {
+        ...updatedItem("story.1"),
         id: "story.1",
         revision: 4,
       }),
-      tool("p2", WORK_ITEM_TRANSITION_NAME, {
-        success: true,
-        action: "patch",
+      tool("p2", WORK_ITEM_UPDATE_NAME, {
+        ...updatedItem("bug.2"),
         id: "bug.2",
         revision: 2,
       }),
       // p3 re-sends what p2 just wrote → identical; p4 unseen item → unknown; p5 denied → not counted
-      tool("p3", WORK_ITEM_TRANSITION_NAME, {
-        success: true,
-        action: "patch",
+      tool("p3", WORK_ITEM_UPDATE_NAME, {
+        ...updatedItem("bug.2"),
         id: "bug.2",
         revision: 3,
       }),
-      tool("p4", WORK_ITEM_TRANSITION_NAME, {
-        success: true,
-        action: "patch",
+      tool("p4", WORK_ITEM_UPDATE_NAME, {
+        ...updatedItem("task.7"),
         id: "task.7",
         revision: 1,
       }),
-      tool("p5", WORK_ITEM_TRANSITION_NAME, {
+      tool("p5", WORK_ITEM_UPDATE_NAME, {
         success: false,
         code: "authz_denied",
         message: "authz_denied",

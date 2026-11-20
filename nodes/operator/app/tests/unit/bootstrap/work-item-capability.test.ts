@@ -7,7 +7,7 @@
  * Scope: Unit test of createWorkItemCapability with fake ports. Does not touch Doltgres or markdown files.
  * Invariants:
  *   - QUERY_READS_THE_LIVE_BACKLOG: `query` lists via `backlogReader` when wired, never the markdown port
- *   - WRITES_NOT_WIDENED: transition still resolves + commands through the markdown ports only
+ *   - WRITES_NOT_WIDENED: new status/fields refuse before the writer
  *   - PATCH_ON_THE_LIVE_BACKLOG / PATCH_CAS_PASSTHROUGH (story.5096): `patch` writes through the
  *     Doltgres `backlogWriter` as its principal, forwards `expectedRevision`, and turns the store's
  *     `WorkItemRevisionConflictError` into the ai-tools `WorkItemPatchConflictError`
@@ -27,8 +27,10 @@ import {
 } from "@cogni/ai-tools";
 import {
   createWorkItemQueryImplementation,
+  createWorkItemUpdateImplementation,
   WorkItemPatchConflictError,
   workItemQueryContract,
+  workItemUpdateContract,
 } from "@cogni/shared-ai-tools";
 import type {
   WorkItem,
@@ -37,7 +39,11 @@ import type {
   WorkItemQueryPort,
 } from "@cogni/work-items";
 import { toWorkItemDto, WorkItemDtoSchema } from "@cogni/work-items";
-import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
+import {
+  WorkItemGateFactsUnavailableError,
+  WorkItemGateUnmetError,
+  WorkItemRevisionConflictError,
+} from "@cogni/work-items/adapters/doltgres";
 import { describe, expect, it, vi } from "vitest";
 
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
@@ -90,7 +96,6 @@ describe("createWorkItemCapability", () => {
     };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader,
     });
 
@@ -124,13 +129,12 @@ describe("createWorkItemCapability", () => {
     };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader,
     });
     const params = {
       sortBy: "rankScore",
       sortDirection: "asc",
-      limit: 2,
+      limit: 1,
     } as const;
     await cap.query(params);
     expect(await cap.queryPage?.(params)).toMatchObject({ nextCursor: "next" });
@@ -162,7 +166,6 @@ describe("createWorkItemCapability", () => {
     };
     const capability = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader,
     });
     const discovery = await createWorkItemQueryImplementation({
@@ -177,7 +180,7 @@ describe("createWorkItemCapability", () => {
     const full = await createWorkItemReadImplementation({
       workItemCapability: capability,
     }).execute({ id: selected.id });
-    expect(full.complete).toBe(true);
+    expect(full.item).not.toBeNull();
     expect(full.item).toMatchObject({
       id: selected.id,
       revision: 4,
@@ -186,7 +189,7 @@ describe("createWorkItemCapability", () => {
     });
     expect(backlogReader.list).toHaveBeenLastCalledWith({
       ids: [selected.id],
-      limit: 2,
+      limit: 1,
     });
     expect(md.query.get).not.toHaveBeenCalled();
     expect(md.query.list).not.toHaveBeenCalled();
@@ -212,7 +215,6 @@ describe("createWorkItemCapability", () => {
     });
     const capability = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader: { list: vi.fn().mockResolvedValue({ items: [selected] }) },
     });
     const expectedAssignees = [
@@ -228,13 +230,17 @@ describe("createWorkItemCapability", () => {
     ];
     const result = await createWorkItemReadImplementation({
       workItemCapability: capability,
+      nodePublicOrigin: "https://cognidao.org",
     }).execute({ id: selected.id });
     const full = workItemReadContract.redact(
       workItemReadContract.outputSchema.parse(result)
     );
     expect(full).toEqual({
-      complete: true,
-      item: { ...toWorkItemDto(selected), assignees: expectedAssignees },
+      item: {
+        ...toWorkItemDto(selected),
+        assignees: expectedAssignees,
+        sourceUrl: `https://cognidao.org/work/items/${selected.id}`,
+      },
     });
     const queryResult = await createWorkItemQueryImplementation({
       workItemCapability: capability,
@@ -255,22 +261,21 @@ describe("createWorkItemCapability", () => {
     const list = vi.fn().mockResolvedValue({ items: [] });
     const capability = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader: { list },
     });
     const read = createWorkItemReadImplementation({
       workItemCapability: capability,
     });
-    await expect(read.execute({ id: "task.5282" })).rejects.toThrow(
-      "work_source_unavailable"
-    );
+    await expect(read.execute({ id: "task.5282" })).resolves.toEqual({
+      item: null,
+    });
     list.mockResolvedValue({ items: [item(), item()] });
     await expect(read.execute({ id: "task.5282" })).rejects.toThrow(
       "work_source_unavailable"
     );
     list.mockResolvedValue({ items: [item({ outcome: "x".repeat(65536) })] });
     await expect(read.execute({ id: "task.5282" })).rejects.toThrow(
-      "work_source_incomplete"
+      "work_item_read_exceeds_limit"
     );
   });
 
@@ -281,7 +286,6 @@ describe("createWorkItemCapability", () => {
       .mockResolvedValue({ items: [item({ revision: undefined })] });
     const capability = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader: { list },
     });
     const read = createWorkItemReadImplementation({
@@ -292,7 +296,6 @@ describe("createWorkItemCapability", () => {
     );
     list.mockResolvedValue({ items: [item({ outcome: undefined })] });
     expect(await read.execute({ id: "task.5282" })).toMatchObject({
-      complete: true,
       item: { id: "task.5282", revision: 4 },
     });
   });
@@ -302,18 +305,17 @@ describe("createWorkItemCapability", () => {
     const backlogReader = { list: vi.fn().mockResolvedValue({ items: [] }) };
     const capability = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader,
     });
     await capability.query({
       ids: ["task.7777"],
       cursor: "cursor-2",
-      limit: 2,
+      limit: 1,
     });
     expect(backlogReader.list).toHaveBeenCalledWith({
       ids: ["task.7777"],
       cursor: "cursor-2",
-      limit: 2,
+      limit: 1,
     });
   });
 
@@ -321,27 +323,9 @@ describe("createWorkItemCapability", () => {
     const md = markdownPorts();
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
     });
     await cap.query({});
     expect(md.query.list).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps transitions on the markdown ports (writes are not routed to the reader)", async () => {
-    const md = markdownPorts();
-    const backlogReader = { list: vi.fn() };
-    const cap = createWorkItemCapability({
-      workItemQuery: md.query,
-      workItemCommand: md.command,
-      backlogReader,
-    });
-
-    await expect(
-      cap.transitionStatus({ id: "task.5282", toStatus: "done" })
-    ).rejects.toThrow("Work item not found");
-    expect(md.query.get).toHaveBeenCalledTimes(1);
-    expect(backlogReader.list).not.toHaveBeenCalled();
-    expect(md.command.transitionStatus).not.toHaveBeenCalled();
   });
 
   it("patches through the Doltgres backlogWriter as its principal, forwarding expectedRevision", async () => {
@@ -353,7 +337,6 @@ describe("createWorkItemCapability", () => {
     };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogWriter: { store, principalId: "system" },
     });
 
@@ -383,7 +366,6 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockResolvedValue(item()) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogWriter: { store, principalId: "system" },
     });
 
@@ -407,7 +389,6 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockRejectedValue(refused) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogWriter: { store, principalId: "system" },
     });
 
@@ -428,7 +409,6 @@ describe("createWorkItemCapability", () => {
     };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogWriter: { store, principalId: "system" },
     });
 
@@ -457,7 +437,6 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockRejectedValue(denied) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogWriter: { store, principalId: "system" },
     });
 
@@ -474,7 +453,6 @@ describe("createWorkItemCapability", () => {
     const md = markdownPorts();
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
     });
 
     await expect(
@@ -484,7 +462,7 @@ describe("createWorkItemCapability", () => {
         reason: "Raise priority",
         set: { priority: 2 },
       })
-    ).rejects.toThrow("requires the Doltgres backlog writer");
+    ).rejects.toThrow("Doltgres backlog writer required");
     expect(md.command.patch).not.toHaveBeenCalled();
   });
 
@@ -495,7 +473,6 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockResolvedValue(item({ priority })) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogWriter: { store, principalId: "system" },
     });
 
@@ -773,5 +750,153 @@ describe("work-item moves at read time", () => {
       });
       expect(read?.moves?.[0]).not.toHaveProperty("kpi");
     });
+  });
+});
+
+describe("published 0.24 update through the operator host", () => {
+  const request = {
+    id: "task.5282",
+    expectedRevision: 4,
+    reason: "Prioritize the supported release",
+    cites: [{ id: "work-gate-enforcement" }],
+    set: { rank: 2, labels: ["train"] },
+  };
+
+  it("executes the released contract preserving reason, cites and CAS, then refuses a stale revision", async () => {
+    let current = item();
+    const commits: unknown[] = [];
+    const patch = vi.fn(async (input, attribution) => {
+      if (input.expectedRevision !== current.revision) {
+        throw new WorkItemRevisionConflictError(
+          input.id,
+          input.expectedRevision,
+          current.revision
+        );
+      }
+      current = { ...current, ...input.set, revision: current.revision + 1 };
+      commits.push({ input, attribution });
+      return current;
+    });
+    const cap = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: {
+        store: { patch },
+        principalId: "prior-system-principal",
+      },
+    });
+    const impl = createWorkItemUpdateImplementation({
+      workItemCapability: cap,
+    });
+    const parsed = workItemUpdateContract.inputSchema.parse(request);
+    const result = workItemUpdateContract.outputSchema.parse(
+      await impl.execute(parsed)
+    );
+    expect(result).toMatchObject({
+      id: request.id,
+      revision: 5,
+      rank: 2,
+      labels: ["train"],
+    });
+    expect(result).not.toHaveProperty("action");
+    expect(commits).toEqual([
+      { input: request, attribution: { actor: "prior-system-principal" } },
+    ]);
+    const stale = workItemUpdateContract.outputSchema.parse(
+      await impl.execute(parsed)
+    );
+    expect(stale).toMatchObject({
+      success: false,
+      code: "revision_conflict",
+      currentRevision: 5,
+    });
+    expect(commits).toHaveLength(1);
+    expect(current.revision).toBe(5);
+  });
+
+  it.each([
+    { status: "needs_merge" },
+    { title: "New authority" },
+    { outcome: "New acceptance" },
+    { estimate: 3 },
+    { moves: [] },
+  ])("refuses expanded authority before store admission: %j", async (set) => {
+    const patch = vi.fn();
+    const cap = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: {
+        store: { patch },
+        principalId: "prior-system-principal",
+      },
+    });
+    const impl = createWorkItemUpdateImplementation({
+      workItemCapability: cap,
+    });
+    const parsed = workItemUpdateContract.inputSchema.parse({
+      ...request,
+      set,
+    });
+    await expect(impl.execute(parsed)).rejects.toThrow(
+      "requires a verified run actor"
+    );
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      new WorkItemGateUnmetError(
+        "task.5282",
+        "needs_implement",
+        "needs_closeout",
+        "review"
+      ),
+      "gate_unmet",
+    ],
+    [
+      new WorkItemGateFactsUnavailableError(
+        "task.5282",
+        "needs_implement",
+        "needs_closeout",
+        "pr.head"
+      ),
+      "gate_facts_unavailable",
+    ],
+  ])("preserves released gate errors from the store: %s", async (error, code) => {
+    // Metadata request exercises propagation only; this does not prove an admitted status write.
+    const patch = vi.fn().mockRejectedValue(error);
+    const cap = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: {
+        store: { patch },
+        principalId: "prior-system-principal",
+      },
+    });
+    await expect(cap.patch(request)).rejects.toBe(error);
+    const impl = createWorkItemUpdateImplementation({
+      workItemCapability: cap,
+    });
+    const result = workItemUpdateContract.outputSchema.parse(
+      await impl.execute(workItemUpdateContract.inputSchema.parse(request))
+    );
+    expect(result).toMatchObject({ success: false, code, id: request.id });
+  });
+
+  it("never translates a lookalike conflict class or falls back to a markdown writer", async () => {
+    const error = Object.assign(new Error("foreign conflict"), {
+      name: "WorkItemRevisionConflictError",
+    });
+    const cap = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: {
+        store: { patch: vi.fn().mockRejectedValue(error) },
+        principalId: "prior-system-principal",
+      },
+    });
+    await expect(cap.patch(request)).rejects.toBe(error);
+    const unwired = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+    });
+    await expect(unwired.patch(request)).rejects.toThrow(
+      "Doltgres backlog writer required"
+    );
   });
 });

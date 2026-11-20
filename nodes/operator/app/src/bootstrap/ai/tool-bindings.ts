@@ -48,7 +48,6 @@ import {
   createVcsListPrsImplementation,
   createVcsMergePrImplementation,
   createWebSearchImplementation,
-  createWorkItemReadImplementation,
   EDO_DECIDE_NAME,
   EDO_HYPOTHESIZE_NAME,
   EDO_RECORD_OUTCOME_NAME,
@@ -75,7 +74,7 @@ import {
   WEB_SEARCH_NAME,
   WORK_ITEM_QUERY_NAME,
   WORK_ITEM_READ_NAME,
-  WORK_ITEM_TRANSITION_NAME,
+  WORK_ITEM_UPDATE_NAME,
 } from "@cogni/ai-tools";
 
 import {
@@ -83,7 +82,8 @@ import {
   createGoalListImplementation,
   createKnowledgeSearchImplementation,
   createWorkItemQueryImplementation,
-  createWorkItemTransitionImplementation,
+  createWorkItemReadImplementation,
+  createWorkItemUpdateImplementation,
   getCurrentTimeImplementation,
   type WorkItemCapability,
 } from "@cogni/shared-ai-tools";
@@ -167,6 +167,7 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
         }
       ) as AnyToolImplementation,
     [WORK_ITEM_READ_NAME]: createWorkItemReadImplementation({
+      nodePublicOrigin: deps.nodePublicOrigin,
       workItemCapability: deps.workItemCapability,
     }) as AnyToolImplementation,
     // Pure tools (no I/O dependencies)
@@ -201,8 +202,17 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
     [EDO_HYPOTHESIZE_NAME]: createEdoHypothesizeImplementation({
       edoCapability: deps.edoCapability,
     }) as AnyToolImplementation,
+    // Temporary: runtime-adapter discards actorId/subjectId/runId; the private
+    // EDO writer neither records attribution nor honors released confidencePct.
+    // Keep the released contract/implementation paired, but refuse admission
+    // until the shared host-bound identity seam (task.0175) is available.
     [EDO_DECIDE_NAME]: createEdoDecideImplementation({
-      edoCapability: deps.edoCapability,
+      edoCapability: {
+        ...deps.edoCapability,
+        decide: async () => {
+          throw new Error("EDO decision requires verified run attribution");
+        },
+      },
     }) as AnyToolImplementation,
     [EDO_RECORD_OUTCOME_NAME]: createEdoRecordOutcomeImplementation({
       edoCapability: deps.edoCapability,
@@ -261,7 +271,7 @@ export function createToolBindings(deps: ToolBindingDeps): ToolBindings {
       workItemCapability: deps.workItemCapability,
     }) as AnyToolImplementation,
 
-    [WORK_ITEM_TRANSITION_NAME]: createWorkItemTransitionImplementation({
+    [WORK_ITEM_UPDATE_NAME]: createWorkItemUpdateImplementation({
       workItemCapability: deps.workItemCapability,
     }) as AnyToolImplementation,
   };

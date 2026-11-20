@@ -19,11 +19,11 @@ import {
   CitationEdgeList,
   groupContributionChanges,
 } from "@cogni/knowledge-base-ui";
-import { isWorkItemEndpointId } from "@cogni/knowledge-store";
 import type {
   ContributionCitationDiffEntry,
   ContributionDiffEntry,
 } from "@cogni/node-contracts";
+import { isWorkItemEndpointId } from "@cogni/operator-knowledge-store";
 import { type ReactElement, useEffect, useRef, useState } from "react";
 
 import { Markdown } from "@/components";

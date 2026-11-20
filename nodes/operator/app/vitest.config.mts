@@ -45,7 +45,18 @@ export default defineConfig({
     // @cogni/money-plane is a symlinked workspace checkout during local dev; its React must be ours.
     dedupe: ["react", "react-dom"],
     alias: [
-      ...workspaceSourceAliases(path.resolve(__dirname, "../../..")),
+      ...workspaceSourceAliases(path.resolve(__dirname, "../../..")).map(
+        (entry) => ({
+          ...entry,
+          find:
+            typeof entry.find === "string"
+              ? entry.find.replace(
+                  /^@cogni\/knowledge-store(?=\/|$)/,
+                  "@cogni/operator-knowledge-store"
+                )
+              : entry.find,
+        })
+      ),
       { find: "@tests", replacement: path.resolve(__dirname, "./tests") },
     ],
   },

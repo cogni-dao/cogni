@@ -47,24 +47,6 @@ import type { FinancialLedgerPort } from "@cogni/financial-ledger";
 import { createTigerBeetleAdapter } from "@cogni/financial-ledger/adapters";
 import type { UserId } from "@cogni/ids";
 import { toUserId, userActor } from "@cogni/ids";
-import {
-  type ContributionService,
-  createContributionService,
-  createEdoCapability,
-  createKnowledgeCapability,
-  defaultCanMergeKnowledge,
-  type KnowledgeStorePort,
-  shapeGate,
-} from "@cogni/knowledge-store";
-import {
-  buildDoltgresClient,
-  createDoltgresPusher,
-  DoltBranchSessionRunner,
-  DoltgresEdoResolverAdapter,
-  DoltgresKnowledgeContributionAdapter,
-  DoltgresKnowledgeStoreAdapter,
-  wrapPushSafe,
-} from "@cogni/knowledge-store/adapters/doltgres";
 import { parseMcpConfigFromEnv } from "@cogni/langgraph-graphs";
 import {
   COGNI_SYSTEM_PRINCIPAL_USER_ID,
@@ -76,6 +58,24 @@ import {
   type NodeStreamPort,
   RedisNodeStreamAdapter,
 } from "@cogni/node-streams";
+import {
+  type ContributionService,
+  createContributionService,
+  createEdoCapability,
+  createKnowledgeCapability,
+  defaultCanMergeKnowledge,
+  type KnowledgeStorePort,
+  shapeGate,
+} from "@cogni/operator-knowledge-store";
+import {
+  buildDoltgresClient,
+  createDoltgresPusher,
+  DoltBranchSessionRunner,
+  DoltgresEdoResolverAdapter,
+  DoltgresKnowledgeContributionAdapter,
+  DoltgresKnowledgeStoreAdapter,
+  wrapPushSafe,
+} from "@cogni/operator-knowledge-store/adapters/doltgres";
 import { numberToPpm } from "@cogni/operator-wallet";
 import { PrivyOperatorWalletAdapter } from "@cogni/operator-wallet/adapters/privy";
 import type { ScheduleControlPort } from "@cogni/scheduler-core";
@@ -85,6 +85,7 @@ import type {
   WorkItemArtifactDeps,
   WorkItemQueryPort,
 } from "@cogni/work-items";
+import { createItemRefPorts } from "@cogni/work-items";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
 import type { GoalsProgress, MetricService } from "@cogni-dao/metrics";
 import {
@@ -1180,7 +1181,8 @@ function createContainer(): Container {
   // WorkItemCapability for AI tools (task.5282). `core__work_item_query` lists
   // through the Doltgres read path — the same `doltgresWorkItems.list` that
   // `GET /api/v1/work/items` serves (read pool, never writer admission). The
-  // command path for transition stays on the markdown ports. `patch` (story.5096)
+  // update stays restricted to proven prior metadata fields until genuine run attribution
+  // is available (task.0175). `patch` (story.5096)
   // writes through the SAME Doltgres patch `PATCH /api/v1/work/items/{id}` uses —
   // the runtime image has no markdown `work/` tree, so a markdown patch could never
   // land — attributed to the system principal scheduled runs execute as, under the
@@ -1188,9 +1190,15 @@ function createContainer(): Container {
   // caller's optional `expectedRevision` as compare-and-set.
   const workItemCapability = createWorkItemCapability({
     workItemQuery: workItemAdapter,
-    workItemCommand: workItemAdapter,
     moveReadings: moveMetrics.readings,
     links: createCitationLinksPort(() => knowledgeStorePort),
+    artifacts: workItemArtifacts
+      ? { latest: (id) => workItemArtifacts.artifacts.latest(id) }
+      : undefined,
+    refs: createItemRefPorts({
+      artifacts: workItemArtifacts?.artifacts,
+      history: doltgresWorkItems,
+    }),
     log: (event) => log.warn(event, "work.items.envelope_degraded"),
     backlogReader: doltgresWorkItems,
     backlogWriter: {

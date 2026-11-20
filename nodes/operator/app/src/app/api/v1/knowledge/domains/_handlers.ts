@@ -17,15 +17,6 @@
  */
 
 import {
-  DomainAlreadyRegisteredError,
-  DomainNotEmptyError,
-  DomainNotRegisteredError,
-  KnowledgeBusyError,
-  KnowledgeWriteConflictError,
-  KnowledgeWriteOutcomeUnknownError,
-  KnowledgeWriteScopeRequiredError,
-} from "@cogni/knowledge-store";
-import {
   DomainIdSchema,
   DomainsCreateRequestSchema,
   DomainsCreateResponseSchema,
@@ -37,6 +28,15 @@ import {
   domainsUpdateOperation,
 } from "@cogni/node-contracts";
 import type { SessionUser } from "@cogni/node-shared";
+import {
+  DomainAlreadyRegisteredError,
+  DomainNotEmptyError,
+  DomainNotRegisteredError,
+  KnowledgeBusyError,
+  KnowledgeWriteConflictError,
+  KnowledgeWriteOutcomeUnknownError,
+  KnowledgeWriteScopeRequiredError,
+} from "@cogni/operator-knowledge-store";
 import { NextResponse } from "next/server";
 
 import { loadDomains } from "@/app/(app)/knowledge/_server/loaders";

@@ -42,9 +42,14 @@ export function createBoundToolSource(
   bindings: ToolBindings
 ): StaticToolSource {
   const runtimes = [];
+  const ids = new Set<string>();
 
   for (const boundTool of contracts) {
     const toolId = boundTool.contract.name;
+    if (ids.has(toolId)) {
+      throw new Error(`TOOL_BINDING_DUPLICATE: ${toolId}`);
+    }
+    ids.add(toolId);
     const impl = bindings[toolId];
     if (!impl) {
       throw new Error(

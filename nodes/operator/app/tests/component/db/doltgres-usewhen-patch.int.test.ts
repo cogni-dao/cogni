@@ -30,13 +30,13 @@ import { fileURLToPath } from "node:url";
 import {
   EmptyKnowledgePatchError,
   KnowledgeContributionEditSchema,
-} from "@cogni/knowledge-store";
+} from "@cogni/operator-knowledge-store";
 import {
   buildDoltgresClient,
   DoltBranchSessionRunner,
   DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
-} from "@cogni/knowledge-store/adapters/doltgres";
+} from "@cogni/operator-knowledge-store/adapters/doltgres";
 import postgres, { type Sql } from "postgres";
 import {
   GenericContainer,

@@ -20,12 +20,12 @@ import {
   type KnowledgeStorePort,
   KnowledgeWriteOutcomeUnknownError,
   KnowledgeWriteScopeRequiredError,
-} from "@cogni/knowledge-store";
+} from "@cogni/operator-knowledge-store";
 import {
   buildDoltgresClient,
   DoltBranchSessionRunner,
   DoltgresKnowledgeStoreAdapter,
-} from "@cogni/knowledge-store/adapters/doltgres";
+} from "@cogni/operator-knowledge-store/adapters/doltgres";
 import { DomainNotEmptyError as PublishedNonempty } from "@cogni/shared-knowledge-store";
 import * as operations from "@cogni/shared-knowledge-store/adapters/doltgres";
 import postgres, { type Sql } from "postgres";
@@ -84,7 +84,7 @@ describe("installed domain artifacts", () => {
     ).toBe(canonical);
     for (const consumer of [
       "@cogni/ai-tools",
-      "@cogni/knowledge-store",
+      "@cogni/operator-knowledge-store",
       "@cogni/node-contracts",
     ]) {
       const consumerRequire = createRequire(import.meta.resolve(consumer));

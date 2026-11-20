@@ -12,9 +12,12 @@
  * @internal
  */
 
-import { buildKnowledgeGraph, type Citation } from "@cogni/knowledge-store";
-import { FakeKnowledgeStoreAdapter } from "@cogni/knowledge-store/adapters/fake";
 import { KnowledgeRowSchema } from "@cogni/node-contracts";
+import {
+  buildKnowledgeGraph,
+  type Citation,
+} from "@cogni/operator-knowledge-store";
+import { FakeKnowledgeStoreAdapter } from "@cogni/operator-knowledge-store/adapters/fake";
 import { KnowledgeRowSchema as CanonicalKnowledgeRowSchema } from "@cogni/shared-knowledge-store/contracts";
 import { describe, expect, it } from "vitest";
 
