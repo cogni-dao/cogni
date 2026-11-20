@@ -388,3 +388,27 @@ export function scopePromQuery(query: string, scope: QueryScope): ScopeResult {
     return { ok: false, reason: "scope_unverified" };
   return { ok: true, query: out, selectors: selectors.length };
 }
+
+// --- Developer read presets ----------------------------------------------------------------------------------------
+
+/** Windows a preset report may cover. */
+export const PRESET_WINDOWS = ["1h", "24h", "7d"] as const;
+export type PresetWindow = (typeof PRESET_WINDOWS)[number];
+
+/** Named reports a developer can ask for without writing PromQL. Each is an instant query the scoper still confines. */
+export const METRICS_PRESETS = {
+  /** Requests per route and status class over the window: the success/failure report of every endpoint. */
+  route_status: (w: PresetWindow) =>
+    `sum by (route, status) (increase(http_requests_total[${w}]))`,
+  /** p95 latency per route over the window, in milliseconds. */
+  route_latency_p95: (w: PresetWindow) =>
+    `histogram_quantile(0.95, sum by (route, le) (rate(http_request_duration_ms_bucket[${w}])))`,
+} as const;
+export type MetricsPreset = keyof typeof METRICS_PRESETS;
+
+/** The PromQL of a named preset, or null for an unknown name or window. */
+export function presetQuery(name: string, window: string): string | null {
+  if (!Object.hasOwn(METRICS_PRESETS, name)) return null;
+  if (!(PRESET_WINDOWS as readonly string[]).includes(window)) return null;
+  return METRICS_PRESETS[name as MetricsPreset](window as PresetWindow);
+}
