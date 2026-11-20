@@ -769,8 +769,11 @@ importers:
   nodes/operator/packages/doltgres-schema:
     dependencies:
       '@cogni/knowledge-base':
+        specifier: https://github.com/cogni-dao/node-template/releases/download/knowledge-base-v0.6.0/cogni-dao-knowledge-base-0.6.0.tgz
+        version: '@cogni-dao/knowledge-base@https://github.com/cogni-dao/node-template/releases/download/knowledge-base-v0.6.0/cogni-dao-knowledge-base-0.6.0.tgz(@cogni/knowledge-store@packages+knowledge-store)(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)'
+      '@cogni/knowledge-store':
         specifier: workspace:*
-        version: link:../../../../packages/knowledge-base
+        version: link:../../../../packages/knowledge-store
       drizzle-orm:
         specifier: ^0.44.7
         version: 0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
@@ -1975,6 +1978,12 @@ packages:
         optional: true
       recharts:
         optional: true
+
+  '@cogni-dao/knowledge-base@https://github.com/cogni-dao/node-template/releases/download/knowledge-base-v0.6.0/cogni-dao-knowledge-base-0.6.0.tgz':
+    resolution: {integrity: sha512-Uc/vntQBl3fN/MuZermRVWkVfsRwvNaFVvx4lgfvoR28I8ZhjFQchdUyoh01VP0aoH8VEK5U1jnu6jc6yMvJ0g==, tarball: https://github.com/cogni-dao/node-template/releases/download/knowledge-base-v0.6.0/cogni-dao-knowledge-base-0.6.0.tgz}
+    version: 0.6.0
+    peerDependencies:
+      '@cogni/knowledge-store': '*'
 
   '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.24.0/cogni-dao-knowledge-store-0.24.0.tgz':
     resolution: {integrity: sha512-MVP35OtyPDOFdEboh1PCjehs2oqGVS7cOn9ZcocmHvk64HjFYM8BqWJ3eP/HUIR+N2mB8i5ZwXNFr3qQgmretQ==, tarball: https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.24.0/cogni-dao-knowledge-store-0.24.0.tgz}
@@ -13696,6 +13705,41 @@ snapshots:
       '@cogni-dao/metrics': https://github.com/cogni-dao/node-template/releases/download/metrics-v0.24.0/cogni-dao-metrics-0.24.0.tgz(drizzle-orm@0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7))(postgres@3.4.7)
       '@cogni/knowledge-store': link:packages/knowledge-store
       recharts: 2.15.4(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+
+  '@cogni-dao/knowledge-base@https://github.com/cogni-dao/node-template/releases/download/knowledge-base-v0.6.0/cogni-dao-knowledge-base-0.6.0.tgz(@cogni/knowledge-store@packages+knowledge-store)(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)':
+    dependencies:
+      '@cogni/knowledge-store': link:packages/knowledge-store
+      drizzle-orm: 0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
+    transitivePeerDependencies:
+      - '@aws-sdk/client-rds-data'
+      - '@cloudflare/workers-types'
+      - '@electric-sql/pglite'
+      - '@libsql/client'
+      - '@libsql/client-wasm'
+      - '@neondatabase/serverless'
+      - '@op-engineering/op-sqlite'
+      - '@opentelemetry/api'
+      - '@planetscale/database'
+      - '@prisma/client'
+      - '@tidbcloud/serverless'
+      - '@types/better-sqlite3'
+      - '@types/pg'
+      - '@types/sql.js'
+      - '@upstash/redis'
+      - '@vercel/postgres'
+      - '@xata.io/client'
+      - better-sqlite3
+      - bun-types
+      - expo-sqlite
+      - gel
+      - knex
+      - kysely
+      - mysql2
+      - pg
+      - postgres
+      - prisma
+      - sql.js
+      - sqlite3
 
   '@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.24.0/cogni-dao-knowledge-store-0.24.0.tgz':
     dependencies:
