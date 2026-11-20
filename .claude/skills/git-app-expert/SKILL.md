@@ -37,6 +37,12 @@ cannot share one. Create + wire per the canonical guide:
 | `cogni-git-review`         | 1761205 | 80293097   | production       | `cognidao.org/...webhooks/github` · `Cogni-DAO/cogni`                  |
 | `cogni-git-review-preview` | 2011345 | 87655574   | preview          | `preview.cognidao.org/...webhooks/github` · selected preview repos     |
 
+**Node AI push tokens come from the operator App, narrowed.** `POST /api/v1/vcs/push-token` mints a 1-hour
+installation token from the env's operator App (`GH_REVIEW_APP_*`) for ONE node repo with Contents and Pull requests
+write only, gated on `node.flight` (`developer`). GitHub shows those pushes as the operator App; the route's terminal
+log names the requesting principal and the node records its run. Design:
+[node-ai-code-identity](https://node-template.cognidao.org/knowledge/node-ai-code-identity).
+
 `Cogni-DAO/test-repo` is only a legacy review-webhook fixture. It is not
 sufficient for node publish/flight testing: the candidate/test App must see the
 template repo, parent pin repo, and freshly minted node repos in the disposable

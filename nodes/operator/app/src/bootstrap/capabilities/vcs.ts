@@ -13,6 +13,8 @@
  * @internal
  */
 
+import { createHash } from "node:crypto";
+
 import type { VcsCapability } from "@cogni/ai-tools";
 
 import { GitHubVcsAdapter } from "@/adapters/server";
@@ -74,4 +76,38 @@ export function createVcsCapability(env: ServerEnv): VcsCapability {
   const privateKey = Buffer.from(privateKeyBase64, "base64").toString("utf-8");
 
   return new GitHubVcsAdapter({ appId, privateKey });
+}
+
+/** Mints a one-repo push token through the operator App (POST /api/v1/vcs/push-token). */
+export interface RepoPushTokenMinter {
+  mintRepoPushToken(params: {
+    owner: string;
+    repo: string;
+  }): Promise<{ token: string; expiresAt: string }>;
+}
+
+let pushTokenMinter: { key: string; minter: RepoPushTokenMinter } | null = null;
+
+/**
+ * The push-token minter, built from the operator App's credentials (GH_REVIEW_APP_*). Every token it mints is
+ * narrowed by GitHub to one repo and to contents + pull_requests write. One instance per credential, so the
+ * installation-id and token caches survive across requests. Null when unset (route → 503).
+ */
+export function createRepoPushTokenMinter(
+  env: ServerEnv
+): RepoPushTokenMinter | null {
+  const appId = env.GH_REVIEW_APP_ID;
+  const privateKeyBase64 = env.GH_REVIEW_APP_PRIVATE_KEY_BASE64;
+  if (!appId || !privateKeyBase64) return null;
+  const key = `${appId}:${createHash("sha256").update(privateKeyBase64).digest("hex")}`;
+  if (pushTokenMinter?.key !== key) {
+    const privateKey = Buffer.from(privateKeyBase64, "base64").toString(
+      "utf-8"
+    );
+    pushTokenMinter = {
+      key,
+      minter: new GitHubVcsAdapter({ appId, privateKey }),
+    };
+  }
+  return pushTokenMinter.minter;
 }
