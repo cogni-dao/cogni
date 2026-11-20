@@ -1201,20 +1201,26 @@ function createContainer(): Container {
   }
 
   // story.0061: a successful patch also records the (atom, item) pairs it cites; the route and the agent tool share
-  // this patch, and the record never fails or delays it.
+  // this patch, and the record never fails or delays it. The adapter is a class instance whose methods live on its
+  // prototype and mutate instance state, so a spread would drop them and Object.create would split that state:
+  // the proxy overrides patch and binds every other method to the real adapter.
   {
     const citePairs = new CitePairRecorder(serviceDb.$client, logUsage);
     const leased = doltgresWorkItems;
-    doltgresWorkItems = {
-      ...leased,
-      async patch(input, principalId) {
-        const item = await leased.patch(input, principalId);
-        if (input.cites?.length) {
-          citePairs.record(item.id, item.revision, input.cites);
-        }
-        return item;
-      },
+    const patch: WorkItemsContentPort["patch"] = async (input, principalId) => {
+      const item = await leased.patch(input, principalId);
+      if (input.cites?.length) {
+        citePairs.record(item.id, item.revision, input.cites);
+      }
+      return item;
     };
+    doltgresWorkItems = new Proxy(leased, {
+      get(target, prop) {
+        if (prop === "patch") return patch;
+        const value = Reflect.get(target, prop, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
   }
 
   // task.0028: artifacts go through the work-items writer path. The artifact records its author for audit; no server check
