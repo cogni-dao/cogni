@@ -25,9 +25,10 @@ import {
 import { type Address, getAddress, zeroAddress } from "viem";
 
 import type { NodeStatus } from "@/shared/db/nodes";
+import { CHAINS } from "@/shared/web3";
 
 /** The Base mainnet chain id the DAO must be on (payments settle on Base). */
-const PAYMENT_PREREQS_CHAIN_ID = "8453";
+const PAYMENT_PREREQS_CHAIN_ID = String(CHAINS.BASE.chainId);
 
 const DEFAULT_REPO_SPEC_PATH = ".cogni/repo-spec.yaml";
 
