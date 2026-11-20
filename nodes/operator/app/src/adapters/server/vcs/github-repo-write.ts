@@ -3640,8 +3640,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
 
   /**
    * Payment-activation write-back into the NODE'S OWN repo (not the operator monorepo): read the
-   * node repo's `.cogni/repo-spec.yaml` on `main`, splice in `node_wallet.address` +
-   * `payments_in.credits_topup.*` (95/5 at-cost) + `payments.status: active`, and open (or reuse)
+   * node repo's `.cogni/repo-spec.yaml` on `main`, splice in `payments_in.credits_topup.*`
+   * (95/5 at-cost) + `payments.status: active` (no wallet block: the node declares
+   * `operator_wallet.address` itself, bug.5656), and open (or reuse)
    * a PR carrying that one-file change. The {owner, repo} here is the node's OWN repo identity
    * (`NODE_MINT_OWNER`/slug), built by the route exactly like `publish` builds it.
    *
@@ -3663,9 +3664,9 @@ export class GitHubRepoWriter implements DeployPlanePort {
     const branch = `cogni-operator/activate-payments-${slug}`;
     const title = `feat(payments): activate ${slug} payment rails`;
     const body =
-      `Activates \`${slug}\`'s payment loop. Writes the node's own wallet + Split into ` +
-      "`.cogni/repo-spec.yaml`:\n\n" +
-      `- \`node_wallet.address\` = \`${input.nodeWalletAddress}\`\n` +
+      `Activates \`${slug}\`'s payment loop. Writes the Split into ` +
+      "`.cogni/repo-spec.yaml`. The node's wallet is the `operator_wallet.address` this repo-spec " +
+      `already declares (\`${input.nodeWalletAddress}\`); this PR does not write a wallet.\n\n` +
       `- \`payments_in.credits_topup.receiving_address\` (Split) = \`${input.splitAddress}\`\n` +
       `- \`payments.status: active\` (95/5 at-cost economics)\n\n` +
       "Inbound USDC routes to this node's own Split, then funds its AI credits. " +
@@ -3687,7 +3688,6 @@ export class GitHubRepoWriter implements DeployPlanePort {
     }
 
     const nextSpec = renderPaymentsActivationSpec(currentSpec, {
-      nodeWalletAddress: input.nodeWalletAddress,
       splitAddress: input.splitAddress,
     });
     if (

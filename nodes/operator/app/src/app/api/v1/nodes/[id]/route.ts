@@ -8,7 +8,9 @@
  *   state-machine event token to advance status atomically.
  * Invariants: OWNER_GATING, STATE_MACHINE_TOTAL - transitions go through `transition()`.
  *   Payment readiness is not owner-declared here; readiness must come from a server-side verifier
- *   after repo-spec main + production deploy match the activated rail.
+ *   after repo-spec main + production deploy match the activated rail. `wallet_provisioned` is NOT
+ *   accepted here (bug.5656): only POST .../payment-prereqs sends it, after reading the wallet
+ *   from the node repo-spec.
  * Side-effects: IO (Postgres)
  * Links: src/features/nodes/state-machine.ts, task.5083
  * @public
@@ -41,7 +43,6 @@ const PatchInput = z.object({
   event: z
     .discriminatedUnion("type", [
       z.object({ type: z.literal("dao_verified") }),
-      z.object({ type: z.literal("wallet_provisioned") }),
       z.object({ type: z.literal("fail"), reason: z.string().min(1) }),
     ])
     .optional(),
