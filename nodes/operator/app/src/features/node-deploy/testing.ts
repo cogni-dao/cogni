@@ -52,6 +52,7 @@ import {
 } from "@/ports";
 import { resolveWorkloadZoneBinding } from "@/shared/node-registry/fleet-ownership";
 
+import { edgeHostRegexFor } from "./edge";
 import { SUBSTRATE_PORTS } from "./substrate-ports";
 
 export const WORKLOAD_ZONE = resolveWorkloadZoneBinding({
@@ -66,6 +67,15 @@ export const SHA_2 = "2".repeat(40);
 export const SHA_3 = "3".repeat(40);
 export const DIGEST = `sha256:${"a".repeat(64)}`;
 export const PUBLIC_HOST = "node-deploy-canary.cognidao.org";
+/**
+ * The edge guard the fake-world tests use: `PUBLIC_HOST`'s label stands in as a catalog slug. The
+ * operator canary that once owned that host is retired (task.5491); the operator owns no host and the
+ * guard's bare default matches nothing.
+ */
+export const FIXTURE_EDGE_HOSTS = edgeHostRegexFor(
+  ["node-deploy-canary"],
+  WORKLOAD_ZONE
+);
 
 export class FakeClock implements SequencerClock {
   constructor(public t = 1_800_000_000_000) {}

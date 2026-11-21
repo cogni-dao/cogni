@@ -27,6 +27,7 @@ import {
   FakeDns,
   FakePayer,
   FakeProbe,
+  FIXTURE_EDGE_HOSTS,
   MemoryLog,
   MemorySecrets,
   MemoryStore,
@@ -66,7 +67,9 @@ function harness(
     store,
     payer,
     edge:
-      opts.withEdge === false ? undefined : new EdgeRouter(dns, WORKLOAD_ZONE),
+      opts.withEdge === false
+        ? undefined
+        : new EdgeRouter(dns, WORKLOAD_ZONE, FIXTURE_EDGE_HOSTS),
     probe,
     secrets,
     chain,
@@ -120,7 +123,7 @@ function restart(h: H) {
   return new NodeDeploySequencer({
     store: h.store,
     payer: h.payer,
-    edge: new EdgeRouter(h.dns, WORKLOAD_ZONE),
+    edge: new EdgeRouter(h.dns, WORKLOAD_ZONE, FIXTURE_EDGE_HOSTS),
     probe: h.probe,
     secrets: h.secrets,
     chain: h.chain,

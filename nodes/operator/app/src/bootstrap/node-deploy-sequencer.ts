@@ -11,7 +11,7 @@
  *   lifecycle. Every deploy decision lives in `@features/node-deploy/sequencer`.
  * Invariants:
  *   - PAYS_ONLY_THROUGH_THE_ACTUATOR: this process holds the actuator BEARER, never a Console key or a
- *     wallet. `ActuatorPayer` is the only payer wired here; ConsolePayer is dev-only.
+ *     wallet. `ActuatorPayer` is the only payer wired here.
  *   - SECRETS_ARRIVE_AS_FILES: credentials are read from a projected Secret volume, never process env.
  *   - SINGLE_INSTANCE: a Postgres session advisory lock is held on the one pooled connection for the
  *     life of the process. A second replica idles (not ready) and a lost lock connection exits the process;

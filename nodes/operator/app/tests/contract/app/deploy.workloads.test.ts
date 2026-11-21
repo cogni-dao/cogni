@@ -10,7 +10,7 @@
  *   - AUTHZ_BEFORE_SIDE_EFFECT: production -> `node.promote_production`; candidate-a/preview ->
  *     `node.manage_envs`; a denial reads nothing from GitHub and writes nothing.
  *   - NODE_DEPLOYS_FROM_ITS_OWN_REPO: the repo is resolved from the IMAGE catalog (story.5137); the
- *     operator is in-repo, so the parent repo (the remote-source case lives in the route's own test).
+ *     fixture node deploys from its own repo, read at the sha through the plane seam.
  *   - INTENT_ONLY: 200 means a release was recorded; this route never pays or touches DNS.
  *   - PLACEMENT_ADMISSION (story.5141): a manifest set naming a fleet-refused country is 422
  *     `placement_country_refused`; a manifest set beside the catalog cell for the env is 409
@@ -26,18 +26,25 @@ import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const NODE_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
+// The fixture node is toks5, a canonical node-deploy node of this fleet. The operator canary that used to
+// play this part is retired (task.5491): the operator deploys through flight and promote, not this verb.
+const OPERATOR_ID = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
+const NODE_ID = "f66b260b-4633-41e2-8711-b7c1b8449cc1";
 const SHA = "a".repeat(40);
 const ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../../.."
 );
+// The checked-in repo-spec, declaring the fixture node instead of the operator.
 const ROOT_SPEC = readFileSync(
   path.join(ROOT, ".cogni/repo-spec.yaml"),
   "utf8"
-);
+).replaceAll(OPERATOR_ID, NODE_ID);
 const CANARY_PATH = ".cogni/workloads/canary.yaml";
-const CANARY = readFileSync(path.join(ROOT, CANARY_PATH), "utf8");
+const CANARY = readFileSync(
+  path.join(ROOT, "packages/repo-spec/tests/fixtures/canary.workload.yaml"),
+  "utf8"
+).replaceAll("node-deploy-canary.cognidao.org", "toks5.cognidao.org");
 
 const plane = vi.hoisted(() => ({
   fetchFileText: vi.fn(),
@@ -203,13 +210,13 @@ const valid = {
 describe("/api/v1/deploy/workloads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    dbState.node = { id: NODE_ID, slug: "operator" };
+    dbState.node = { id: NODE_ID, slug: "toks5" };
     dbState.billing = { id: "billing-1" };
     dbState.call = 0;
     authz.present = true;
     authz.check.mockResolvedValue({ decision: "allow", code: "authz_allowed" });
     mockGetSessionUser.mockResolvedValue(TEST_SESSION_USER_1);
-    envState.NODE_SUBMODULE_PARENT_OWNER = "test-owner";
+    envState.NODE_SUBMODULE_PARENT_OWNER = "cogni-dao";
     envState.NODE_SUBMODULE_PARENT_REPO = "test-repo";
     envState.DEPLOY_ENVIRONMENT = "production";
     catalogOverlay.row = undefined;
@@ -217,8 +224,7 @@ describe("/api/v1/deploy/workloads", () => {
       [".cogni/repo-spec.yaml", ROOT_SPEC],
       [CANARY_PATH, CANARY],
     ]);
-    // The operator is an in-repo node: the IMAGE catalog resolves its source to the parent repo and it has
-    // no image repository (story.5137).
+    // The fixture node deploys from its OWN repo (cogni-dao/toks5), resolved from the IMAGE catalog (story.5137).
     plane.fetchFileText.mockImplementation(
       async ({ path: p }: { path: string }) => files.byPath.get(p) ?? null
     );
@@ -322,20 +328,20 @@ describe("/api/v1/deploy/workloads", () => {
         desiredState: "running",
       });
       expect(plane.fetchFileText).toHaveBeenCalledWith({
-        owner: "test-owner",
-        repo: "test-repo",
+        owner: "cogni-dao",
+        repo: "toks5",
         path: ".cogni/repo-spec.yaml",
         ref: SHA,
       });
       expect(plane.listDirectoryEntries).toHaveBeenCalledWith({
-        owner: "test-owner",
-        repo: "test-repo",
+        owner: "cogni-dao",
+        repo: "toks5",
         path: ".cogni/workloads",
         ref: SHA,
       });
       expect(plane.fetchFileText).toHaveBeenCalledWith({
-        owner: "test-owner",
-        repo: "test-repo",
+        owner: "cogni-dao",
+        repo: "toks5",
         path: CANARY_PATH,
         ref: SHA,
       });
@@ -347,16 +353,14 @@ describe("/api/v1/deploy/workloads", () => {
         sourceSha: SHA,
         createdBy: `user:${TEST_SESSION_USER_1.id}`,
       });
-      expect(input.spec.expose.http.host).toBe(
-        "node-deploy-canary.cognidao.org"
-      );
+      expect(input.spec.expose.http.host).toBe("toks5.cognidao.org");
     });
 
     it("candidate-a releases carry the -test host", async () => {
       envState.DEPLOY_ENVIRONMENT = "candidate-a";
       await post({ ...valid, env: "candidate-a" });
       expect(store.recordRelease.mock.calls[0]?.[0].spec.expose.http.host).toBe(
-        "node-deploy-canary-test.cognidao.org"
+        "toks5-test.cognidao.org"
       );
     });
 
@@ -487,8 +491,14 @@ describe("/api/v1/deploy/workloads", () => {
     });
 
     it("409 for a state workload that already exists; a state lease is never replaced by a deploy", async () => {
+      // candidate-a: G4 refuses any NEW production state first, so the create-once rule is shown where state is admitted.
+      envState.DEPLOY_ENVIRONMENT = "candidate-a";
       store.getDesired.mockResolvedValue({ state: "running" });
-      const res = await post({ ...valid, workload: "canary-db" });
+      const res = await post({
+        ...valid,
+        env: "candidate-a",
+        workload: "canary-db",
+      });
       expect(res.status).toBe(409);
       expect(await res.json()).toEqual({ error: "state_workload_exists" });
       expect(store.recordRelease).not.toHaveBeenCalled();
@@ -511,17 +521,14 @@ describe("/api/v1/deploy/workloads", () => {
       expect(store.recordRelease).not.toHaveBeenCalled();
     });
 
-    it("G4: canary-db is admitted only for the operator's own node (poly is a node-deploy node of this fleet in production)", async () => {
+    it("G4 has no exception since the operator canary was retired: a state named canary-db is refused too", async () => {
       const POLY_ID = "4b06359a-a859-4399-888e-a8c7a6696f7e";
       dbState.node = { id: POLY_ID, slug: "poly" };
       envState.NODE_SUBMODULE_PARENT_OWNER = "cogni-dao";
       // The entire declaration set must belong to Poly, including the app beside this state.
       files.byPath.set(
         CANARY_PATH,
-        CANARY.replaceAll(
-          "node-deploy-canary.cognidao.org",
-          "poly.cognidao.org"
-        )
+        CANARY.replaceAll("toks5.cognidao.org", "poly.cognidao.org")
       );
       files.byPath.set(
         ".cogni/repo-spec.yaml",

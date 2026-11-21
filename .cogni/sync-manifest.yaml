@@ -107,7 +107,7 @@ divergences:
       - "infra/k8s/secrets/.sops.yaml" # hub sops key config
       - "infra/k8s/secrets/README.md" # hub secrets-layout doc
       - "scripts/experiments/**" # hub-only research scripts
-      - ".cogni/workloads/**" # operator canary manifest; hub-only (story.5137)
+      - ".cogni/workloads/**" # node-local workload manifests (story.5137); the operator declares none
     artifact_only:
       # The node BODY. standalone-node ships the whole single node under nodes/node-template/**;
       # the hub has ZERO files there (node-template is a catalog-pinned remote source, not in-tree),
@@ -130,7 +130,7 @@ divergences:
       - "nodes/node-template/**"
       - "infra/catalog/operator.yaml"
       - "infra/catalog/scheduler-worker.yaml"
-      - ".cogni/workloads/**" # operator canary manifest; hub-only (story.5137)
+      - ".cogni/workloads/**" # node-local workload manifests (story.5137); the operator declares none
     artifact_only:
       - "nodes/poly/**"
 

@@ -29,6 +29,7 @@ import {
   FakeDns,
   FakePayer,
   FakeProbe,
+  FIXTURE_EDGE_HOSTS,
   MemoryLog,
   MemorySecrets,
   MemoryStore,
@@ -52,7 +53,7 @@ function harness(cfg: Partial<SequencerConfig> = {}) {
   const seq = new NodeDeploySequencer({
     store,
     payer,
-    edge: new EdgeRouter(dns, WORKLOAD_ZONE),
+    edge: new EdgeRouter(dns, WORKLOAD_ZONE, FIXTURE_EDGE_HOSTS),
     probe,
     secrets: new MemorySecrets(),
     chain: new FakeChain(payer),

@@ -7,10 +7,10 @@
  * Module: `@cogni/repo-spec/tests/workload-manifest`
  * Purpose: Prove the two-pass workload-manifest check and the byte-identical canary lowering.
  *   One test per policy refusal, the cross-file rules, and the operator's REAL
- *   `.cogni/workloads/canary.yaml` lowered against the pre-manifest `deployment.workloads` golden.
+ *   `fixtures/canary.workload.yaml` lowered against the pre-manifest `deployment.workloads` golden.
  * Scope: Unit tests of packages/repo-spec/src/workload-manifest.ts. Does not call the network or the operator.
  * Invariants: the vendored Score schema matches its pinned sha256; the canary lowering matches the golden sha256.
- * Side-effects: IO (reads .cogni/workloads/canary.yaml and the golden fixture)
+ * Side-effects: IO (reads fixtures/canary.workload.yaml and the golden fixture)
  * Links: packages/repo-spec/src/workload-manifest.ts, hub `workload-manifest`
  * @internal
  */
@@ -44,9 +44,11 @@ import {
 } from "../src/workload-manifest";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+// A virtual repo path for the fixture below: no live `.cogni/workloads/canary.yaml` exists any more.
 const CANARY_PATH = ".cogni/workloads/canary.yaml";
+// The former operator canary manifest, kept as a test fixture (task.5491 retired the live declaration).
 const CANARY = readFileSync(
-  path.resolve(here, "../../..", CANARY_PATH),
+  path.resolve(here, "fixtures/canary.workload.yaml"),
   "utf8"
 );
 /**
@@ -132,7 +134,7 @@ describe("the SDL service name is the Score container key (task.5490)", () => {
   });
 });
 
-describe("the operator canary manifest", () => {
+describe("the canary fixture manifest", () => {
   it("lowers to a NodeWorkloadSpec pair byte-identical to the pre-manifest deployment.workloads pair, except the SDL service name (task.5490)", () => {
     const loweredNamed = lowerWorkloadManifests([
       { path: CANARY_PATH, text: CANARY },

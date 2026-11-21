@@ -48,8 +48,8 @@
  *     `test_env_cap`, counted before any side effect and again after the row exists, so racing requests cannot
  *     leave more than `cap`), and returns the host. Without `testEnv` the v1 path is byte for byte unchanged.
  *   - G4_STATE_ADMISSION: a new production `state` workload is refused 422 `state_admission_refused`
- *     until the off-provider backup debt row closes; the only exception is the operator node's own
- *     `canary-db`.
+ *     until the off-provider backup debt row closes. There is no exception: the operator canary's
+ *     `canary-db`, the one earlier exception, was destroyed and its declaration removed (task.5491).
  *   - NO_SOURCE_ECHO: a 502 read failure never returns the GitHub/Octokit message.
  * Side-effects: IO (image catalog file read, GitHub App or anonymous contents read, operator Postgres write)
  * Links: contracts/deploy.workloads.v1.contract.ts, features/node-deploy/declarations.ts,
@@ -83,7 +83,6 @@ import {
   testEnvSpec,
 } from "@/features/node-deploy/test-env";
 import type { ResolvedNodeSource } from "@/ports";
-import { getNodeId } from "@/shared/config";
 import { serverEnv } from "@/shared/env";
 import {
   resolveWorkloadZoneBinding,
@@ -91,12 +90,6 @@ import {
 } from "@/shared/node-registry/fleet-ownership";
 import { EVENT_NAMES } from "@/shared/observability";
 import { canWriteSecretsLane } from "@/shared/secrets/secrets-lane-trust.data";
-
-/**
- * G4 canary-only exception: the one production state workload admitted before backups exist. It
- * holds only for the operator's OWN node (`getNodeId()`), never for another node's `canary-db`.
- */
-const G4_PRODUCTION_STATE_EXCEPTION = "canary-db";
 
 export interface RecordNodeReleaseInput {
   readonly node: { readonly id: string; readonly slug: string };
@@ -268,13 +261,8 @@ export async function recordNodeRelease(
   }
 
   // G4: no NEW production state until the off-provider backup debt row closes (hub
-  // node-service-delivery, debt ledger). `canary-db` is the one canary-only exception: it holds
-  // canary boot rows, no user data. Lift this guard when that debt row closes.
-  if (
-    env === "production" &&
-    spec.kind === "state" &&
-    !(node.id === getNodeId() && workload === G4_PRODUCTION_STATE_EXCEPTION)
-  )
+  // node-service-delivery, debt ledger). Lift this guard when that debt row closes.
+  if (env === "production" && spec.kind === "state")
     return refused(422, {
       error: "state_admission_refused",
       message:

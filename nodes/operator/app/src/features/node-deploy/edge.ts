@@ -9,10 +9,10 @@
  * Invariants:
  *   - HOST_GUARD: every write names a host matching the configured regex; anything else throws BEFORE
  *     any request. The zone comes from the fleet binding. The regex is built from the image catalog
- *     (`edgeHostRegexFor`): the operator's canary plus every node whose `compute_api[<env>]` is
- *     `node-deploy`, so no per-node overlay edit is needed (CD1). The bare default is canary-only.
+ *     (`edgeHostRegexFor`): every node whose `compute_api[<env>]` is `node-deploy`, so no per-node
+ *     overlay edit is needed (CD1). The operator owns no host and the bare default matches nothing.
  *   - HOST_IS_THE_NODES_OWN: a release may only claim `hostOwnedBy(host, env, slug, workload)`: the node's own
- *     slug (the operator's canary label for the operator), or `<slug>-<workload>` for a sibling workload of
+ *     slug, or `<slug>-<workload>` for a sibling workload of
  *     that node, plus the env's `-test`/`-preview`/`-dev` suffix, so one node can never take another's host
  *     and operator hosts are never claimable.
  *   - NEVER_WITHDRAWN: the port has no delete; a record stays at the last proven lease through any
@@ -55,8 +55,7 @@ export function hostForEnv(host: string, env: string): string {
   return `${host.slice(0, dot)}-${suffix}${host.slice(dot)}`;
 }
 
-/** The operator's own workload (the canary) lives at this label, not at its slug. */
-const CANARY_LABEL = "node-deploy-canary";
+/** The operator deploys through flight and promote, never this verb: it owns no workload host (task.5491). */
 const OPERATOR_SLUG = "operator";
 
 const escapeRegex = (s: string): string =>
@@ -70,10 +69,12 @@ export function edgeHostRegexFor(
   slugs: Iterable<string>,
   binding: WorkloadZoneBinding
 ): RegExp {
-  const names = [
-    CANARY_LABEL,
-    ...[...new Set(slugs)].filter((s) => s !== OPERATOR_SLUG).sort(),
-  ].map(escapeRegex);
+  const names = [...new Set(slugs)]
+    .filter((s) => s !== OPERATOR_SLUG)
+    .sort()
+    .map(escapeRegex);
+  // No slug, no host: a guard with no names matches nothing (the old default admitted the canary host).
+  if (names.length === 0) return /(?!)/;
   return new RegExp(
     `^(${names.join("|")})(-[a-z]+(-[a-z]+)?)?\\.${escapeRegex(binding.zoneName)}$`
   );
@@ -82,8 +83,7 @@ export function edgeHostRegexFor(
 /**
  * True when `host` is a host `slug` may claim in `env`: its own production name plus the env suffix, or,
  * for a sibling `workload` of the node (task.5272, e.g. red's `sandbox`), `<slug>-<workload>` plus the same
- * suffix (`red-sandbox`, `red-sandbox-test`, `red-sandbox-preview`). The operator owns only its canary
- * label; a workload never widens it.
+ * suffix (`red-sandbox`, `red-sandbox-test`, `red-sandbox-preview`). The operator owns no host.
  */
 export function hostOwnedBy(
   binding: WorkloadZoneBinding,
@@ -92,11 +92,9 @@ export function hostOwnedBy(
   slug: string,
   workload?: string
 ): boolean {
-  const label = slug === OPERATOR_SLUG ? CANARY_LABEL : slug;
+  if (slug === OPERATOR_SLUG) return false;
   const labels =
-    workload && slug !== OPERATOR_SLUG && workload !== slug
-      ? [label, `${label}-${workload}`]
-      : [label];
+    workload && workload !== slug ? [slug, `${slug}-${workload}`] : [slug];
   try {
     return labels.some(
       (l) => host.toLowerCase() === hostForEnv(`${l}.${binding.zoneName}`, env)
