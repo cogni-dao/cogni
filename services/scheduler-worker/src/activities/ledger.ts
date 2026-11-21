@@ -42,6 +42,9 @@ import {
 } from "@cogni/attribution-pipeline-contracts";
 import type { DefaultRegistries } from "@cogni/attribution-pipeline-plugins";
 import type { ActivityEvent } from "@cogni/ingestion-core";
+import { diagnosticTarget } from "@cogni/scheduler-core";
+import { activityInfo } from "@temporalio/activity";
+import { logEpochDiagnostic } from "../observability/epoch-diagnostic.js";
 
 import type { Logger } from "../observability/logger.js";
 import type {
@@ -58,6 +61,7 @@ export interface AttributionActivityDeps {
   readonly registries: DefaultRegistries;
   readonly nodeId: string;
   readonly scopeId: string;
+  readonly diagnosticNamespace?: string;
   readonly logger: Logger;
 }
 
@@ -292,7 +296,7 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
    * Looks up by window (any status), not just open epochs — handles finalized epochs.
    * Pins weightConfig on first create; returns existing config if epoch already exists.
    */
-  async function ensureEpochForWindow(
+  async function ensureEpochForWindowInner(
     input: EnsureEpochInput
   ): Promise<EnsureEpochOutput> {
     const { periodStart, periodEnd, weightConfig } = input;
@@ -380,6 +384,35 @@ export function createAttributionActivities(deps: AttributionActivityDeps) {
       }
       // Not a race condition — rethrow original error
       throw err;
+    }
+  }
+
+  async function ensureEpochForWindow(
+    input: EnsureEpochInput
+  ): Promise<EnsureEpochOutput> {
+    const startedAt = Date.now();
+    let outcome: "success" | "error" = "error";
+    try {
+      const result = await ensureEpochForWindowInner(input);
+      outcome = "success";
+      return result;
+    } finally {
+      let attempt = 1;
+      try {
+        attempt = activityInfo().attempt;
+      } catch {
+        /* Pure activity tests have no native context. */
+      }
+      logEpochDiagnostic(
+        logger,
+        diagnosticTarget(nodeId, deps.diagnosticNamespace ?? ""),
+        {
+          event: "epoch.ledger_activity_complete",
+          outcome,
+          durationMs: Math.min(86400000, Math.max(0, Date.now() - startedAt)),
+          attempt,
+        }
+      );
     }
   }
 

@@ -288,7 +288,10 @@ export async function startSchedulerWorker(
     grantAdapter: container.grantAdapter,
     runAdapter: container.runAdapter,
     nodePrincipalResolver: container.nodePrincipalResolver,
-    config: container.config,
+    config: {
+      ...container.config,
+      diagnosticNamespace: env.TEMPORAL_NAMESPACE,
+    },
     logger:
       container.logger.child?.({ component: "activities" }) ?? container.logger,
   });
@@ -391,7 +394,10 @@ export async function startSchedulerWorker(
         grantAdapter: routeContainer.grantAdapter,
         runAdapter: routeContainer.runAdapter,
         nodePrincipalResolver: routeContainer.nodePrincipalResolver,
-        config: routeContainer.config,
+        config: {
+          ...routeContainer.config,
+          diagnosticNamespace: route.namespace,
+        },
         logger:
           routeContainer.logger.child?.({ component: "activities" }) ??
           routeContainer.logger,

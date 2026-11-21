@@ -50,21 +50,41 @@ export class HttpLokiReader implements LokiReaderPort, LokiInstantReaderPort {
       headers: { Authorization: `Bearer ${this.token}` },
       // Loki reads are fast; bound the call so a hung upstream can't pin the route.
       signal: range.signal
-        ? AbortSignal.any([AbortSignal.timeout(15_000), range.signal])
-        : AbortSignal.timeout(15_000),
+        ? AbortSignal.any([
+            AbortSignal.timeout(range.bounds?.timeoutMs ?? 15_000),
+            range.signal,
+          ])
+        : AbortSignal.timeout(range.bounds?.timeoutMs ?? 15_000),
     });
 
     if (!res.ok) {
       // Never echo the token; include status + a short body excerpt for diagnosis.
+      if (range.bounds) {
+        await res.body?.cancel();
+        throw new Error("loki_query_failed");
+      }
       const body = (await res.text().catch(() => "")).slice(0, 200);
       throw new Error(`loki query_range failed: HTTP ${res.status} ${body}`);
     }
 
-    const json = (await res.json()) as LokiQueryRangeResponse;
+    const json = (
+      range.bounds
+        ? JSON.parse(await readBoundedLokiResponse(res, range.bounds.maxBytes))
+        : await res.json()
+    ) as LokiQueryRangeResponse;
     const streams = json.data?.result ?? [];
     const lines: LokiLogLine[] = [];
     for (const stream of streams) {
       for (const [ts, line] of stream.values ?? []) {
+        if (
+          range.bounds &&
+          (typeof ts !== "string" ||
+            typeof line !== "string" ||
+            !/^\d{1,20}$/.test(ts) ||
+            Buffer.byteLength(line) > range.bounds.maxLineBytes ||
+            lines.length >= range.limit)
+        )
+          throw new Error("loki_response_bounds");
         lines.push({ ts, line });
       }
     }
@@ -124,4 +144,34 @@ interface LokiQueryRangeResponse {
       readonly values?: ReadonlyArray<readonly [string, string]>;
     }>;
   };
+}
+
+/** Enforce bytes while streaming, before parsing; cancel the actual HTTP body on refusal. */
+async function readBoundedLokiResponse(
+  response: Response,
+  maxBytes: number
+): Promise<string> {
+  if (!response.body) throw new Error("loki_invalid_response");
+  if (Number(response.headers.get("content-length")) > maxBytes) {
+    await response.body.cancel();
+    throw new Error("loki_response_bounds");
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        await reader.cancel();
+        throw new Error("loki_response_bounds");
+      }
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    reader.releaseLock();
+  }
 }

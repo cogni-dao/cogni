@@ -27,6 +27,12 @@ export interface LokiQueryRange {
   readonly limit: number;
   /** Optional caller abort (a metric calculator's budget). The adapter's own timeout still applies. */
   readonly signal?: AbortSignal;
+  /** Strict privacy projections opt into a bounded streaming response. */
+  readonly bounds?: {
+    readonly timeoutMs: number;
+    readonly maxBytes: number;
+    readonly maxLineBytes: number;
+  };
 }
 
 /** One sample of an instant metric query (a LogQL `sum(count_over_time(...))` vector element). */

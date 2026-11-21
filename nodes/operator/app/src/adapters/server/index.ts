@@ -268,8 +268,10 @@ export {
 // which breaks Turbopack bundling. Import directly from subpath when needed:
 //   import { SandboxAgentCatalogProvider } from "@/adapters/server/sandbox/sandbox-agent-catalog.provider"
 //   const { SandboxGraphProvider, ... } = await import("@/adapters/server/sandbox")
-// Temporal adapters - schedule control
+// Temporal adapters - schedule control and finite read-only diagnostics
 export {
+  TemporalDiagnosticError,
+  TemporalLedgerDiagnosticAdapter,
   TemporalScheduleControlAdapter,
   type TemporalScheduleControlConfig,
 } from "./temporal";
