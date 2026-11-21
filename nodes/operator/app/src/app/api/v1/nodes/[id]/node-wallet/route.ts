@@ -20,6 +20,7 @@
  *     different key is 409 `key_mismatch`. Privy creation carries `privy-idempotency-key` =
  *     `node-wallet:<env>:<row id>:<key sha256>`; a pending row with no wallet id first adopts a wallet
  *     Privy already lists for that owner key.
+ *   - ONE_KEY_ONE_NODE: an owner key pinned on another node row is 409 `key_in_use` (no cross-node adoption).
  *   - SINGLE_WRITER_OF_OPERATOR_WALLET_ADDRESS: this route writes only the `pending_node_wallet_*`
  *     columns. `operator_wallet_address` stays written by payment-prereqs, from the repo-spec on main.
  *   - NEVER_OVERWRITE: a row with `operator_wallet_address`, or a repo-spec on main that names
@@ -32,7 +33,7 @@
  * @public
  */
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, ne } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { createNodeWalletProvisioner } from "@/bootstrap/capabilities/node-wallet-provisioner";
@@ -268,6 +269,19 @@ async function handleNodeWallet(
 
     // ONE_WALLET_PER_NODE_AND_LANE: pin the owner-key hash once.
     if (node.pendingNodeWalletKeySha256 === null) {
+      // ONE_KEY_ONE_NODE: an owner key already pinned on ANOTHER node row must not be pinned here, or
+      // adoption below would hand that node's wallet to this one (a recovery file loaded on the wrong node).
+      const keyInUse = await db
+        .select()
+        .from(nodes)
+        .where(
+          and(
+            eq(nodes.pendingNodeWalletKeySha256, key.keySha256),
+            ne(nodes.id, node.id)
+          )
+        )
+        .limit(1);
+      if (keyInUse[0]) return refuse(409, "key_in_use");
       const pinned = await db
         .update(nodes)
         .set({
@@ -313,6 +327,9 @@ async function handleNodeWallet(
     } else {
       let wallet: { id: string; address: string };
       try {
+        // Adoption is safe: the key is generated per node in the browser, and ONE_KEY_ONE_NODE above
+        // guarantees no other row in this lane has it pinned, so a wallet Privy lists for this owner key
+        // can only be this node's interrupted create.
         const listed = await provisioner.findByOwnerKey(key.spkiBase64);
         if (listed.length > 1) {
           return refuse(409, "wallet_ambiguous", {

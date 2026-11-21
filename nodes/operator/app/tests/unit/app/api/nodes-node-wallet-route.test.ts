@@ -45,6 +45,7 @@ const dbState = vi.hoisted(() => ({
   updateReturnsRow: true,
   /** Scripted select results, consumed before falling back to `current`. */
   selectQueue: [] as unknown[][],
+  selectCalls: 0,
 }));
 const envState = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 const sessionState = vi.hoisted(() => ({
@@ -100,9 +101,20 @@ vi.mock("@/bootstrap/container", () => ({
     select: () => ({
       from: () => ({
         where: () => ({
-          limit: () =>
-            dbState.selectQueue.shift() ??
-            (dbState.current ? [dbState.current] : []),
+          limit: () => {
+            dbState.selectCalls += 1;
+            const scripted = dbState.selectQueue.shift();
+            if (scripted) return scripted;
+            // The 2nd select of an unpinned row is the ONE_KEY_ONE_NODE conflict lookup: no other row.
+            const row = dbState.current as Row | undefined;
+            if (
+              dbState.selectCalls === 2 &&
+              row?.pendingNodeWalletKeySha256 === null
+            ) {
+              return [];
+            }
+            return row ? [row] : [];
+          },
         }),
       }),
     }),
@@ -172,6 +184,7 @@ function call(
     "x-forwarded-proto": "https",
     origin: ORIGIN,
   };
+  dbState.selectCalls = 0;
   for (const [k, v] of Object.entries(opts.headers ?? {})) {
     if (v === null) delete headers[k];
     else headers[k] = v;
@@ -201,6 +214,7 @@ beforeEach(() => {
   dbState.wheres = [];
   dbState.updateReturnsRow = true;
   dbState.selectQueue = [];
+  dbState.selectCalls = 0;
   sessionState.current = { id: "owner-1" };
   provisionerState.configured = true;
   envState.current = {
@@ -464,12 +478,26 @@ describe("POST /api/v1/nodes/[id]/node-wallet creation", () => {
     dbState.updateReturnsRow = false;
     dbState.selectQueue = [
       [baseRow()],
+      [],
       [baseRow({ pendingNodeWalletKeySha256: "e".repeat(64) })],
     ];
     const res = await call();
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe("key_mismatch");
     expect(mockCreateOwned).not.toHaveBeenCalled();
+  });
+
+  it("refuses a key already pinned on another node, never adopting its wallet", async () => {
+    dbState.selectQueue = [
+      [baseRow()],
+      [baseRow({ id: "other-node", pendingNodeWalletKeySha256: KEY_SHA })],
+    ];
+    const res = await call();
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("key_in_use");
+    expect(mockFindByOwnerKey).not.toHaveBeenCalled();
+    expect(mockCreateOwned).not.toHaveBeenCalled();
+    expect(dbState.patches).toEqual([]);
   });
 
   it("502s when Privy fails, logging only the error class", async () => {
