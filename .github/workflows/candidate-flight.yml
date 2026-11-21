@@ -779,7 +779,7 @@ jobs:
       # result, so a sibling's substrate failure can't skip this cell.
       - name: Download this node's substrate marker
         continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v4.1.8
         with:
           name: substrate-ok-${{ matrix.node }}
           path: ${{ runner.temp }}/substrate-marker
@@ -1076,7 +1076,7 @@ jobs:
       # (not in substrate_node_targets_json) has no marker and passes.
       - name: Download this node's assert marker
         continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v4.1.8
         with:
           name: assert-ok-${{ matrix.node }}
           path: ${{ runner.temp }}/assert-marker
@@ -1090,7 +1090,7 @@ jobs:
 
       - name: Download resolved-pr-images
         if: env.DEPLOYMENT_PROVIDER == 'k3s' && matrix.node != 'scheduler-worker'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v4.1.8
         with:
           name: resolved-pr-images
           path: ${{ runner.temp }}/
@@ -1439,7 +1439,7 @@ jobs:
 
       - name: Download scheduler-worker build payload
         if: contains(fromJSON(needs.decide.outputs.flight_targets_json), 'scheduler-worker')
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v4.1.8
         with:
           name: resolved-pr-images
           path: ${{ runner.temp }}/
@@ -1608,7 +1608,7 @@ jobs:
       # flight cell used. A sibling node's substrate failure can't reach here.
       - name: Download this node's assert marker
         continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v4.1.8
         with:
           name: assert-ok-${{ matrix.node }}
           path: ${{ runner.temp }}/assert-marker
@@ -1629,7 +1629,7 @@ jobs:
           token: ${{ steps.deploy-app.outputs.token || github.token }}
 
       - name: Download per-cell deploy_branch_sha
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v4.1.8
         with:
           name: deploy-sha-${{ matrix.node }}
           path: ${{ runner.temp }}/
