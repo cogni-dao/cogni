@@ -45,6 +45,8 @@ Shared authorization port, OpenFGA adapter, resource helpers, and deterministic 
 - `OpenFgaAuthorizationAdapter`
 - `FakeAuthorizationAdapter`
 
+- `OpenFgaAuthorizationAdapterConfig.readTransport` optionally supplies a real HTTP signal/timeout and disables SDK retries for bounded request-local checks.
+
 ## Responsibilities
 
 - This directory **does**: define shared authz contracts; map Cogni actions to OpenFGA relations; implement OpenFGA checks and tuple writes through the official SDK; provide deterministic tests fakes.

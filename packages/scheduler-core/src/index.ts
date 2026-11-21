@@ -13,6 +13,8 @@
  * @public
  */
 
+export * from "./epoch-worker-diagnostic";
+export * from "./ledger-diagnostic";
 // Job payloads (Zod schemas for producer/consumer validation)
 export {
   type ExecuteScheduledRunPayload,
@@ -68,6 +70,7 @@ export {
   type ScheduleWorkerPort,
   type UpdateScheduleInput,
 } from "./ports";
+export type { TemporalLedgerDiagnosticPort } from "./ports/temporal-ledger-diagnostic.port";
 // Grant scope mint + checker (M1 grant↔node binding + M2 scope generalization)
 export {
   graphExecuteScope,
@@ -121,3 +124,4 @@ export {
   type GraphRunStatus,
   type ScheduleSpec,
 } from "./types";
+export { buildLedgerIngestInput, buildWorkflowArgs } from "./workflow-envelope";

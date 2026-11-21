@@ -19,6 +19,7 @@
  */
 
 import {
+  buildWorkflowArgs,
   type CreateScheduleParams,
   ScheduleControlConflictError,
   ScheduleControlNotFoundError,
@@ -51,63 +52,6 @@ export interface TemporalScheduleControlConfig {
 /** Workflow type name for unified graph execution (defined in scheduler-temporal-worker) */
 const GRAPH_RUN_WORKFLOW_TYPE = "GraphRunWorkflow";
 /** Workflow type name for the generic non-graph node-task dispatch (task.5029). */
-const NODE_TASK_WORKFLOW_TYPE = "NodeTaskWorkflow";
-
-/**
- * Build the workflow `args[0]` envelope for a schedule.
- *
- * Storage decision (no migration — design § Storage): for a NodeTask the
- * `{route, payload}` tunnel inside `input` and `graph_id` carries `task:<route>`.
- * This unwraps that into the `NodeTaskInput` the NodeTaskWorkflow expects; every
- * other workflowType keeps the canonical GraphRunWorkflowInput shape (CollectEpoch
- * etc. ignore graph fields and read `input`).
- */
-function buildWorkflowArgs(
-  params: CreateScheduleParams,
-  workflowType: string
-): Record<string, unknown> {
-  if (workflowType === NODE_TASK_WORKFLOW_TYPE) {
-    const input =
-      params.input && typeof params.input === "object"
-        ? (params.input as Record<string, unknown>)
-        : {};
-    const route =
-      typeof input.route === "string"
-        ? input.route
-        : // Fallback: derive from the `task:<route>` graphId tunnel.
-          params.graphId.startsWith("task:")
-          ? params.graphId.slice("task:".length)
-          : params.graphId;
-    const payload =
-      input.payload && typeof input.payload === "object"
-        ? (input.payload as Record<string, unknown>)
-        : {};
-    return {
-      nodeId: params.nodeId,
-      route,
-      payload,
-      executionGrantId: params.executionGrantId,
-      runKind: "system_scheduled" as const,
-      triggerSource: "temporal_schedule",
-      scheduleId: params.scheduleId,
-      requestedBy: params.ownerUserId,
-    };
-  }
-
-  // Default: the unified GraphRunWorkflowInput shape.
-  return {
-    nodeId: params.nodeId,
-    graphId: params.graphId,
-    executionGrantId: params.executionGrantId,
-    input: params.input,
-    runKind: "system_scheduled" as const,
-    triggerSource: "temporal_schedule",
-    triggerRef: params.scheduleId,
-    requestedBy: params.ownerUserId,
-    dbScheduleId: params.dbScheduleId ?? null,
-    temporalScheduleId: params.scheduleId,
-  };
-}
 
 /** Map port-level overlap hint to Temporal SDK enum */
 function toTemporalOverlapPolicy(

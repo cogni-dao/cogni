@@ -91,6 +91,8 @@ System setup installers were moved to `scripts/bootstrap/` and are out of scope 
 
 - `composeNodeDeployLanes` (`node-deploy-lanes.ts`) wires the same recovery lanes with one explicit workload-zone binding. Missing/invalid zone or owner refuses fresh HTTP/DNS effects without stopping paid observation, cleanup or state reconciliation. Native clients, leadership and process lifecycle stay in `node-deploy-sequencer.ts`.
 
+- `createDiagnosticRequestBudget` / `createLedgerPreparation` bind a read-only local identity/registry/grant lookup and native Temporal read with real transport cancellation.
+
 ## Responsibilities
 
 - This directory **does**:

@@ -38,6 +38,7 @@ import {
   assertV1NotSuperseded,
   CredentialRateLimitedError,
   type CredentialState,
+  type CredentialStore,
   CredentialStoreUnavailableError,
   isRevocableKey,
   type VerifyResult,
@@ -163,13 +164,19 @@ export async function peekAgentKeyExpiry(): Promise<number | null> {
  */
 export async function verifyRevocableKey(
   token: string,
-  allow: readonly CredentialState[]
+  allow: readonly CredentialState[],
+  credentialStore?: CredentialStore
 ): Promise<VerifyResult> {
   const { getAgentCredentialStore, verifyAgentCredential } = await import(
     "@/bootstrap/agent-credentials"
   );
   const h = await headers();
-  return verifyAgentCredential(getAgentCredentialStore(), token, allow, h);
+  return verifyAgentCredential(
+    credentialStore ?? getAgentCredentialStore(),
+    token,
+    allow,
+    h
+  );
 }
 
 /** The bearer token of the current request, if any (the credential routes read it to tell a signed key from a revocable one). */
@@ -190,7 +197,9 @@ function isSameOrigin(origin: string | null, host: string | null): boolean {
   }
 }
 
-export async function resolveRequestIdentity(): Promise<SessionUser | null> {
+export async function resolveRequestIdentity(options?: {
+  credentialStore: CredentialStore;
+}): Promise<SessionUser | null> {
   let h: Awaited<ReturnType<typeof headers>>;
   try {
     h = await headers();
@@ -200,7 +209,11 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
   const bearer = extractBearerToken(h.get("authorization"));
   if (bearer) {
     if (isRevocableKey(bearer)) {
-      const verified = await verifyRevocableKey(bearer, ["active"]);
+      const verified = await verifyRevocableKey(
+        bearer,
+        ["active"],
+        options?.credentialStore
+      );
       if (verified.ok) {
         return {
           id: verified.userId,
@@ -220,7 +233,10 @@ export async function resolveRequestIdentity(): Promise<SessionUser | null> {
     const { getAgentCredentialStore } = await import(
       "@/bootstrap/agent-credentials"
     );
-    await assertV1NotSuperseded(getAgentCredentialStore(), payload.sub);
+    await assertV1NotSuperseded(
+      options?.credentialStore ?? getAgentCredentialStore(),
+      payload.sub
+    );
     return {
       id: payload.sub,
       walletAddress: null,

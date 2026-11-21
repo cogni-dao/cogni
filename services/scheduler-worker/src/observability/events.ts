@@ -12,6 +12,9 @@
  */
 
 export const WORKER_EVENT_NAMES = {
+  EPOCH_WORKER_STARTED: "epoch.worker_started",
+  EPOCH_LEDGER_ACTIVITY_COMPLETE: "epoch.ledger_activity_complete",
+  EPOCH_DISPATCH_AUTHORIZED: "epoch.dispatch_authorized",
   // Lifecycle — main.ts, worker.ts boot/shutdown
   LIFECYCLE_STARTING: "worker.lifecycle.starting",
   LIFECYCLE_READY: "worker.lifecycle.ready",

@@ -44,6 +44,8 @@ Thin app-layer wrappers that resolve dependencies, bind request context, map DTO
 - **Implements ports:** none
 - **Contracts:** none
 
+- `nodes/observability-temporal.server` and `nodes/observability-worker.server` wire finite epoch metadata and projected worker-event reads.
+
 ## Responsibilities
 
 - This directory **does**: Validate input with contracts, resolve dependencies, map DTOs, add tracing/usage tracking

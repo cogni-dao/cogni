@@ -142,6 +142,12 @@ export function scopeNodeLogQL(input: {
   readonly service?: string | undefined;
   /** Optional narrowing: only streams of this workload (WORKLOAD_FILTER_NARROWS). */
   readonly workload?: string | undefined;
+  /** Trusted registry-derived custody. Never populated from caller LogQL. */
+  readonly epochSource?: {
+    readonly physicalEnv: FlightEnv;
+    readonly namespace: string;
+    readonly container: "scheduler-worker";
+  };
 }): string {
   const service = input.service ?? NODE_SCOPED_SERVICE;
   if (!isValidServiceName(service)) {
@@ -151,13 +157,19 @@ export function scopeNodeLogQL(input: {
     );
   }
   const deploy = service === DEPLOY_LOG_SERVICE;
+  const epoch = service === "epoch-worker";
+  if (epoch && !input.epochSource)
+    throw new ObservabilityQueryError(
+      "invalid_query",
+      "diagnostic source is not bound"
+    );
   if (input.workload !== undefined && !isValidWorkloadName(input.workload)) {
     throw new ObservabilityQueryError(
       "invalid_query",
       "'workload' must be a workload name: a lowercase DNS label (no '-mesh-')"
     );
   }
-  if (input.workload !== undefined && deploy) {
+  if (input.workload !== undefined && (deploy || epoch)) {
     throw new ObservabilityQueryError(
       "invalid_query",
       "'workload' cannot narrow service=deploy: sequencer events carry no workload label"
@@ -167,33 +179,51 @@ export function scopeNodeLogQL(input: {
     input.workload === undefined ? [] : [`workload=${quote(input.workload)}`];
   // What the selector is re-emitted with, and which caller values for a forced label are accepted
   // (the virtual `deploy` also accepts its stream name; both are the same, narrow-only scope).
-  const forcedValues: Record<string, string> = deploy
-    ? { env: input.env, service: SEQUENCER_LOKI_SERVICE }
-    : {
-        env: input.env,
-        service,
-        node: input.nodeId,
-        // PER_SERVICE_ENVELOPE: beyond `app`, only pump-labeled lease streams are node-attributable.
-        ...(service === NODE_SCOPED_SERVICE
-          ? {}
-          : { source: LEASE_LOG_SOURCE }),
-      };
+  const forcedValues: Record<string, string> = epoch
+    ? {
+        app: "cogni-template",
+        env: input.epochSource!.physicalEnv,
+        service: "scheduler-worker",
+        source: "k8s",
+        namespace: input.epochSource!.namespace,
+        container: input.epochSource!.container,
+      }
+    : deploy
+      ? { env: input.env, service: SEQUENCER_LOKI_SERVICE }
+      : {
+          env: input.env,
+          service,
+          node: input.nodeId,
+          // PER_SERVICE_ENVELOPE: beyond `app`, only pump-labeled lease streams are node-attributable.
+          ...(service === NODE_SCOPED_SERVICE
+            ? {}
+            : { source: LEASE_LOG_SOURCE }),
+        };
   const accepted = (label: string): readonly string[] | undefined => {
     const v = forcedValues[label];
     if (v === undefined) return undefined;
-    return deploy && label === "service" ? [v, DEPLOY_LOG_SERVICE] : [v];
+    return (deploy || epoch) && label === "service" ? [v, service] : [v];
   };
   const forced = Object.entries(forcedValues).map(
     ([label, value]) => `${label}=${quote(value)}`
   );
+  if (epoch) forced.push('pod=~"scheduler-worker-[a-z0-9]+-[a-z0-9]+"');
   // DEPLOY_EVENTS_PIN_BY_LINE: the forced node pin of a deploy query, before any caller pipeline.
-  const pin = deploy
-    ? ` |= ${quote(DEPLOY_EVENT_LINE_FILTER)} | json | nodeId=${quote(input.nodeId)}`
-    : "";
+  const epochPin = ` | json | __error__="" | schemaVersion="1" | targetNodeId=${quote(input.nodeId)} | node_id=${quote(input.nodeId)} | targetEnv=${quote(input.env)} | event=~"epoch\\.(worker_started|ledger_activity_complete|dispatch_authorized)" | writerKind=~"ledger|central_dispatch"`;
+  const pin = epoch
+    ? epochPin
+    : deploy
+      ? ` |= ${quote(DEPLOY_EVENT_LINE_FILTER)} | json | nodeId=${quote(input.nodeId)}`
+      : "";
   // The same node filter again AFTER the caller's stages: a caller stage that rewrote `nodeId` can
   // only ever narrow what the first pin admitted. Only emitted when the caller added stages.
-  const tail = deploy ? ` | nodeId=${quote(input.nodeId)}` : "";
+  const tail = epoch
+    ? epochPin
+    : deploy
+      ? ` | nodeId=${quote(input.nodeId)}`
+      : "";
   const raw = (input.query ?? "").trim();
+  const stages = epoch ? validateEpochStages : validateCallerStages;
   if (raw === "")
     return `{${[...forced, ...workloadMatcher].join(", ")}}${pin}`;
 
@@ -212,7 +242,7 @@ export function scopeNodeLogQL(input: {
         "query must begin with a stream selector {…} or be a bare LogQL pipeline"
       );
     }
-    return `{${[...forced, ...workloadMatcher].join(", ")}}${pin} ${validateCallerStages(raw)}${tail}`;
+    return `{${[...forced, ...workloadMatcher].join(", ")}}${pin} ${stages(raw)}${tail}`;
   }
 
   // Full LogQL: split the leading stream selector from the trailing pipeline.
@@ -243,7 +273,7 @@ export function scopeNodeLogQL(input: {
   }
 
   const selector = `{${[...forced, ...narrowing].join(", ")}}${pin}`;
-  const pipeline = validateCallerStages(pipelineRaw);
+  const pipeline = stages(pipelineRaw);
   return pipeline === "" ? selector : `${selector} ${pipeline}${tail}`;
 }
 
@@ -305,6 +335,27 @@ function validateCallerStages(remainder: string): string {
       if (PROTECTED_LABELS.includes(target))
         bad(`may not write the label '${target}'`);
     }
+  }
+  return text;
+}
+
+/** This privacy projection accepts filters only; no parse, format, extraction or label writes. */
+function validateEpochStages(raw: string): string {
+  const text = validateCallerStages(raw);
+  let rest = text;
+  const quoted = '"(?:[^"\\\\]|\\\\.)*"';
+  const line = new RegExp(`^(?:\\|=|\\|~|!=|!~)\\s*${quoted}\\s*`);
+  const field = new RegExp(
+    `^\\|\\s*(?:outcome|phase|kind|queueRole|reasonCode|attempt|durationMs)\\s*(?:=~|!~|!=|=|>=|<=|>|<)\\s*(?:${quoted}|[0-9]+)\\s*`
+  );
+  while (rest.length) {
+    const matched = line.exec(rest) ?? field.exec(rest);
+    if (!matched)
+      throw new ObservabilityQueryError(
+        "invalid_query",
+        "epoch diagnostics permit filters only"
+      );
+    rest = rest.slice(matched[0].length);
   }
   return text;
 }

@@ -15,11 +15,13 @@
  */
 
 import { createRequire } from "node:module";
+import { diagnosticTarget } from "@cogni/scheduler-core";
 import { NativeConnection, Worker } from "@temporalio/worker";
 import { createEnrichmentActivities } from "./activities/enrichment.js";
 import { createAttributionActivities } from "./activities/ledger.js";
 import type { AttributionContainer } from "./bootstrap/container.js";
 import type { Env } from "./bootstrap/env.js";
+import { logEpochDiagnostic } from "./observability/epoch-diagnostic.js";
 import type { Logger } from "./observability/logger.js";
 
 const require = createRequire(import.meta.url);
@@ -69,6 +71,7 @@ export async function startAttributionWorker(
     registries: container.registries,
     nodeId: container.nodeId,
     scopeId: container.scopeId,
+    diagnosticNamespace: env.TEMPORAL_NAMESPACE,
     logger: container.logger,
   });
 
@@ -100,6 +103,11 @@ export async function startAttributionWorker(
     logger.error({ err }, "Ledger worker run failed");
   });
 
+  logEpochDiagnostic(
+    logger,
+    diagnosticTarget(container.nodeId, env.TEMPORAL_NAMESPACE),
+    { event: "epoch.worker_started" }
+  );
   logger.info({}, "Ledger worker started, polling for tasks");
 
   return {
