@@ -195,7 +195,7 @@ jobs:
           echo "passphrase pre-flight ok"
 
       - name: Checkout
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0
@@ -622,7 +622,7 @@ jobs:
           [ -n "$OPENBAO_ROOT_TOKEN" ] || { echo "::error::substrate-only requires the openbao_root_token input"; exit 1; }
           [ -n "$VM_HOST" ] || { echo "::error::VM_HOST secret missing for ${DEPLOY_ENV}"; exit 1; }
 
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Setup SSH to the env VM
         env:
