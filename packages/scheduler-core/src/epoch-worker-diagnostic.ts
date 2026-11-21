@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/scheduler-core/epoch-worker-diagnostic`
  * Purpose: Finite target-bound epoch event contract shared by writer and reader.
- * Scope: Pure projection; caller proves target from closure or successful grant validation.
+ * Scope: Pure projection; does not prove the target, which is the caller's responsibility.
  * Invariants: No payload, error, native identity or caller override survives projection.
  * Side-effects: none
  * Links: https://cognidao.org/knowledge/node-log-proxy-contract
