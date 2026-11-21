@@ -15386,12 +15386,12 @@ snapshots:
   '@lezer/lr@1.4.12':
     dependencies:
       '@lezer/common': 1.5.5
-      '@lit-labs/ssr-dom-shim': 1.4.0
 
   '@lit-labs/ssr-dom-shim@1.4.0': {}
 
   '@lit/reactive-element@2.1.1':
-    dependencies: null
+    dependencies:
+      '@lit-labs/ssr-dom-shim': 1.4.0
 
   '@metamask/abi-utils@2.0.4':
     dependencies:
