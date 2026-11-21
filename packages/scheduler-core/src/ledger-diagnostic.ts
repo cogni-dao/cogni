@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/scheduler-core/ledger-diagnostic`
  * Purpose: Strict public diagnostic contract and private admitted binding.
- * Scope: Pure types, projection policy and read-only port; no SDK or I/O.
+ * Scope: Pure types, projection policy and read-only port; does not perform SDK calls or I/O.
  * Invariants: No native identifiers, payloads, errors or arbitrary fields in public DTOs.
  * Side-effects: none
  * Links: https://cognidao.org/knowledge/node-temporal-health-contract

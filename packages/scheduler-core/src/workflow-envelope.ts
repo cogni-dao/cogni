@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
-// SPDX-FileCopyrightText: 2026 Cogni-DAO
+// SPDX-FileCopyrightText: 2025 Cogni-DAO
 
 /**
  * Module: `@cogni/scheduler-core/workflow-envelope`
  * Purpose: Canonical producer input for schedule writes and private diagnostic verification.
- * Scope: Pure envelope construction; no SDK, I/O or ownership decision.
+ * Scope: Pure envelope construction; does not perform SDK calls, I/O or ownership decisions.
  * Invariants: Existing producer semantics and key sets are preserved.
  * Side-effects: none
  * Links: https://cognidao.org/knowledge/node-temporal-health-contract
  * @public
  */
+import type { JsonObject } from "type-fest";
 import type { CreateScheduleParams } from "./ports/schedule-control.port";
 
 /**
@@ -73,19 +74,17 @@ export function buildLedgerIngestInput(
   ledger: NonNullable<
     import("./services/syncGovernanceSchedules").GovernanceScheduleConfig["ledger"]
   >
-) {
-  return {
+): JsonObject {
+  const input: JsonObject = {
     version: 1,
     scopeId: ledger.scopeId,
     scopeKey: ledger.scopeKey,
     epochLengthDays: ledger.epochLengthDays,
     activitySources: ledger.activitySources,
-    ...(ledger.baseIssuanceCredits && {
-      baseIssuanceCredits: ledger.baseIssuanceCredits,
-    }),
-    ...(ledger.approvers &&
-      ledger.approvers.length > 0 && {
-        approvers: ledger.approvers,
-      }),
   };
+  if (ledger.baseIssuanceCredits)
+    input.baseIssuanceCredits = ledger.baseIssuanceCredits;
+  if (ledger.approvers && ledger.approvers.length > 0)
+    input.approvers = ledger.approvers;
+  return input;
 }
