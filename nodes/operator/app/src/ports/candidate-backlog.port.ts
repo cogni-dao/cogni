@@ -29,6 +29,8 @@ export interface CandidateOpenPr {
   /** The PR's current head commit. */
   readonly headSha: string;
   readonly createdAt: Date;
+  /** Last activity on the PR (GitHub `updated_at`): the active-window filter reads it. */
+  readonly updatedAt: Date;
 }
 
 export interface CandidateBacklogSourcePort {

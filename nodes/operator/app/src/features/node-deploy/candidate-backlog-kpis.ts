@@ -29,6 +29,10 @@
  *     epoch, so a long-open PR whose head served long ago is not backlog. `days` (default 28) bounds only the WAIT
  *     samples: a served head whose first activation is older than `days` is left out of them (`outside_window`).
  *     Unserved heads are always sampled.
+ *   - ACTIVE_PRS_ONLY: both outputs count only PRs whose `updated_at` is in `[now - activeDays d, now)`
+ *     (`activeDays` 1..28, default 7, applied in code so stored params and their series identity are unchanged).
+ *     Abandoned months-old PRs are not the queue and drown the signal; the evidence names the active and the
+ *     excluded stale count. The BOUNDED cap still applies to all open PRs, before the filter.
  *   - SNAPSHOT: the reading is "now".
  *   - IDS_USE_DASHES: the id matches `MetricSpecSchema.calculatorId`.
  * Side-effects: none (calculators call the injected sources)
@@ -58,6 +62,8 @@ export const MAX_CANDIDATE_PRS = 100;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 const MAX_EVIDENCE = 20;
+/** Default PR activity window, in days (`activeDays`). */
+export const DEFAULT_ACTIVE_DAYS = 7;
 /** Most releases one reading covers. */
 const MAX_RELEASES = 5000;
 
@@ -66,6 +72,8 @@ const params = z.strictObject({
   output: z.enum(["backlog", "wait_p90_hours"]),
   /** Wait-sample window only: a head first served longer ago than this is not a wait sample. */
   days: z.number().int().min(1).max(28).default(28),
+  /** Only PRs updated within this many days count (ACTIVE_PRS_ONLY). Optional: the default is applied in code. */
+  activeDays: z.number().int().min(1).max(28).optional(),
 });
 
 /** `owner/repo` of a catalog `source_repo` URL, or undefined. */
@@ -185,8 +193,16 @@ export function createCandidateBacklogCalculators(
         );
 
       const nowMs = now();
+      // ACTIVE_PRS_ONLY: half-open `[now - activeDays d, now)` on `updatedAt`.
+      const activeDays = p.activeDays ?? DEFAULT_ACTIVE_DAYS;
+      const activeFrom = nowMs - activeDays * DAY_MS;
+      const activePrs = open.prs.filter((pr) => {
+        const t = pr.updatedAt.getTime();
+        return t >= activeFrom && t < nowMs;
+      });
+      const staleCount = open.prs.length - activePrs.length;
       // SERVED_HAS_NO_WINDOW: look the heads up by sha, from the epoch. No heads: nothing to look up.
-      const heads = [...new Set(open.prs.map((pr) => pr.headSha))];
+      const heads = [...new Set(activePrs.map((pr) => pr.headSha))];
       const read =
         heads.length === 0
           ? { rows: [], truncated: false, asOf: open.asOf }
@@ -219,11 +235,12 @@ export function createCandidateBacklogCalculators(
         };
 
       const served = firstServed(read.rows);
-      const unserved = open.prs.filter((pr) => !served.has(pr.headSha));
+      const unserved = activePrs.filter((pr) => !served.has(pr.headSha));
       const evidence = [
         ...head,
         repoRef,
-        `candidate:open_prs=${open.prs.length},unserved=${unserved.length}`,
+        `candidate:open_prs=${activePrs.length},unserved=${unserved.length}`,
+        `candidate:active_days=${activeDays},active=${activePrs.length},excluded_stale=${staleCount}`,
         ...unserved
           .slice(0, MAX_EVIDENCE)
           .map(
@@ -246,7 +263,7 @@ export function createCandidateBacklogCalculators(
       let untimed = 0;
       let outsideWindow = 0;
       let incomplete = 0;
-      for (const pr of open.prs as readonly CandidateOpenPr[]) {
+      for (const pr of activePrs as readonly CandidateOpenPr[]) {
         const ci = await ctx.read((signal) =>
           github.ciGreenAt({ repo, headSha: pr.headSha, signal })
         );

@@ -39,6 +39,7 @@ interface PullNode {
   number?: number;
   draft?: boolean;
   created_at?: string;
+  updated_at?: string;
   head?: { sha?: string };
 }
 interface SuiteNode {
@@ -54,11 +55,18 @@ export function mapOpenPulls(nodes: readonly PullNode[]): CandidateOpenPr[] {
   const out: CandidateOpenPr[] = [];
   for (const n of nodes) {
     if (n.draft === true) continue;
-    if (n.number === undefined || !n.head?.sha || !n.created_at) continue;
+    if (
+      n.number === undefined ||
+      !n.head?.sha ||
+      !n.created_at ||
+      !n.updated_at
+    )
+      continue;
     out.push({
       number: n.number,
       headSha: n.head.sha.toLowerCase(),
       createdAt: new Date(n.created_at),
+      updatedAt: new Date(n.updated_at),
     });
   }
   return out;

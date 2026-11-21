@@ -36,25 +36,48 @@ describe("mapOpenPulls", () => {
           number: 1,
           draft: false,
           created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-01T00:00:00Z",
           head: { sha: "A".repeat(40) },
         },
         {
           number: 2,
           draft: true,
           created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-01T00:00:00Z",
           head: { sha: SHA },
         },
-        { number: 3, created_at: "2026-11-02T00:00:00Z", head: { sha: SHA } },
+        {
+          number: 3,
+          created_at: "2026-11-02T00:00:00Z",
+          updated_at: "2026-11-02T00:00:00Z",
+          head: { sha: SHA },
+        },
         { number: 4, draft: false, created_at: "2026-11-02T00:00:00Z" },
         {
           draft: false,
           created_at: "2026-11-02T00:00:00Z",
+          updated_at: "2026-11-02T00:00:00Z",
           head: { sha: SHA },
         },
       ]).map((p) => [p.number, p.headSha])
     ).toEqual([
       [1, SHA],
       [3, SHA],
+    ]);
+  });
+
+  it("carries updated_at, and drops a node without one", () => {
+    const out = mapOpenPulls([
+      {
+        number: 1,
+        created_at: "2026-11-01T00:00:00Z",
+        updated_at: "2026-11-17T00:00:00Z",
+        head: { sha: SHA },
+      },
+      { number: 2, created_at: "2026-11-01T00:00:00Z", head: { sha: SHA } },
+    ]);
+    expect(out.map((p) => [p.number, p.updatedAt.toISOString()])).toEqual([
+      [1, "2026-11-17T00:00:00.000Z"],
     ]);
   });
 });
@@ -134,12 +157,14 @@ describe("GitHubCandidateBacklogSource", () => {
           number: 1,
           draft: false,
           created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-01T00:00:00Z",
           head: { sha: SHA },
         },
         {
           number: 2,
           draft: true,
           created_at: "2026-11-01T00:00:00Z",
+          updated_at: "2026-11-01T00:00:00Z",
           head: { sha: SHA },
         },
       ],
