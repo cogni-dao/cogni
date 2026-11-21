@@ -242,6 +242,9 @@ export const flex = cva("flex", {
   },
 });
 
+/** Chrome surface for the authenticated top bar. */
+export const topBar = cva("border-b bg-sidebar");
+
 // Header-specific padding variants (y-axis only)
 const headerPaddingVariants = {
   none: "",

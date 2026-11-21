@@ -146,6 +146,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Check design tokens
+        run: pnpm check:design-tokens
+
       - name: Validate workflow contracts
         run: |
           node --test scripts/ci/tests/workflow-check.test.mjs

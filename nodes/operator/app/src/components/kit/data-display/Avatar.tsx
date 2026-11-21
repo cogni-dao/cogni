@@ -77,3 +77,44 @@ export const AvatarFallback = React.forwardRef<
   />
 ));
 AvatarFallback.displayName = "AvatarFallback";
+
+/** A custom hex fill needs its own foreground; the primary fallback keeps its token pair. */
+export function ColorAvatarFallback({
+  color,
+  children,
+}: {
+  color?: string | null;
+  children: React.ReactNode;
+}) {
+  const hex = color?.match(/^#([0-9a-f]{6})$/i)?.[1];
+  if (!hex) {
+    return (
+      <AvatarFallback className="bg-primary font-semibold text-primary-foreground text-sm">
+        {children}
+      </AvatarFallback>
+    );
+  }
+
+  const channel = (offset: number) => {
+    const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance =
+    0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4);
+  const foreground =
+    luminance > Math.sqrt(0.0525) - 0.05 ? "#000000" : "#ffffff";
+
+  return (
+    <AvatarFallback
+      className="bg-[var(--avatar-bg)] font-semibold text-[var(--avatar-fg)] text-sm"
+      style={
+        {
+          "--avatar-bg": color,
+          "--avatar-fg": foreground,
+        } as React.CSSProperties
+      }
+    >
+      {children}
+    </AvatarFallback>
+  );
+}

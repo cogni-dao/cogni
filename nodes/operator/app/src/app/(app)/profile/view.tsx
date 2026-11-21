@@ -22,8 +22,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   Avatar,
-  AvatarFallback,
   Button,
+  ColorAvatarFallback,
   DiscordIcon,
   EthereumIcon,
   GitHubIcon,
@@ -253,7 +253,7 @@ function ColorPickerSwatch({
         aria-label="Change avatar color"
       />
       {open && (
-        <div className="absolute top-full right-0 z-50 mt-2 rounded-lg border border-border bg-popover p-3 shadow-md">
+        <div className="absolute top-full right-0 z-50 mt-2 w-max rounded-lg border border-border bg-popover p-3 shadow-md">
           <div className="grid grid-cols-6 gap-3">
             {colors.map((color) => (
               <button
@@ -632,13 +632,10 @@ export function ProfileView(): ReactElement {
             Display Name
           </div>
           <div className="flex items-center gap-3">
-            <Avatar
-              className="size-8"
-              style={{ "--avatar-bg": selectedColor } as React.CSSProperties}
-            >
-              <AvatarFallback className="bg-[var(--avatar-bg)] font-semibold text-primary-foreground text-sm">
+            <Avatar className="size-8">
+              <ColorAvatarFallback color={selectedColor}>
                 {avatarLetter}
-              </AvatarFallback>
+              </ColorAvatarFallback>
             </Avatar>
             <span className="rounded-md border border-input bg-background px-3 py-1.5 text-foreground text-sm">
               {displayName}
