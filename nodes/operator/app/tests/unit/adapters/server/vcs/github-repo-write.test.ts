@@ -401,6 +401,8 @@ intent:
 governance:
   dao_contract: "0xDA0"
   chain_id: "8453"
+operator_wallet:
+  address: "0xdCCa8D85603C2CC47dc6974a790dF846f8695056"
 payments:
   status: pending_activation
 `;
@@ -435,7 +437,6 @@ describe("GitHubRepoWriter.openPaymentsActivationPr", () => {
     const splitAddress = "0xec9add7DF66E0481E87C8fB04F22f9813F3B0894";
     const branch = "cogni-operator/activate-payments-test-cog";
     const desiredSpec = renderPaymentsActivationSpec(PAYMENT_PENDING_SPEC, {
-      nodeWalletAddress,
       splitAddress,
     });
     const encode = (content: string) =>
@@ -510,7 +511,6 @@ describe("GitHubRepoWriter.openPaymentsActivationPr", () => {
     const splitAddress = "0xec9add7DF66E0481E87C8fB04F22f9813F3B0894";
     const branch = "cogni-operator/activate-payments-test-cog";
     const desiredSpec = renderPaymentsActivationSpec(PAYMENT_PENDING_SPEC, {
-      nodeWalletAddress,
       splitAddress,
     });
     const encode = (content: string) =>
@@ -591,12 +591,8 @@ payments_in:
       - USDC
     markup_factor: 1.10803324099723
     revenue_share: 0
-
-node_wallet:
-  address: "${nodeWalletAddress}"
 `;
     const renderedFromMain = renderPaymentsActivationSpec(pendingSpec, {
-      nodeWalletAddress,
       splitAddress,
     });
     expect(branchSpec).not.toBe(renderedFromMain);

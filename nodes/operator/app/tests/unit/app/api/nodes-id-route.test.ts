@@ -153,8 +153,7 @@ describe("PATCH /api/v1/nodes/[id]", () => {
     NODE_ID,
     "red",
   ])("updates %s using the resolved UUID", async (id) => {
-    if (dbState.current) dbState.current.status = "published";
-    const response = await PATCH(patchRequest("wallet_provisioned"), {
+    const response = await PATCH(patchRequest("dao_verified"), {
       params: Promise.resolve({ id }),
     });
 
@@ -189,7 +188,7 @@ describe("PATCH /api/v1/nodes/[id]", () => {
 
   it("returns and logs one safe update failure on database errors", async () => {
     dbState.failRead = true;
-    const response = await PATCH(patchRequest("wallet_provisioned"), {
+    const response = await PATCH(patchRequest("dao_verified"), {
       params: Promise.resolve({ id: "red" }),
     });
     expect(response.status).toBe(500);
@@ -205,7 +204,7 @@ describe("PATCH /api/v1/nodes/[id]", () => {
 
   it("returns 404 for an unknown reference without writing", async () => {
     dbState.current = undefined;
-    const response = await PATCH(patchRequest("wallet_provisioned"), {
+    const response = await PATCH(patchRequest("dao_verified"), {
       params: Promise.resolve({ id: "unknown" }),
     });
     expect(response.status).toBe(404);
@@ -225,7 +224,7 @@ describe("PATCH /api/v1/nodes/[id]", () => {
   });
 
   it.each([
-    ["published", "wallet_provisioned", "wallet_ready"],
+    ["dao_pending", "dao_verified", "dao_formed"],
   ] as const)("accepts %s + %s and advances to %s", async (currentStatus, eventType, nextStatus) => {
     if (dbState.current) dbState.current.status = currentStatus;
 
@@ -242,8 +241,10 @@ describe("PATCH /api/v1/nodes/[id]", () => {
   it.each([
     "payments_configured",
     "activation_published",
+    // bug.5656: wallet readiness is read from the node repo-spec by POST .../payment-prereqs only.
+    "wallet_provisioned",
   ] as const)("rejects browser-declared %s readiness events", async (eventType) => {
-    if (dbState.current) dbState.current.status = "wallet_ready";
+    if (dbState.current) dbState.current.status = "published";
 
     const response = await PATCH(patchRequest(eventType), {
       params: Promise.resolve({ id: "node-1" }),

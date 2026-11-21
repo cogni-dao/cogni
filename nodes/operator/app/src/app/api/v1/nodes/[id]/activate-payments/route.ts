@@ -3,9 +3,9 @@
 
 /**
  * Module: `@app/api/v1/nodes/[id]/activate-payments`
- * Purpose: Open the payment-activation PR into the NODE'S OWN repo - write `node_wallet.address` +
+ * Purpose: Open the payment-activation PR into the NODE'S OWN repo - write
  *   `payments_in.credits_topup.*` (95/5 at-cost) + `payments.status: active` into that repo's
- *   `.cogni/repo-spec.yaml` via the cogni-operator GitHub App.
+ *   `.cogni/repo-spec.yaml` via the cogni-operator GitHub App. It writes NO wallet (bug.5656).
  * Scope: Bearer/session auth + owner-or-developer gating. The Split is deployed client-side (wagmi)
  *   and its address PATCHed onto the node row BEFORE this call; this route is the missing
  *   write-back path - the wizard previously only hand-pasted YAML and never committed it to the
@@ -15,6 +15,8 @@
  *   - SINGLE_HOME: targets the node's OWN repo (`NODE_MINT_OWNER`/slug, built like `publish` - never
  *     `getGithubRepo()` which is hardcoded to the operator monorepo), writes ONLY `.cogni/repo-spec.yaml`.
  *   - WALLET_CUSTODY: operator never holds node keys; this only records addresses.
+ *   - WALLET_MATCHES_GIT (bug.5656): before opening the PR, the repo-spec `operator_wallet.address` on
+ *     `main` must equal the row's `operatorWalletAddress` (case-insensitive), else 409 `wallet_mismatch`.
  *   - OWNER_OR_DEVELOPER: node owner session OR `node.flight` authorizes activation.
  *   - IDEMPOTENT: re-running detects an already-active spec (`no_changes`) and returns the existing PR.
  *   - NO_FALSE_READY: opening a PR is not readiness. Status advances only after repo-spec main and
@@ -24,6 +26,7 @@
  * @public
  */
 
+import { extractOperatorWalletConfig, parseRepoSpec } from "@cogni/repo-spec";
 import { NextResponse } from "next/server";
 import { resolveRouteIdentity } from "@/app/_lib/auth/route-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
@@ -31,6 +34,7 @@ import { resolveNodeAndAuthorize } from "@/app/_lib/node-rbac";
 import { createNodeRepoWriter } from "@/bootstrap/capabilities/node-repo-write";
 import { resolveServiceDb } from "@/bootstrap/container";
 import { nodeIdOrSlug } from "@/features/nodes/node-lookup";
+import { resolveNodeSpecLocation } from "@/features/nodes/payment-prereqs";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
 
@@ -152,6 +156,55 @@ export async function POST(_request: Request, routeArgs: RouteParams) {
   }
 
   const writer = createNodeRepoWriter(env);
+
+  // WALLET_MATCHES_GIT: the wallet the Split was built from must be the one the node declares in git.
+  const location = resolveNodeSpecLocation(node, mintOwner);
+  if (!location) {
+    return NextResponse.json(
+      { error: "node repo-spec location unknown" },
+      { status: 503 }
+    );
+  }
+  let declaredWallet: string | undefined;
+  try {
+    const specText = await writer.fetchFileText({
+      owner: location.owner,
+      repo: location.repo,
+      path: location.path,
+      ref: "main",
+    });
+    if (specText === null) {
+      return NextResponse.json(
+        { error: "node repo-spec read failed", reason: "repo_spec_unreadable" },
+        { status: 502 }
+      );
+    }
+    declaredWallet = extractOperatorWalletConfig(
+      parseRepoSpec(specText)
+    )?.address;
+  } catch {
+    // Fixed reason: upstream error text can embed hosts or credentials.
+    return NextResponse.json(
+      { error: "node repo-spec read failed", reason: "repo_spec_unreadable" },
+      { status: 502 }
+    );
+  }
+  if (
+    !declaredWallet ||
+    declaredWallet.toLowerCase() !== node.operatorWalletAddress.toLowerCase()
+  ) {
+    return NextResponse.json(
+      {
+        error: "wallet_mismatch",
+        reason:
+          "repo-spec operator_wallet.address on main must equal the node's recorded operator wallet; run 'Read node repo-spec' after merging the wallet to main",
+        declaredInRepoSpec: declaredWallet ?? null,
+        recordedOnRow: node.operatorWalletAddress,
+      },
+      { status: 409 }
+    );
+  }
+
   let result: Awaited<ReturnType<typeof writer.openPaymentsActivationPr>>;
   try {
     result = await writer.openPaymentsActivationPr({
