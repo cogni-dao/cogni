@@ -64,11 +64,11 @@ export function UserAvatarMenu(): ReactElement | null {
       <DropdownMenuPrimitive.Trigger asChild>
         <button
           type="button"
-          className="flex items-center rounded-full outline-none transition-opacity hover:opacity-80 focus-visible:outline-2 focus-visible:outline-ring"
+          className="flex items-center rounded-full outline-none focus-visible:outline-2 focus-visible:outline-ring"
           aria-label="User menu"
         >
           <Avatar className="size-8">
-            <ColorAvatarFallback color={user.avatarColor}>
+            <ColorAvatarFallback color={user.avatarColor ?? null}>
               {avatarLetter}
             </ColorAvatarFallback>
           </Avatar>
