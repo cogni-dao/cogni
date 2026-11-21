@@ -153,6 +153,42 @@ describe("NodeWalletCreate", () => {
     expect(mockRefresh).toHaveBeenCalled();
   });
 
+  it("after a reload with a pending wallet and no known PR, offers the recovery-file retry that reopens the PR", async () => {
+    const { container } = render(
+      <NodeWalletCreate
+        nodeId="node-1"
+        slug="spawny-boi"
+        nodeRepoUrl="https://github.com/o/spawny-boi"
+        pendingWalletAddress={WALLET}
+      />
+    );
+    expect(screen.getByText("Node wallet created")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Load recovery file to open the PR" })
+    );
+    const input = await waitFor(() => {
+      const el = container.querySelector('input[type="file"]');
+      if (!el) throw new Error("file input not shown yet");
+      return el as HTMLInputElement;
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    const file = await generateOwnerKey();
+    fireEvent.change(input, {
+      target: {
+        files: [new File([file.recoveryPem], "spawny-boi-wallet-owner.pem")],
+      },
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const body = JSON.parse(
+      String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)
+    );
+    expect(Object.keys(body)).toEqual(["ownerPublicKey"]);
+    expect(body.ownerPublicKey).toBe(file.spkiBase64);
+    expect(
+      await screen.findByRole("link", { name: /View PR/ })
+    ).toHaveAttribute("href", "https://github.com/o/r/pull/1");
+  });
+
   it("refuses to create when the loaded file is a different key", async () => {
     const { container } = renderControl();
     fireEvent.click(screen.getByRole("button", { name: "Create node wallet" }));

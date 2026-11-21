@@ -106,7 +106,8 @@ export function NodeWalletCreate({
       document.body.appendChild(link);
       link.click();
       link.remove();
-      URL.revokeObjectURL(url);
+      // Safari and Firefox can drop the download if the URL is revoked in the same tick.
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
       setPhase("AWAIT_FILE");
     } catch {
       setMessage("Could not make a key in this browser.");
@@ -188,6 +189,17 @@ export function NodeWalletCreate({
           below. Keep <code>{recoveryFileName(slug)}</code> safe: it owns the
           wallet.
         </p>
+        {!prUrl ? (
+          <div className="space-y-2">
+            <p className="text-muted-foreground">
+              Not sure the PR was opened? Load the recovery file again and the
+              operator opens it (or finds the open one).
+            </p>
+            <Button type="button" variant="outline" onClick={useExistingFile}>
+              Load recovery file to open the PR
+            </Button>
+          </div>
+        ) : null}
         {(prUrl ?? pullsUrl) ? (
           <a
             href={prUrl ?? pullsUrl ?? undefined}
