@@ -51,6 +51,7 @@ import { calculatorShape } from "@cogni-dao/metrics";
 import {
   displayFits,
   KpiBindingsSchema,
+  parseStoredMetricSpec,
   StoredMetricSpecSchema,
 } from "@cogni-dao/metrics/contracts";
 import { NextResponse } from "next/server";
@@ -562,7 +563,8 @@ export function validateMetricSpec(
       { error: "invalid metric definition", issues: parsed.error.issues },
       { status: 400 }
     );
-  const { display, serves: _serves, band, ...spec } = parsed.data;
+  // Authoring is strict; the shared reader then separates every known annex.
+  const { display, band, spec } = parseStoredMetricSpec(parsed.data);
   const registry = getContainer().goalMetrics?.registry;
   try {
     registry?.validate({ id, title, revision: "proposed", spec });
