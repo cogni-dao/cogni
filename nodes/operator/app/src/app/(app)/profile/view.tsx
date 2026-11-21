@@ -253,7 +253,7 @@ function ColorPickerSwatch({
         aria-label="Change avatar color"
       />
       {open && (
-        <div className="absolute top-full right-0 z-50 mt-2 rounded-lg border border-border bg-popover p-3 shadow-md">
+        <div className="absolute top-full right-0 z-50 mt-2 w-max rounded-lg border border-border bg-popover p-3 shadow-md">
           <div className="grid grid-cols-6 gap-3">
             {colors.map((color) => (
               <button
