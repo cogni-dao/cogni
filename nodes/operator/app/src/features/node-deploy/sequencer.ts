@@ -171,6 +171,7 @@ import {
   checkQualification,
   QualificationFailure,
   qualificationChallenge,
+  qualificationRefusalCode,
   savedQualification,
   validationCode,
 } from "./qualification";
@@ -2328,10 +2329,14 @@ export class NodeDeploySequencer {
         sent
       );
     if (result.status < 200 || result.status >= 300)
-      throw new QualificationFailure("http", "status", {
-        ...sent,
-        status: result.status,
-      });
+      throw new QualificationFailure(
+        "http",
+        qualificationRefusalCode(result.body),
+        {
+          ...sent,
+          status: result.status,
+        }
+      );
     if (expired() || this.d.clock.now() > deadline)
       throw new QualificationFailure("deadline", "expired", {
         ...sent,

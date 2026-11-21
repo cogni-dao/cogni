@@ -126,6 +126,58 @@ export function validationCode(error: unknown): string {
   return "evidence_invalid";
 }
 
+/** Map a complete bounded refusal to a fixed, reviewed diagnostic; retain no input text. */
+export function qualificationRefusalCode(body: string): string {
+  if (Buffer.byteLength(body, "utf8") > 1024) return "qualification_failed";
+  try {
+    const value: unknown = JSON.parse(body);
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return "qualification_failed";
+    const fields = Object.keys(value);
+    if (fields.length !== 1 || fields[0] !== "error")
+      return "qualification_failed";
+    const error = (value as { error: unknown }).error;
+    switch (error) {
+      case "qualification_market_unavailable":
+        return "qualification_market_unavailable";
+      case "paper_binding_invalid":
+        return "paper_binding_invalid";
+      case "paper_helper_unreachable":
+        return "paper_helper_unreachable";
+      case "companion_readiness_failed":
+        return "companion_readiness_failed";
+      case "helper_identity_changed":
+        return "helper_identity_changed";
+      case "paper_receipt_unproven":
+        return "paper_receipt_unproven";
+      case "qualification_companions_invalid":
+        return "qualification_companions_invalid";
+      case "companion_readiness_unproven":
+        return "companion_readiness_unproven";
+      case "paper_receipt_mismatch":
+        return "paper_receipt_mismatch";
+      case "paper_order_not_found":
+        return "paper_order_not_found";
+      case "qualification_receipt_missing":
+        return "qualification_receipt_missing";
+      case "qualification_subject_stale":
+        return "qualification_subject_stale";
+      case "qualification_agent_owner_missing":
+        return "qualification_agent_owner_missing";
+      case "qualification_paper_fixture_missing":
+        return "qualification_paper_fixture_missing";
+      case "qualification_paper_grant_missing":
+        return "qualification_paper_grant_missing";
+      case "qualification_auth_invalid":
+        return "qualification_auth_invalid";
+      default:
+        return "qualification_failed";
+    }
+  } catch {
+    return "qualification_failed";
+  }
+}
+
 /** Any thrown value as a QualificationFailure; an unknown error keeps no text. */
 export function asQualificationFailure(error: unknown): QualificationFailure {
   return error instanceof QualificationFailure

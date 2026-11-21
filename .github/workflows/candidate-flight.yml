@@ -1712,6 +1712,13 @@ jobs:
           echo "sha=$expected_sha" >> "$GITHUB_OUTPUT"
           echo "digest=$expected_digest" >> "$GITHUB_OUTPUT"
 
+      - name: Download selected operator artifact
+        if: matrix.node == 'operator'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.8
+        with:
+          name: resolved-pr-images
+          path: ${{ runner.temp }}/
+
       - name: Wait for in-cluster services (per-node)
         if: steps.ssh-setup.outputs.has_vm == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s'
         env:
@@ -1721,6 +1728,10 @@ jobs:
           COGNI_CATALOG_ROOT: app-src/infra/catalog
           SCHEDULER_EXPECTED_SHA: ${{ steps.scheduler-identity.outputs.sha }}
           SCHEDULER_EXPECTED_DIGEST: ${{ steps.scheduler-identity.outputs.digest }}
+          OPERATOR_DEPLOY_ROOT: deploy-branch
+          OPERATOR_DEPLOY_SHA: ${{ steps.expected.outputs.deploy_branch_sha }}
+          OPERATOR_APP_SOURCE_ROOT: app-src
+          OPERATOR_PAYLOAD_FILE: ${{ runner.temp }}/resolved-pr-images.json
         run: bash ci-src/scripts/ci/wait-for-in-cluster-services.sh
 
       - name: Verify buildSha on endpoint (per-node)
