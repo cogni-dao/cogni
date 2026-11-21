@@ -58,6 +58,8 @@ Vertical slices containing use cases like accounts/, ai/, and home/. Orchestrate
 - **Implements ports:** none
 - **Contracts (required if implementing):** none
 
+- Node epoch observability: `nodes/observability-temporal` validates env-only input and orders node resolution, developer authorization, private binding and bounded native reads.
+
 ## Responsibilities
 
 - This directory **does**: Implement use cases, orchestrate domain logic, provide feature boundaries

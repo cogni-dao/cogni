@@ -14,6 +14,8 @@ import { EVENT_NAMES as NODE_SHARED_EVENT_NAMES } from "@cogni/node-shared";
 
 export const EVENT_NAMES = {
   ...NODE_SHARED_EVENT_NAMES,
+  NODE_OBSERVABILITY_TEMPORAL_COMPLETE:
+    "feature.node_observability_temporal.complete",
   // task.5474 / story.5156: revocable hashed v2 agent keys. Ids + reasons only, never a key or hash.
   AGENT_CREDENTIAL_UPGRADED: "agent.credential.upgraded",
   AGENT_CREDENTIAL_ROTATED: "agent.credential.rotated",

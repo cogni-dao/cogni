@@ -37,9 +37,7 @@
  */
 
 import { isDeepStrictEqual } from "node:util";
-
 import type { JsonValue } from "type-fest";
-
 import {
   type CreateScheduleParams,
   isScheduleControlConflictError,
@@ -48,6 +46,7 @@ import {
   type ScheduleDescription,
 } from "../ports/schedule-control.port";
 import { nodeTaskScope } from "../scopes";
+import { buildLedgerIngestInput } from "../workflow-envelope";
 
 /** Graph ID for OpenClaw sandbox execution */
 const GOVERNANCE_GRAPH_ID = "sandbox:openclaw";
@@ -377,20 +376,7 @@ export async function syncGovernanceSchedules(
       // is NOT rewired onto NodeTaskWorkflow(/collect): that would dead-dispatch (the operator's
       // `/api/internal/attribution/collect` route ships in a sibling PR) AND, once it lands,
       // double-collect alongside this schedule. The dispatch swap below is other-nodes-only.
-      desiredInput = {
-        version: 1,
-        scopeId: config.ledger.scopeId,
-        scopeKey: config.ledger.scopeKey,
-        epochLengthDays: config.ledger.epochLengthDays,
-        activitySources: config.ledger.activitySources,
-        ...(config.ledger.baseIssuanceCredits && {
-          baseIssuanceCredits: config.ledger.baseIssuanceCredits,
-        }),
-        ...(config.ledger.approvers &&
-          config.ledger.approvers.length > 0 && {
-            approvers: config.ledger.approvers,
-          }),
-      };
+      desiredInput = buildLedgerIngestInput(config.ledger);
       workflowType = COLLECT_EPOCH_WORKFLOW_TYPE;
       // bug.5023: the shared `ledger-tasks` queue is purged — the operator's
       // CollectEpochWorkflow runs on its OWN per-node queue, matching the per-node

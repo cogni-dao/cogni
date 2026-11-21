@@ -12,6 +12,10 @@
  */
 
 export {
+  TemporalDiagnosticError,
+  TemporalLedgerDiagnosticAdapter,
+} from "./ledger-diagnostic.adapter";
+export {
   TemporalScheduleControlAdapter,
   type TemporalScheduleControlConfig,
 } from "./schedule-control.adapter";

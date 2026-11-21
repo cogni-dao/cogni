@@ -96,6 +96,8 @@ HTTP API endpoints using Next.js App Router. Contract-validated entry points tha
 - Fixed service target `scheduler-worker-custodied-routing` on `/api/v1/deploy/infra-reconcile`: own-production custodian only; additive Git publication or receipt rollback; publication is not rollout proof.
 - **Files considered API:** v1/_/route.ts, admin/_/route.ts
 
+- `/api/v1/nodes/[id]/observability/temporal/ledger` [GET] — developer-gated serving-environment finite metadata; `logs?service=epoch-worker` admits strict target-bound worker events only.
+
 ## Responsibilities
 
 - This directory **does**: validate HTTP requests/responses with contracts; delegate to features

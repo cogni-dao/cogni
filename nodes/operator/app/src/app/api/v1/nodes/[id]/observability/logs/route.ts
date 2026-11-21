@@ -30,6 +30,7 @@
 
 import type { AuthzDecisionCode } from "@cogni/authorization-core";
 import { NextResponse } from "next/server";
+import { readEpochWorkerLogs } from "@/app/_facades/nodes/observability-worker.server";
 import { resolveRouteIdentity } from "@/app/_lib/auth/route-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
@@ -189,6 +190,17 @@ export async function GET(
       },
       { status: 400 }
     );
+  }
+
+  if (params.get("service")?.trim() === "epoch-worker") {
+    const result = await readEpochWorkerLogs(request, node.nodeId, env);
+    logComplete({
+      outcome: result.status === 200 ? "success" : "error",
+      status: result.status,
+      nodeId: node.nodeId,
+      env,
+    });
+    return NextResponse.json(result.body, { status: result.status });
   }
 
   // Authorize the caller's full LogQL query against this node. `?query=` takes the SAME LogQL a dev
