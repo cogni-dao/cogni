@@ -553,10 +553,14 @@ jobs:
           NODE: ${{ matrix.node }}
           DEPLOY_SHA: ${{ steps.push.outputs.deploy_branch_sha }}
           PROMOTED: ${{ steps.digest.outputs.promoted }}
+          SELECTED_DIGEST: ${{ steps.digest.outputs.digest }}
+          SELECTED_SOURCE: ${{ steps.digest.outputs.source_sha }}
         run: |
           mkdir -p out
           printf '%s' "${DEPLOY_SHA:-}" > "out/deploy-sha-${NODE}.txt"
           printf '%s' "${PROMOTED:-false}" > "out/promoted-${NODE}.txt"
+          printf '%s' "${SELECTED_DIGEST:-}" > "out/selected-digest-${NODE}.txt"
+          printf '%s' "${SELECTED_SOURCE:-}" > "out/selected-source-${NODE}.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -952,6 +956,11 @@ jobs:
         if: steps.cell.outputs.promoted == 'true' && env.DEPLOYMENT_PROVIDER == 'k3s'
         env:
           PROMOTED_APPS: ${{ matrix.node }}
+          OPERATOR_DEPLOY_ROOT: deploy-branch
+          OPERATOR_DEPLOY_SHA: ${{ steps.cell.outputs.deploy_branch_sha }}
+          OPERATOR_APP_SOURCE_ROOT: app-src
+          OPERATOR_SELECTED_DIGEST_FILE: ${{ runner.temp }}/selected-digest-operator.txt
+          OPERATOR_SELECTED_SOURCE_FILE: ${{ runner.temp }}/selected-source-operator.txt
         run: bash app-src/scripts/ci/wait-for-in-cluster-services.sh
 
       - name: Verify buildSha (per-node)

@@ -1799,10 +1799,103 @@ describe("private release companions", () => {
     );
   });
 
+  const reviewedRefusals = [
+    "qualification_market_unavailable",
+    "paper_binding_invalid",
+    "paper_helper_unreachable",
+    "companion_readiness_failed",
+    "helper_identity_changed",
+    "paper_receipt_unproven",
+    "qualification_companions_invalid",
+    "companion_readiness_unproven",
+    "paper_receipt_mismatch",
+    "paper_order_not_found",
+    "qualification_receipt_missing",
+    "qualification_subject_stale",
+    "qualification_agent_owner_missing",
+    "qualification_paper_fixture_missing",
+    "qualification_paper_grant_missing",
+    "qualification_auth_invalid",
+  ];
+  const refusalExamples = [
+    ...reviewedRefusals.map((code) => [JSON.stringify({ error: code }), code]),
+    ['{"error":"secret_sentinel"}', "qualification_failed"],
+    [
+      '{"error":"paper_binding_invalid","message":"secret_sentinel"}',
+      "qualification_failed",
+    ],
+    ['{"error":7}', "qualification_failed"],
+    ['["paper_binding_invalid"]', "qualification_failed"],
+    ["<html>secret_sentinel</html>", "qualification_failed"],
+    ['{"error":"paper_binding_invalid"', "qualification_failed"],
+    [
+      '{"error":"paper_binding_invalid"}' + " ".repeat(991),
+      "paper_binding_invalid",
+    ],
+    [
+      '{"error":"paper_binding_invalid"}' + " ".repeat(992),
+      "qualification_failed",
+    ],
+    [
+      '{"error":"paper_binding_invalid"}' + "é".repeat(500),
+      "qualification_failed",
+    ],
+  ];
+  it.each(
+    ["qualify", "readback"].flatMap((mode) =>
+      refusalExamples.map(([body, code]) => [mode, body, code])
+    )
+  )("retains only a reviewed refusal class during %s", async (mode, body, code) => {
+    const h = harness({ environment: "preview" });
+    installBundle(h);
+    await companionRelease(
+      h,
+      canaryApp({
+        bindings: [],
+        expose: { http: { host: "poly-preview.cognidao.org" } },
+      })
+    );
+    const key = { ...h.key(POLY_ID, "canary"), env: "preview" };
+    await h.seq.step(key);
+    const blue = h.store.attempts.find((a) => a.phase === "active");
+    proofResponder(h);
+    const responder = h.probe.qualification;
+    h.probe.qualification = async (input) => {
+      const ok = await responder?.(input);
+      if (!ok) throw new Error("missing probe");
+      return input.mode === mode
+        ? { status: 503, body: body as string, ms: 7 }
+        : ok;
+    };
+    const { release } = await companionRelease(h);
+    await h.seq.step(key);
+    const green = h.store.attempts.find((a) => a.releaseId === release.id);
+    expect(green?.phase).toBe("failed");
+    expect(h.store.attempts.find((a) => a.id === blue?.id)?.phase).toBe(
+      "active"
+    );
+    expect(
+      h.log.lines.filter((l) => l.fields.step === "qualification_diagnostic")[0]
+        ?.fields
+    ).toMatchObject({
+      mode,
+      stage: "http",
+      code,
+      httpStatus: 503,
+      qualificationMs: 7,
+    });
+    expect(
+      green?.steps.find((s) => s.step === "qualification_diagnostic")?.reason
+    ).toContain(code);
+    expect(JSON.stringify([h.log.lines, h.store.attempts])).not.toContain(
+      "secret_sentinel"
+    );
+  });
+
   it.each([
-    ["qualify", 421, "http", "status"],
+    ["qualify", 421, "http", "qualification_failed"],
     ["qualify", 0, "transport", "DEPTH_ZERO_SELF_SIGNED_CERT"],
-    ["readback", 503, "http", "status"],
+    ["readback", 503, "http", "qualification_failed"],
     ["readback", 200, "validate", "evidence_json"],
     // A plain Error thrown during readback (store, jose, schema, dependency): bounded, never its text.
     ["readback", -1, "internal", "unexpected"],

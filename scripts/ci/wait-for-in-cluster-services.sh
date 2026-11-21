@@ -45,6 +45,14 @@
 #   SCHEDULER_EXPECTED_DIGEST required with SCHEDULER_EXPECTED_SHA; sha256:...
 #                             from the promoted overlay/payload.
 #
+#   OPERATOR_DEPLOY_ROOT / OPERATOR_DEPLOY_SHA: exact clean promoted checkout.
+#   OPERATOR_APP_SOURCE_ROOT: selected app checkout (candidate source must match).
+#   OPERATOR_PAYLOAD_FILE: candidate resolved-pr-images.json; or promotion's
+#   OPERATOR_SELECTED_DIGEST_FILE / OPERATOR_SELECTED_SOURCE_FILE: selected cell
+#     artifact inputs. Required for operator even on preview (absence is rendered).
+#     lib/verify-sequencer.py uses kubectl kustomize + yq locally, buildx registry
+#     reads, and the existing runner SSH key for bounded read-only native evidence.
+#
 # Adds: extend the case statement below when a new in-cluster deployment
 # needs gating. Promotion to a `k8s_deployment` field on infra/catalog/*.yaml
 # (CATALOG_IS_SSOT, axiom 16) is the right home if/when a fifth node lands.
@@ -101,6 +109,15 @@ if [ ${#SERVICES[@]} -eq 0 ]; then
 fi
 
 NS="cogni-${DEPLOY_ENVIRONMENT}"
+
+# bug.5663: the separate worker shares the operator artifact. Its topology and
+# identity come from the exact promoted tree, never app /version or labels alone.
+for node in "${_NODES[@]}"; do
+  if [ "$node" = "operator" ]; then
+    python3 "$SCRIPT_DIR/lib/verify-sequencer.py"
+    break
+  fi
+done
 
 # Endpoint cutover wait: poll Service endpoints until the address count
 # equals deployment desired replicas exactly. During a RollingUpdate with

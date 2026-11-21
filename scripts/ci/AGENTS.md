@@ -6,7 +6,7 @@
 
 - **Owners:** @derekg1729
 - **Status:** draft
-- **Last reviewed:** 2026-11-05
+- **Last reviewed:** 2026-11-21
 
 ## Purpose
 
@@ -105,6 +105,7 @@ scripts/fetch_github_job_logs.sh  # Fetch job logs from GitHub Actions API (requ
 - `aggregate-rollup.sh <env>` (task.0376) computes `current-sha = git merge-base $(deploy/<env>-<node> tips)` and merges per-node `source-sha-by-app.json` entries into the rollup, preserving unaffected entries (`CURRENT_SHA_IS_MERGE_BASE` + `ROLLUP_MAP_PRESERVES_UNAFFECTED`). Called by `promote-and-deploy.yml`'s `aggregate-{preview,production}` job; rebase-retries on push contention.
 - `resolve-cell-state.sh` (task.0376; Axiom 19 enforcement point) is the per-cell precondition gate inside the `verify-deploy` matrix in `promote-and-deploy.yml`. Reads `promoted-${NODE}.txt` + `deploy-sha-${NODE}.txt` from the cell artifact, hard-fails on missing artifact (Axiom 14) and on missing `VM_HOST` or empty `deploy_branch_sha` when the cell promoted (Axiom 19). Emits `promoted=` and `deploy_branch_sha=` to `$GITHUB_OUTPUT`. Replaces inline-bash gates that previously skipped silently when the env's `VM_HOST` secret was unseeded.
 - `aggregate-decide-outcome.sh` (task.0376; Axiom 19 enforcement point) is the single decision function consumed by both `aggregate-preview` and `aggregate-production` in `promote-and-deploy.yml`. Walks `promoted-*.txt` and `verified-*.txt` markers in `CELLS_DIR`, asserts every promoted cell has a matching verified marker (Axiom 19), and combines that with the four upstream `*_RESULT` env vars to emit `outcome={dispatched|failed}`. `STRICT_FAIL=1` makes a non-`dispatched` outcome a hard exit 1 — used by `aggregate-production` to block the rollup write when an unverified-but-promoted cell slipped past job-level gates. The verified markers are written by `verify-buildsha.sh` when `MARKER_DIR` is set; the matrix uploads them as `cell-verify-<node>` artifacts, and `download-artifact pattern: cell-*` merges them into the same dir as the promoted markers.
+- `wait-for-in-cluster-services.sh` calls internal `lib/verify-sequencer.py` for operator promotions. `OPERATOR_DEPLOY_ROOT`, `OPERATOR_DEPLOY_SHA` and `OPERATOR_APP_SOURCE_ROOT` pin the clean promoted tree and selected source. Candidate supplies `OPERATOR_PAYLOAD_FILE`; promotion supplies `OPERATOR_SELECTED_DIGEST_FILE` and `OPERATOR_SELECTED_SOURCE_FILE` from its cell artifact. Rendered preview omits the sequencer; candidate-a/production require exact current native worker ownership and ready container manifest identity. Native reads stay inside trusted CI; no worker endpoint cutover is required.
 - `wait-for-argocd.sh` uses per-invocation `$$.$RANDOM.$RANDOM` suffix on its remote `/tmp/` paths so concurrent matrix cells don't race each other's cleanup (task.0372).
 - `wait-for-candidate-ready.sh` scopes `/readyz` polling to `PROMOTED_APPS` when set, matching affected-only candidate-flight matrix cells.
 - `verify-deployment.sh` requires an explicit `PROMOTED_APPS` CSV. Empty means no node checks; missing or invalid scope fails before requests. Only selected catalog nodes are probed, with bounded HTTP calls and an exact `alive` liveness response.
