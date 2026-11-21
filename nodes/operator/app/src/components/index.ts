@@ -113,7 +113,12 @@ export { Reveal } from "./kit/animation/Reveal";
 export { SignInDialog } from "./kit/auth/SignInDialog";
 export { WalletConnectButton } from "./kit/auth/WalletConnectButton";
 export * from "./kit/chat";
-export { Avatar, AvatarFallback, AvatarImage } from "./kit/data-display/Avatar";
+export {
+  Avatar,
+  AvatarFallback,
+  AvatarImage,
+  ColorAvatarFallback,
+} from "./kit/data-display/Avatar";
 export { Badge } from "./kit/data-display/Badge";
 export { ExpandableTableRow } from "./kit/data-display/ExpandableTableRow";
 export {

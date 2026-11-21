@@ -22,11 +22,11 @@ import { useTheme } from "next-themes";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 import { useDisconnect } from "wagmi";
-import { Avatar, AvatarFallback } from "@/components/kit/data-display/Avatar";
+import {
+  Avatar,
+  ColorAvatarFallback,
+} from "@/components/kit/data-display/Avatar";
 import { EthereumIcon } from "@/components/kit/data-display/ProviderIcons";
-
-/** Default avatar color when none is set */
-const DEFAULT_AVATAR_COLOR = "hsl(var(--primary))";
 
 // Radix animation classes for dropdown content
 const DROPDOWN_CONTENT_CLASSES =
@@ -58,7 +58,6 @@ export function UserAvatarMenu(): ReactElement | null {
     user.name ||
     (user.walletAddress ? truncateWallet(user.walletAddress) : "User");
   const avatarLetter = displayName.charAt(0).toUpperCase();
-  const avatarColor = user.avatarColor || DEFAULT_AVATAR_COLOR;
 
   return (
     <DropdownMenuPrimitive.Root>
@@ -68,13 +67,10 @@ export function UserAvatarMenu(): ReactElement | null {
           className="flex items-center rounded-full outline-none transition-opacity hover:opacity-80 focus-visible:outline-2 focus-visible:outline-ring"
           aria-label="User menu"
         >
-          <Avatar
-            className="size-8"
-            style={{ "--avatar-bg": avatarColor } as React.CSSProperties}
-          >
-            <AvatarFallback className="bg-[var(--avatar-bg)] font-semibold text-primary-foreground text-sm">
+          <Avatar className="size-8">
+            <ColorAvatarFallback color={user.avatarColor}>
               {avatarLetter}
-            </AvatarFallback>
+            </ColorAvatarFallback>
           </Avatar>
         </button>
       </DropdownMenuPrimitive.Trigger>
