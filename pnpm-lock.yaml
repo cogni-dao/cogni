@@ -401,8 +401,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/financial-ledger
       '@cogni/fleet-metrics-source':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/metrics-v0.25.0/cogni-dao-metrics-0.25.0.tgz
-        version: '@cogni-dao/metrics@https://github.com/cogni-dao/node-template/releases/download/metrics-v0.25.0/cogni-dao-metrics-0.25.0.tgz(drizzle-orm@0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7))(postgres@3.4.7)'
+        specifier: https://github.com/cogni-dao/node-template/releases/download/metrics-v0.26.0/cogni-dao-metrics-0.26.0.tgz
+        version: '@cogni-dao/metrics@https://github.com/cogni-dao/node-template/releases/download/metrics-v0.26.0/cogni-dao-metrics-0.26.0.tgz(drizzle-orm@0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7))(postgres@3.4.7)'
       '@cogni/ids':
         specifier: workspace:*
         version: link:../../../packages/ids
@@ -2005,9 +2005,9 @@ packages:
       postgres:
         optional: true
 
-  '@cogni-dao/metrics@https://github.com/cogni-dao/node-template/releases/download/metrics-v0.25.0/cogni-dao-metrics-0.25.0.tgz':
-    resolution: {integrity: sha512-1rQdTWWIrTEXnUc3hedf6dBMgpGb3Xs1QHg6vE1TOcJ3JUllI/gSSVXNgUciuFaxKwW6NbBWZIIAr7MEfbQhYA==, tarball: https://github.com/cogni-dao/node-template/releases/download/metrics-v0.25.0/cogni-dao-metrics-0.25.0.tgz}
-    version: 0.25.0
+  '@cogni-dao/metrics@https://github.com/cogni-dao/node-template/releases/download/metrics-v0.26.0/cogni-dao-metrics-0.26.0.tgz':
+    resolution: {integrity: sha512-shidqR2/kVNdX9wKtMxe8jwS4C+RPkoKDXQOTXGvhdHN9/0zLcPUbT6WUN4RrJggsC6o47SVZKuA6cXUL1oaqw==, tarball: https://github.com/cogni-dao/node-template/releases/download/metrics-v0.26.0/cogni-dao-metrics-0.26.0.tgz}
+    version: 0.26.0
     peerDependencies:
       drizzle-orm: ^0.44.7
       postgres: ^3.4.5
@@ -13765,7 +13765,7 @@ snapshots:
       drizzle-orm: 0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
       postgres: 3.4.7
 
-  '@cogni-dao/metrics@https://github.com/cogni-dao/node-template/releases/download/metrics-v0.25.0/cogni-dao-metrics-0.25.0.tgz(drizzle-orm@0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7))(postgres@3.4.7)':
+  '@cogni-dao/metrics@https://github.com/cogni-dao/node-template/releases/download/metrics-v0.26.0/cogni-dao-metrics-0.26.0.tgz(drizzle-orm@0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7))(postgres@3.4.7)':
     dependencies:
       zod: 4.3.6
     optionalDependencies:
