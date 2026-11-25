@@ -216,17 +216,9 @@ export function resolveWorkloadDeclaration(input: {
         "declaration must name this node's permitted production-form workload host"
       );
     if (!workload.companions && !workload.health?.qualification) continue;
-    // A service declared as its OWN worker workload (another entry in `workloads`, a sibling worker)
-    // deploys separately, so this workload's Score does not cover it. Everything else stays strict.
-    const separateWorkers = new Set(
-      workloads
-        .filter(
-          (w) => w.name !== workload.name && isWorkerService(spec, w.name)
-        )
-        .map((w) => w.name)
-    );
+    const separateWorkers = separateWorkerNames(spec, workloads, workload.name);
     const services = extractNodeServices(spec).filter(
-      (s) => !separateWorkers.has(s.name)
+      (s) => !separateWorkers.includes(s.name)
     );
     const main = services.find((s) => s.visibility === "public");
     if (
@@ -381,6 +373,15 @@ export function resolveWorkloadDeclaration(input: {
         repository: input.sourceRepository.toLowerCase(),
         imageRepository: input.pendingImage.replace(/:sha-[0-9a-f]{40}$/, ""),
         services: spec.deployment.services,
+        ...(separateWorkerNames(spec, workloads, declared.name).length
+          ? {
+              separateWorkers: separateWorkerNames(
+                spec,
+                workloads,
+                declared.name
+              ),
+            }
+          : {}),
       },
     };
   }
@@ -482,6 +483,21 @@ function appServiceName(spec: ReturnType<typeof parseRepoSpec>): string {
       (s) => s.runtimeProfile === "cogni-node-app-v1"
     )?.name ?? "app"
   );
+}
+
+/**
+ * Services of the repo-spec that are declared as their OWN worker workload (another entry in `workloads`, a
+ * sibling worker per `isWorkerService`). They deploy separately, so a companion/qualified workload's Score
+ * does not cover them (story.0090). An extra service with no workload of its own is never listed.
+ */
+function separateWorkerNames(
+  spec: ReturnType<typeof parseRepoSpec>,
+  workloads: readonly NodeWorkloadSpec[],
+  self: string
+): string[] {
+  return workloads
+    .filter((w) => w.name !== self && isWorkerService(spec, w.name))
+    .map((w) => w.name);
 }
 
 /**

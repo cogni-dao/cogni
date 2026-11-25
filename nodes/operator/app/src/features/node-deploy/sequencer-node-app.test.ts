@@ -3104,6 +3104,75 @@ describe("accepted bundle image identity", () => {
   });
 });
 
+describe("a service that is its own worker workload (story.0090)", () => {
+  const SANDBOX_IMAGE = `ghcr.io/example/node-sandbox@sha256:${"f".repeat(64)}`;
+  const sandboxService = nodeServiceSpecSchema.parse({
+    name: "sandbox",
+    artifact: { name: "sandbox" },
+    port: 8080,
+    visibility: "private",
+    resources: { cpu_units: 0.25, memory_mi: 256, storage_mi: 256 },
+  });
+  const withSandbox = (separateWorkers?: string[]) => {
+    const base = companionSpec();
+    return {
+      ...base,
+      artifactPlan: {
+        ...requiredFixture(base.artifactPlan),
+        services: [...SERVICE_DECLARATIONS, sandboxService],
+        ...(separateWorkers ? { separateWorkers } : {}),
+      },
+    };
+  };
+  const publicationWithSandbox = async (h: H) => {
+    installBundle(h);
+    const publication = await requiredFixture(h.images.resolveArtifactBundle)({
+      imageRepository: "ghcr.io/example/node",
+      sourceSha: SHA_1,
+    });
+    if (!publication) throw new Error("fixture");
+    const bundle = publication.bundle as {
+      artifacts: object[];
+      services: object[];
+    };
+    return {
+      ...publication,
+      bundle: {
+        ...bundle,
+        artifacts: [
+          ...bundle.artifacts,
+          { name: "sandbox", image: SANDBOX_IMAGE },
+        ],
+        services: [
+          ...bundle.services,
+          { name: "sandbox", artifact: "sandbox" },
+        ],
+      },
+    };
+  };
+
+  it("is excluded from this release's selected set when it was declared as a separate worker", async () => {
+    const h = harness({ environment: "preview" });
+    const publication = await publicationWithSandbox(h);
+    const { release } = await companionRelease(h, withSandbox(["sandbox"]));
+    const selected = selectReleaseBundle(release, publication);
+    expect(selected.artifactPlan?.selectedImages).toEqual({
+      canary: PUBLIC_IMAGE,
+      helper: HELPER_IMAGE,
+    });
+    expect(selected.artifactPlan?.separateWorkers).toEqual(["sandbox"]);
+  });
+
+  it("an undeclared extra service still refuses the bundle", async () => {
+    const h = harness({ environment: "preview" });
+    const publication = await publicationWithSandbox(h);
+    const { release } = await companionRelease(h, withSandbox());
+    expect(() => selectReleaseBundle(release, publication)).toThrow(
+      "selected service coverage mismatch"
+    );
+  });
+});
+
 describe("green migrates itself before it serves (task.5408)", () => {
   it.each([
     "bucket",

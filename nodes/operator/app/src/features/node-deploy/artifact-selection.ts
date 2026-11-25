@@ -34,10 +34,17 @@ export function selectReleaseBundle(
     publication.bundle,
     { repository: plan.repository, sourceSha: release.sourceSha }
   );
-  const selected = resolveNodeArtifactBundleForEnvironment(
+  const forEnv = resolveNodeArtifactBundleForEnvironment(
     complete,
     release.env as DeploymentEnvName
   );
+  // Services frozen at declaration as their OWN worker workload are not part of this release's set
+  // (story.0090). The whole bundle was validated above; an undeclared extra service stays in and refuses.
+  const separate = new Set(plan.separateWorkers ?? []);
+  const selected = {
+    ...forEnv,
+    services: forEnv.services.filter((s) => !separate.has(s.service.name)),
+  };
   const mainName = w.serviceName ?? w.name;
   const main = selected.services.find((s) => s.service.name === mainName);
   if (!main) throw new Error("public entry missing from bundle");

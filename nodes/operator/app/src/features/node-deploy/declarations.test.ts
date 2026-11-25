@@ -363,6 +363,8 @@ ${route("poly-sandbox.cognidao.org", 8080)}`,
     const w = resolvePoly();
     expect(w.companions?.map((c) => c.name)).toEqual(["paper-trader"]);
     expect(w.artifactPlan?.services.map((s) => s.name)).toContain("sandbox");
+    // frozen at declaration so the release's bundle selection excludes it (artifact-selection.ts)
+    expect(w.artifactPlan?.separateWorkers).toEqual(["sandbox"]);
   });
 
   it("still refuses an undeclared extra service, and the worker workload when it is not declared", () => {

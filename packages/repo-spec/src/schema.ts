@@ -524,6 +524,12 @@ export const nodeWorkloadSpecSchema = z
           .regex(/^ghcr\.io\/[a-z0-9._-]+\/[a-z0-9._-]+$/),
         /** Frozen same-SHA build declarations, including services pruned in this environment. */
         services: z.array(storedNodeServiceSpecSchema).min(1).max(8),
+        /**
+         * Services of the bundle that deploy as their OWN worker workload (another manifest of the node).
+         * Frozen at declaration time; this release's Score does not cover them, so they are excluded from
+         * its selected set. Never set by a manifest. Absent = none (story.0090).
+         */
+        separateWorkers: z.array(serviceNameSchema).max(8).optional(),
         bundleDigest: workloadImageSchema.optional(),
         selectedImages: z
           .record(serviceNameSchema, workloadImageSchema)
