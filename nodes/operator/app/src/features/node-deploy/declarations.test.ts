@@ -21,6 +21,7 @@ import {
   RETIRED_SECRET_REFS_MESSAGE,
 } from "@cogni/repo-spec";
 import { describe, expect, it } from "vitest";
+import { parse, stringify } from "yaml";
 import {
   DeclarationError,
   hostForEnv,
@@ -260,6 +261,122 @@ describe("declared secret keys on an app release (task.5405, bug.5254)", () => {
       expect.objectContaining({
         code: "secret_ref_refused",
         message: RETIRED_SECRET_REFS_MESSAGE,
+      })
+    );
+  });
+});
+
+describe("companion coverage with a separate worker workload (story.0090)", () => {
+  const POLY_ID = "4b06359a-a859-4399-888e-a8c7a6696f7e";
+  const service = (over: Record<string, unknown>) => ({
+    artifact: { name: "x", context: ".", dockerfile: "Dockerfile" },
+    port: 3200,
+    visibility: "private",
+    bindings: {},
+    bind_host: "0.0.0.0",
+    resources: { cpu_units: 1, memory_mi: 512, storage_mi: 1024 },
+    ...over,
+  });
+  /** Poly's shape: the node app, its private companion, and a profile-less sandbox worker. */
+  const polySpec = (extra: Record<string, unknown>[] = []) =>
+    stringify({
+      ...(parse(ROOT_SPEC) as Record<string, unknown>),
+      node_id: POLY_ID,
+      deployment: {
+        services: [
+          service({
+            name: "app",
+            visibility: "public",
+            runtime_profile: "cogni-node-app-v1",
+          }),
+          service({ name: "paper-trader", port: 9100 }),
+          service({ name: "sandbox", port: 8080 }),
+          ...extra,
+        ],
+      },
+    });
+  const route = (host: string, port: number) => `service:
+  ports:
+    web: {port: 80, targetPort: ${port}}
+resources:
+  web:
+    type: route
+    params: {host: ${host}, path: /, port: 80}
+`;
+  const POLY = {
+    path: ".cogni/workloads/poly.yaml",
+    text: `apiVersion: score.dev/v1b1
+metadata:
+  name: poly
+  annotations:
+    cogni.dev/exclusive: "false"
+    cogni.dev/qualification-path: /api/v1/deploy/qualification
+    cogni.dev/qualification-timeout-ms: "20000"
+containers:
+  app:
+    image: .
+    resources:
+      requests: {cpu: "1", memory: 1024Mi}
+    readinessProbe:
+      httpGet: {path: /readyz, port: 3200}
+  paper-trader:
+    image: .
+    resources:
+      requests: {cpu: 250m, memory: 256Mi}
+    readinessProbe:
+      httpGet: {path: /readyz, port: 9100}
+${route("poly.cognidao.org", 3200)}`,
+  };
+  const SANDBOX = {
+    path: ".cogni/workloads/sandbox.yaml",
+    text: `apiVersion: score.dev/v1b1
+metadata:
+  name: sandbox
+  annotations:
+    cogni.dev/exclusive: "false"
+containers:
+  sandbox:
+    image: ghcr.io/cogni-dao/poly-sandbox@sha256:${"d".repeat(64)}
+    resources:
+      requests: {cpu: "1", memory: 1024Mi}
+    readinessProbe:
+      httpGet: {path: /readyz, port: 8080}
+${route("poly-sandbox.cognidao.org", 8080)}`,
+  };
+  const resolvePoly = (
+    over: Partial<Parameters<typeof resolveWorkloadDeclaration>[0]> = {}
+  ) =>
+    resolveWorkloadDeclaration({
+      workloadZone: WORKLOAD_ZONE,
+      nodeSlug: "poly",
+      repoSpecText: polySpec(),
+      manifests: [POLY, SANDBOX],
+      nodeId: POLY_ID,
+      env: "candidate-a",
+      workload: "poly",
+      pendingImage: `ghcr.io/cogni-dao/poly:sha-${"a".repeat(40)}`,
+      sourceRepository: "cogni-dao/poly",
+      ...over,
+    });
+
+  it("accepts the companion+qualification workload when the extra service is its own worker workload", () => {
+    const w = resolvePoly();
+    expect(w.companions?.map((c) => c.name)).toEqual(["paper-trader"]);
+    expect(w.artifactPlan?.services.map((s) => s.name)).toContain("sandbox");
+  });
+
+  it("still refuses an undeclared extra service, and the worker workload when it is not declared", () => {
+    const extra = [service({ name: "stray", port: 7000 })];
+    expect(() => resolvePoly({ repoSpecText: polySpec(extra) })).toThrow(
+      expect.objectContaining({
+        code: "workload_manifest_refused",
+        message: "Score must cover the complete repo-spec service set",
+      })
+    );
+    expect(() => resolvePoly({ manifests: [POLY] })).toThrow(
+      expect.objectContaining({
+        code: "workload_manifest_refused",
+        message: "Score must cover the complete repo-spec service set",
       })
     );
   });

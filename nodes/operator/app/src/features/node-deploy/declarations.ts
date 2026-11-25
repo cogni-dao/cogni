@@ -216,7 +216,18 @@ export function resolveWorkloadDeclaration(input: {
         "declaration must name this node's permitted production-form workload host"
       );
     if (!workload.companions && !workload.health?.qualification) continue;
-    const services = extractNodeServices(spec);
+    // A service declared as its OWN worker workload (another entry in `workloads`, a sibling worker)
+    // deploys separately, so this workload's Score does not cover it. Everything else stays strict.
+    const separateWorkers = new Set(
+      workloads
+        .filter(
+          (w) => w.name !== workload.name && isWorkerService(spec, w.name)
+        )
+        .map((w) => w.name)
+    );
+    const services = extractNodeServices(spec).filter(
+      (s) => !separateWorkers.has(s.name)
+    );
     const main = services.find((s) => s.visibility === "public");
     if (
       !main ||
