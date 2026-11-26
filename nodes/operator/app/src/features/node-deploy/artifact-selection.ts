@@ -6,6 +6,11 @@
  * Purpose: Validate the complete source bundle and select the declared environment's immutable images.
  * Scope: Pure bundle validation and release-spec construction; does not read registries or write releases.
  * Invariants: Exact source/service coverage; whole-bundle validation precedes env pruning; selected images remain digest-pinned.
+ *   SELECTION_PRUNES_TO_THE_RELEASE (bug.5666): the images of THIS release are the bundle services named by the
+ *   frozen release spec (`serviceName` + `companions`) and nothing else. The bundle is still validated whole against
+ *   the frozen `plan.services`, so a missing artifact for any service refuses the release. A service outside the
+ *   release is a separate worker with its own release; declarations.ts (SERVICE_PARTITION) is the only place that
+ *   decides a service belongs to no workload. This reads no repo-spec, GitHub or sibling workload.
  * Side-effects: none
  * Links: declarations.ts, sequencer.ts, bug.5568
  * @internal
@@ -34,18 +39,20 @@ export function selectReleaseBundle(
     publication.bundle,
     { repository: plan.repository, sourceSha: release.sourceSha }
   );
-  const selected = resolveNodeArtifactBundleForEnvironment(
+  const forEnv = resolveNodeArtifactBundleForEnvironment(
     complete,
     release.env as DeploymentEnvName
   );
   const mainName = w.serviceName ?? w.name;
+  const names = new Set([mainName, ...(w.companions ?? []).map((c) => c.name)]);
+  const selected = {
+    ...forEnv,
+    services: forEnv.services.filter((s) => names.has(s.service.name)),
+  };
   const main = selected.services.find((s) => s.service.name === mainName);
   if (!main) throw new Error("public entry missing from bundle");
-  const names = new Set([mainName, ...(w.companions ?? []).map((c) => c.name)]);
-  if (
-    selected.services.length !== names.size ||
-    selected.services.some((s) => !names.has(s.service.name))
-  )
+  // Every service this release names must be in the bundle for this env; others are not this release's.
+  if (selected.services.length !== names.size)
     throw new Error("selected service coverage mismatch");
   // Match the existing CI naming contract: an artifact used publicly uses the base
   // repository; other node-built artifacts use the declared artifact suffix.

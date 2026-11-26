@@ -38,6 +38,11 @@
  *     a substrate-reserved, fleet-inherited or off-cluster-denied key is refused.
  *   - PLACEMENT_FOLLOWS_ENV (story.5141): the app carries the manifest's placement set for `env`
  *     (`placement.requiredCountryCodes`), frozen into the release with the rest of the spec (CD3).
+ *   - SERVICE_PARTITION (bug.5666): when the node has an app workload with companions or a qualification,
+ *     every repo-spec service is a container of that workload OR the single container of one separate
+ *     worker workload (a workload whose NAME is the service name), never both and never neither. This is
+ *     the ONE place the rule is enforced: the release selection (artifact-selection.ts) only prunes to the
+ *     workload's own frozen services and adds no second guard. A node whose app is plain skips the check.
  *   - HOST_FOLLOWS_ENV: a manifest names its PRODUCTION host; other environments get the
  *     `-test` (candidate-a) / `-preview` / `-dev` sibling of its first label, so one manifest serves
  *     every environment without a per-env copy.
@@ -98,6 +103,26 @@ export class DeclarationError extends Error {
     super(message);
     this.name = "DeclarationError";
   }
+}
+
+/**
+ * Fixed 422 messages of the service partition (bug.5666). Each is a constant: none quotes repo-spec
+ * text (NO_SOURCE_ECHO), and each refusal has its own text so a node developer can tell them apart.
+ */
+export const REFUSAL = {
+  twoApps:
+    "a node may have only one app workload with companions or a qualification",
+  noWorkload: "a repo-spec service is in no workload",
+  doubleClaim:
+    "a repo-spec service is in the app workload and claimed by another workload",
+  workerShape:
+    "a separate worker must be one plain container named for its service, with no runtime profile or bindings",
+  bindingToWorker: "an app binding may not target a separate worker",
+} as const;
+
+/** An app workload with companions or a qualification annotation: the node's one "app workload". */
+function hasCompanionsOrQualification(w: NodeWorkloadSpec): boolean {
+  return Boolean(w.companions || w.health?.qualification);
 }
 
 export function resolveWorkloadDeclaration(input: {
@@ -192,6 +217,10 @@ export function resolveWorkloadDeclaration(input: {
       "workload_not_declared",
       `workload ${input.workload} is not declared by any .cogni/workloads/*.yaml manifest`
     );
+  // ONE_APP_WITH_COMPANIONS (bug.5666): the app workload is the one whose manifest has companions or a
+  // qualification; a node has at most one, so "the services of the app workload" is never ambiguous.
+  if (workloads.filter(hasCompanionsOrQualification).length > 1)
+    throw new DeclarationError("workload_manifest_refused", REFUSAL.twoApps);
   // Validate the complete Score/declaration bridge BEFORE the environment cascade.
   for (const workload of workloads) {
     if (
@@ -215,7 +244,7 @@ export function resolveWorkloadDeclaration(input: {
         "workload_manifest_refused",
         "declaration must name this node's permitted production-form workload host"
       );
-    if (!workload.companions && !workload.health?.qualification) continue;
+    if (!hasCompanionsOrQualification(workload)) continue;
     const services = extractNodeServices(spec);
     const main = services.find((s) => s.visibility === "public");
     if (
@@ -234,14 +263,41 @@ export function resolveWorkloadDeclaration(input: {
       main.name,
       ...(workload.companions ?? []).map((c) => c.name),
     ]);
-    if (
-      services.length !== scoreNames.size ||
-      services.some((s) => !scoreNames.has(s.name))
-    )
-      throw new DeclarationError(
-        "workload_manifest_refused",
-        "Score must cover the complete repo-spec service set"
+    // PARTITION (bug.5666): every repo-spec service is a container of this app workload OR the single
+    // container of its own separate worker workload; never both, never neither.
+    for (const service of services) {
+      const claims = workloads.filter(
+        (w) => w !== workload && w.name === service.name
       );
+      if (scoreNames.has(service.name)) {
+        if (claims.length > 0)
+          throw new DeclarationError(
+            "workload_manifest_refused",
+            REFUSAL.doubleClaim
+          );
+        continue;
+      }
+      const worker = claims.length === 1 ? claims[0] : undefined;
+      if (!worker)
+        throw new DeclarationError(
+          "workload_manifest_refused",
+          REFUSAL.noWorkload
+        );
+      if (
+        worker.kind !== "app" ||
+        hasCompanionsOrQualification(worker) ||
+        (worker.serviceName !== undefined &&
+          worker.serviceName !== worker.name) ||
+        Object.keys(service.bindings).length > 0 ||
+        !isWorkerService(spec, service.name)
+      )
+        throw new DeclarationError(
+          "workload_manifest_refused",
+          REFUSAL.workerShape
+        );
+      // A separate worker keeps the same secret-key denylist as when it is requested by itself.
+      workerSecretKeys(service.name, catalog);
+    }
     for (const c of workload.companions ?? []) {
       const service = services.find((s) => s.name === c.name);
       if (
@@ -278,7 +334,7 @@ export function resolveWorkloadDeclaration(input: {
           "companion variables conflict with declared secret or binding"
         );
     }
-    for (const service of services) {
+    for (const service of services.filter((s) => scoreNames.has(s.name))) {
       const secretKeys =
         service.name === main.name
           ? appSecretKeys(spec, catalog)
@@ -288,6 +344,12 @@ export function resolveWorkloadDeclaration(input: {
         secretKeys
       );
       for (const [key, target] of Object.entries(service.bindings)) {
+        // Cross-lease bindings stay refused: a worker has its own lease (BaaS placement).
+        if (services.some((s) => s.name === target) && !scoreNames.has(target))
+          throw new DeclarationError(
+            "workload_manifest_refused",
+            REFUSAL.bindingToWorker
+          );
         const sibling = services.find((s) => s.name === target);
         const consumer =
           service.name === main.name

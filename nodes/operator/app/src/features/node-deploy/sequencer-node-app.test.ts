@@ -3104,6 +3104,110 @@ describe("accepted bundle image identity", () => {
   });
 });
 
+describe("bundle selection prunes to this release's own services (bug.5666)", () => {
+  const SANDBOX_IMAGE = `ghcr.io/example/node-sandbox@sha256:${"f".repeat(64)}`;
+  const sandboxService = nodeServiceSpecSchema.parse({
+    name: "sandbox",
+    artifact: { name: "sandbox" },
+    port: 8080,
+    visibility: "private",
+    resources: { cpu_units: 0.25, memory_mi: 256, storage_mi: 256 },
+  });
+  /** The release spec of the app workload when the repo-spec also lists a separate `sandbox` worker. */
+  const withSandbox = () => {
+    const base = companionSpec();
+    return {
+      ...base,
+      artifactPlan: {
+        ...requiredFixture(base.artifactPlan),
+        services: [...SERVICE_DECLARATIONS, sandboxService],
+      },
+    };
+  };
+  const publication = async (h: H, withSandboxArtifact = true) => {
+    installBundle(h);
+    const published = await requiredFixture(h.images.resolveArtifactBundle)({
+      imageRepository: "ghcr.io/example/node",
+      sourceSha: SHA_1,
+    });
+    if (!published) throw new Error("fixture");
+    const bundle = published.bundle as {
+      artifacts: object[];
+      services: object[];
+    };
+    return withSandboxArtifact
+      ? {
+          ...published,
+          bundle: {
+            ...bundle,
+            artifacts: [
+              ...bundle.artifacts,
+              { name: "sandbox", image: SANDBOX_IMAGE },
+            ],
+            services: [
+              ...bundle.services,
+              { name: "sandbox", artifact: "sandbox" },
+            ],
+          },
+        }
+      : published;
+  };
+
+  it("selects only the app workload's services when the bundle also carries a separate worker", async () => {
+    const h = harness({ environment: "preview" });
+    const { release } = await companionRelease(h, withSandbox());
+    const selected = selectReleaseBundle(release, await publication(h));
+    expect(selected.artifactPlan?.selectedImages).toEqual({
+      canary: PUBLIC_IMAGE,
+      helper: HELPER_IMAGE,
+    });
+    // The whole frozen service list stays on the release; the worker is not part of this lease.
+    expect(selected.artifactPlan?.services.map((s) => s.name)).toEqual([
+      "canary",
+      "helper",
+      "sandbox",
+    ]);
+    expect(selected.companions?.map((c) => c.name)).toEqual(["helper"]);
+    expect(selected.artifactPlan?.bundleDigest).toBe(BUNDLE_REF);
+  });
+
+  it("selects the public app alone in production, where the helper is gated out", async () => {
+    const h = harness({ environment: "production" });
+    const { companions: _gated, ...prod } = withSandbox();
+    const { release } = await companionRelease(h, prod);
+    const selected = selectReleaseBundle(
+      { ...release, env: "production" },
+      await publication(h)
+    );
+    expect(selected.artifactPlan?.selectedImages).toEqual({
+      canary: PUBLIC_IMAGE,
+    });
+  });
+
+  it("still validates the whole bundle: a missing worker artifact refuses the app release", async () => {
+    const h = harness({ environment: "preview" });
+    const { release } = await companionRelease(h, withSandbox());
+    const bare = await publication(h, false);
+    expect(() => selectReleaseBundle(release, bare)).toThrow(
+      "Service coverage mismatch"
+    );
+  });
+
+  it("refuses a release that names a companion the bundle does not carry", async () => {
+    const h = harness({ environment: "preview" });
+    const spec = withSandbox();
+    const helper = requiredFixture(spec.companions?.[0]);
+    const { release } = await companionRelease(h, {
+      ...spec,
+      companions: [helper, { ...helper, name: "ghost" }],
+    });
+    const published = await publication(h);
+    expect(() => selectReleaseBundle(release, published)).toThrow(
+      "selected service coverage mismatch"
+    );
+  });
+});
+
 describe("green migrates itself before it serves (task.5408)", () => {
   it.each([
     "bucket",

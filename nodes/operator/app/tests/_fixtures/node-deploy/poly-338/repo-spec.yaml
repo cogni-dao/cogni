@@ -1,0 +1,147 @@
+# Node Template — repo-spec
+#
+# Identity for the hub's node-template deployment; node_id MUST match
+# infra/catalog/node-template.yaml. Forks renaming this scaffold MUST
+# regenerate both UUIDs:
+#   node_id:  openssl rand -hex 16 | sed 's/\(.\{8\}\)\(.\{4\}\)\(.\{4\}\)\(.\{4\}\)\(.\{12\}\)/\1-\2-\3-\4-\5/'
+#   scope_id: uuidv5(node_id, "default")
+# See https://cognidao.org/knowledge/node-template-identity-model, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/multi-node-tenancy.md.
+
+schema_version: "0.1.4"
+
+node_id: "4b06359a-a859-4399-888e-a8c7a6696f7e"
+scope_id: "8ed85c91-0cf9-5c3c-b56b-19431d36815a"
+scope_key: "default"
+
+intent:
+  name: poly
+  hook: "Community AI for prediction markets"
+  mission: "Cogni Poly is a multi-experimental, community-steered AI searching for the best ways to profit consistently and ethically on prediction markets — explainable signals, ground-truth evidence, token holders steer priorities. A standing sub-quest: explore how prediction markets and their profits can be used ethically, for good."
+  brand:
+    icon: Activity
+    color: "#22c55e"
+
+governance:
+  dao_contract: "0x8a018d191f7135dbf1adc5fa5a76e46cf02cc69c"
+  plugin_contract: "0xfa4e08aed196f64a4bd66c82616c956c42c6d160"
+  signal_contract: "0x99ae96f6f04b0276571d5a6df24021585477797f"
+  chain_id: "8453"
+  base_url: "https://proposal.cognidao.org"
+
+cogni_dao:
+  dao_contract: "0x8a018d191f7135dbf1adc5fa5a76e46cf02cc69c"
+  plugin_contract: "0xfa4e08aed196f64a4bd66c82616c956c42c6d160"
+  signal_contract: "0x99ae96f6f04b0276571d5a6df24021585477797f"
+  chain_id: "8453"
+  base_url: "https://proposal.cognidao.org"
+
+# Activity ledger ingestion + approver allowlist.
+# `approvers` gates the `(admin)/` route group and write routes under
+# `/api/v1/attribution/*`. Replace with the fork's DAO-owner wallet(s) when
+# spinning up a new node from this template.
+activity_ledger:
+  epoch_length_days: 7
+  approvers:
+    - "0x070075F1389Ae1182aBac722B36CA12285d0c949" # derekg1729.eth (template default)
+  activity_sources:
+    github:
+      attribution_pipeline: cogni-v0.0
+      source_refs: ["cogni-dao/poly"]
+
+payments:
+  status: pending_activation
+
+# Born-reviewable default gates. When this node is minted as a single-node fork
+# (node-at-root, no `nodes:` registry) the operator's review path runs these gates
+# against the repo-root `.cogni/rules/` below. The mint (`renderRepoSpec`) re-emits
+# this same block onto the minted repo's identity spec — keep the two in lockstep.
+# Gate set coordinated with the operator review path (Lane A). Tune per node.
+gates:
+  - type: review-limits
+    id: review_limits
+    with:
+      max_changed_files: 50
+      max_total_diff_kb: 1500
+  - type: ai-rule
+    with:
+      rule_file: pr-syntropy-coherence.yaml
+  - type: ai-rule
+    with:
+      rule_file: patterns-and-docs.yaml
+  - type: ai-rule
+    with:
+      rule_file: repo-goal-alignment.yaml
+
+# Akash lane (story.5016). Declares WHAT this node runs so the operator can
+# render a provider-neutral workload. Emitted verbatim by
+# `renderNodeDeploymentYaml()` in @cogni/repo-spec -- the SAME renderer the node
+# scaffolder mints from and that `assertDeclaredNodeDeployment` prints when a
+# node is missing one. One renderer, no hand-authored drift.
+deployment:
+  services:
+    - name: app
+      artifact:
+        name: app
+        context: .
+        dockerfile: Dockerfile
+        target: runner
+      port: 3200
+      visibility: public
+      runtime_profile: cogni-node-app-v1
+      bindings:
+        # Operator resolves this to the paper-trader companion's URL. The app routes
+        # paper-venue accounts through it; the companion is selected only for
+        # candidate-a and preview (see `envs` on the paper-trader service below).
+        PAPER_SIDECAR_URL: paper-trader
+      # Node secrets beyond the runtime profile are declared ONCE in
+      # .cogni/secrets-catalog.yaml; an entry's `workloads: [app]` delivers it to
+      # this service (bug.5254). Never list keys here.
+      bind_host: 0.0.0.0
+      resources:
+        cpu_units: 2
+        memory_mi: 2048
+        storage_mi: 4096
+    # Paper-trading sidecar (as-built from cogni-poly). FastAPI wrapper over the
+    # vendored polymarket-paper-trader; the app's buildPaperOnlyExecutor talks to
+    # it over PAPER_SIDECAR_URL. Private (loopback-tier); no runtime_profile (not
+    # a cogni-node-app). Gated to the paper-trading envs via `envs` (story.5043):
+    # production runs live-CLOB (PAPER_ENFORCE_MODE=live) and never routes to the
+    # sidecar, so excluding it keeps prod a 1-service akash lease that ships
+    # in-place — no lease re-mint (prod is the activity_env and cannot re-mint).
+    - name: paper-trader
+      artifact:
+        name: paper-trader
+        context: sidecars/paper-trader
+        # dockerfile is repo-root-relative (like the app's); COPY paths inside it
+        # resolve against `context`. Build the `base` runtime stage, not `test`.
+        dockerfile: sidecars/paper-trader/Dockerfile
+        target: base
+      port: 9100
+      visibility: private
+      # story.5043 per-service env gate: deploy the sidecar ONLY where paper mode
+      # runs. Absent = every env; listing these two excludes production.
+      envs: [candidate-a, preview]
+      bindings: {}
+      bind_host: 0.0.0.0
+      resources:
+        cpu_units: 0.5
+        memory_mi: 384
+        storage_mi: 1024
+    # Remote code-execution workspace (OpenSandbox execd behind Caddy) that
+    # agent tools call over HTTPS. It deploys as its own lease (workload
+    # `sandbox`) under Poly's identity at poly-sandbox[-<env>].
+    # No app→sandbox binding — cross-lease bindings are refused; the app
+    # derives the sandbox host from its own public host instead.
+    - name: sandbox
+      artifact:
+        name: sandbox
+        context: services/sandbox
+        dockerfile: services/sandbox/Dockerfile
+      port: 8080
+      visibility: private
+      bindings: {}
+      bind_host: 0.0.0.0
+      resources:
+        cpu_units: 1
+        memory_mi: 1024
+        storage_mi: 5120
