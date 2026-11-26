@@ -12,12 +12,14 @@
  * @internal
  */
 
+import { createFleetTrainLagCalculator } from "@cogni/fleet-metrics-source/fleet-train-lag";
 import { MetricRegistry } from "@cogni-dao/metrics";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 const create = vi.fn();
 const registry = new MetricRegistry();
+registry.register(createFleetTrainLagCalculator());
 registry.register({
   id: "work.count@1",
   unit: "items",
@@ -51,6 +53,18 @@ const spec = {
   calculatorId: "work.count@1",
   params: { mode: "open" },
   maxAgeSeconds: 7200,
+};
+const fleetSpec = {
+  calculatorId: "fleet.train-lag@1",
+  params: {
+    publisher: "cogni-dao/node-template",
+    members: [{ name: "@cogni-dao/metrics", tagPrefix: "metrics-v" }],
+    consumers: [{ repo: "cogni-dao/cogni", manifestPath: "app/package.json" }],
+    graceHours: 24,
+  },
+  cadenceSeconds: 3600,
+  maxAgeSeconds: 7200,
+  brief: { summary: "Fleet train lag", justification: "Shows outdated nodes" },
 };
 const post = (metricSpec: unknown) =>
   handleCreate(
@@ -133,5 +147,62 @@ describe("handleCreate metric spec with serves + band (story.0033)", () => {
   it("still rejects an unknown calculator with a 422", async () => {
     const res = await post({ ...spec, calculatorId: "nope@1" });
     expect(res.status).toBe(422);
+  });
+
+  it("accepts and preserves a brief on the real fleet factory", async () => {
+    const metricSpec = {
+      ...fleetSpec,
+      display: "volume",
+      serves: { kpi: "deploy-first-try-7d", role: "diagnostic" },
+      band: { comparator: "lte", target: { value: 0, unit: "nodes" } },
+    };
+    expect((await post(metricSpec)).status).toBe(201);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          edits: [
+            expect.objectContaining({
+              entry: expect.objectContaining({ metricSpec }),
+            }),
+          ],
+        }),
+      })
+    );
+  });
+
+  it.each([
+    [
+      "malformed brief",
+      { ...fleetSpec, brief: { summary: "", justification: "reason" } },
+      400,
+    ],
+    ["malformed core", { ...fleetSpec, maxAgeSeconds: -1 }, 400],
+    ["unknown calculator", { ...fleetSpec, calculatorId: "unknown@1" }, 422],
+    [
+      "bad parameters",
+      { ...fleetSpec, params: { ...fleetSpec.params, unexpected: true } },
+      422,
+    ],
+    [
+      "wrong band unit",
+      {
+        ...fleetSpec,
+        band: { comparator: "lte", target: { value: 0, unit: "%" } },
+      },
+      422,
+    ],
+    ["wrong display unit", { ...fleetSpec, display: "slo" }, 422],
+  ])("rejects %s", async (_name, metricSpec, status) => {
+    expect((await post(metricSpec)).status).toBe(status);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("rejects unauthenticated requests before validation", async () => {
+    const res = await handleCreate(
+      new Request("http://x", { method: "POST" }),
+      null
+    );
+    expect(res.status).toBe(401);
+    expect(create).not.toHaveBeenCalled();
   });
 });

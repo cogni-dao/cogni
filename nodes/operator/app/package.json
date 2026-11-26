@@ -43,6 +43,7 @@
     "@cogni/db-client": "workspace:*",
     "@cogni/db-schema": "workspace:*",
     "@cogni/financial-ledger": "workspace:*",
+    "@cogni/fleet-metrics-source": "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.26.0/cogni-dao-metrics-0.26.0.tgz",
     "@cogni/ids": "workspace:*",
     "@cogni/ingestion-core": "workspace:*",
     "@cogni/knowledge-base-ui": "https://github.com/cogni-dao/node-template/releases/download/knowledge-base-ui-v0.13.0/cogni-dao-knowledge-base-ui-0.13.0.tgz",
