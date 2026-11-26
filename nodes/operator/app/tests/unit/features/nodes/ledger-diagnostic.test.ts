@@ -903,6 +903,7 @@ describe("terminal event boundary", () => {
   it("emits validated identity, reasons and attempted calls for success and failure", async () => {
     const info = vi.fn();
     const controller = new AbortController();
+    const createPreparation = vi.fn(() => prep);
     const prep = {
       credentialStore: {},
       check() {},
@@ -934,7 +935,7 @@ describe("terminal event boundary", () => {
           super(code);
         }
       },
-      createLedgerPreparation: () => prep,
+      createLedgerPreparation: createPreparation,
       createDiagnosticRequestBudget: () => ({
         signal: controller.signal,
         startedAt: Date.now(),
@@ -987,5 +988,31 @@ describe("terminal event boundary", () => {
       reasonCodes: ["temporal_read_failed"],
     });
     expect(info).toHaveBeenCalledTimes(2);
+
+    prep.reader.read.mockClear();
+    createPreparation.mockClear();
+    controller.abort();
+    expect(
+      (await GET(request, { params: Promise.resolve({ id: "operator" }) }))
+        .status
+    ).toBe(503);
+    expect(info.mock.calls[2]?.[0]).toMatchObject({
+      env: "production",
+      calls: 0,
+      result: "deadline_exceeded",
+      reasonCodes: ["deadline_exceeded"],
+    });
+    expect(prep.reader.read).not.toHaveBeenCalled();
+    expect(createPreparation).not.toHaveBeenCalled();
+    const invalid = new Request("http://localhost/api?env=PRIVATE_SENTINEL");
+    expect(
+      (await GET(invalid, { params: Promise.resolve({ id: "operator" }) }))
+        .status
+    ).toBe(503);
+    expect(JSON.stringify(info.mock.calls[3])).not.toContain(
+      "PRIVATE_SENTINEL"
+    );
+    expect(info.mock.calls[3]?.[0].env).toBeUndefined();
+    expect(info).toHaveBeenCalledTimes(4);
   });
 });

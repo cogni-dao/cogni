@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { ledgerDiagnosticResponse } from "@/app/_facades/nodes/observability-temporal.server";
 import { createDiagnosticRequestBudget } from "@/bootstrap/ledger-diagnostic";
+import { parseLedgerDiagnosticQuery } from "@/features/nodes/observability-temporal";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,6 +49,15 @@ export async function GET(
   } catch {
     return NextResponse.json({ error: "deadline_exceeded" }, { status: 503 });
   } finally {
+    if (budget.signal.aborted && terminal.env === undefined) {
+      try {
+        terminal.env = parseLedgerDiagnosticQuery(
+          new URL(request.url).searchParams
+        );
+      } catch {
+        // Invalid input must not be included in terminal telemetry.
+      }
+    }
     budget.dispose();
     logger.info(
       {
