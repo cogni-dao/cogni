@@ -13,6 +13,7 @@ import {
   MAX_SELECTORS,
   parseNodeBasicAuth,
   pickReadParams,
+  presetQuery,
   scopePromQuery,
 } from "./lease-metrics-read";
 
@@ -411,5 +412,34 @@ describe("pickReadParams", () => {
         new URLSearchParams(`query=up&time=${"1".repeat(65)}`)
       )
     ).toEqual({ ok: false, reason: "parameter time too long" });
+  });
+});
+
+describe("presetQuery", () => {
+  it("builds the route/status report for each window", () => {
+    expect(presetQuery("route_status", "24h")).toBe(
+      "sum by (route, status) (increase(http_requests_total[24h]))"
+    );
+    expect(presetQuery("route_latency_p95", "1h")).toContain(
+      "http_request_duration_ms_bucket[1h]"
+    );
+  });
+
+  it("refuses an unknown preset, an inherited key or an unknown window", () => {
+    expect(presetQuery("nope", "24h")).toBeNull();
+    expect(presetQuery("constructor", "24h")).toBeNull();
+    expect(presetQuery("route_status", "30d")).toBeNull();
+  });
+
+  it("every preset scopes cleanly to a node and env", () => {
+    for (const name of ["route_status", "route_latency_p95"])
+      for (const w of ["1h", "24h", "7d"]) {
+        const q = presetQuery(name, w) as string;
+        const scoped = scopePromQuery(q, {
+          nodeId: "b927a9dd-6132-4fc9-a51e-e3cee2568e3c",
+          env: "production",
+        });
+        expect(scoped.ok).toBe(true);
+      }
   });
 });

@@ -253,6 +253,11 @@ export type {
   IdentityAttestationSignerPort,
 } from "./identity-attestation.port";
 export type {
+  KnowledgeRead,
+  KnowledgeReadCounter,
+  KnowledgeReaderClass,
+} from "./knowledge-read-counter.port";
+export type {
   LangfuseObservationPage,
   LangfuseObservationQuery,
   LangfuseOwnershipPort,

@@ -39,6 +39,7 @@ import {
   composeItemEnvelope,
   createItemRefPorts,
   judgeMoveSummaries,
+  routeAttribution,
   toWorkItemDto,
   toWorkItemId,
   WorkItemSummarySchema,
@@ -461,7 +462,7 @@ function attributionFromSession(user: {
   id: string;
   displayName: string | null;
 }): WriteAttribution {
-  return { actor: user.id };
+  return routeAttribution(user.id);
 }
 
 type StripUndefined<T> = {

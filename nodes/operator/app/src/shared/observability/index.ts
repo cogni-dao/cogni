@@ -70,6 +70,10 @@ export const EVENT_NAMES = {
   NODE_DISTRIBUTION_ACTIVATION_COMPLETE:
     "feature.node_distribution_activation.complete",
   NODE_DAO_RESET_COMPLETE: "feature.node_dao_reset.complete",
+  // POST /api/v1/nodes/{id}/payment-prereqs (bug.5656): ONE terminal event per call. Fields: nodeId, outcome
+  // (recorded | unchanged | no_change | error), missingKey (only for prereq_missing), previousStatus, nextStatus,
+  // status (HTTP), durationMs. Never an address, a URL or a repo-spec body.
+  NODE_PAYMENT_PREREQS_COMPLETE: "node.payment_prereqs.complete",
   // defineScheduledJob dispatcher: one cron fire of a registered scheduled job.
   SCHEDULED_JOB_DISPATCH_RECEIVED: "feature.scheduled_job.dispatch_received",
   SCHEDULED_JOB_DISPATCH_COMPLETE: "feature.scheduled_job.dispatch_complete",
@@ -115,6 +119,10 @@ export const EVENT_NAMES = {
   // Node metrics read (story.5169): ONE warn per refused or failed `/api/metrics/read` request. Fields: nodeId (only
   // when the credential parsed), env, kind, reason (bounded enum), upstreamStatus, queryChars. Never a token or query text.
   NODE_METRICS_READ: "node_metrics_read",
+  // GET /api/v1/nodes/{id}/observability/metrics (bug.5641 follow-up): ONE terminal event per request. Fields: outcome,
+  // status, errorCode, nodeId, env, kind, preset, queryChars, durationMs. Never query text or results.
+  NODE_OBSERVABILITY_METRICS_COMPLETE:
+    "feature.node_observability_metrics.complete",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

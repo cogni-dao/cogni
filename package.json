@@ -25,6 +25,7 @@
     "check:docs:metadata": "node scripts/validate-docs-metadata.mjs",
     "check:docs:sync-manifest": "node scripts/validate-sync-manifest-refs.mjs",
     "check:root-layout": "pnpm tsx scripts/check-root-layout.ts",
+    "check:design-tokens": "pnpm --filter operator exec ui-theme-check src/styles/tailwind.css",
     "check:node-port-unique": "bash scripts/ci/next-free-node-port.sh --check",
     "node-port:next": "bash scripts/ci/next-free-node-port.sh",
     "gen:caddyfile": "bash scripts/ci/render-caddyfile.sh > infra/compose/edge/configs/Caddyfile.tmpl",
@@ -214,7 +215,7 @@
     "@cogni/repo-spec": "workspace:*",
     "@cogni/scheduler-core": "workspace:*",
     "@cogni/temporal-workflows": "workspace:*",
-    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.24.0/cogni-dao-work-items-0.24.0.tgz",
+    "@cogni/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.27.0/cogni-dao-work-items-0.27.0.tgz",
     "@privy-io/node": "^0.10.1",
     "cron-parser": "^4.9.0",
     "drizzle-orm": "^0.44.7",
@@ -222,8 +223,8 @@
     "postgres": "^3.4.5",
     "prom-client": "^15.1.3",
     "zod": "^4.1.12",
-    "@cogni-dao/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.24.0/cogni-dao-work-items-0.24.0.tgz",
-    "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.24.0/cogni-dao-knowledge-store-0.24.0.tgz"
+    "@cogni-dao/work-items": "https://github.com/cogni-dao/node-template/releases/download/work-items-v0.27.0/cogni-dao-work-items-0.27.0.tgz",
+    "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.27.0/cogni-dao-knowledge-store-0.27.0.tgz"
   },
   "devDependencies": {
     "@0xsplits/splits-sdk": "6.4.1",

@@ -12,10 +12,7 @@
  *     when wired — in operator that is the Doltgres read path `GET /api/v1/work/items`
  *     uses (read pool, never writer admission). The runtime image carries no `work/`
  *     tree, so a markdown-bound query always saw an empty backlog.
- *   - LEGACY_METADATA_ONLY: no host-bound actor/requester/run reaches this capability. Until
- *     task.0175 supplies the shared binding, only the prior released metadata fields may write
- *     as the existing system principal: priority, rank, labels, summary, scores. New status/fields
- *     fail closed before store admission. This is not status-transition proof.
+ *   - ACTOR_IS_PRINCIPAL: released host writers resolve attribution for each call; a missing principal writes nothing.
  *   - PATCH_REASON_CITES_CAS: forwards id/reason/cites/revision/set to the released Doltgres
  *     patch, translating only its revision conflict. Gate errors propagate unchanged.
  *   - NO_MARKDOWN_WRITE_FALLBACK: missing Doltgres writer refuses every patch.
@@ -47,18 +44,17 @@ import type {
   WorkItemQueryPort,
   WorkItemStatus,
   WorkItemType,
+  WriteAttribution,
 } from "@cogni/work-items";
 import {
   composeItemEnvelope,
+  type createWorkItemWriters,
   judgeMoveSummaries,
   toWorkItemDto,
   toWorkItemId,
   toWorkItemsPatchInput,
 } from "@cogni/work-items";
-import {
-  WorkItemRevisionConflictError,
-  type WorkItemsDoltgresPort,
-} from "@cogni/work-items/adapters/doltgres";
+import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 
 /**
  * Dependencies for creating the work item capability.
@@ -80,14 +76,10 @@ export interface WorkItemCapabilityDeps {
   readonly artifacts?: ItemArtifactsPort | undefined;
   /** One event per degraded envelope part (chain or links). */
   readonly log?: ((event: EnvelopeDegradedEvent) => void) | undefined;
-  /**
-   * Doltgres write path for `patch` (the store behind `PATCH /api/v1/work/items/{id}`).
-   * When set, `patch` writes there as `principalId` (the bare actor id; the store adds the `actor:` tag) instead of the markdown ports.
-   */
-  readonly backlogWriter?: {
-    readonly store: Pick<WorkItemsDoltgresPort, "patch">;
-    readonly principalId: string;
-  };
+  /** Released host binding; attribution is read per invocation, never cached or supplied by the model. */
+  readonly backlogWriter?: ReturnType<
+    typeof createWorkItemWriters
+  >["backlogWriter"];
 }
 
 function toWorkItemInfo(item: WorkItem): WorkItemInfo {
@@ -194,18 +186,15 @@ export function createWorkItemCapability(
     },
 
     async patch(input): Promise<WorkItemInfo> {
-      const allowed = new Set([
-        "priority",
-        "rank",
-        "labels",
-        "summary",
-        "scores",
-      ]);
-      if (Object.keys(input.set).some((key) => !allowed.has(key))) {
-        throw new Error("work item update field requires a verified run actor");
-      }
       const writer = deps.backlogWriter;
       if (writer) {
+        let attribution: WriteAttribution;
+        try {
+          attribution = writer.attribution();
+        } catch (error) {
+          writer.attributionDenied({ workItemId: input.id, error });
+          throw error;
+        }
         try {
           const updated = await writer.store.patch(
             toWorkItemsPatchInput({
@@ -215,7 +204,7 @@ export function createWorkItemCapability(
               cites: input.cites,
               set: input.set,
             }),
-            { actor: writer.principalId }
+            attribution
           );
           return toWorkItemInfo(updated);
         } catch (e) {

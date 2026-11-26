@@ -40,7 +40,7 @@ Pure tool definitions for AI agent execution. Defines `ToolContract`, `ToolImple
 
 - **Exports:**
   - `ToolContract` - Tool definition interface (name, inputSchema, outputSchema, redact)
-  - `ToolImplementation` - Pure execute function interface
+  - `ToolImplementation` - Pure execute function with optional host-bound invocation context
   - `BoundTool` - Contract + implementation bundled together
   - `CatalogBoundTool` - Type alias for TOOL_CATALOG entries (type-erased BoundTool)
   - `ToolResult`, `ToolErrorCode` - Execution result types, including bounded nonretryable lookup receipts

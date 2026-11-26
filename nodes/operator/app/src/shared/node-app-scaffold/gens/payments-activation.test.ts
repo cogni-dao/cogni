@@ -3,8 +3,8 @@
 
 /**
  * Module: `@shared/node-app-scaffold/gens/payments-activation`
- * Purpose: Pin the payment-activation repo-spec splice - node_wallet + payments_in (95/5) + active
- *   status are written, the result stays parseable YAML, comments survive, and a re-splice is a no-op.
+ * Purpose: Pin the payment-activation repo-spec splice - payments_in (95/5) + active status are
+ *   written (never a node_wallet block, bug.5656), the result stays parseable YAML, comments survive, and a re-splice is a no-op.
  * Scope: Pure unit test over `renderPaymentsActivationSpec`. No IO.
  * Invariants: AT_COST_ECONOMICS, SINGLE_HOME, IDEMPOTENT_SPLICE.
  * Side-effects: none.
@@ -22,7 +22,7 @@ import {
   renderPaymentsActivationSpec,
 } from "./payments-activation";
 
-const NODE_WALLET = "0x1111111111111111111111111111111111111111";
+const OPERATOR_WALLET = "0x1111111111111111111111111111111111111111";
 const SPLIT = "0x2222222222222222222222222222222222222222";
 
 const PENDING_SPEC = `# Node Template - repo-spec
@@ -40,6 +40,9 @@ governance:
   dao_contract: "0xDA0"
   chain_id: "8453"
 
+operator_wallet:
+  address: "${OPERATOR_WALLET}"
+
 payments:
   status: pending_activation
 
@@ -50,14 +53,15 @@ gates:
 
 describe("renderPaymentsActivationSpec", () => {
   const activated = renderPaymentsActivationSpec(PENDING_SPEC, {
-    nodeWalletAddress: NODE_WALLET,
     splitAddress: SPLIT,
   });
 
-  it("writes node_wallet, payments_in (95/5), and flips status to active", () => {
+  it("writes payments_in (95/5) and flips status to active, never a node_wallet block", () => {
     const parsed = parseYaml(activated) as Record<string, unknown>;
-    expect((parsed.node_wallet as Record<string, unknown>).address).toBe(
-      NODE_WALLET
+    expect(parsed.node_wallet).toBeUndefined();
+    expect(activated).not.toContain("node_wallet");
+    expect((parsed.operator_wallet as Record<string, unknown>).address).toBe(
+      OPERATOR_WALLET
     );
     const topup = (
       parsed.payments_in as Record<string, Record<string, unknown>>
@@ -82,20 +86,19 @@ describe("renderPaymentsActivationSpec", () => {
 
   it("is idempotent when re-splicing an activated spec", () => {
     const twice = renderPaymentsActivationSpec(activated, {
-      nodeWalletAddress: NODE_WALLET,
       splitAddress: SPLIT,
     });
     expect(twice).toBe(activated);
     expect(
       hasPaymentsActivationSpec(twice, {
-        nodeWalletAddress: NODE_WALLET,
+        nodeWalletAddress: OPERATOR_WALLET,
         splitAddress: SPLIT,
       })
     ).toBe(true);
   });
 
   it("recognizes semantically active specs even when block placement differs", () => {
-    const reordered = `${PENDING_SPEC.replace("  status: pending_activation", "  status: active")}
+    const reordered = `${PENDING_SPEC.replace("  status: pending_activation", "  status: active").replace(OPERATOR_WALLET, OPERATOR_WALLET.toUpperCase())}
 
 payments_in:
   credits_topup:
@@ -107,14 +110,11 @@ payments_in:
       - USDC
     markup_factor: ${ACTIVATION_MARKUP_FACTOR}
     revenue_share: ${ACTIVATION_REVENUE_SHARE}
-
-node_wallet:
-  address: "${NODE_WALLET.toUpperCase()}"
 `;
 
     expect(
       hasPaymentsActivationSpec(reordered, {
-        nodeWalletAddress: NODE_WALLET,
+        nodeWalletAddress: OPERATOR_WALLET,
         splitAddress: SPLIT,
       })
     ).toBe(true);
@@ -123,7 +123,6 @@ node_wallet:
   it("re-splices new values onto an already-activated spec", () => {
     const newSplit = "0x3333333333333333333333333333333333333333";
     const next = renderPaymentsActivationSpec(activated, {
-      nodeWalletAddress: NODE_WALLET,
       splitAddress: newSplit,
     });
     const parsed = parseYaml(next) as Record<string, unknown>;
@@ -137,13 +136,30 @@ node_wallet:
   it("appends payments block when the source spec has none", () => {
     const noPayments = `node_id: "abc"\nintent:\n  name: atlas\n`;
     const out = renderPaymentsActivationSpec(noPayments, {
-      nodeWalletAddress: NODE_WALLET,
       splitAddress: SPLIT,
     });
     const parsed = parseYaml(out) as Record<string, unknown>;
     expect((parsed.payments as Record<string, unknown>).status).toBe("active");
-    expect((parsed.node_wallet as Record<string, unknown>).address).toBe(
-      NODE_WALLET
+    expect(parsed.node_wallet).toBeUndefined();
+  });
+
+  it("does not report active when operator_wallet is missing or differs", () => {
+    const noWallet = activated.replace(
+      /operator_wallet:\n {2}address: "[^"]*"\n\n/,
+      ""
     );
+    expect(noWallet).not.toContain("operator_wallet");
+    expect(
+      hasPaymentsActivationSpec(noWallet, {
+        nodeWalletAddress: OPERATOR_WALLET,
+        splitAddress: SPLIT,
+      })
+    ).toBe(false);
+    expect(
+      hasPaymentsActivationSpec(activated, {
+        nodeWalletAddress: "0x4444444444444444444444444444444444444444",
+        splitAddress: SPLIT,
+      })
+    ).toBe(false);
   });
 });

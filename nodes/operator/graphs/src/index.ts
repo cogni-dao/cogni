@@ -22,12 +22,22 @@ import {
   OPERATOR_LANGGRAPH_GRAPH_IDS,
 } from "@cogni/langgraph-graphs";
 
+import { NODE_LANGGRAPH_CATALOG } from "@cogni/shared-langgraph-graphs";
+
 const cogniWorkReview = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
 if (!cogniWorkReview)
   throw new Error("Operator Cogni graph is missing work-prioritizer");
-export const LANGGRAPH_CATALOG: LangGraphCatalog = {
+export const LANGGRAPH_CATALOG: LangGraphCatalog &
+  Readonly<Record<string, { readonly principal?: string }>> = {
   ...OPERATOR_LANGGRAPH_CATALOG,
-  "work-prioritizer": cogniWorkReview,
+  cogni: {
+    ...OPERATOR_LANGGRAPH_CATALOG.cogni,
+    principal: NODE_LANGGRAPH_CATALOG.cogni.principal,
+  },
+  "work-prioritizer": {
+    ...cogniWorkReview,
+    principal: NODE_LANGGRAPH_CATALOG["work-prioritizer"].principal,
+  },
 };
 export {
   DEFAULT_LANGGRAPH_GRAPH_ID,

@@ -47,6 +47,15 @@ import type { FinancialLedgerPort } from "@cogni/financial-ledger";
 import { createTigerBeetleAdapter } from "@cogni/financial-ledger/adapters";
 import type { UserId } from "@cogni/ids";
 import { toUserId, userActor } from "@cogni/ids";
+import {
+  bindEdoToolCapability,
+  createEdoCapability as createPublishedEdoCapability,
+} from "@cogni/knowledge-store";
+import {
+  DoltBranchSessionRunner as PublishedBranchSessionRunner,
+  DoltgresEdoResolverAdapter as PublishedEdoResolver,
+  DoltgresKnowledgeStoreAdapter as PublishedKnowledgeStore,
+} from "@cogni/knowledge-store/adapters/doltgres";
 import { parseMcpConfigFromEnv } from "@cogni/langgraph-graphs";
 import {
   COGNI_SYSTEM_PRINCIPAL_USER_ID,
@@ -85,9 +94,19 @@ import type {
   WorkItemArtifactDeps,
   WorkItemQueryPort,
 } from "@cogni/work-items";
-import { createItemRefPorts } from "@cogni/work-items";
+import {
+  createItemRefPorts,
+  createRunAttribution,
+  createWorkItemWriters,
+} from "@cogni/work-items";
 import { MarkdownWorkItemAdapter } from "@cogni/work-items/markdown";
 import type { GoalsProgress, MetricService } from "@cogni-dao/metrics";
+import {
+  CitePairRecorder,
+  KnowledgeReadCounter as PostgresKnowledgeReadCounter,
+  type UsageLogEvent,
+} from "@cogni-dao/metrics/usage";
+import { trace } from "@opentelemetry/api";
 import {
   Client as TemporalClient,
   Connection as TemporalConnection,
@@ -112,6 +131,7 @@ import {
   DrizzleScheduleUserAdapter,
   DrizzleThreadPersistenceAdapter,
   EvmRpcOnChainVerifierAdapter,
+  findExecutionScope,
   GITHUB_ADAPTER_VERSION,
   GitHubNodeDeploymentTopologyAdapter,
   GitHubWebhookNormalizer,
@@ -156,6 +176,7 @@ import { getServiceDb } from "@/adapters/server/db/drizzle.service-client";
 import { DrizzleWorkItemSessionAdapter } from "@/adapters/server/db/work-item-session.adapter";
 import { createHttpEpochsRead } from "@/adapters/server/ingestion/http-epochs-read";
 import { createHttpReceiptDelivery } from "@/adapters/server/ingestion/http-receipt-delivery";
+import { withReadCounting } from "@/adapters/server/knowledge-usage/counting-knowledge-capability";
 import { CompositeNodeRegistryAdapter } from "@/adapters/server/node-registry/composite-node-registry.adapter";
 import { DbNodeRegistryAdapter } from "@/adapters/server/node-registry/db-node-registry.adapter";
 import { LiveNodeRegistryAdapter } from "@/adapters/server/node-registry/live-node-registry.adapter";
@@ -240,6 +261,7 @@ import type {
   DataSourceRegistration,
   EpochsRead,
   GovernanceStatusPort,
+  KnowledgeReadCounter,
   LangfusePort,
   LlmService,
   MetricsQueryPort,
@@ -295,6 +317,7 @@ import { resolveNodeCatalogSource } from "@/shared/node-registry/catalog-source"
 import { envForApex } from "@/shared/node-registry/deploy-hosts";
 import { baseDomain } from "@/shared/node-registry/resolve";
 import {
+  logEvent,
   makeLogger,
   EVENT_NAMES as OPERATOR_EVENT_NAMES,
 } from "@/shared/observability";
@@ -389,7 +412,7 @@ export interface Container {
   goalMetrics: MetricService | undefined;
   /** The node's one goal-progress read; the HTTP route and the Goals view share it. */
   goalProgress: () => Promise<GoalsProgress>;
-  /** EDO hypothesis-loop capability for the langgraph tool bindings AND the bearer-auth REST routes under /api/v1/edo. Always present (stubs throw when DOLTGRES_URL is unset). */
+  /** Established EDO product capability for goal-loop/service and REST callers; graph tools separately bind the released attributed writer. Always present (stubs throw when DOLTGRES_URL is unset). */
   edoCapability: EdoCapability;
   /** Thread persistence scoped to a user (RLS enforced) */
   threadPersistenceForUser(userId: UserId): ThreadPersistencePort;
@@ -401,6 +424,8 @@ export interface Container {
   workItemQuery: WorkItemQueryPort;
   /** Doltgres-backed work-items API surface — task.0423 v0. Throws if DOLTGRES_URL is unset. */
   doltgresWorkItems: WorkItemsContentPort;
+  /** Write-time daily counters of agent atom reads (story.0061): batched, never blocks or fails the caller. */
+  knowledgeReadCounter: KnowledgeReadCounter;
   /** Review and validation artifacts of work items (task.0028): the item store and the insert-only artifact store. Undefined when DOLTGRES_URL is unset. */
   workItemArtifacts: WorkItemArtifactDeps | undefined;
   /** Operator-local active work-item coordination sessions. */
@@ -846,6 +871,21 @@ function createContainer(): Container {
 
   // Service DB (BYPASSRLS) for worker adapters
   const serviceDb = getServiceDb();
+
+  // story.0061: the shared usage writers log through this node's registered events.
+  const usageLog = log.child({ component: "KnowledgeUsage" });
+  const logUsage = ({ event, ...fields }: UsageLogEvent) =>
+    logEvent(usageLog, event, fields);
+  const knowledgeReadCounter = new PostgresKnowledgeReadCounter(
+    serviceDb.$client,
+    logUsage
+  );
+  const flushReadCounts = () => {
+    void knowledgeReadCounter.flush();
+  };
+  process.on("SIGTERM", flushReadCounts);
+  process.on("SIGINT", flushReadCounts);
+
   const paymentAttemptServiceRepository =
     new ServiceDrizzlePaymentAttemptRepository(serviceDb);
   const workItemSessions = getWorkItemSessionPort();
@@ -959,6 +999,7 @@ function createContainer(): Container {
   // KnowledgeCapability + EdoCapability for AI tools (require DOLTGRES_URL)
   let knowledgeCapability: KnowledgeCapability;
   let edoCapability: EdoCapability;
+  let edoToolCapability: EdoCapability;
   let knowledgeContributionService: ContributionService | undefined;
   let knowledgeStorePort: KnowledgeStorePort | undefined;
   let goalMetrics: MetricService | undefined;
@@ -1025,11 +1066,47 @@ function createContainer(): Container {
           evaluateAt: g.evaluateAt ? g.evaluateAt.toISOString() : null,
         })),
     };
-    const edoResolver = new DoltgresEdoResolverAdapter({
+    // After the listActiveGoals assignment, so the spread keeps it (story.0061).
+    knowledgeCapability = withReadCounting(
+      knowledgeCapability,
+      knowledgeReadCounter,
+      () => {
+        const scope = findExecutionScope();
+        return scope ? { principalId: scope.principalId } : undefined;
+      }
+    );
+    // EDO uses the published writer, including confidence and commit attribution. It shares
+    // the existing database and database-lock protocol with the operator knowledge store.
+    const edoStore = new PublishedKnowledgeStore({
       sql: doltClient,
-      store: knowledgePort,
+      writerSession: new PublishedBranchSessionRunner(
+        createKnowledgeBranchClient(),
+        {
+          logger: log,
+          writerProtocol: "database",
+        }
+      ),
     });
-    edoCapability = createEdoCapability(knowledgePort, edoResolver);
+    const edo = createPublishedEdoCapability(
+      edoStore,
+      new PublishedEdoResolver({ sql: doltClient, store: edoStore })
+    );
+    edoToolCapability = bindEdoToolCapability(
+      edo,
+      createRunAttribution({
+        scope: () => {
+          const scope = findExecutionScope();
+          if (!scope) throw new Error("EDO tool requires an execution scope");
+          return scope;
+        },
+        log,
+      })
+    );
+    // Keep existing goal-loop/service callers on their established product composition.
+    edoCapability = createEdoCapability(
+      knowledgePort,
+      new DoltgresEdoResolverAdapter({ sql: doltClient, store: knowledgePort })
+    );
     // Branch work gets its own `max: 1` client, deliberately NOT the pool that
     // serves reads. Dolt branch ops need a session-pinned connection; bounding
     // them above the pool (FIFO + advisory lock, see `DoltBranchSessionRunner`)
@@ -1166,6 +1243,31 @@ function createContainer(): Container {
     };
   }
 
+  edoToolCapability ??= edoCapability;
+
+  // story.0061: a successful patch also records the (atom, item) pairs it cites; the route and the agent tool share
+  // this patch, and the record never fails or delays it. The adapter is a class instance whose methods live on its
+  // prototype and mutate instance state, so a spread would drop them and Object.create would split that state:
+  // the proxy overrides patch and binds every other method to the real adapter.
+  {
+    const citePairs = new CitePairRecorder(serviceDb.$client, logUsage);
+    const leased = doltgresWorkItems;
+    const patch: WorkItemsContentPort["patch"] = async (input, principalId) => {
+      const item = await leased.patch(input, principalId);
+      if (input.cites?.length) {
+        citePairs.record(item.id, item.revision, input.cites);
+      }
+      return item;
+    };
+    doltgresWorkItems = new Proxy(leased, {
+      get(target, prop) {
+        if (prop === "patch") return patch;
+        const value = Reflect.get(target, prop, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }
+
   // task.0028: artifacts go through the work-items writer path. The artifact records its author for audit; no server check
   // compares it with the subject's author. Undefined when DOLTGRES_URL is unset (the routes answer 503, nothing written).
   const workItemArtifacts: WorkItemArtifactDeps | undefined =
@@ -1178,16 +1280,18 @@ function createContainer(): Container {
         }
       : undefined;
 
-  // WorkItemCapability for AI tools (task.5282). `core__work_item_query` lists
-  // through the Doltgres read path — the same `doltgresWorkItems.list` that
-  // `GET /api/v1/work/items` serves (read pool, never writer admission). The
-  // update stays restricted to proven prior metadata fields until genuine run attribution
-  // is available (task.0175). `patch` (story.5096)
-  // writes through the SAME Doltgres patch `PATCH /api/v1/work/items/{id}` uses —
-  // the runtime image has no markdown `work/` tree, so a markdown patch could never
-  // land — attributed to the system principal scheduled runs execute as, under the
-  // store's unchanged authority (non-creator ⇒ triage fields only) and with the
-  // caller's optional `expectedRevision` as compare-and-set.
+  const workItemWriters = createWorkItemWriters({
+    log,
+    scope: () => {
+      const scope = findExecutionScope();
+      if (!scope) throw new Error("Work item tool requires an execution scope");
+      return scope;
+    },
+    traceId: () => trace.getActiveSpan()?.spanContext().traceId,
+    store: () => doltgresWorkItems,
+    artifacts: () => workItemArtifacts,
+  });
+  // The released writer preserves attribution, CAS and lifecycle gates on the same store as HTTP.
   const workItemCapability = createWorkItemCapability({
     workItemQuery: workItemAdapter,
     moveReadings: moveMetrics.readings,
@@ -1201,10 +1305,7 @@ function createContainer(): Container {
     }),
     log: (event) => log.warn(event, "work.items.envelope_degraded"),
     backlogReader: doltgresWorkItems,
-    backlogWriter: {
-      store: doltgresWorkItems,
-      principalId: COGNI_SYSTEM_PRINCIPAL_USER_ID,
-    },
+    backlogWriter: workItemWriters.backlogWriter,
   });
 
   // ToolSource with real implementations (per CAPABILITY_INJECTION)
@@ -1231,7 +1332,7 @@ function createContainer(): Container {
         ? findServiceLinkTarget(subject.nodeId)?.origin
         : undefined;
     },
-    edoCapability,
+    edoCapability: edoToolCapability,
     metricsCapability,
     webSearchCapability,
     repoCapability,
@@ -1499,6 +1600,7 @@ function createContainer(): Container {
     toolSource,
     knowledgeContributionService,
     knowledgeStorePort,
+    knowledgeReadCounter,
     goalMetrics,
     goalProgress,
     edoCapability,

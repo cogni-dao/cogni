@@ -41,6 +41,8 @@ export const EVENT_NAMES = {
   // The success twins: one terminal event per accepted create or patch, ids and counts only.
   WORK_ITEMS_CREATE_SUCCESS: "work.items.create_success",
   WORK_ITEMS_PATCH_SUCCESS: "work.items.patch_success",
+  // Released attribution builder: missing durable run facts are observable, never replaced with guessed values.
+  WORK_ITEMS_ATTRIBUTION_RUN_MISSING: "work.items.attribution_run_missing",
   // GET /api/v1/work/items/{id}: one terminal event per read, named by `@cogni/work-items` `WORK_ITEM_READ_EVENTS` (story.0085); a parity test pins them.
   WORK_ITEMS_GET_SUCCESS: "work.items.get_success",
   WORK_ITEMS_GET_REFUSED: "work.items.get_refused",
@@ -57,6 +59,12 @@ export const EVENT_NAMES = {
   // Work-item PR repo pin at boot (task.0122): unset or malformed leaves it unpinned; entries that are not owner/repo are ignored. Once at boot, never per request.
   ADAPTER_WORK_ITEMS_PR_REPO_UNPINNED: "adapter.work_items.pr_repo_unpinned",
   ADAPTER_WORK_ITEMS_PR_REPO_IGNORED: "adapter.work_items.pr_repo_ignored",
+  // Agent atom read counters (story.0061): one line per flush with key and read counts; a drop or a failed flush with its count. Never ids.
+  KNOWLEDGE_READ_COUNTS_FLUSHED: "knowledge.read_counts_flushed",
+  KNOWLEDGE_READ_COUNT_WRITE_FAILED: "knowledge.read_count_write_failed",
+  // A citing patch's (atom, item) pairs recorded, or not recorded (story.0061): counts and reason only.
+  KNOWLEDGE_CITE_PAIRS_RECORDED: "knowledge.cite_pairs_recorded",
+  KNOWLEDGE_CITE_PAIRS_WRITE_FAILED: "knowledge.cite_pairs_write_failed",
   // AI Domain - Server
   AI_COMPLETION: "ai.completion",
   AI_LLM_CALL: "ai.llm_call",

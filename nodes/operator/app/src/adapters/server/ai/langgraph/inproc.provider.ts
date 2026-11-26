@@ -48,11 +48,21 @@ import {
   type ToolExecFn,
 } from "@cogni/langgraph-graphs";
 import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
+import { CORE_TOOL_BUNDLE as RELEASED_TOOLS } from "@cogni/shared-ai-tools";
+import { actingPrincipal } from "@cogni/work-items";
+import {
+  type GuardDeps,
+  guardTools,
+  offeredToolIds,
+  ToolAuthorityError,
+  type ToolRequires,
+} from "@cogni-dao/agent-grants";
 import { trace } from "@opentelemetry/api";
 import type { Logger } from "pino";
 import {
   type ExecutionCodeSubject,
   getExecutionScope,
+  runInScope,
 } from "@/adapters/server/ai/execution-scope";
 import type {
   AiExecutionErrorCode,
@@ -222,7 +232,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     /** Host-owned architect body reader; used only for catalog entries with `hostArchitect`. */
     private readonly architectReader?: ArchitectBodyReader,
     /** Grounding of a review whose code subject is ANOTHER node (task.5448); absent = such a run fails closed. */
-    private readonly subjectGroundingLoader?: SubjectGroundingLoader
+    private readonly subjectGroundingLoader?: SubjectGroundingLoader,
+    private readonly writerAuthority?: GuardDeps
   ) {
     this.log = makeLogger({
       component: "LangGraphInProcProvider",
@@ -315,6 +326,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
     const mcpServerIds = entry.mcpServerIds ?? [];
 
     // Async helper: resolve MCP tools then execute graph
+    const deniedRun = new AbortController();
+    let terminalDenial: ToolAuthorityError["receipt"] | undefined;
     const resolveMcpAndExecute = async (): Promise<{
       stream: AsyncIterable<AiEvent>;
       final: Promise<GraphResult>;
@@ -348,12 +361,84 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         }
       }
 
-      // Combined tool IDs for allowlist: native catalog tools + MCP tools
-      const allToolIds = [...toolIds, ...mcpToolIds];
+      // The migrated writers use published principal/subject locks in addition to the
+      // operator's existing tool-runner policies. No seeds, grants or admin rights are created here.
+      const writerIds = new Set([
+        "core__work_item_update",
+        "core__edo_decide",
+        "core__edo_hypothesize",
+        "core__edo_record_outcome",
+      ]);
+      const requiresById: Record<string, ToolRequires> = {};
+      for (const tool of RELEASED_TOOLS) {
+        if (writerIds.has(tool.contract.name) && tool.contract.requires) {
+          requiresById[tool.contract.name] = tool.contract.requires;
+        }
+      }
+      const writers: Record<string, BoundToolRuntime> = {};
+      for (const [id, runtime] of Object.entries(runtimeTools)) {
+        if (!writerIds.has(id)) continue;
+        writers[id] = {
+          ...runtime,
+          exec: (args, ctx, capabilities) => {
+            const current = getExecutionScope();
+            return runtime.exec(
+              args,
+              {
+                ...ctx,
+                actorId: `user:${actingPrincipal(current)}`,
+                ...(current.subjectUserId
+                  ? { subjectId: `user:${current.subjectUserId}` }
+                  : {}),
+              },
+              capabilities
+            );
+          },
+        };
+      }
+      const authority: GuardDeps = this.writerAuthority ?? {
+        withStore: async () => {
+          throw new Error("writer authority unavailable");
+        },
+        adminCheck: async () => "unavailable",
+      };
+      const guardScope = {
+        principalId: scope.principalId,
+        subjectUserId: scope.subjectUserId,
+        accountId: scope.billing.billingAccountId,
+        payer: scope.billing.billingAccountId,
+        runId,
+      };
+      Object.assign(
+        runtimeTools,
+        guardTools(writers, requiresById, guardScope, {
+          ...authority,
+          runAs: (identity, fn) => runInScope({ ...scope, ...identity }, fn),
+          onTerminalDenial: (denial) => {
+            terminalDenial = new ToolAuthorityError(
+              denial.code,
+              denial.tool,
+              requiresById[denial.tool]?.scope ?? null
+            ).receipt;
+            deniedRun.abort();
+          },
+        })
+      );
+      const offered = await offeredToolIds(
+        Object.values(writers),
+        requiresById,
+        guardScope,
+        authority
+      );
+      const permitted = (id: string) =>
+        !writerIds.has(id) || offered.offered.includes(id);
+      const offeredIds = toolIds.filter(permitted);
+      const allToolIds = [...offeredIds, ...mcpToolIds];
 
       // Get catalog tools for contract extraction from the injected node bundle
       // (per NODE_BUNDLE_IS_CANONICAL — TOOL_CATALOG only has core tools post-bug.0319 ckpt 2)
       const catalogTools = catalogToolIds
+        .filter(permitted)
         .map((id) => this.boundToolMap.get(id))
         .filter((bt): bt is NonNullable<typeof bt> => bt !== undefined);
 
@@ -395,6 +480,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
                 reason: record.reason.slice(0, 200),
               }),
               actorId: record.actorId,
+              principalId: scope.principalId,
+              subjectUserId: scope.subjectUserId,
               nodeId: record.nodeId,
               graphId: record.graphId,
               grantId: record.grantId,
@@ -446,14 +533,14 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
       const runnerRequest: InProcGraphRequest = {
         runId,
         messages: messages as InProcGraphRequest["messages"],
-        ...(scope.abortSignal !== undefined && {
-          abortSignal: scope.abortSignal,
-        }),
+        abortSignal: scope.abortSignal
+          ? AbortSignal.any([scope.abortSignal, deniedRun.signal])
+          : deniedRun.signal,
         ...(traceId !== undefined && { traceId }),
         ...(requestId !== undefined && { ingressRequestId: requestId }),
         configurable: {
           model,
-          toolIds,
+          toolIds: offeredIds,
           ...(scope.actorUserId !== undefined
             ? { actorId: `user:${scope.actorUserId}` }
             : {}),
@@ -628,12 +715,37 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           const delta = graphReportDelta((await inner.final).structuredOutput);
           if (delta) yield { type: "text_delta" as const, delta };
         }
+        if (terminalDenial && event.type === "error") continue;
+        if (terminalDenial && event.type === "done") {
+          yield {
+            type: "text_delta" as const,
+            delta: "Tool execution stopped by its authority check.",
+          };
+        }
         yield event;
       }
     })();
 
     const final = innerResult.then(
-      (r) => this.mapToGraphFinal(r.final, runId, requestId, graphName),
+      async (r) => {
+        const result = await r.final;
+        if (terminalDenial)
+          return {
+            ok: true,
+            runId,
+            requestId,
+            finishReason: "stop" as const,
+            content: "Tool execution stopped by its authority check.",
+            structuredOutput: terminalDenial,
+            ...(result.usage ? { usage: result.usage } : {}),
+          };
+        return this.mapToGraphFinal(
+          Promise.resolve(result),
+          runId,
+          requestId,
+          graphName
+        );
+      },
       (error) =>
         ({
           ok: false as const,

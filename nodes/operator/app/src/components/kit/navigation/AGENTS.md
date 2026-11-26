@@ -31,7 +31,8 @@ Navigation UI components for mobile and desktop. Provides NavigationLink with ac
 - **Exports:**
   - `NavigationLink` - Next.js Link wrapper with active route detection
   - `MobileNav` - Sheet-based mobile navigation (md:hidden)
-- **Files considered API:** `NavigationLink.tsx`, `MobileNav.tsx`
+  - `SidebarMenuButton`, `SidebarMenuSubButton` - operator active-state wrappers
+- **Files considered API:** `NavigationLink.tsx`, `MobileNav.tsx`, `SidebarButtons.tsx`
 
 ## Responsibilities
 

@@ -4,13 +4,15 @@
 /**
  * Module: `@shared/node-app-scaffold/gens/payments-activation`
  * Purpose: Pure splice of payment-activation config into an EXISTING node repo-spec YAML - the
- *   `node_wallet.address`, `payments_in.credits_topup.*` (95/5 at-cost economics), and
- *   `payments.status: active` blocks the operator writes back into the node's OWN repo when a
- *   founder activates payments.
+ *   `payments_in.credits_topup.*` (95/5 at-cost economics) and `payments.status: active` blocks the
+ *   operator writes back into the node's OWN repo when a founder activates payments.
  * Scope: Pure string transform over the current `.cogni/repo-spec.yaml` text. No IO, no env, no
  *   YAML round-trip (a string splice, so the spec's comments + ordering are preserved). The route
  *   layer reads the current file via the App and persists the result via a PR.
  * Invariants:
+ *   - NO_WALLET_WRITE (bug.5656): activation never writes a wallet. The node declares
+ *     `operator_wallet.address` itself in git; the operator only reads it (payment-prereqs route) and
+ *     the status reader checks it. A `node_wallet` block is never written (nothing reads it).
  *   - AT_COST_ECONOMICS: `markup_factor` + `revenue_share` are fixed at the 95/5 at-cost defaults
  *     (matches the activation UI + `@cogni/operator-wallet` split math); callers do not parameterize
  *     them, so a node can never be born with off-economics defaults.
@@ -29,15 +31,18 @@ export const ACTIVATION_MARKUP_FACTOR = 1.10803324099723;
 export const ACTIVATION_REVENUE_SHARE = 0;
 
 export interface RenderPaymentsActivationInput {
-  /** The node's own Privy/operator wallet address (checksummed) for `node_wallet.address`. */
-  readonly nodeWalletAddress: string;
   /** The deployed 0xSplits V2 Split for `payments_in.credits_topup.receiving_address`. */
   readonly splitAddress: string;
 }
 
-const NODE_WALLET_BLOCK = (address: string): string =>
-  `node_wallet:
-  address: "${address}"`;
+export interface PaymentsActivationSpecCheckInput
+  extends RenderPaymentsActivationInput {
+  /**
+   * The node's wallet as recorded on the registry row. Name kept for call-site stability; it is
+   * compared against the repo-spec `operator_wallet.address` (bug.5656), not a `node_wallet` block.
+   */
+  readonly nodeWalletAddress: string;
+}
 
 const PAYMENTS_IN_BLOCK = (splitAddress: string): string =>
   `payments_in:
@@ -57,8 +62,7 @@ const PAYMENTS_IN_BLOCK = (splitAddress: string): string =>
  * Strategy (string splice, comment-preserving):
  *   1. Flip the existing `payments:` block to `status: active` (replace `pending_activation`); if no
  *      `payments:` block exists, append `payments:\n  status: active`.
- *   2. Upsert the `node_wallet:` block (replace if present, else insert before `payments:`/append).
- *   3. Upsert the `payments_in:` block (replace if present, else insert before `payments:`/append).
+ *   2. Upsert the `payments_in:` block (replace if present, else insert before `payments:`/append).
  *
  * The result is deterministic + idempotent: a spec already carrying these exact blocks splices to an
  * identical string.
@@ -69,11 +73,6 @@ export function renderPaymentsActivationSpec(
 ): string {
   let out = current.replace(/\s*$/, "\n");
 
-  out = upsertTopLevelBlock(
-    out,
-    "node_wallet",
-    NODE_WALLET_BLOCK(input.nodeWalletAddress)
-  );
   out = upsertTopLevelBlock(
     out,
     "payments_in",
@@ -101,7 +100,7 @@ function sameAddress(a: unknown, b: string): boolean {
  */
 export function hasPaymentsActivationSpec(
   spec: string,
-  input: RenderPaymentsActivationInput
+  input: PaymentsActivationSpecCheckInput
 ): boolean {
   let parsed: unknown;
   try {
@@ -112,16 +111,16 @@ export function hasPaymentsActivationSpec(
 
   const root = asRecord(parsed);
   const payments = asRecord(root?.payments);
-  const nodeWallet = asRecord(root?.node_wallet);
+  const operatorWallet = asRecord(root?.operator_wallet);
   const paymentsIn = asRecord(root?.payments_in);
   const topup = asRecord(paymentsIn?.credits_topup);
-  if (!root || !payments || !nodeWallet || !topup) return false;
+  if (!root || !payments || !operatorWallet || !topup) return false;
 
   const allowedChains = topup.allowed_chains;
   const allowedTokens = topup.allowed_tokens;
   return (
     payments.status === "active" &&
-    sameAddress(nodeWallet.address, input.nodeWalletAddress) &&
+    sameAddress(operatorWallet.address, input.nodeWalletAddress) &&
     topup.provider === "cogni-usdc-backend-v1" &&
     sameAddress(topup.receiving_address, input.splitAddress) &&
     Array.isArray(allowedChains) &&

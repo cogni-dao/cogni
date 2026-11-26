@@ -8,6 +8,7 @@
  * Invariants:
  *   - TOOL_SOURCE_RETURNS_BOUND_TOOL: Returns executable BoundToolRuntime
  *   - AUTH_VIA_CAPABILITY_INTERFACE: exec() receives capabilities, not raw secrets
+ *   - HOST_CONTEXT_PRESERVED: invocation identity reaches execute separately from model arguments
  *   - Zod validation stays in this layer; ai-core sees only the interface
  * Side-effects: none
  * Links: TOOL_USE_SPEC.md #27
@@ -86,12 +87,11 @@ export function toBoundToolRuntime(
 
     async exec(
       validatedArgs: unknown,
-      _ctx: ToolInvocationContext,
+      ctx: ToolInvocationContext,
       _capabilities: ToolCapabilities
     ): Promise<unknown> {
-      // TODO: In P1, pass capabilities to tools that need them
-      // For now, tools receive validated args only (existing behavior)
-      return implementation.execute(validatedArgs as never);
+      // Invocation identity is host-bound and stays out of model-supplied arguments.
+      return implementation.execute(validatedArgs as never, ctx);
     },
 
     validateOutput(rawOutput: unknown): unknown {

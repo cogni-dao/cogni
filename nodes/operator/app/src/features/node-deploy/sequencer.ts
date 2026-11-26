@@ -174,7 +174,12 @@ import {
   savedQualification,
   validationCode,
 } from "./qualification";
-import { ingressHostOf, publicHostOf, toPayerSpec } from "./spec";
+import {
+  hasCompanionsOrQualification,
+  ingressHostOf,
+  publicHostOf,
+  toPayerSpec,
+} from "./spec";
 import { TERMINAL_ATTEMPT_PHASES } from "./stop-plan";
 import { expiredTestEnvs, TEST_ENV_ENV } from "./test-env";
 
@@ -750,7 +755,7 @@ export class NodeDeploySequencer {
     release: ReleaseRow
   ): Promise<ReleaseRow> {
     const w = release.spec;
-    if ((w.companions?.length || w.health?.qualification) && !w.artifactPlan)
+    if (hasCompanionsOrQualification(w) && !w.artifactPlan)
       throw new InvalidArtifactSet(
         "qualified service set has no frozen artifact plan"
       );

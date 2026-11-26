@@ -7,7 +7,7 @@
  * Scope: Unit test of createWorkItemCapability with fake ports. Does not touch Doltgres or markdown files.
  * Invariants:
  *   - QUERY_READS_THE_LIVE_BACKLOG: `query` lists via `backlogReader` when wired, never the markdown port
- *   - WRITES_NOT_WIDENED: new status/fields refuse before the writer
+ *   - ACTOR_IS_PRINCIPAL: missing principals refuse before the writer
  *   - PATCH_ON_THE_LIVE_BACKLOG / PATCH_CAS_PASSTHROUGH (story.5096): `patch` writes through the
  *     Doltgres `backlogWriter` as its principal, forwards `expectedRevision`, and turns the store's
  *     `WorkItemRevisionConflictError` into the ai-tools `WorkItemPatchConflictError`
@@ -21,13 +21,24 @@
  */
 
 import {
+  contractToRuntime,
   createWorkItemReadImplementation,
   WorkItemQueryOutputSchema,
   workItemReadContract,
 } from "@cogni/ai-tools";
 import {
+  bindEdoToolCapability,
+  createEdoCapability,
+} from "@cogni/knowledge-store";
+import {
+  FakeEdoResolverAdapter,
+  FakeKnowledgeStoreAdapter,
+} from "@cogni/knowledge-store/adapters/fake";
+import {
+  createEdoDecideImplementation,
   createWorkItemQueryImplementation,
   createWorkItemUpdateImplementation,
+  edoDecideContract,
   WorkItemPatchConflictError,
   workItemQueryContract,
   workItemUpdateContract,
@@ -38,13 +49,24 @@ import type {
   WorkItemId,
   WorkItemQueryPort,
 } from "@cogni/work-items";
-import { toWorkItemDto, WorkItemDtoSchema } from "@cogni/work-items";
+import {
+  actingPrincipal,
+  createRunAttribution,
+  createWorkItemWriters,
+  toWorkItemDto,
+  WorkItemDtoSchema,
+} from "@cogni/work-items";
 import {
   WorkItemGateFactsUnavailableError,
   WorkItemGateUnmetError,
   WorkItemRevisionConflictError,
 } from "@cogni/work-items/adapters/doltgres";
 import { describe, expect, it, vi } from "vitest";
+import {
+  type ExecutionScope,
+  getExecutionScope,
+  runInScope,
+} from "@/adapters/server/ai/execution-scope";
 
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
@@ -337,7 +359,11 @@ describe("createWorkItemCapability", () => {
     };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      backlogWriter: { store, principalId: "system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     const result = await cap.patch({
@@ -366,7 +392,11 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockResolvedValue(item()) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      backlogWriter: { store, principalId: "system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     await cap.patch({
@@ -389,7 +419,11 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockRejectedValue(refused) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      backlogWriter: { store, principalId: "system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     await expect(
@@ -409,7 +443,11 @@ describe("createWorkItemCapability", () => {
     };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      backlogWriter: { store, principalId: "system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     const err = await cap
@@ -437,7 +475,11 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockRejectedValue(denied) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      backlogWriter: { store, principalId: "system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     await expect(
@@ -473,7 +515,11 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockResolvedValue(item({ priority })) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      backlogWriter: { store, principalId: "system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     const result = await cap.patch({
@@ -506,7 +552,11 @@ describe("shared evaluation capability adoption", () => {
     const capability = createWorkItemCapability({
       workItemQuery: query,
       workItemCommand: command,
-      backlogWriter: { store, principalId: "test" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "test" }),
+        attributionDenied: vi.fn(),
+      },
     });
     const result = await capability.patch({
       id: scored.id,
@@ -753,7 +803,7 @@ describe("work-item moves at read time", () => {
   });
 });
 
-describe("published 0.24 update through the operator host", () => {
+describe("published 0.27 update through the operator host", () => {
   const request = {
     id: "task.5282",
     expectedRevision: 4,
@@ -781,7 +831,8 @@ describe("published 0.24 update through the operator host", () => {
       workItemQuery: markdownPorts().query,
       backlogWriter: {
         store: { patch },
-        principalId: "prior-system-principal",
+        attribution: () => ({ actor: "prior-system-principal" }),
+        attributionDenied: vi.fn(),
       },
     });
     const impl = createWorkItemUpdateImplementation({
@@ -819,13 +870,16 @@ describe("published 0.24 update through the operator host", () => {
     { outcome: "New acceptance" },
     { estimate: 3 },
     { moves: [] },
-  ])("refuses expanded authority before store admission: %j", async (set) => {
+  ])("refuses every field without an acting principal before store admission: %j", async (set) => {
     const patch = vi.fn();
     const cap = createWorkItemCapability({
       workItemQuery: markdownPorts().query,
       backlogWriter: {
         store: { patch },
-        principalId: "prior-system-principal",
+        attribution: () => ({
+          actor: actingPrincipal({ subjectUserId: "requester" }),
+        }),
+        attributionDenied: vi.fn(),
       },
     });
     const impl = createWorkItemUpdateImplementation({
@@ -835,9 +889,7 @@ describe("published 0.24 update through the operator host", () => {
       ...request,
       set,
     });
-    await expect(impl.execute(parsed)).rejects.toThrow(
-      "requires a verified run actor"
-    );
+    await expect(impl.execute(parsed)).rejects.toThrow("acting principal");
     expect(patch).not.toHaveBeenCalled();
   });
 
@@ -867,7 +919,8 @@ describe("published 0.24 update through the operator host", () => {
       workItemQuery: markdownPorts().query,
       backlogWriter: {
         store: { patch },
-        principalId: "prior-system-principal",
+        attribution: () => ({ actor: "prior-system-principal" }),
+        attributionDenied: vi.fn(),
       },
     });
     await expect(cap.patch(request)).rejects.toBe(error);
@@ -888,7 +941,8 @@ describe("published 0.24 update through the operator host", () => {
       workItemQuery: markdownPorts().query,
       backlogWriter: {
         store: { patch: vi.fn().mockRejectedValue(error) },
-        principalId: "prior-system-principal",
+        attribution: () => ({ actor: "prior-system-principal" }),
+        attributionDenied: vi.fn(),
       },
     });
     await expect(cap.patch(request)).rejects.toBe(error);
@@ -898,5 +952,155 @@ describe("published 0.24 update through the operator host", () => {
     await expect(unwired.patch(request)).rejects.toThrow(
       "Doltgres backlog writer required"
     );
+  });
+});
+
+describe("released invocation-to-writer identity seam", () => {
+  const log = { info: vi.fn(), warn: vi.fn() };
+  const scope = (principalId?: string): ExecutionScope => ({
+    billing: { billingAccountId: "payer", virtualKeyId: "key" },
+    llmService: {} as ExecutionScope["llmService"],
+    usageSource: "litellm",
+    subjectUserId: "requester-S",
+    actorUserId: "requester-S",
+    ...(principalId ? { principalId } : {}),
+    runId: "run-R",
+    runKind: "system_scheduled",
+  });
+  const invocation = {
+    runId: "run-R",
+    toolCallId: "call-C",
+    actorId: "user:principal-P",
+    subjectId: "user:requester-S",
+    tenantId: "payer",
+  };
+
+  it("preserves host invocation context separately from model arguments", async () => {
+    const execute = vi.fn().mockResolvedValue({});
+    const runtime = contractToRuntime(workItemUpdateContract, { execute });
+    const input = {
+      id: "task.5282",
+      reason: "Observed work requires prioritization",
+      set: { rank: 2 },
+    };
+    await runtime.exec(input, invocation, {});
+    expect(execute).toHaveBeenCalledWith(input, invocation);
+  });
+
+  it.each([
+    "user_immediate",
+    "system_scheduled",
+    "system_webhook",
+  ] as const)("records P, requester S and the actual %s run through the released writer", async (runKind) => {
+    const patch = vi.fn().mockResolvedValue(item({ revision: 5 }));
+    const writers = createWorkItemWriters({
+      log,
+      scope: getExecutionScope,
+      traceId: () => "trace",
+      store: () => ({ patch }),
+      artifacts: () => undefined,
+    });
+    const capability = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: writers.backlogWriter,
+    });
+    const runtime = contractToRuntime(
+      workItemUpdateContract,
+      createWorkItemUpdateImplementation({ workItemCapability: capability })
+    );
+    const input = workItemUpdateContract.inputSchema.parse({
+      id: "task.5282",
+      expectedRevision: 4,
+      reason: "Observed work requires prioritization",
+      set: { rank: 2 },
+    });
+    await runInScope({ ...scope("principal-P"), runKind }, () =>
+      runtime.exec(input, invocation, {})
+    );
+    expect(patch).toHaveBeenCalledWith(input, {
+      actor: "principal-P",
+      requestedBy: "requester-S",
+      run: { id: "run-R", kind: runKind },
+    });
+  });
+
+  it("a requester without a principal cannot reach the work-item store", async () => {
+    const patch = vi.fn();
+    const writers = createWorkItemWriters({
+      log,
+      scope: getExecutionScope,
+      traceId: () => undefined,
+      store: () => ({ patch }),
+      artifacts: () => undefined,
+    });
+    const capability = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: writers.backlogWriter,
+    });
+    await expect(
+      runInScope(scope(), () =>
+        capability.patch({
+          id: "task.5282",
+          reason: "Observed work requires prioritization",
+          set: { rank: 2 },
+        })
+      )
+    ).rejects.toThrow();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("admits a released EDO decision with confidence, principal/requester/run commit lines, and refuses a missing principal", async () => {
+    const store = new FakeKnowledgeStoreAdapter();
+    await store.registerDomain({ id: "strategy", name: "Strategy" });
+    await store.withWrite(
+      { operationId: "seed", message: "seed hypothesis" },
+      (write) =>
+        write.addKnowledge({
+          id: "hypothesis",
+          domain: "strategy",
+          title: "Prediction",
+          content: "Prediction",
+          entryType: "hypothesis",
+          sourceType: "agent",
+          confidencePct: 30,
+          evaluateAt: new Date("2027-01-01"),
+        })
+    );
+    const edo = bindEdoToolCapability(
+      createEdoCapability(store, new FakeEdoResolverAdapter(store)),
+      createRunAttribution({ scope: getExecutionScope, log })
+    );
+    const runtime = contractToRuntime(
+      edoDecideContract,
+      createEdoDecideImplementation({ edoCapability: edo })
+    );
+    const input = edoDecideContract.inputSchema.parse({
+      id: "decision",
+      domain: "strategy",
+      title: "Decision",
+      content: "Observed evidence supports the decision",
+      derivesFromHypothesisId: "hypothesis",
+      sourceType: "agent",
+      confidencePct: 63,
+    });
+    await runInScope(scope("principal-P"), () =>
+      runtime.exec(input, invocation, {})
+    );
+    expect((await store.getKnowledge("decision"))?.confidencePct).toBe(63);
+    expect(store.commitLog.at(-1)?.message).toContain("by actor:principal-P");
+    expect(store.commitLog.at(-1)?.message).toContain(
+      "Requested-by: requester-S"
+    );
+    expect(store.commitLog.at(-1)?.message).toContain(
+      "Run: run-R system_scheduled"
+    );
+    const before = store.commitLog.length;
+    await expect(
+      runInScope(scope(), () =>
+        runtime.exec({ ...input, id: "refused" }, invocation, {})
+      )
+    ).rejects.toThrow();
+    expect(await store.getKnowledge("refused")).toBeNull();
+    expect(store.commitLog).toHaveLength(before);
   });
 });
