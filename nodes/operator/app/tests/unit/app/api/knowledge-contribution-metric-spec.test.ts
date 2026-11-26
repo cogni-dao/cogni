@@ -12,8 +12,8 @@
  * @internal
  */
 
-import { createFleetTrainLagCalculator } from "@cogni/fleet-metrics-source/fleet-train-lag";
 import { MetricRegistry } from "@cogni-dao/metrics";
+import { createFleetTrainLagCalculator } from "@cogni-dao/metrics/fleet-train-lag";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 

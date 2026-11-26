@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Shield-1.0.0
 // SPDX-FileCopyrightText: 2025 Cogni-DAO
 
-import { createFleetTrainLagCalculator } from "@cogni-dao/metrics/fleet-train-lag";
 import {
   createMetricService,
   type MetricAction,
@@ -12,6 +11,7 @@ import {
   MetricRegistry,
   type MetricSnapshot,
 } from "@cogni-dao/metrics";
+import { createFleetTrainLagCalculator } from "@cogni-dao/metrics/fleet-train-lag";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const now = new Date("2026-11-22T00:00:00.000Z");
