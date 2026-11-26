@@ -79,6 +79,7 @@ import {
 } from "@/shared/secrets/node-secrets-reserved.data";
 import { hostForEnv, hostOwnedBy, siblingLabel } from "./edge";
 import { runtimeOwnedEnvKeys } from "./node-app-env";
+import { hasCompanionsOrQualification } from "./spec";
 
 const APP_PROFILE_KEYS: ReadonlySet<string> = new Set(
   COGNI_NODE_APP_V1_REQUIRED_SECRET_KEYS
@@ -119,11 +120,6 @@ export const REFUSAL = {
     "a separate worker must be one plain container named for its service, with no runtime profile or bindings",
   bindingToWorker: "an app binding may not target a separate worker",
 } as const;
-
-/** An app workload with companions or a qualification annotation: the node's one "app workload". */
-function hasCompanionsOrQualification(w: NodeWorkloadSpec): boolean {
-  return Boolean(w.companions || w.health?.qualification);
-}
 
 export function resolveWorkloadDeclaration(input: {
   readonly workloadZone: WorkloadZoneBinding;
@@ -265,7 +261,7 @@ export function resolveWorkloadDeclaration(input: {
     ]);
     // PARTITION (bug.5666): every repo-spec service is a container of this app workload OR the single
     // container of its own separate worker workload; never both, never neither.
-    for (const service of services) {
+    for (const [index, service] of services.entries()) {
       const claims = workloads.filter(
         (w) => w !== workload && w.name === service.name
       );
@@ -281,7 +277,15 @@ export function resolveWorkloadDeclaration(input: {
       if (!worker)
         throw new DeclarationError(
           "workload_manifest_refused",
-          REFUSAL.noWorkload
+          REFUSAL.noWorkload,
+          [
+            {
+              // The service name is a schema-checked DNS-safe token, so naming it echoes no free text.
+              code: "manifest_name_mismatch",
+              path: `deployment.services[${index}]`,
+              message: `service "${service.name}" is in no workload: name a manifest for it, or remove it`,
+            },
+          ]
         );
       if (
         worker.kind !== "app" ||
@@ -383,7 +387,7 @@ export function resolveWorkloadDeclaration(input: {
           }
         : { ...declared, secretKeys: appSecretKeys(spec, catalog) }
       : declared;
-  if (declared.companions || declared.health?.qualification) {
+  if (hasCompanionsOrQualification(declared)) {
     const services = extractNodeServices(spec);
     const main = services.find((s) => s.visibility === "public");
     if (

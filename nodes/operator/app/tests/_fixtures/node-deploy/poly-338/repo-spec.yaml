@@ -1,11 +1,6 @@
-# Node Template — repo-spec
-#
-# Identity for the hub's node-template deployment; node_id MUST match
-# infra/catalog/node-template.yaml. Forks renaming this scaffold MUST
-# regenerate both UUIDs:
-#   node_id:  openssl rand -hex 16 | sed 's/\(.\{8\}\)\(.\{4\}\)\(.\{4\}\)\(.\{4\}\)\(.\{12\}\)/\1-\2-\3-\4-\5/'
-#   scope_id: uuidv5(node_id, "default")
-# See https://cognidao.org/knowledge/node-template-identity-model, https://github.com/cogni-dao/cogni/blob/2321821e61dd12aa0cf75d235bd668ff65739109/docs/spec/multi-node-tenancy.md.
+# Fixture for bug.5666. Source: cogni-dao/poly@adafa17294d1 (PR #338 head), .cogni/repo-spec.yaml.
+# Trimmed to what the operator reads for a deploy: node identity, the required `governance` block and `deployment.services`.
+# The service blocks and their comments are verbatim; ledger, payments and gate fields are removed.
 
 schema_version: "0.1.4"
 
@@ -15,11 +10,6 @@ scope_key: "default"
 
 intent:
   name: poly
-  hook: "Community AI for prediction markets"
-  mission: "Cogni Poly is a multi-experimental, community-steered AI searching for the best ways to profit consistently and ethically on prediction markets — explainable signals, ground-truth evidence, token holders steer priorities. A standing sub-quest: explore how prediction markets and their profits can be used ethically, for good."
-  brand:
-    icon: Activity
-    color: "#22c55e"
 
 governance:
   dao_contract: "0x8a018d191f7135dbf1adc5fa5a76e46cf02cc69c"
@@ -28,55 +18,6 @@ governance:
   chain_id: "8453"
   base_url: "https://proposal.cognidao.org"
 
-cogni_dao:
-  dao_contract: "0x8a018d191f7135dbf1adc5fa5a76e46cf02cc69c"
-  plugin_contract: "0xfa4e08aed196f64a4bd66c82616c956c42c6d160"
-  signal_contract: "0x99ae96f6f04b0276571d5a6df24021585477797f"
-  chain_id: "8453"
-  base_url: "https://proposal.cognidao.org"
-
-# Activity ledger ingestion + approver allowlist.
-# `approvers` gates the `(admin)/` route group and write routes under
-# `/api/v1/attribution/*`. Replace with the fork's DAO-owner wallet(s) when
-# spinning up a new node from this template.
-activity_ledger:
-  epoch_length_days: 7
-  approvers:
-    - "0x070075F1389Ae1182aBac722B36CA12285d0c949" # derekg1729.eth (template default)
-  activity_sources:
-    github:
-      attribution_pipeline: cogni-v0.0
-      source_refs: ["cogni-dao/poly"]
-
-payments:
-  status: pending_activation
-
-# Born-reviewable default gates. When this node is minted as a single-node fork
-# (node-at-root, no `nodes:` registry) the operator's review path runs these gates
-# against the repo-root `.cogni/rules/` below. The mint (`renderRepoSpec`) re-emits
-# this same block onto the minted repo's identity spec — keep the two in lockstep.
-# Gate set coordinated with the operator review path (Lane A). Tune per node.
-gates:
-  - type: review-limits
-    id: review_limits
-    with:
-      max_changed_files: 50
-      max_total_diff_kb: 1500
-  - type: ai-rule
-    with:
-      rule_file: pr-syntropy-coherence.yaml
-  - type: ai-rule
-    with:
-      rule_file: patterns-and-docs.yaml
-  - type: ai-rule
-    with:
-      rule_file: repo-goal-alignment.yaml
-
-# Akash lane (story.5016). Declares WHAT this node runs so the operator can
-# render a provider-neutral workload. Emitted verbatim by
-# `renderNodeDeploymentYaml()` in @cogni/repo-spec -- the SAME renderer the node
-# scaffolder mints from and that `assertDeclaredNodeDeployment` prints when a
-# node is missing one. One renderer, no hand-authored drift.
 deployment:
   services:
     - name: app

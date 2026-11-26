@@ -1,3 +1,4 @@
+# Fixture for bug.5666. Source: cogni-dao/poly@adafa17294d1 (PR #338 head), .cogni/workloads/sandbox.yaml, verbatim below this line.
 # Workload manifest (hub `workload-manifest`, task.5272): Poly's code-execution sandbox (OpenSandbox execd
 # behind Caddy, services/sandbox) as its OWN lease, so a sandbox resize or re-mint never touches the app.
 # It is a worker: the operator gives it ONLY the catalog keys whose `workloads` names `sandbox`

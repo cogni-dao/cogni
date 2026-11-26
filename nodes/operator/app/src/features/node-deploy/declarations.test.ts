@@ -427,7 +427,8 @@ ${containers}${route(host, port)}`,
     expect(resolvePoly({ manifests, workload: "canary" }).name).toBe("canary");
   });
 
-  it.each([
+  type PoyOver = Parameters<typeof resolvePoly>[0];
+  const REFUSAL_CASES: [string, PoyOver, string][] = [
     [
       "an undeclared extra service",
       {
@@ -554,12 +555,109 @@ ${containers}${route(host, port)}`,
       },
       REFUSAL.twoApps,
     ],
-  ])("refuses %s with its own fixed message, before any paid create", (_label, over, message) => {
-    expect(() => resolvePoly(over)).toThrow(refusal(message));
-    // The whole set is checked: requesting the worker is refused too.
-    expect(() => resolvePoly({ ...over, workload: "sandbox" })).toThrow(
-      DeclarationError
+  ];
+  /** Requesting the worker also refuses (the whole set is checked), unless its manifest is the missing one. */
+  const declaresSandbox = (over: PoyOver) =>
+    (over?.manifests ?? [POLY, SANDBOX_MANIFEST]).some(
+      (m) => m.path === ".cogni/workloads/sandbox.yaml"
     );
+
+  it.each(
+    REFUSAL_CASES
+  )("refuses %s with its own fixed message, before any paid create", (_label, over, message) => {
+    expect(() => resolvePoly(over)).toThrow(refusal(message));
+    expect(() => resolvePoly({ ...over, workload: "sandbox" })).toThrow(
+      declaresSandbox(over)
+        ? refusal(message)
+        : expect.objectContaining({ code: "workload_not_declared" })
+    );
+  });
+
+  it("the five refusals throw five different messages, and the one for an unowned service names it only in issues", () => {
+    const thrown = REFUSAL_CASES.map(([, over]) => {
+      try {
+        resolvePoly(over);
+      } catch (e) {
+        return e as DeclarationError;
+      }
+      throw new Error("expected a refusal");
+    });
+    expect(new Set(thrown.map((e) => e.message)).size).toBe(
+      Object.values(REFUSAL).length
+    );
+    expect([...new Set(thrown.map((e) => e.message))].sort()).toEqual(
+      Object.values(REFUSAL).sort()
+    );
+    const stray = REFUSAL_CASES.findIndex(([l]) => l.includes("extra service"));
+    const strayError = thrown[stray] as DeclarationError;
+    expect(strayError.message).toBe(REFUSAL.noWorkload);
+    expect(strayError.issues).toEqual([
+      expect.objectContaining({
+        path: "deployment.services[3]",
+        message: expect.stringContaining('"stray"'),
+      }),
+    ]);
+  });
+
+  it("a worker beside an app that has no node-app profile is refused as a worker-shape error, not classified as a worker", () => {
+    expect(() =>
+      resolvePoly({
+        services: [
+          service({ name: "app", visibility: "public" }),
+          TRADER,
+          SANDBOX,
+        ],
+      })
+    ).toThrow(refusal(REFUSAL.workerShape));
+  });
+
+  describe("secret isolation with a node secrets catalog", () => {
+    const catalog = (entries: { name: string; workloads: string[] }[]) =>
+      `secrets:\n${entries
+        .map(
+          (e) => `  - name: ${e.name}
+    tier: A2
+    source: human
+    workloads: [${e.workloads.join(", ")}]
+    required: true
+    category: Node
+    description: Node-owned key.
+    steps: []
+`
+        )
+        .join("")}`;
+    const KEYS = [
+      { name: "SANDBOX_EXECD_TOKEN", workloads: ["sandbox"] },
+      { name: "PAPER_ENFORCE_MODE", workloads: ["app"] },
+      { name: "TRADER_ACCESS", workloads: ["paper-trader"] },
+    ];
+
+    it("the app release excludes the worker's key, and the worker gets only its own key", () => {
+      const secretsCatalogText = catalog(KEYS);
+      const app = resolvePoly({ secretsCatalogText });
+      expect(app.secretKeys).toContain("PAPER_ENFORCE_MODE");
+      expect(app.secretKeys).not.toContain("SANDBOX_EXECD_TOKEN");
+      expect(app.secretKeys).not.toContain("TRADER_ACCESS");
+      expect(app.companions?.[0]?.secretKeys).toEqual(["TRADER_ACCESS"]);
+      const worker = resolvePoly({ secretsCatalogText, workload: "sandbox" });
+      expect(worker.secretKeys).toEqual(["SANDBOX_EXECD_TOKEN"]);
+      expect(worker.runtimeProfile).toBe("worker");
+    });
+
+    it("a fleet credential that names the worker refuses the app release too", () => {
+      const secretsCatalogText = catalog([
+        ...KEYS,
+        { name: "OPENROUTER_API_KEY", workloads: ["sandbox"] },
+      ]);
+      const refused = expect.objectContaining({
+        code: "secrets_catalog_refused",
+        message: expect.stringContaining("OPENROUTER_API_KEY"),
+      });
+      expect(() => resolvePoly({ secretsCatalogText })).toThrow(refused);
+      expect(() =>
+        resolvePoly({ secretsCatalogText, workload: "sandbox" })
+      ).toThrow(refused);
+    });
   });
 
   it("a second service with the node-app profile is refused by the repo-spec schema, so it never becomes a worker", () => {
@@ -576,12 +674,6 @@ ${containers}${route(host, port)}`,
         ],
       })
     ).toThrow(expect.objectContaining({ code: "repo_spec_unparseable" }));
-  });
-
-  it("each refusal has its own message and none quotes repo-spec text", () => {
-    const messages = Object.values(REFUSAL);
-    expect(new Set(messages).size).toBe(messages.length);
-    expect(messages.join(" ")).not.toMatch(/sandbox|paper-trader|poly/);
   });
 });
 

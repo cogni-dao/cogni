@@ -1,3 +1,4 @@
+# Fixture for bug.5666. Source: cogni-dao/poly@adafa17294d1 (PR #338 head), .cogni/workloads/poly.yaml, verbatim below this line.
 # Workload manifest (hub `workload-manifest`, story.5137): this node's app on the operator's
 # node-deploy verb. `POST /api/v1/deploy/workloads {nodeId, env, workload: "poly", sourceSha}`
 # reads this file at sourceSha. Image "." = the image this repo's CI built at that sha.
