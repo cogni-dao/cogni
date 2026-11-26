@@ -34,11 +34,18 @@ export async function ledgerDiagnosticResponse(
   nodeId?: string;
   code: string;
   calls: number;
+  env?: "candidate-a" | "preview" | "production";
+  reasonCodes: readonly string[];
 }> {
+  let env: "candidate-a" | "preview" | "production" | undefined;
+  let nodeId: string | undefined;
+  let calls = 0;
   let preparation: ReturnType<typeof createLedgerPreparation> | undefined;
   try {
     budget.signal.throwIfAborted();
-    const env = parseLedgerDiagnosticQuery(new URL(request.url).searchParams);
+    const parsedEnv: "candidate-a" | "preview" | "production" =
+      parseLedgerDiagnosticQuery(new URL(request.url).searchParams);
+    env = parsedEnv;
     preparation = createLedgerPreparation(budget, nodeIdOrSlug);
     const credentialStore = preparation.credentialStore;
     const auth = await resolveRouteIdentity(() =>
@@ -50,22 +57,32 @@ export async function ledgerDiagnosticResponse(
         status: auth.status,
         body: { error: auth.errorCode },
         code: auth.errorCode,
-        calls: 0,
+        calls,
+        env: parsedEnv,
+        reasonCodes: [auth.errorCode],
       };
     if (!auth.user)
       return {
         status: 401,
         body: { error: "unauthorized" },
         code: "unauthorized",
-        calls: 0,
+        calls,
+        env: parsedEnv,
+        reasonCodes: ["unauthorized"],
       };
     const dto = await readLedgerDiagnostic(
       {
         ref,
         actorId: auth.user.id,
-        env,
+        env: parsedEnv,
         signal: budget.signal,
         deadline: budget.deadline,
+        onNodeResolved: (resolved) => {
+          nodeId = resolved;
+        },
+        onAttempt: () => {
+          calls += 1;
+        },
       },
       preparation
     );
@@ -74,7 +91,9 @@ export async function ledgerDiagnosticResponse(
       body: dto,
       nodeId: dto.nodeId,
       code: dto.state,
-      calls: dto.budgets.calls,
+      calls,
+      env: parsedEnv,
+      reasonCodes: dto.reasonCodes,
     };
   } catch (error) {
     const code =
@@ -97,7 +116,15 @@ export async function ledgerDiagnosticResponse(
           : code === "deadline_exceeded"
             ? 503
             : 502;
-    return { status, body: { error: code }, code, calls: 0 };
+    return {
+      status,
+      body: { error: code },
+      code,
+      calls,
+      ...(env === undefined ? {} : { env }),
+      ...(nodeId === undefined ? {} : { nodeId }),
+      reasonCodes: [code],
+    };
   } finally {
     preparation?.dispose();
   }

@@ -10,9 +10,14 @@ import {
 } from "@cogni/scheduler-core";
 import { describe, expect, it, vi } from "vitest";
 import { HttpLokiReader } from "@/adapters/server/observability/loki-reader.adapter";
+import { resolveEpochWorkerSource } from "@/bootstrap/ledger-diagnostic";
 import { scopeNodeLogQL } from "@/features/nodes/observability-logs";
 import { logEpochDiagnostic } from "../../../../../../../services/scheduler-worker/src/observability/epoch-diagnostic";
 import type { Logger } from "../../../../../../../services/scheduler-worker/src/observability/logger";
+
+vi.mock("@/adapters/server", () => ({}));
+vi.mock("@/bootstrap/container", () => ({}));
+vi.mock("@/bootstrap/jobs/resolveRoutableNodeGovernanceConfigs", () => ({}));
 
 const nodeId = "4ff8eac1-4eba-4ed0-931b-b1fe4f64713d";
 const neighbor = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
@@ -33,6 +38,37 @@ const scoped = (query?: string) =>
   });
 
 describe("strict target-bound worker event writer and reader", () => {
+  it("binds Akash central dispatch to the environment's operator worker", () => {
+    const binding = resolveEpochWorkerSource(
+      { "candidate-a": "akash" },
+      "candidate-a"
+    );
+    expect(binding).toEqual({
+      physicalEnv: "candidate-a",
+      namespace: "cogni-candidate-a",
+      container: "scheduler-worker",
+    });
+    const query = scopeNodeLogQL({
+      env: "candidate-a",
+      nodeId,
+      service: "epoch-worker",
+      epochSource: binding,
+    });
+    expect(query).toContain('env="candidate-a"');
+    expect(query).toContain('namespace="cogni-candidate-a"');
+    expect(query).toContain(`targetNodeId="${nodeId}"`);
+    expect(() => resolveEpochWorkerSource(null, "candidate-a")).toThrow();
+    expect(() =>
+      resolveEpochWorkerSource({ "candidate-a": "invalid" }, "candidate-a")
+    ).toThrow();
+  });
+  it("emits a LogQL-compatible forced event regex", () => {
+    const query = scoped();
+    expect(query).toContain(
+      'event=~"epoch[.](worker_started|ledger_activity_complete|dispatch_authorized)"'
+    );
+    expect(query).not.toContain("epoch\\.");
+  });
   it("derives targetEnv from the exact declared native namespace", () => {
     expect(diagnosticTarget(nodeId, "cogni-candidate-a")).toEqual(target);
     for (const namespace of [

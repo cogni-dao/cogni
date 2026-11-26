@@ -17,6 +17,10 @@ import type {
 export interface TemporalLedgerDiagnosticPort {
   read(
     binding: LedgerDiagnosticBinding,
-    options: { readonly signal: AbortSignal; readonly deadline: number }
+    options: {
+      readonly signal: AbortSignal;
+      readonly deadline: number;
+      readonly onAttempt?: () => void;
+    }
   ): Promise<LedgerDiagnosticV1>;
 }

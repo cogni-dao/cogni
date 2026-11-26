@@ -46,6 +46,8 @@ export async function readLedgerDiagnostic(
     env: "candidate-a" | "preview" | "production";
     signal: AbortSignal;
     deadline: number;
+    onNodeResolved?: (nodeId: string) => void;
+    onAttempt?: () => void;
   },
   deps: {
     check(): void;
@@ -61,6 +63,7 @@ export async function readLedgerDiagnostic(
 ): Promise<LedgerDiagnosticV1> {
   deps.check();
   const node = await deps.lookup(input.ref);
+  input.onNodeResolved?.(node.nodeId);
   deps.check();
   await deps.authorize(input.actorId, node.nodeId);
   deps.check();
@@ -72,5 +75,6 @@ export async function readLedgerDiagnostic(
   return deps.reader.read(binding, {
     signal: input.signal,
     deadline: input.deadline,
+    ...(input.onAttempt ? { onAttempt: input.onAttempt } : {}),
   });
 }

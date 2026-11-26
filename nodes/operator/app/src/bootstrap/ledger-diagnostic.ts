@@ -36,15 +36,7 @@ import { TemporalLedgerDiagnosticAdapter } from "@/adapters/server";
 import { getGovernanceConfig, getNodeId } from "@/shared/config";
 import { nodes } from "@/shared/db/nodes";
 import { serverEnv } from "@/shared/env";
-import {
-  type FlightEnv,
-  isFlightEnv,
-} from "@/shared/node-registry/deploy-hosts";
-import {
-  controlEnvFor,
-  providerForEnv,
-  toNodeDeploymentPlacement,
-} from "@/shared/node-registry/placement";
+import type { FlightEnv } from "@/shared/node-registry/deploy-hosts";
 import { isLocalActivityAuthority } from "./jobs/resolveRoutableNodeGovernanceConfigs";
 
 export class LedgerRequestError extends Error {
@@ -54,6 +46,21 @@ export class LedgerRequestError extends Error {
   ) {
     super(code);
   }
+}
+export function resolveEpochWorkerSource(
+  placement: unknown,
+  requestedEnv: FlightEnv
+) {
+  if (!placement || typeof placement !== "object" || Array.isArray(placement))
+    throw new LedgerRequestError("diagnostic_logs_unwired", 503);
+  const provider = (placement as Record<string, unknown>)[requestedEnv];
+  if (provider !== undefined && provider !== "k3s" && provider !== "akash")
+    throw new LedgerRequestError("diagnostic_logs_unwired", 503);
+  return {
+    physicalEnv: requestedEnv,
+    namespace: `cogni-${requestedEnv}`,
+    container: "scheduler-worker" as const,
+  };
 }
 export function createDiagnosticRequestBudget(request: Request) {
   const startedAt = Date.now();
@@ -311,40 +318,7 @@ export function createLedgerPreparation(
       node: { nodeId: string; deploymentProviders: unknown },
       requestedEnv: FlightEnv
     ) {
-      const placement = node.deploymentProviders;
-      if (
-        !placement ||
-        typeof placement !== "object" ||
-        Array.isArray(placement)
-      )
-        throw new LedgerRequestError("diagnostic_logs_unwired", 503);
-      const declaredProvider = (placement as Record<string, unknown>)[
-        requestedEnv
-      ];
-      if (
-        declaredProvider !== undefined &&
-        declaredProvider !== "k3s" &&
-        declaredProvider !== "akash"
-      )
-        throw new LedgerRequestError("diagnostic_logs_unwired", 503);
-      const physicalEnv =
-        node.nodeId === operatorNodeId
-          ? requestedEnv
-          : controlEnvFor(
-              requestedEnv,
-              providerForEnv(
-                toNodeDeploymentPlacement(placement),
-                requestedEnv
-              ),
-              env.FLEET_CONTROL_ENV
-            );
-      if (!isFlightEnv(physicalEnv))
-        throw new LedgerRequestError("diagnostic_logs_unwired", 503);
-      return {
-        physicalEnv,
-        namespace: `cogni-${physicalEnv}`,
-        container: "scheduler-worker" as const,
-      };
+      return resolveEpochWorkerSource(node.deploymentProviders, requestedEnv);
     },
     reader: new TemporalLedgerDiagnosticAdapter(env.TEMPORAL_ADDRESS),
     finish() {

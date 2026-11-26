@@ -264,7 +264,7 @@ export class TemporalLedgerDiagnosticAdapter
   ) {}
   async read(
     binding: LedgerDiagnosticBinding,
-    options: { signal: AbortSignal; deadline: number }
+    options: { signal: AbortSignal; deadline: number; onAttempt?: () => void }
   ): Promise<LedgerDiagnosticV1> {
     const result = emptyLedgerDiagnostic(binding);
     const signal = options.signal;
@@ -298,6 +298,7 @@ export class TemporalLedgerDiagnosticAdapter
         conn.withAbortSignal(signal, () => {
           check();
           result.budgets.calls += 1;
+          options.onAttempt?.();
           return call(conn.workflowService);
         })
       );

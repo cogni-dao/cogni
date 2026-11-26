@@ -209,7 +209,7 @@ export function scopeNodeLogQL(input: {
   );
   if (epoch) forced.push('pod=~"scheduler-worker-[a-z0-9]+-[a-z0-9]+"');
   // DEPLOY_EVENTS_PIN_BY_LINE: the forced node pin of a deploy query, before any caller pipeline.
-  const epochPin = ` | json | __error__="" | schemaVersion="1" | targetNodeId=${quote(input.nodeId)} | node_id=${quote(input.nodeId)} | targetEnv=${quote(input.env)} | event=~"epoch\\.(worker_started|ledger_activity_complete|dispatch_authorized)" | writerKind=~"ledger|central_dispatch"`;
+  const epochPin = ` | json | __error__="" | schemaVersion="1" | targetNodeId=${quote(input.nodeId)} | node_id=${quote(input.nodeId)} | targetEnv=${quote(input.env)} | event=~"epoch[.](worker_started|ledger_activity_complete|dispatch_authorized)" | writerKind=~"ledger|central_dispatch"`;
   const pin = epoch
     ? epochPin
     : deploy

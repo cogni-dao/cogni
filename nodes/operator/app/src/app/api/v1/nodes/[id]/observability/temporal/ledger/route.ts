@@ -28,6 +28,8 @@ export async function GET(
     result: "deadline_exceeded",
     calls: 0,
     nodeId: undefined as string | undefined,
+    env: undefined as "candidate-a" | "preview" | "production" | undefined,
+    reasonCodes: ["deadline_exceeded"] as readonly string[],
   };
   try {
     budget.signal.throwIfAborted();
@@ -39,6 +41,8 @@ export async function GET(
       result: result.code,
       calls: result.calls,
       nodeId: result.nodeId,
+      env: result.env,
+      reasonCodes: result.reasonCodes,
     };
     return NextResponse.json(result.body, { status: result.status });
   } catch {

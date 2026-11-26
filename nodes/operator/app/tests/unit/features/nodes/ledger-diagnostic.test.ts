@@ -129,6 +129,7 @@ function fixture(
     }) => ReturnType<typeof execution> | Promise<ReturnType<typeof execution>>;
     pollers?: (name: string, kind: number) => object;
     onCreate?: () => void;
+    failFinal?: boolean;
   } = {}
 ) {
   const calls: string[] = [];
@@ -141,6 +142,11 @@ function fixture(
         if (method === "describeSchedule")
           return async () => {
             calls.push(method);
+            if (
+              options.failFinal &&
+              calls.filter((c) => c === method).length > 1
+            )
+              throw new Error("final_failure");
             return calls.filter((c) => c === method).length === 1
               ? (options.first ?? schedule())
               : (options.final ?? options.first ?? schedule());
@@ -644,6 +650,47 @@ describe("actual native receive bound", () => {
 });
 
 describe("public preparation and authority seams", () => {
+  it("retains resolved identity even when authorization rejects", async () => {
+    const onNodeResolved = vi.fn();
+    await expect(
+      readLedgerDiagnostic(
+        {
+          ref: "operator",
+          actorId: "agent",
+          env: "production",
+          ...readOptions(),
+          onNodeResolved,
+        },
+        {
+          check() {},
+          lookup: async () => ({
+            nodeId,
+            slug: "operator",
+            status: "active",
+            deployEnvs: ["production"],
+            activityEnv: "production",
+          }),
+          authorize: async () => {
+            throw new Error("authz_denied");
+          },
+          bind: async () => binding,
+          finish() {},
+          reader: { read: vi.fn() },
+        }
+      )
+    ).rejects.toThrow("authz_denied");
+    expect(onNodeResolved).toHaveBeenCalledWith(nodeId);
+  });
+  it("counts actual native attempts even when a later call fails", async () => {
+    const f = fixture({ failFinal: true });
+    const onAttempt = vi.fn();
+    await expect(
+      f.adapter.read(binding, { ...readOptions(), onAttempt })
+    ).rejects.toThrow();
+    expect(onAttempt).toHaveBeenCalledTimes(f.calls.length);
+    expect(f.calls.length).toBeGreaterThan(1);
+  });
+
   it("accepts only one env parameter", () => {
     expect(
       parseLedgerDiagnosticQuery(new URLSearchParams("env=production"))
@@ -849,5 +896,96 @@ describe("public preparation and authority seams", () => {
     expect(dto.state).toBe("unknown");
     expect(dto.budgets.complete).toBe(false);
     expect(dto.reasonCodes).toEqual(["activity_elsewhere"]);
+  });
+});
+
+describe("terminal event boundary", () => {
+  it("emits validated identity, reasons and attempted calls for success and failure", async () => {
+    const info = vi.fn();
+    const controller = new AbortController();
+    const prep = {
+      credentialStore: {},
+      check() {},
+      finish() {},
+      dispose() {},
+      lookup: async () => ({
+        nodeId,
+        slug: "operator",
+        status: "active",
+        deployEnvs: ["production"],
+        activityEnv: "production",
+      }),
+      authorize: async () => {},
+      bind: async () => binding,
+      reader: { read: vi.fn() },
+    };
+    vi.doMock("@/app/_lib/auth/request-identity", () => ({
+      resolveRequestIdentity: vi.fn(),
+    }));
+    vi.doMock("@/app/_lib/auth/route-identity", () => ({
+      resolveRouteIdentity: async () => ({ ok: true, user: { id: "agent" } }),
+    }));
+    vi.doMock("@/bootstrap/ledger-diagnostic", () => ({
+      LedgerRequestError: class extends Error {
+        constructor(
+          readonly code: string,
+          readonly status: number
+        ) {
+          super(code);
+        }
+      },
+      createLedgerPreparation: () => prep,
+      createDiagnosticRequestBudget: () => ({
+        signal: controller.signal,
+        startedAt: Date.now(),
+        deadline: Date.now() + 4500,
+        dispose() {},
+      }),
+    }));
+    vi.doMock("@/shared/observability", () => ({
+      EVENT_NAMES: { NODE_OBSERVABILITY_TEMPORAL_COMPLETE: "terminal" },
+      makeLogger: () => ({ info }),
+    }));
+    const { GET } = await import(
+      "@/app/api/v1/nodes/[id]/observability/temporal/ledger/route"
+    );
+    prep.reader.read.mockImplementation(async (_binding, options) => {
+      options.onAttempt();
+      options.onAttempt();
+      return {
+        ...emptyLedgerDiagnostic(binding),
+        state: "partial",
+        reasonCodes: ["selection_incomplete"],
+        budgets: { calls: 2, complete: false },
+      };
+    });
+    const request = new Request("http://localhost/api?env=production");
+    expect(
+      (await GET(request, { params: Promise.resolve({ id: "operator" }) }))
+        .status
+    ).toBe(200);
+    expect(info.mock.calls[0]?.[0]).toMatchObject({
+      nodeId,
+      env: "production",
+      calls: 2,
+      reasonCodes: ["selection_incomplete"],
+      result: "partial",
+    });
+    prep.reader.read.mockImplementation(async (_binding, options) => {
+      options.onAttempt();
+      options.onAttempt();
+      throw new Error("temporal_read_failed");
+    });
+    expect(
+      (await GET(request, { params: Promise.resolve({ id: "operator" }) }))
+        .status
+    ).toBe(502);
+    expect(info.mock.calls[1]?.[0]).toMatchObject({
+      nodeId,
+      env: "production",
+      calls: 2,
+      reasonCodes: ["temporal_read_failed"],
+    });
+    expect(info).toHaveBeenCalledTimes(2);
   });
 });
