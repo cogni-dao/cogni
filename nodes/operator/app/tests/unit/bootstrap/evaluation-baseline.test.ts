@@ -173,7 +173,7 @@ describe("operator released tool composition", () => {
     expect(patch).not.toHaveBeenCalled();
   });
 
-  it("matches released EDO reduced output/confidence while refusing the unqualified host writer even with invocation IDs", async () => {
+  it("matches released EDO output/confidence through the injected host capability", async () => {
     const input = edoDecideContract.inputSchema.parse({
       id: "decision-train",
       domain: "strategy",
@@ -221,10 +221,19 @@ describe("operator released tool composition", () => {
     const runtime = source.getBoundTool(edoId);
     if (!runtime) throw new Error("Missing EDO");
     expect(runtime.validateOutput(result)).toEqual(result);
-    await expect(
-      runtime.exec(runtime.validateInput(input), ctx, {})
-    ).rejects.toThrow("requires verified run attribution");
-    expect(hostDecide).not.toHaveBeenCalled();
+    hostDecide.mockImplementation(decide);
+    const hostResult = await runtime.exec(
+      runtime.validateInput(input),
+      ctx,
+      {}
+    );
+    expect(runtime.validateOutput(hostResult)).toEqual(result);
+    expect(hostDecide).toHaveBeenCalledWith(
+      expect.objectContaining({
+        confidencePct: 83,
+        derivesFromHypothesisId: "goal-a",
+      })
+    );
   });
 
   it("reads artifact/history/link options through the same real facade composition and preserves unavailable markers", async () => {
