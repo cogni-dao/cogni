@@ -28,11 +28,11 @@ const scope = vi.hoisted(
   () =>
     ({
       nodeId: "node-own",
-      actorUserId: "developer",
+      principalId: "developer",
       billing: { billingAccountId: "payer" },
     }) as {
       nodeId: string;
-      actorUserId: string;
+      principalId: string;
       billing: { billingAccountId: string };
       codeSubject?: {
         nodeId: string;

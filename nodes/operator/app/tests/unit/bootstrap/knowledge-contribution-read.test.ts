@@ -43,7 +43,7 @@ const scope = (
   llmService: {} as ExecutionScope["llmService"],
   usageSource: "litellm",
   nodeId,
-  ...(actorUserId ? { actorUserId } : {}),
+  ...(actorUserId ? { principalId: actorUserId } : {}),
 });
 const fixture = () => {
   const service = {

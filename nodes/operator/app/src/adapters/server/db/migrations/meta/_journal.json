@@ -498,6 +498,13 @@
       "when": 1795197343435,
       "tag": "0070_easy_revanche",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1795718419289,
+      "tag": "0071_operator_internal_principals",
+      "breakpoints": true
     }
   ]
 }

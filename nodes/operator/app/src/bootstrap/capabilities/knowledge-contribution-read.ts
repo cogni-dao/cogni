@@ -21,7 +21,7 @@ export function createKnowledgeContributionReadCapability(deps: {
   return {
     read: async (input) => {
       const scope = getExecutionScope();
-      if (scope.nodeId !== deps.nodeId || !scope.actorUserId)
+      if (scope.nodeId !== deps.nodeId || !scope.principalId)
         throw new Error("knowledge_inbox_scope_unavailable");
       const service = deps.service;
       if (!service) throw new Error("knowledge_inbox_source_unavailable");

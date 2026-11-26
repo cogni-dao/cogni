@@ -13,7 +13,7 @@
  * @internal
  */
 
-import type { AiEvent, ToolSourcePort } from "@cogni/ai-core";
+import type { AiEvent, BoundToolRuntime, ToolSourcePort } from "@cogni/ai-core";
 import { AiExecutionError } from "@cogni/ai-core";
 import {
   CORE_TOOL_BUNDLE,
@@ -22,17 +22,23 @@ import {
 } from "@cogni/ai-tools";
 import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
 import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
+import type { AgentGrantsStore, GuardDeps } from "@cogni-dao/agent-grants";
 import { describe, expect, it, vi } from "vitest";
 
 // Pass-through spy so the provider's tool-runner config can be asserted (authz v0).
-const toolRunnerSpy = vi.hoisted(() => ({ calls: [] as unknown[][] }));
+const toolRunnerSpy = vi.hoisted(() => ({
+  calls: [] as unknown[][],
+  runners: [] as ReturnType<typeof import("@cogni/ai-core").createToolRunner>[],
+}));
 vi.mock("@cogni/ai-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@cogni/ai-core")>();
   return {
     ...actual,
     createToolRunner: (...args: Parameters<typeof actual.createToolRunner>) => {
       toolRunnerSpy.calls.push(args);
-      return actual.createToolRunner(...args);
+      const runner = actual.createToolRunner(...args);
+      toolRunnerSpy.runners.push(runner);
+      return runner;
     },
   };
 });
@@ -205,6 +211,8 @@ describe("LangGraphInProcProvider", () => {
       const scope = {
         ...TEST_SCOPE,
         actorUserId: "00000000-0000-4000-a000-000000000001",
+        subjectUserId: "00000000-0000-4000-a000-000000000001",
+        principalId: "catalog-agent",
         nodeId: "operator-node-id",
         grantId: "grant-123",
       };
@@ -230,7 +238,8 @@ describe("LangGraphInProcProvider", () => {
       expect(config).toMatchObject({
         nodeId: "operator-node-id",
         grantId: "grant-123",
-        actorId: "user:00000000-0000-4000-a000-000000000001",
+        actorId: "user:catalog-agent",
+        subjectId: "user:00000000-0000-4000-a000-000000000001",
         graphId: "langgraph:poet",
       });
       expect(typeof config.onAuthzDecision).toBe("function");
@@ -239,7 +248,13 @@ describe("LangGraphInProcProvider", () => {
     it("omits grantId for API/chat runs (no grant in scope)", async () => {
       toolRunnerSpy.calls.length = 0;
       await runInScope(
-        { ...TEST_SCOPE, actorUserId: "user-1", nodeId: "operator-node-id" },
+        {
+          ...TEST_SCOPE,
+          principalId: "catalog-agent",
+          actorUserId: "user-1",
+          subjectUserId: "user-1",
+          nodeId: "operator-node-id",
+        },
         async () => {
           const provider = new LangGraphInProcProvider(
             createMockAdapter(),
@@ -263,6 +278,8 @@ describe("LangGraphInProcProvider", () => {
         {
           ...TEST_SCOPE,
           actorUserId: "00000000-0000-4000-a000-000000000001",
+          subjectUserId: "00000000-0000-4000-a000-000000000001",
+          principalId: "catalog-agent",
           nodeId: "operator-node-id",
           grantId: "grant-123",
         },
@@ -280,7 +297,8 @@ describe("LangGraphInProcProvider", () => {
       );
       const config = toolRunnerSpy.calls[0]?.[2] as Record<string, unknown>;
       expect(config).toMatchObject({
-        actorId: "user:00000000-0000-4000-a000-000000000001",
+        actorId: "user:catalog-agent",
+        subjectId: "user:00000000-0000-4000-a000-000000000001",
         tenantId: "test-billing",
         graphId: "langgraph:poet",
         nodeId: "operator-node-id",
@@ -288,6 +306,232 @@ describe("LangGraphInProcProvider", () => {
       });
       expect(typeof config.onAuthzDecision).toBe("function");
       expect(config).not.toHaveProperty("authz");
+    });
+  });
+
+  describe("catalog principal reaches the outer runner (story.0085)", () => {
+    const principalId = "operating-review-user";
+    const nodeId = "operator-node-id";
+    const readId = "core__goal_list";
+    const writeId = "core__work_item_update";
+
+    async function launch(
+      options: {
+        graph?: string;
+        subjectUserId?: string;
+        principal?: string;
+        granted?: boolean;
+        privileged?: boolean;
+        unavailable?: boolean;
+      } = {}
+    ) {
+      toolRunnerSpy.runners.length = 0;
+      const writes = vi.fn(async (_args: unknown, ctx: unknown) => ({ ctx }));
+      const reads = vi.fn(async () => ({ goals: [] }));
+      const runtime = (
+        id: string,
+        exec: BoundToolRuntime["exec"],
+        effect: BoundToolRuntime["effect"]
+      ): BoundToolRuntime => ({
+        id,
+        spec: {
+          name: id,
+          description: "authorization fixture",
+          inputSchema: { type: "object" },
+        },
+        effect,
+        requires: options.privileged ? "node.flight" : "node.collaborate",
+        requiresConnection: false,
+        capabilities: [],
+        validateInput: (v) => v,
+        validateOutput: (v) => v,
+        redact: (v) => v,
+        exec,
+      });
+      const source = new Map([
+        [readId, runtime(readId, reads, "read_only")],
+        [writeId, runtime(writeId, writes, "state_change")],
+        [
+          "core__edo_decide",
+          runtime("core__edo_decide", writes, "state_change"),
+        ],
+      ]);
+      const granted = options.granted ?? true;
+      const liveScopes = vi.fn(async (id: string, scopes: readonly string[]) =>
+        granted && id === principalId ? [...scopes] : []
+      );
+      const hasLiveRole = vi.fn(
+        async (id: string) => granted && id === principalId
+      );
+      const store = { liveScopes, hasLiveRole } as unknown as AgentGrantsStore;
+      const adminCheck = vi.fn(async () => "allow" as const);
+      const authority: GuardDeps = {
+        withStore: async (fn) => {
+          if (options.unavailable) throw new Error("authority unavailable");
+          return fn(store);
+        },
+        adminCheck,
+      };
+      const authorization = new FakeAuthorizationAdapter();
+      const check = vi.spyOn(authorization, "check");
+      const scope = {
+        ...TEST_SCOPE,
+        ...(options.principal ? { principalId: options.principal } : {}),
+        ...(options.subjectUserId
+          ? {
+              subjectUserId: options.subjectUserId,
+              actorUserId: options.subjectUserId,
+            }
+          : {}),
+        runId: "test-run-id",
+        runKind: "system_scheduled" as const,
+        nodeId,
+      };
+      const provider = new LangGraphInProcProvider(
+        createMockAdapter(),
+        {
+          getBoundTool: (id) => source.get(id),
+          listToolSpecs: () => [...source.values()].map((r) => r.spec),
+          hasToolId: (id) => source.has(id),
+        },
+        undefined,
+        [],
+        authorization,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        authority
+      );
+      await runInScope(scope, async () => {
+        const result = provider.runGraph(
+          createTestRequest({
+            graphId: `langgraph:${options.graph ?? "operating-review"}`,
+          })
+        );
+        for await (const _ of result.stream) {
+          /* drain */
+        }
+        await result.final;
+      });
+      const runner = toolRunnerSpy.runners[0];
+      if (!runner) throw new Error("provider did not create a tool runner");
+      return {
+        writes,
+        reads,
+        check,
+        liveScopes,
+        hasLiveRole,
+        adminCheck,
+        exec: (id: string, args: unknown = {}) =>
+          runInScope(scope, () => runner.exec(id, args)),
+      };
+    }
+
+    it.each([
+      "cogni",
+      "brain",
+      "autoresearch-single-lane",
+      "autoresearch-syntropy-loop",
+      "autoresearch-registry-swarm",
+    ])("subjectless %s executes EDO writes beyond the outer gate", async (graph) => {
+      const run = await launch({ graph, principal: principalId });
+      if (graph === "cogni") {
+        expect(await run.exec(readId)).toMatchObject({ ok: true });
+        expect(run.reads).toHaveBeenCalledOnce();
+      }
+      expect(await run.exec("core__edo_decide")).toMatchObject({ ok: true });
+      expect(run.writes).toHaveBeenCalledWith(
+        {},
+        expect.objectContaining({ actorId: `user:${principalId}` }),
+        {}
+      );
+      expect(run.writes.mock.calls[0]?.[1]).not.toHaveProperty("subjectId");
+      expect(run.hasLiveRole).toHaveBeenCalledWith(principalId, "edo:write");
+    });
+
+    it("Operating Review retains its own catalog identity and executes a triage patch with a separate requester", async () => {
+      expect(LANGGRAPH_CATALOG["operating-review"]?.principal).toBe(
+        "operating-review"
+      );
+      const run = await launch({
+        principal: principalId,
+        subjectUserId: "requester",
+      });
+      const patch = {
+        id: "task.1",
+        expectedRevision: 4,
+        reason: "Triage",
+        set: { priority: 2, status: "needs_design" },
+      };
+      expect(await run.exec(writeId, patch)).toMatchObject({ ok: true });
+      expect(run.writes).toHaveBeenCalledWith(
+        patch,
+        expect.objectContaining({
+          actorId: `user:${principalId}`,
+          subjectId: "user:requester",
+        }),
+        {}
+      );
+      expect(run.hasLiveRole).toHaveBeenCalledWith(
+        principalId,
+        "work_item:transition"
+      );
+      const prompt = LANGGRAPH_CATALOG["operating-review"]?.systemPrompt;
+      expect(prompt).toContain("set:{priority, status}");
+      expect(prompt).not.toContain("Status writes are unavailable");
+      expect(prompt).toContain("gate_unmet");
+    });
+
+    it("an authenticated requester never substitutes for a missing principal", async () => {
+      const run = await launch({ subjectUserId: "requester" });
+      expect(await run.exec(writeId)).toMatchObject({ ok: false });
+      expect(run.writes).not.toHaveBeenCalled();
+      const config = toolRunnerSpy.calls.at(-1)?.[2] as Record<string, unknown>;
+      expect(config).not.toHaveProperty("actorId");
+      expect(config.subjectId).toBe("user:requester");
+    });
+
+    it.each([
+      { granted: false },
+      { unavailable: true },
+    ])("missing or unavailable principal grants withhold writers: %j", async (options) => {
+      const run = await launch({ principal: principalId, ...options });
+      expect(await run.exec(writeId)).toMatchObject({ ok: false });
+      expect(run.writes).not.toHaveBeenCalled();
+    });
+
+    it("revocation after offering a writer refuses before mutation", async () => {
+      const run = await launch({
+        graph: "cogni",
+        principal: principalId,
+        subjectUserId: "requester",
+      });
+      run.hasLiveRole.mockResolvedValue(false);
+      expect(await run.exec("core__edo_decide")).toMatchObject({ ok: false });
+      expect(run.writes).not.toHaveBeenCalled();
+    });
+
+    it("genuine operator actions still require OpenFGA permission", async () => {
+      const run = await launch({
+        graph: "cogni",
+        principal: principalId,
+        privileged: true,
+      });
+      expect(await run.exec(readId)).toMatchObject({
+        ok: false,
+        errorCode: "authz_denied",
+      });
+      expect(run.check).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorId: `user:${principalId}`,
+          action: "node.flight",
+          resource: `node:${nodeId}`,
+        })
+      );
+      expect(run.reads).not.toHaveBeenCalled();
     });
   });
 
@@ -440,6 +684,8 @@ describe("LangGraphInProcProvider", () => {
         {
           ...TEST_SCOPE,
           actorUserId: "00000000-0000-4000-a000-000000000001",
+          subjectUserId: "00000000-0000-4000-a000-000000000001",
+          principalId: "catalog-agent",
           nodeId: OPERATOR_NODE,
           codeSubject: subject,
         },

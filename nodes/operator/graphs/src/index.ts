@@ -22,21 +22,48 @@ import {
   OPERATOR_LANGGRAPH_GRAPH_IDS,
 } from "@cogni/langgraph-graphs";
 
-import { NODE_LANGGRAPH_CATALOG } from "@cogni/shared-langgraph-graphs";
+import {
+  EDO_DECIDE_NAME,
+  EDO_HYPOTHESIZE_NAME,
+  EDO_RECORD_OUTCOME_NAME,
+} from "@cogni/ai-tools";
+
+// These programs are this node's AI, not their human requester. Catalog identity
+// is explicit at composition; the launcher never falls back to a caller/system actor.
+const nodeAiCatalog = Object.fromEntries(
+  Object.entries(OPERATOR_LANGGRAPH_CATALOG).map(([id, entry]) => [
+    id,
+    { ...entry, principal: "node-ai" },
+  ])
+);
 
 const cogniWorkReview = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
 if (!cogniWorkReview)
   throw new Error("Operator Cogni graph is missing work-prioritizer");
 export const LANGGRAPH_CATALOG: LangGraphCatalog &
   Readonly<Record<string, { readonly principal?: string }>> = {
-  ...OPERATOR_LANGGRAPH_CATALOG,
+  ...nodeAiCatalog,
+  brain: {
+    ...OPERATOR_LANGGRAPH_CATALOG.brain,
+    principal: "node-ai",
+    toolIds: [
+      ...OPERATOR_LANGGRAPH_CATALOG.brain.toolIds,
+      EDO_HYPOTHESIZE_NAME,
+      EDO_DECIDE_NAME,
+      EDO_RECORD_OUTCOME_NAME,
+    ],
+  },
   cogni: {
     ...OPERATOR_LANGGRAPH_CATALOG.cogni,
-    principal: NODE_LANGGRAPH_CATALOG.cogni.principal,
+    principal: "node-ai",
+  },
+  "operating-review": {
+    ...OPERATOR_LANGGRAPH_CATALOG["operating-review"],
+    principal: "operating-review",
   },
   "work-prioritizer": {
     ...cogniWorkReview,
-    principal: NODE_LANGGRAPH_CATALOG["work-prioritizer"].principal,
+    principal: "prioritizer",
   },
 };
 export {

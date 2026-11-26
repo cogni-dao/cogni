@@ -448,8 +448,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         const policy = createToolAllowlistPolicy(allToolIds);
         const source = createStaticToolSourceFromRecord(runtimeTools);
         const actorId =
-          scope.actorUserId !== undefined
-            ? `user:${scope.actorUserId}`
+          scope.principalId !== undefined
+            ? `user:${scope.principalId}`
             : undefined;
         const tenantId = scope.billing.billingAccountId;
         // Authority is checked on the REVIEWED node (`node_code_*` needs `node.flight` there); `scope.nodeId`
@@ -462,6 +462,9 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           // node policies are evaluated with or without OpenFGA; `authz` only when installed.
           // Undeclared tools keep the legacy path (authz-checked only when an adapter exists).
           ...(actorId !== undefined ? { actorId } : {}),
+          ...(scope.subjectUserId !== undefined
+            ? { subjectId: `user:${scope.subjectUserId}` }
+            : {}),
           tenantId,
           graphId,
           ...(authzNodeId !== undefined ? { nodeId: authzNodeId } : {}),
@@ -541,8 +544,8 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         configurable: {
           model,
           toolIds: offeredIds,
-          ...(scope.actorUserId !== undefined
-            ? { actorId: `user:${scope.actorUserId}` }
+          ...(scope.principalId !== undefined
+            ? { actorId: `user:${scope.principalId}` }
             : {}),
           tenantId: scope.billing.billingAccountId,
           graphId,

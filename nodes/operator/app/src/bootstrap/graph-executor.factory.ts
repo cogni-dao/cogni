@@ -45,6 +45,7 @@ import {
 } from "@cogni/langgraph-graphs";
 import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
+import { GRAPH_RUN_KINDS } from "@cogni/scheduler-core";
 import {
   createPostgresAgentGrantsStore,
   resolveInternalPrincipal,
@@ -331,8 +332,11 @@ export function runGraphWithScope(params: {
       SYSTEM_ACTOR,
       req.runId
     );
-    if (run && run.graphId !== req.graphId)
+    if (!run) throw new Error("durable graph run required");
+    if (run.runId !== req.runId || run.graphId !== req.graphId)
       throw new Error("run graph identity mismatch");
+    if (!run.runKind || !GRAPH_RUN_KINDS.includes(run.runKind))
+      throw new Error("durable graph run kind required");
     const graphName = req.graphId.startsWith("langgraph:")
       ? req.graphId.slice("langgraph:".length)
       : undefined;
@@ -355,7 +359,7 @@ export function runGraphWithScope(params: {
         llmService,
         usageSource,
         runId: req.runId,
-        ...(run?.runKind ? { runKind: run.runKind } : {}),
+        runKind: run.runKind,
         ...(principalId ? { principalId } : {}),
         ...(params.nodeId ? { nodeId: params.nodeId } : {}),
         ...(params.grantId ? { grantId: params.grantId } : {}),
