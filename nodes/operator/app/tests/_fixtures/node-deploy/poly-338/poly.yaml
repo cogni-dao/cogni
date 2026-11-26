@@ -1,0 +1,58 @@
+# Fixture for bug.5666. Source: cogni-dao/poly@adafa17294d1 (PR #338 head), .cogni/workloads/poly.yaml, verbatim below this line.
+# Workload manifest (hub `workload-manifest`, story.5137): this node's app on the operator's
+# node-deploy verb. `POST /api/v1/deploy/workloads {nodeId, env, workload: "poly", sourceSha}`
+# reads this file at sourceSha. Image "." = the image this repo's CI built at that sha.
+# Runtime env and secrets come from the operator (OpenBao custody), never from this file.
+# Each merge to main ships through that one verb (story.5127): build once, blue/green, exact SHA.
+apiVersion: score.dev/v1b1
+metadata:
+  # The workload is named for the node: the actuator binds poly's dedicated database cell to the
+  # release whose workload equals the node slug (akash-tx-actuator requireQualifiedCellRelease).
+  name: poly
+  annotations:
+    cogni.dev/exclusive: "false"
+    cogni.dev/ephemeral-storage: 4Gi
+    cogni.dev/qualification-path: /api/v1/deploy/qualification
+    cogni.dev/qualification-timeout-ms: "20000"
+    # story.5141: Poly owns its placement. Polymarket-allowed countries only
+    # (https://docs.polymarket.com/api-reference/geoblock). Read by the operator at this source SHA.
+    cogni.dev/placement-countries-production: "BG,CZ,FI,NL,PT,UA"
+    cogni.dev/placement-countries-candidate-a: "FI,NL,PT,UA"
+    cogni.dev/placement-countries-preview: "FI,NL,PT,UA"
+containers:
+  app:
+    image: .
+    variables:
+      COGNI_CODING_ACTOR_IDS: "4bfb4411-75c8-4cd7-830f-87e2d91ec4ac"
+    resources:
+      requests:
+        cpu: "2"
+        # story.5142: 2 GiB drew no Polymarket-allowed bid (0 of 5 probe auctions, 2026-11-07); with
+        # more than 2 GiB the BG digitalfrontier provider bid every time (8 of 8).
+        memory: 4096Mi
+    readinessProbe:
+      httpGet:
+        path: /readyz
+        port: 3200
+  paper-trader:
+    image: .
+    resources:
+      requests:
+        cpu: "0.5"
+        memory: 384Mi
+    readinessProbe:
+      httpGet:
+        path: /readyz
+        port: 9100
+service:
+  ports:
+    web:
+      port: 80
+      targetPort: 3200
+resources:
+  web:
+    type: route
+    params:
+      host: poly.cognidao.org
+      path: /
+      port: 80

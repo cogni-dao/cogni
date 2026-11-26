@@ -33,6 +33,14 @@ import {
   type MeshCompanionService,
 } from "./mesh-attempt";
 
+/**
+ * The node's "app workload with companions" test (bug.5666): a manifest with private companions or a
+ * qualification annotation. ONE spelling, shared by the declaration partition and the sequencer.
+ */
+export function hasCompanionsOrQualification(w: NodeWorkloadSpec): boolean {
+  return Boolean(w.companions?.length || w.health?.qualification);
+}
+
 export function publicHostOf(w: NodeWorkloadSpec): string | undefined {
   return "http" in w.expose ? w.expose.http.host : undefined;
 }

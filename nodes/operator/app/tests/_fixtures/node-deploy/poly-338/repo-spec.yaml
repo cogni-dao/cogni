@@ -1,0 +1,88 @@
+# Fixture for bug.5666. Source: cogni-dao/poly@adafa17294d1 (PR #338 head), .cogni/repo-spec.yaml.
+# Trimmed to what the operator reads for a deploy: node identity, the required `governance` block and `deployment.services`.
+# The service blocks and their comments are verbatim; ledger, payments and gate fields are removed.
+
+schema_version: "0.1.4"
+
+node_id: "4b06359a-a859-4399-888e-a8c7a6696f7e"
+scope_id: "8ed85c91-0cf9-5c3c-b56b-19431d36815a"
+scope_key: "default"
+
+intent:
+  name: poly
+
+governance:
+  dao_contract: "0x8a018d191f7135dbf1adc5fa5a76e46cf02cc69c"
+  plugin_contract: "0xfa4e08aed196f64a4bd66c82616c956c42c6d160"
+  signal_contract: "0x99ae96f6f04b0276571d5a6df24021585477797f"
+  chain_id: "8453"
+  base_url: "https://proposal.cognidao.org"
+
+deployment:
+  services:
+    - name: app
+      artifact:
+        name: app
+        context: .
+        dockerfile: Dockerfile
+        target: runner
+      port: 3200
+      visibility: public
+      runtime_profile: cogni-node-app-v1
+      bindings:
+        # Operator resolves this to the paper-trader companion's URL. The app routes
+        # paper-venue accounts through it; the companion is selected only for
+        # candidate-a and preview (see `envs` on the paper-trader service below).
+        PAPER_SIDECAR_URL: paper-trader
+      # Node secrets beyond the runtime profile are declared ONCE in
+      # .cogni/secrets-catalog.yaml; an entry's `workloads: [app]` delivers it to
+      # this service (bug.5254). Never list keys here.
+      bind_host: 0.0.0.0
+      resources:
+        cpu_units: 2
+        memory_mi: 2048
+        storage_mi: 4096
+    # Paper-trading sidecar (as-built from cogni-poly). FastAPI wrapper over the
+    # vendored polymarket-paper-trader; the app's buildPaperOnlyExecutor talks to
+    # it over PAPER_SIDECAR_URL. Private (loopback-tier); no runtime_profile (not
+    # a cogni-node-app). Gated to the paper-trading envs via `envs` (story.5043):
+    # production runs live-CLOB (PAPER_ENFORCE_MODE=live) and never routes to the
+    # sidecar, so excluding it keeps prod a 1-service akash lease that ships
+    # in-place — no lease re-mint (prod is the activity_env and cannot re-mint).
+    - name: paper-trader
+      artifact:
+        name: paper-trader
+        context: sidecars/paper-trader
+        # dockerfile is repo-root-relative (like the app's); COPY paths inside it
+        # resolve against `context`. Build the `base` runtime stage, not `test`.
+        dockerfile: sidecars/paper-trader/Dockerfile
+        target: base
+      port: 9100
+      visibility: private
+      # story.5043 per-service env gate: deploy the sidecar ONLY where paper mode
+      # runs. Absent = every env; listing these two excludes production.
+      envs: [candidate-a, preview]
+      bindings: {}
+      bind_host: 0.0.0.0
+      resources:
+        cpu_units: 0.5
+        memory_mi: 384
+        storage_mi: 1024
+    # Remote code-execution workspace (OpenSandbox execd behind Caddy) that
+    # agent tools call over HTTPS. It deploys as its own lease (workload
+    # `sandbox`) under Poly's identity at poly-sandbox[-<env>].
+    # No app→sandbox binding — cross-lease bindings are refused; the app
+    # derives the sandbox host from its own public host instead.
+    - name: sandbox
+      artifact:
+        name: sandbox
+        context: services/sandbox
+        dockerfile: services/sandbox/Dockerfile
+      port: 8080
+      visibility: private
+      bindings: {}
+      bind_host: 0.0.0.0
+      resources:
+        cpu_units: 1
+        memory_mi: 1024
+        storage_mi: 5120
