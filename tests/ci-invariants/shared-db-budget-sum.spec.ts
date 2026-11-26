@@ -5,7 +5,7 @@
  * Module: `@tests/ci-invariants/shared-db-budget-sum`
  * Purpose: Keep the sum of every lane-resident node's role caps under each env's Postgres ceiling.
  * Scope: Declarative catalog + budget-profile arithmetic; mirrors reconcile-node-substrate.sh scaling. Does not read live Postgres or prove admission.
- * Invariants: Caps scale by catalog `copies` / profile `copies`; per env sum <= env_max_connections[env] - reserve. A non-production `dedicated` row without `placement: akash-cell` keeps its roles on the lane Postgres, so it counts; a row's `roleConnectionLimits` replaces profile x copies for that row (bug.5645).
+ * Invariants: Caps are declared roleConnectionLimits else profile x copies; per env sum <= env_max_connections - reserve; a non-production dedicated row without akash-cell placement counts (bug.5645).
  * Side-effects: IO (reads infra/catalog and infra/database-budget-profiles.yaml)
  * Links: bug.5637, bug.5645, story.5159, database-expert axiom 3, noisy-neighbor-database-architecture
  * @internal
