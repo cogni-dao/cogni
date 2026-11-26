@@ -50,11 +50,6 @@ operator-control-v1:
 
 dedicated-high-throughput-v1:
   design_rate_per_minute: 240
-  # bug.5645 — the caps below fit this many simultaneous copies of the node: one workload x
-  # (1 live + 1 spare/release slot). A lane row that declares database.<env>.copies scales both
-  # caps by copies / this value. It scales lane role caps only (reconcile-node-substrate.sh); the
-  # cell kit budget below is read unscaled and a retained production cell keeps its audited bounds.
-  copies: 2
   cell_capacity:
     vcpus: 4
     memory_gib: 16

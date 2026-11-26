@@ -5,7 +5,7 @@
  * Module: `@tests/ci-invariants/shared-db-budget-sum`
  * Purpose: Keep the sum of every lane-resident node's role caps under each env's Postgres ceiling.
  * Scope: Declarative catalog + budget-profile arithmetic; mirrors reconcile-node-substrate.sh scaling. Does not read live Postgres or prove admission.
- * Invariants: Caps scale by catalog `copies` / profile `copies`; per env sum <= env_max_connections[env] - reserve. A non-production `dedicated` row without `placement: akash-cell` keeps its roles on the lane Postgres, so it counts (bug.5645).
+ * Invariants: Caps scale by catalog `copies` / profile `copies`; per env sum <= env_max_connections[env] - reserve. A non-production `dedicated` row without `placement: akash-cell` keeps its roles on the lane Postgres, so it counts; a row's `roleConnectionLimits` replaces profile x copies for that row (bug.5645).
  * Side-effects: IO (reads infra/catalog and infra/database-budget-profiles.yaml)
  * Links: bug.5637, bug.5645, story.5159, database-expert axiom 3, noisy-neighbor-database-architecture
  * @internal
@@ -54,6 +54,7 @@ const catalogs = readdirSync(path.join(root, "infra/catalog"))
             budget_profile: string;
             copies?: number;
             placement?: string;
+            roleConnectionLimits?: { app: number; service: number };
             runtimePoolLimits?: {
               replicaCount: number;
               app: number;
@@ -90,7 +91,32 @@ function onLanePostgres(
   );
 }
 
-/** Sum of every lane-resident node's role caps declared for one env. */
+interface Placement {
+  tier: string;
+  budget_profile: string;
+  copies?: number;
+  placement?: string;
+  roleConnectionLimits?: { app: number; service: number };
+}
+
+/** The native role caps reconcile-node-substrate.sh applies to a row: declared directly, else profile x copies. */
+function roleCaps(placement: Placement, profile: Profile) {
+  if (placement.roleConnectionLimits) return placement.roleConnectionLimits;
+  return {
+    app: scaled(
+      profile.roles.app.connection_limit,
+      placement.copies,
+      profile.copies
+    ),
+    service: scaled(
+      profile.roles.service.connection_limit,
+      placement.copies,
+      profile.copies
+    ),
+  };
+}
+
+/** Role-connection sum of every lane-resident node declared for one env. */
 function roleCapSum(env: (typeof ENVS)[number]) {
   let sum = 0;
   for (const node of catalogs) {
@@ -99,19 +125,9 @@ function roleCapSum(env: (typeof ENVS)[number]) {
     const profile = profiles[placement.budget_profile];
     expect(profile, `${node.name}: unknown profile`).toBeDefined();
     if (!profile) continue;
+    const caps = roleCaps(placement, profile);
     // app + service + migration (1) + recovery probe (1)
-    sum +=
-      scaled(
-        profile.roles.app.connection_limit,
-        placement.copies,
-        profile.copies
-      ) +
-      scaled(
-        profile.roles.service.connection_limit,
-        placement.copies,
-        profile.copies
-      ) +
-      2;
+    sum += caps.app + caps.service + 2;
   }
   return sum;
 }
@@ -172,52 +188,58 @@ describe("shared database budget sum (bug.5637)", () => {
     }
   });
 
-  // bug.5645: poly's candidate-a and preview lanes. A release runs the serving pod, the new blue pod
-  // and the app's qualification (one dedicated app-role connection) at once, and a failed release
-  // leaves its pod holding connections until retired. Pools stay below the caps, one reserved per role.
+  // bug.5645: poly's candidate-a and preview lanes, sized from ONE model (documented in poly.yaml):
+  // simultaneous pods N, each holding its pools plus one transient qualification connection and one
+  // job leader, with one connection reserved per role. Everything below is derived from the catalog.
+  //   N = live + retiring (the sequencer keeps a replaced lease for 10 minutes) + blue.
+  const SIMULTANEOUS_PODS = 3;
+  // poly bootstrap/qualification.ts: one transient app-role connection per process.
+  const QUALIFICATION_APP_CONNECTIONS = 1;
+  // Per pod service_poly: service pool + read pool + one job-leader connection.
+  const LEADER_CONNECTIONS = 1;
+  const RESERVE = 1;
+
   describe.each([
     "candidate-a",
     "preview",
-  ] as const)("poly %s role caps cover blue/green and qualification", (env) => {
+  ] as const)("poly %s role caps cover every simultaneous pod", (env) => {
     const poly = catalogs.find((c) => c.name === "poly");
     const placement = poly?.database?.[env];
-    const profile = profiles[placement?.budget_profile ?? ""];
     const pools = placement?.runtimePoolLimits;
-    const appCap = scaled(
-      profile?.roles.app.connection_limit ?? 0,
-      placement?.copies,
-      profile?.copies
-    );
-    const serviceCap = scaled(
-      profile?.roles.service.connection_limit ?? 0,
-      placement?.copies,
-      profile?.copies
-    );
-    // poly bootstrap/qualification.ts: one transient app-role connection per qualification.
-    const QUALIFICATION_APP_CONNECTIONS = 1;
-    const RESERVE = 1;
-    // Per pod service_poly: service pool + read pool + one job-leader connection.
-    const LEADER_CONNECTIONS = 1;
+    const caps = placement?.roleConnectionLimits;
 
-    it("declares copies and explicit pool limits", () => {
-      expect(profile?.copies).toBe(2);
-      expect(placement?.copies).toBe(4);
-      expect(pools).toEqual({ replicaCount: 1, app: 1, service: 1, read: 1 });
+    it("declares explicit pools and role caps, never both copies and caps", () => {
+      expect(pools).toBeDefined();
+      expect(caps).toBeDefined();
+      expect(placement?.copies).toBeUndefined();
     });
 
-    it("app_poly fits serving + blue + qualification with one reserved", () => {
-      expect(appCap).toBe(4);
-      const demand = 2 * (pools?.app ?? 0) + QUALIFICATION_APP_CONNECTIONS;
-      expect(demand + RESERVE).toBeLessThanOrEqual(appCap);
+    it("app_poly = pods x (app pool + qualification) + one reserved", () => {
+      const perPod = (pools?.app ?? 0) + QUALIFICATION_APP_CONNECTIONS;
+      expect(caps?.app).toBe(SIMULTANEOUS_PODS * perPod + RESERVE);
     });
 
-    it("service_poly fits every simultaneous copy with one reserved", () => {
-      expect(serviceCap).toBe(16);
+    it("service_poly = pods x (service + read + leader) + one reserved", () => {
       const perPod =
         (pools?.service ?? 0) + (pools?.read ?? 0) + LEADER_CONNECTIONS;
-      expect(perPod * (placement?.copies ?? 0) + RESERVE).toBeLessThanOrEqual(
-        serviceCap
-      );
+      expect(caps?.service).toBe(SIMULTANEOUS_PODS * perPod + RESERVE);
     });
+  });
+
+  it("only a dedicated row declares roleConnectionLimits, and never with copies", () => {
+    for (const node of catalogs) {
+      for (const [env, placement] of Object.entries(node.database ?? {})) {
+        if (!placement.roleConnectionLimits) continue;
+        expect(placement.tier, `${node.name}/${env}`).toBe("dedicated");
+        expect(placement.copies, `${node.name}/${env}`).toBeUndefined();
+        expect(placement.placement, `${node.name}/${env}`).toBeUndefined();
+      }
+    }
+  });
+
+  it("poly production keeps its audited cell: no lane role caps declared", () => {
+    const poly = catalogs.find((c) => c.name === "poly");
+    expect(poly?.database?.production?.roleConnectionLimits).toBeUndefined();
+    expect(poly?.database?.production?.copies).toBeUndefined();
   });
 });

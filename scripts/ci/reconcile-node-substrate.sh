@@ -290,6 +290,19 @@ if [[ -n "$catalog_copies" && "$catalog_copies" != "null" ]]; then
   db_app_connection_limit=$(( (db_app_connection_limit * catalog_copies + profile_copies - 1) / profile_copies ))
   db_service_connection_limit=$(( (db_service_connection_limit * catalog_copies + profile_copies - 1) / profile_copies ))
 fi
+# bug.5645 — a lane whose per-copy demand differs from the profile's declares its native role caps
+# directly (one copies ratio cannot size both roles). Exclusive with copies; the schema refuses the
+# pair and any shared-tier row, so deploy-infra.sh (which writes shared rows) never needs to read it.
+role_limit_app="$(yq -r ".database.\"${DEPLOY_ENVIRONMENT}\".roleConnectionLimits.app // \"\"" "$node_catalog_file")"
+role_limit_service="$(yq -r ".database.\"${DEPLOY_ENVIRONMENT}\".roleConnectionLimits.service // \"\"" "$node_catalog_file")"
+if [[ -n "$role_limit_app$role_limit_service" ]]; then
+  [[ -z "$catalog_copies" || "$catalog_copies" == "null" ]] \
+    || fail "database ${TARGET_NODE}/${DEPLOY_ENVIRONMENT} declares both copies and roleConnectionLimits"
+  [[ "$role_limit_app" =~ ^[1-9][0-9]*$ && "$role_limit_service" =~ ^[1-9][0-9]*$ ]] \
+    || fail "roleConnectionLimits for ${TARGET_NODE}/${DEPLOY_ENVIRONMENT} needs positive integer app and service"
+  db_app_connection_limit="$role_limit_app"
+  db_service_connection_limit="$role_limit_service"
+fi
 for budget_number in \
   "$db_app_connection_limit" "$db_app_statement_timeout_ms" \
   "$db_service_connection_limit" "$db_service_statement_timeout_ms" \
