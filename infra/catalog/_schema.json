@@ -336,7 +336,7 @@
           "maximum": 32
         },
         "roleConnectionLimits": {
-          "description": "bug.5645: native CONNECTION LIMIT of the lane's app and service roles, declared directly when a node's per-copy demand differs from the budget profile's (one `copies` ratio cannot size both roles). Replaces profile x copies for this row; exclusive with copies; dedicated tier only, because only reconcile-node-substrate.sh reads it (deploy-infra.sh writes shared rows).",
+          "description": "bug.5645: native CONNECTION LIMIT of the lane's app and service roles, declared directly when a node's per-copy demand differs from the budget profile's (one `copies` ratio cannot size both roles). Replaces profile x copies for this row; exclusive with copies and akash-cell placement (a placed cell takes the profile caps); dedicated tier only, because only reconcile-node-substrate.sh reads it (deploy-infra.sh writes shared rows).",
           "type": "object",
           "additionalProperties": false,
           "required": ["app", "service"],
@@ -374,7 +374,12 @@
           "if": { "required": ["roleConnectionLimits"] },
           "then": {
             "properties": { "tier": { "const": "dedicated" } },
-            "not": { "required": ["copies"] }
+            "not": {
+              "anyOf": [
+                { "required": ["copies"] },
+                { "required": ["placement"] }
+              ]
+            }
           }
         }
       ]

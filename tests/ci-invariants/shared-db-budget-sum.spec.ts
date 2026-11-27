@@ -22,7 +22,12 @@ const ENVS = ["candidate-a", "preview", "production"] as const;
 // deploy-infra.sh passes the same value to the shared Postgres (`-c max_connections`, default 100).
 // Reserve covers superuser slots, the readonly exporter/Grafana role, support sessions and one
 // migration burst outside node budgets.
-const RESERVE = 15;
+const ENV_RESERVE = 15;
+
+/** Connections node roles may use on one env Postgres. Module-level so no inner scope can shadow the reserve. */
+function envBudget(env: (typeof ENVS)[number]) {
+  return (envMaxConnections[env] ?? 0) - ENV_RESERVE;
+}
 
 interface Profile {
   copies?: number;
@@ -141,7 +146,7 @@ describe("shared database budget sum (bug.5637)", () => {
     ).toBe(true);
     expect(maxConnections).toBeGreaterThanOrEqual(20);
     expect(maxConnections).toBeLessThanOrEqual(500);
-    expect(roleCapSum(env)).toBeLessThanOrEqual(maxConnections - RESERVE);
+    expect(roleCapSum(env)).toBeLessThanOrEqual(envBudget(env));
   });
 
   // candidate-a is deliberately sized for the raised 200 ceiling (per-dev test envs, story.5159).
@@ -149,7 +154,13 @@ describe("shared database budget sum (bug.5637)", () => {
     "preview",
     "production",
   ] as const)("%s current catalog also fits the image-default ceiling of 100", (env) => {
-    expect(roleCapSum(env)).toBeLessThanOrEqual(100 - RESERVE);
+    expect(roleCapSum(env)).toBeLessThanOrEqual(100 - ENV_RESERVE);
+  });
+
+  // Canary: a shadowed or edited reserve once turned `max - 15` into `max - 1` and CI stayed green.
+  it.each(ENVS)("%s budget keeps the 15-connection reserve", (env) => {
+    expect(ENV_RESERVE).toBe(15);
+    expect(envBudget(env)).toBe((envMaxConnections[env] ?? 0) - 15);
   });
 
   it("only candidate-a raises the ceiling above the image default", () => {
@@ -197,7 +208,7 @@ describe("shared database budget sum (bug.5637)", () => {
   const QUALIFICATION_APP_CONNECTIONS = 1;
   // Per pod service_poly: service pool + read pool + one job-leader connection.
   const LEADER_CONNECTIONS = 1;
-  const RESERVE = 1;
+  const POD_RESERVE = 1;
 
   describe.each([
     "candidate-a",
@@ -216,13 +227,13 @@ describe("shared database budget sum (bug.5637)", () => {
 
     it("app_poly = pods x (app pool + qualification) + one reserved", () => {
       const perPod = (pools?.app ?? 0) + QUALIFICATION_APP_CONNECTIONS;
-      expect(caps?.app).toBe(SIMULTANEOUS_PODS * perPod + RESERVE);
+      expect(caps?.app).toBe(SIMULTANEOUS_PODS * perPod + POD_RESERVE);
     });
 
     it("service_poly = pods x (service + read + leader) + one reserved", () => {
       const perPod =
         (pools?.service ?? 0) + (pools?.read ?? 0) + LEADER_CONNECTIONS;
-      expect(caps?.service).toBe(SIMULTANEOUS_PODS * perPod + RESERVE);
+      expect(caps?.service).toBe(SIMULTANEOUS_PODS * perPod + POD_RESERVE);
     });
   });
 
