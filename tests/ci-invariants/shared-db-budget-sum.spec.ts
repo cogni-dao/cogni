@@ -3,11 +3,11 @@
 
 /**
  * Module: `@tests/ci-invariants/shared-db-budget-sum`
- * Purpose: Keep the sum of every shared-tier node's role caps under each env's Postgres ceiling.
+ * Purpose: Keep the sum of every lane-resident node's role caps under each env's Postgres ceiling.
  * Scope: Declarative catalog + budget-profile arithmetic; mirrors reconcile-node-substrate.sh scaling. Does not read live Postgres or prove admission.
- * Invariants: Caps scale by catalog `copies` / profile `copies`; per env sum <= env_max_connections[env] - reserve.
+ * Invariants: Caps are declared roleConnectionLimits else profile x copies; per env sum <= env_max_connections - reserve; a non-production dedicated row without akash-cell placement counts (bug.5645).
  * Side-effects: IO (reads infra/catalog and infra/database-budget-profiles.yaml)
- * Links: bug.5637, story.5159, database-expert axiom 3, noisy-neighbor-database-architecture
+ * Links: bug.5637, bug.5645, story.5159, database-expert axiom 3, noisy-neighbor-database-architecture
  * @internal
  */
 
@@ -22,7 +22,12 @@ const ENVS = ["candidate-a", "preview", "production"] as const;
 // deploy-infra.sh passes the same value to the shared Postgres (`-c max_connections`, default 100).
 // Reserve covers superuser slots, the readonly exporter/Grafana role, support sessions and one
 // migration burst outside node budgets.
-const RESERVE = 15;
+const ENV_RESERVE = 15;
+
+/** Connections node roles may use on one env Postgres. Module-level so no inner scope can shadow the reserve. */
+function envBudget(env: (typeof ENVS)[number]) {
+  return (envMaxConnections[env] ?? 0) - ENV_RESERVE;
+}
 
 interface Profile {
   copies?: number;
@@ -49,7 +54,19 @@ const catalogs = readdirSync(path.join(root, "infra/catalog"))
         name: string;
         database?: Record<
           string,
-          { tier: string; budget_profile: string; copies?: number }
+          {
+            tier: string;
+            budget_profile: string;
+            copies?: number;
+            placement?: string;
+            roleConnectionLimits?: { app: number; service: number };
+            runtimePoolLimits?: {
+              replicaCount: number;
+              app: number;
+              service: number;
+              read: number;
+            };
+          }
         >;
       }
   );
@@ -65,28 +82,57 @@ function scaled(
   return Math.ceil((cap * copies) / base);
 }
 
-/** Sum of every shared-tier node's role caps declared for one env. */
+/**
+ * A row's roles live on this env's Postgres when it is shared, or when it is a non-production
+ * dedicated row that has no applied `akash-cell` placement (poly candidate-a and preview).
+ */
+function onLanePostgres(
+  env: (typeof ENVS)[number],
+  placement: { tier: string; placement?: string }
+) {
+  return (
+    placement.tier === "shared" ||
+    (env !== "production" && placement.placement !== "akash-cell")
+  );
+}
+
+interface Placement {
+  tier: string;
+  budget_profile: string;
+  copies?: number;
+  placement?: string;
+  roleConnectionLimits?: { app: number; service: number };
+}
+
+/** The native role caps reconcile-node-substrate.sh applies to a row: declared directly, else profile x copies. */
+function roleCaps(placement: Placement, profile: Profile) {
+  if (placement.roleConnectionLimits) return placement.roleConnectionLimits;
+  return {
+    app: scaled(
+      profile.roles.app.connection_limit,
+      placement.copies,
+      profile.copies
+    ),
+    service: scaled(
+      profile.roles.service.connection_limit,
+      placement.copies,
+      profile.copies
+    ),
+  };
+}
+
+/** Role-connection sum of every lane-resident node declared for one env. */
 function roleCapSum(env: (typeof ENVS)[number]) {
   let sum = 0;
   for (const node of catalogs) {
     const placement = node.database?.[env];
-    if (!placement || placement.tier !== "shared") continue;
+    if (!placement || !onLanePostgres(env, placement)) continue;
     const profile = profiles[placement.budget_profile];
     expect(profile, `${node.name}: unknown profile`).toBeDefined();
     if (!profile) continue;
+    const caps = roleCaps(placement, profile);
     // app + service + migration (1) + recovery probe (1)
-    sum +=
-      scaled(
-        profile.roles.app.connection_limit,
-        placement.copies,
-        profile.copies
-      ) +
-      scaled(
-        profile.roles.service.connection_limit,
-        placement.copies,
-        profile.copies
-      ) +
-      2;
+    sum += caps.app + caps.service + 2;
   }
   return sum;
 }
@@ -100,7 +146,7 @@ describe("shared database budget sum (bug.5637)", () => {
     ).toBe(true);
     expect(maxConnections).toBeGreaterThanOrEqual(20);
     expect(maxConnections).toBeLessThanOrEqual(500);
-    expect(roleCapSum(env)).toBeLessThanOrEqual(maxConnections - RESERVE);
+    expect(roleCapSum(env)).toBeLessThanOrEqual(envBudget(env));
   });
 
   // candidate-a is deliberately sized for the raised 200 ceiling (per-dev test envs, story.5159).
@@ -108,7 +154,13 @@ describe("shared database budget sum (bug.5637)", () => {
     "preview",
     "production",
   ] as const)("%s current catalog also fits the image-default ceiling of 100", (env) => {
-    expect(roleCapSum(env)).toBeLessThanOrEqual(100 - RESERVE);
+    expect(roleCapSum(env)).toBeLessThanOrEqual(100 - ENV_RESERVE);
+  });
+
+  // Canary: a shadowed or edited reserve once turned `max - 15` into `max - 1` and CI stayed green.
+  it.each(ENVS)("%s budget keeps the 15-connection reserve", (env) => {
+    expect(ENV_RESERVE).toBe(15);
+    expect(envBudget(env)).toBe((envMaxConnections[env] ?? 0) - 15);
   });
 
   it("only candidate-a raises the ceiling above the image default", () => {
@@ -145,5 +197,60 @@ describe("shared database budget sum (bug.5637)", () => {
       const c = catalogs.find((n) => n.name === name);
       expect(c?.database?.["candidate-a"]?.copies, name).toBe(7);
     }
+  });
+
+  // bug.5645: poly's candidate-a and preview lanes, sized from ONE model (documented in poly.yaml):
+  // simultaneous pods N, each holding its pools plus one transient qualification connection and one
+  // job leader, with one connection reserved per role. Everything below is derived from the catalog.
+  //   N = live + retiring (the sequencer keeps a replaced lease for 10 minutes) + blue.
+  const SIMULTANEOUS_PODS = 3;
+  // poly bootstrap/qualification.ts: one transient app-role connection per process.
+  const QUALIFICATION_APP_CONNECTIONS = 1;
+  // Per pod service_poly: service pool + read pool + one job-leader connection.
+  const LEADER_CONNECTIONS = 1;
+  const POD_RESERVE = 1;
+
+  describe.each([
+    "candidate-a",
+    "preview",
+  ] as const)("poly %s role caps cover every simultaneous pod", (env) => {
+    const poly = catalogs.find((c) => c.name === "poly");
+    const placement = poly?.database?.[env];
+    const pools = placement?.runtimePoolLimits;
+    const caps = placement?.roleConnectionLimits;
+
+    it("declares explicit pools and role caps, never both copies and caps", () => {
+      expect(pools).toBeDefined();
+      expect(caps).toBeDefined();
+      expect(placement?.copies).toBeUndefined();
+    });
+
+    it("app_poly = pods x (app pool + qualification) + one reserved", () => {
+      const perPod = (pools?.app ?? 0) + QUALIFICATION_APP_CONNECTIONS;
+      expect(caps?.app).toBe(SIMULTANEOUS_PODS * perPod + POD_RESERVE);
+    });
+
+    it("service_poly = pods x (service + read + leader) + one reserved", () => {
+      const perPod =
+        (pools?.service ?? 0) + (pools?.read ?? 0) + LEADER_CONNECTIONS;
+      expect(caps?.service).toBe(SIMULTANEOUS_PODS * perPod + POD_RESERVE);
+    });
+  });
+
+  it("only a dedicated row declares roleConnectionLimits, and never with copies", () => {
+    for (const node of catalogs) {
+      for (const [env, placement] of Object.entries(node.database ?? {})) {
+        if (!placement.roleConnectionLimits) continue;
+        expect(placement.tier, `${node.name}/${env}`).toBe("dedicated");
+        expect(placement.copies, `${node.name}/${env}`).toBeUndefined();
+        expect(placement.placement, `${node.name}/${env}`).toBeUndefined();
+      }
+    }
+  });
+
+  it("poly production keeps its audited cell: no lane role caps declared", () => {
+    const poly = catalogs.find((c) => c.name === "poly");
+    expect(poly?.database?.production?.roleConnectionLimits).toBeUndefined();
+    expect(poly?.database?.production?.copies).toBeUndefined();
   });
 });

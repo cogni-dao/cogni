@@ -18,6 +18,10 @@ FAKEBIN="$TMPROOT/bin"
 REMOTE_ROOT="$TMPROOT/remote"
 DESTINATION_ROOT="$TMPROOT/destination"
 export FAKE_DESTINATION_ROOT="$DESTINATION_ROOT"
+# bug.5645: the foreign-lane provisioner receives poly candidate-a's declared role caps; read them, never copy them.
+EXPECTED_DB_APP_CONNECTION_LIMIT="$(yq -er '.database."candidate-a".roleConnectionLimits.app' infra/catalog/poly.yaml)"
+EXPECTED_DB_SERVICE_CONNECTION_LIMIT="$(yq -er '.database."candidate-a".roleConnectionLimits.service' infra/catalog/poly.yaml)"
+export EXPECTED_DB_APP_CONNECTION_LIMIT EXPECTED_DB_SERVICE_CONNECTION_LIMIT
 BAO_ROOT="$REMOTE_ROOT/openbao"
 mkdir -p \
   "$FAKEBIN" \
@@ -307,9 +311,12 @@ if [[ "$*" == *'--network container:destination-postgres'* ]]; then
   [ "$APP_DB_PASSWORD" = foreign-app-sentinel ] || exit 32
   [ "$APP_DB_SERVICE_PASSWORD" = foreign-service-sentinel ] || exit 33
   [ "$APP_DB_MIGRATION_PASSWORD" = foreign-migration-sentinel ] || exit 34
-  [ "$DB_APP_CONNECTION_LIMIT" = 2 ] && [ "$DB_SERVICE_CONNECTION_LIMIT" = 8 ] || exit 35
+  # bug.5645: poly candidate-a declares roleConnectionLimits; the expected values are read from the live catalog.
+  [ "$DB_APP_CONNECTION_LIMIT" = "$EXPECTED_DB_APP_CONNECTION_LIMIT" ] \
+    && [ "$DB_SERVICE_CONNECTION_LIMIT" = "$EXPECTED_DB_SERVICE_CONNECTION_LIMIT" ] || exit 35
   [ "$DB_HOST" = 172.19.0.2 ] || exit 36
-  printf 'destination-only root; selected lane credentials; app2/service8\n' >> "${FAKE_REMOTE_ROOT}/provision-proof.log"
+  printf 'destination-only root; selected lane credentials; app%s/service%s\n' \
+    "$DB_APP_CONNECTION_LIMIT" "$DB_SERVICE_CONNECTION_LIMIT" >> "${FAKE_REMOTE_ROOT}/provision-proof.log"
   exit "${FAKE_DESTINATION_PROVISION_RESULT:-0}"
 fi
 if [[ "$*" == *MIGRATION_IDENTITY_SQL_B64* ]]; then
@@ -936,7 +943,7 @@ for foreign_node in poly "$FOREIGN_NODE"; do
     "$TMPROOT/$foreign_node-summary.json" >/dev/null
   grep -q -- '--network container:destination-postgres' "$DESTINATION_ROOT/docker.log"
   grep -q -- '--pull=never --cpus=.5 --memory=256m --pids-limit=64' "$DESTINATION_ROOT/docker.log"
-  grep -q 'destination-only root; selected lane credentials; app2/service8' "$DESTINATION_ROOT/provision-proof.log"
+  grep -q "destination-only root; selected lane credentials; app${EXPECTED_DB_APP_CONNECTION_LIMIT}/service${EXPECTED_DB_SERVICE_CONNECTION_LIMIT}" "$DESTINATION_ROOT/provision-proof.log"
   if grep -qE 'foreign-app-sentinel|foreign-service-sentinel|foreign-migration-sentinel|destination-only-root-sentinel' \
     "$TMPROOT/$foreign_node.out" "$TMPROOT/$foreign_node-summary.json" "$REMOTE_ROOT/destination-ssh-argv.log"; then
     echo 'destination bridge evidence or SSH argv leaked a credential' >&2; exit 1

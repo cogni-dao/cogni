@@ -38,8 +38,47 @@ production_branch: deploy/production-poly
 # That is the property that would cost real money.
 envs: [candidate-a, preview, production]
 database:
-  candidate-a: { tier: dedicated, budget_profile: dedicated-high-throughput-v1 }
-  preview: { tier: dedicated, budget_profile: dedicated-high-throughput-v1 }
+  # bug.5645 — declares the connection budget of the candidate-a and preview lanes (shared lane Postgres,
+  # no cell), sized from ONE model:
+  #   simultaneous pods N = 3. The node-deploy sequencer starts a new release (blue) while the serving
+  #   pod runs and keeps the replaced pod's lease for 10 minutes (retainMs), so live + retiring + blue
+  #   are open at once (sequencer.ts does not hold a new create for a retiring attempt). Poly's own
+  #   comment counts blue + green only (4 of 4 app, no spare); it omits the retiring pod.
+  #   Per pod, Poly main holds (packages/db-client build-client.ts, bootstrap/qualification.ts):
+  #     app_poly:     app pool 1 + one transient qualification connection 1 = 2
+  #     service_poly: service pool 1 + read pool 1 + job leader 1 = 3
+  #   DEPENDENCY: live candidate-a showed 4 service_poly sessions on one pod (2 cogni_job_leader). That
+  #   is a stray leader backend that poly#330 (bug.5066) removes; the 3-per-pod model assumes it is
+  #   deployed. After it lands, read pg_stat_activity during one release overlap and resize if it differs.
+  #   cap = N x per-pod + 1 reserved connection per role:
+  #     app_poly     = 3 x 2 + 1 = 7
+  #     service_poly = 3 x 3 + 1 = 10
+  # One `copies` ratio cannot express this: dedicated-high-throughput-v1 is app 2 / service 8 (1 and 4
+  # per copy at base copies 2), but Poly needs 2 app and 3 service per pod. Reaching app 7 by copies
+  # would force service 28. `roleConnectionLimits` declares the lane's native role caps directly; the
+  # profile still owns the timeouts and the production cell kit, which these rows do not touch.
+  # Raise N when a workload is added to this node. shared-db-budget-sum.spec.ts re-derives both caps
+  # from the pool limits below and checks the per-env sum <= max_connections - 15.
+  # Each of these lanes spends 19 role connections; candidate-a ends at 182 of 185 allowed.
+  #
+  # ACTIVATION (CD4, bug.5669): these rows are DESIRED STATE. No workflow applies them to the live
+  # roles: deploy-infra skips `tier: dedicated`; candidate-flight and promote select no node-deploy
+  # cell for node-substrate (and poly has no k8s overlay); run-node-substrate's dedicated path is
+  # production-only. Today the caps take effect only through (a) a custodian run of
+  # scripts/ci/run-node-substrate.sh <env> poly, or (b) a break-glass ALTER ROLE app_poly /
+  # service_poly CONNECTION LIMIT; both need CEO permission, not yet given. The pool limits reach
+  # the pods only after an operator image promote (the catalog is baked into the image) and a new
+  # Poly release.
+  candidate-a:
+    tier: dedicated
+    budget_profile: dedicated-high-throughput-v1
+    roleConnectionLimits: { app: 7, service: 10 }
+    runtimePoolLimits: { replicaCount: 1, app: 1, service: 1, read: 1 }
+  preview:
+    tier: dedicated
+    budget_profile: dedicated-high-throughput-v1
+    roleConnectionLimits: { app: 7, service: 10 }
+    runtimePoolLimits: { replicaCount: 1, app: 1, service: 1, read: 1 }
   production:
     tier: dedicated
     budget_profile: dedicated-high-throughput-v1
