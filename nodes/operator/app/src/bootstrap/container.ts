@@ -47,10 +47,7 @@ import type { FinancialLedgerPort } from "@cogni/financial-ledger";
 import { createTigerBeetleAdapter } from "@cogni/financial-ledger/adapters";
 import type { UserId } from "@cogni/ids";
 import { toUserId, userActor } from "@cogni/ids";
-import {
-  bindEdoToolCapability,
-  createEdoCapability as createPublishedEdoCapability,
-} from "@cogni/knowledge-store";
+import { createEdoCapability as createPublishedEdoCapability } from "@cogni/knowledge-store";
 import {
   DoltBranchSessionRunner as PublishedBranchSessionRunner,
   DoltgresEdoResolverAdapter as PublishedEdoResolver,
@@ -77,12 +74,16 @@ import {
   shapeGate,
 } from "@cogni/operator-knowledge-store";
 import {
+  ACQUIRE_TIMEOUT_MS,
   buildDoltgresClient,
   createDoltgresPusher,
   DoltBranchSessionRunner,
   DoltgresEdoResolverAdapter,
   DoltgresKnowledgeContributionAdapter,
   DoltgresKnowledgeStoreAdapter,
+  LOCK_RETRY_MS,
+  LOCK_WAIT_MS,
+  QUEUE_WAIT_MS,
   wrapPushSafe,
 } from "@cogni/operator-knowledge-store/adapters/doltgres";
 import { numberToPpm } from "@cogni/operator-wallet";
@@ -323,7 +324,7 @@ import {
 } from "@/shared/observability";
 import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
 import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
-import { withOperatorEdoConfidence } from "./edo-confidence";
+import { createOperatorEdoTools } from "./edo-confidence";
 
 export type UnhandledErrorPolicy = "rethrow" | "respond_500";
 
@@ -1085,6 +1086,10 @@ function createContainer(): Container {
         {
           logger: log,
           writerProtocol: "database",
+          queueWaitMs: QUEUE_WAIT_MS,
+          acquireTimeoutMs: ACQUIRE_TIMEOUT_MS,
+          lockWaitMs: LOCK_WAIT_MS,
+          lockRetryMs: LOCK_RETRY_MS,
         }
       ),
     });
@@ -1092,8 +1097,8 @@ function createContainer(): Container {
       edoStore,
       new PublishedEdoResolver({ sql: doltClient, store: edoStore })
     );
-    edoToolCapability = bindEdoToolCapability(
-      withOperatorEdoConfidence(edo),
+    edoToolCapability = createOperatorEdoTools(
+      edo,
       createRunAttribution({
         scope: () => {
           const scope = findExecutionScope();

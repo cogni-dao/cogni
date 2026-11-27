@@ -526,7 +526,7 @@ describe("LangGraphInProcProvider", () => {
       });
       expect(run.check).toHaveBeenCalledWith(
         expect.objectContaining({
-          actorId: `agent:${principalId}`,
+          actorId: `user:${principalId}`,
           action: "node.flight",
           resource: `node:${nodeId}`,
         })

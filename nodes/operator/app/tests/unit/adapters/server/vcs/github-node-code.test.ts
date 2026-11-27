@@ -69,6 +69,9 @@ vi.mock("@octokit/core", () => ({
   },
 }));
 vi.mock("@/adapters/server", async () => ({
+  withRunNodeAuthorization: (
+    await import("@/adapters/server/ai/run-node-authorization")
+  ).withRunNodeAuthorization,
   REVIEW_NODE_CODE_POLICY: (
     await import("@/adapters/server/vcs/github-node-code.adapter")
   ).REVIEW_NODE_CODE_POLICY,

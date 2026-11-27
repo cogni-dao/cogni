@@ -73,7 +73,6 @@ export async function workItemHttpAuthority() {
       import("@/bootstrap/node-admin-gate"),
       import("@cogni-dao/agent-grants"),
     ]);
-  const container = getContainer();
   return {
     withStore: (fn) =>
       fn(
@@ -82,6 +81,7 @@ export async function workItemHttpAuthority() {
         )
       ),
     adminCheck: async (userId) => {
+      const container = getContainer();
       const decision = await checkNodeAdmin(container.authorization, {
         userId,
         nodeId: container.nodeId,
