@@ -77,6 +77,7 @@ export {
   remoteFailureToExecutionCode,
   toRemoteExecutionError,
 } from "./ai/remote-knowledge-capability";
+export { withRunNodeAuthorization } from "./ai/run-node-authorization";
 export {
   TavilyWebSearchAdapter,
   type TavilyWebSearchConfig,

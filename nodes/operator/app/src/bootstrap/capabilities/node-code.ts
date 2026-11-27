@@ -28,8 +28,8 @@ import {
   GitHubVcsAdapter,
   getExecutionScope,
   REVIEW_NODE_CODE_POLICY,
+  withRunNodeAuthorization,
 } from "@/adapters/server";
-import { withRunNodeAuthorization } from "@/adapters/server/ai/run-node-authorization";
 import { findServiceLinkTarget, type LinkTarget } from "@/shared/config";
 
 /**
