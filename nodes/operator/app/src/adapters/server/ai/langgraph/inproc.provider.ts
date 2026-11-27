@@ -76,8 +76,8 @@ import type {
   Message,
 } from "@/ports";
 import { EVENT_NAMES, makeLogger } from "@/shared/observability";
-
 import type { CompletionUnitParams } from "../inproc-completion-unit.adapter";
+import { withRunNodeAuthorization } from "../run-node-authorization";
 
 import type { LangGraphCatalog } from "./catalog";
 
@@ -496,7 +496,12 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
             }
           },
           ...(this.authorization !== undefined
-            ? { authz: this.authorization }
+            ? {
+                authz: withRunNodeAuthorization(
+                  this.authorization,
+                  scope.principalId
+                ),
+              }
             : {}),
         });
 

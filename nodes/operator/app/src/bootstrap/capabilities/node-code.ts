@@ -29,6 +29,7 @@ import {
   getExecutionScope,
   REVIEW_NODE_CODE_POLICY,
 } from "@/adapters/server";
+import { withRunNodeAuthorization } from "@/adapters/server/ai/run-node-authorization";
 import { findServiceLinkTarget, type LinkTarget } from "@/shared/config";
 
 /**
@@ -166,7 +167,10 @@ export function createNodeCodeCapability(deps: {
     const authzNodeId = subject?.nodeId ?? deps.nodeId;
     let decision: AuthzDecision;
     try {
-      decision = await authorization.check({
+      decision = await withRunNodeAuthorization(
+        authorization,
+        scope.principalId
+      ).check({
         actorId: `agent:${scope.principalId}`,
         ...(scope.subjectUserId
           ? { subjectId: `user:${scope.subjectUserId}` }

@@ -37,7 +37,12 @@ const mocks = vi.hoisted(() => ({
   workReadBatch: vi.fn(),
 }));
 
-vi.mock("@/bootstrap/container", () => ({ getContainer: vi.fn() }));
+vi.mock("@/bootstrap/container", () => ({
+  getContainer: vi.fn(),
+  resolveServiceDb: () => {
+    throw new Error("Unexpected grants store access in session fixture");
+  },
+}));
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
 
 const { patch, get, create, workReadBatch } = mocks;
