@@ -12,6 +12,7 @@
  *   - NODE_BUNDLE_IS_CANONICAL: Resolves BoundTool from injected node bundle (CORE_TOOL_BUNDLE [+ POLY_TOOL_BUNDLE for poly]); never iterates the global TOOL_CATALOG (which is per-package and can drift behind per-node bundles).
  *   - DENY_BY_DEFAULT: Tool policy explicitly provided per graph
  *   - PROGRAM_WRITER_REFUSAL_IS_TERMINAL: A withheld required program writer returns its authority receipt before graph construction or inference.
+ *   - WRITER_EXEC_REFUSAL_IS_TERMINAL: Outer policy/FGA refusals and inner principal/subject refusals share one fixed receipt and run abort.
  *   - MCP_VIA_ASYNC_SOURCE: MCP tools resolved via async getMcpToolSource() function (shared cache with reconnect-on-error)
  *   - TOOL_AUTHZ_CONTEXT_ALWAYS_THREADED (authz v0): actor/tenant/graph/node/grant reach the tool runner with or
  *     without an authz adapter, plus one `ai.tool_authz.decision` log per evaluated call; `authz` only when installed.
@@ -380,6 +381,19 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           requiresById[tool.contract.name] = tool.contract.requires;
         }
       }
+      const terminateWriter = (
+        tool: string,
+        code: "policy_denied" | "authz_unavailable"
+      ) => {
+        const denial = new ToolAuthorityError(
+          code,
+          tool,
+          requiresById[tool]?.scope ?? null
+        );
+        terminalDenial ??= denial.receipt;
+        deniedRun.abort();
+        return denial;
+      };
       const writers: Record<string, BoundToolRuntime> = {};
       for (const [id, runtime] of Object.entries(runtimeTools)) {
         if (!writerIds.has(id)) continue;
@@ -420,12 +434,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           ...authority,
           runAs: (identity, fn) => runInScope({ ...scope, ...identity }, fn),
           onTerminalDenial: (denial) => {
-            terminalDenial = new ToolAuthorityError(
-              denial.code,
-              denial.tool,
-              requiresById[denial.tool]?.scope ?? null
-            ).receipt;
-            deniedRun.abort();
+            terminateWriter(denial.tool, denial.code);
           },
         })
       );
@@ -479,6 +488,9 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         // Authority is checked on the REVIEWED node (`node_code_*` needs `node.flight` there); `scope.nodeId`
         // stays the operator everywhere else (task.5448).
         const authzNodeId = otherSubject?.nodeId ?? scope.nodeId;
+        const authorization = this.authorization
+          ? withRunNodeAuthorization(this.authorization, scope.principalId)
+          : undefined;
         const toolRunner = createToolRunner(source, emit, {
           policy,
           ctx: { runId },
@@ -519,24 +531,57 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
               this.log.warn(fields, "tool authz decision");
             }
           },
-          ...(this.authorization !== undefined
+          ...(authorization !== undefined
             ? {
-                authz: withRunNodeAuthorization(
-                  this.authorization,
-                  scope.principalId
-                ),
+                authz: {
+                  ...authorization,
+                  check: async (params) => {
+                    try {
+                      return await authorization.check(params);
+                    } catch (error) {
+                      // The legacy tool.execute gate does not normalize thrown
+                      // outages. Keep writer outages on the same terminal path.
+                      if (!writerIds.has(params.resource.replace(/^tool:/, "")))
+                        throw error;
+                      return {
+                        decision: "deny",
+                        code: "authz_unavailable",
+                        checks: [],
+                      };
+                    }
+                  },
+                },
               }
             : {}),
         });
 
         return async (name, args, toolCallId) => {
-          const result =
+          let result =
             toolCallId !== undefined
               ? await toolRunner.exec(name, args, {
                   modelToolCallId: toolCallId,
                 })
               : await toolRunner.exec(name, args);
           if (!result.ok) {
+            if (
+              writerIds.has(name) &&
+              (result.errorCode === "authz_denied" ||
+                result.errorCode === "authz_unavailable" ||
+                result.errorCode === "policy_denied")
+            ) {
+              const denial = terminateWriter(
+                name,
+                result.errorCode === "authz_unavailable"
+                  ? "authz_unavailable"
+                  : "policy_denied"
+              );
+              result = {
+                ...result,
+                safeMessage: denial.message,
+                receipt: denial.receipt,
+                retryable: false,
+              };
+            }
             this.log.warn(
               {
                 event: EVENT_NAMES.AI_TOOL_CALL_ERROR,

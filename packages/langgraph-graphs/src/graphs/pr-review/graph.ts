@@ -49,6 +49,7 @@ import {
   NODE_CODE_LIST_NAME,
   NODE_CODE_READ_NAME,
   WORK_ITEM_READ_NAME,
+  workItemReadContract,
 } from "@cogni/ai-tools";
 import {
   type BaseMessage,
@@ -229,9 +230,12 @@ function scanEvidence(messages: readonly BaseMessage[]): {
           hubEntries.add(e.id);
         }
       }
-    } else if (name === WORK_ITEM_READ_NAME && v.complete === true) {
-      const id = (v.item as { id?: unknown } | undefined)?.id;
-      if (typeof id === "string") entries.add(id);
+    } else if (name === WORK_ITEM_READ_NAME) {
+      // The released reader returns the complete canonical DTO or null. A
+      // legacy receipt or id-only object cannot prove a complete item read.
+      const read = workItemReadContract.outputSchema.safeParse(v);
+      if (read.success && read.data.item !== null)
+        entries.add(read.data.item.id);
     } else if (
       name === NODE_CODE_READ_NAME &&
       v.exists === true &&

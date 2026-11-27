@@ -11,8 +11,12 @@
  * @public
  */
 
+import {
+  createWorkItemReadImplementation,
+  workItemReadContract,
+} from "@cogni/ai-tools";
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import {
@@ -31,6 +35,23 @@ import {
 } from "../../../src/graphs/pr-review/graph";
 import { buildReviewUserMessage } from "../../../src/graphs/pr-review/prompts";
 import { CogniCompletionAdapter } from "../../../src/runtime/cogni/completion-adapter";
+
+const item = {
+  id: "task.1",
+  type: "task",
+  title: "Retain review evidence",
+  status: "needs_implement",
+  summary: "Read the full item through the released tool.",
+  outcome: "The review can cite this item.",
+  externalRefs: [],
+  labels: [],
+  specRefs: [],
+  revision: 1,
+  deployVerified: false,
+  assignees: [],
+  createdAt: "2026-11-27T00:00:00.000Z",
+  updatedAt: "2026-11-27T00:00:00.000Z",
+};
 
 describe("PR Review Graph", () => {
   describe("catalog registration (story.5102)", () => {
@@ -229,8 +250,7 @@ describe("collectReviewEvidence (EVIDENCE_FROM_OWN_TOOL_RESULTS)", () => {
       }),
       call("c5", "core__work_item_read", { id: "task.1" }),
       result("c5", "core__work_item_read", {
-        complete: true,
-        item: { id: "task.1" },
+        item,
       }),
       call("c6", "core__knowledge_read", { id: "denied" }),
       result("c6", "core__knowledge_read", {
@@ -242,6 +262,78 @@ describe("collectReviewEvidence (EVIDENCE_FROM_OWN_TOOL_RESULTS)", () => {
       "no-secrets-in-logs",
       "task.1",
     ]);
+  });
+
+  it("counts a correlated full result from the released reader without a legacy receipt", async () => {
+    const read = vi.fn(async () => item);
+    const reader = createWorkItemReadImplementation({
+      workItemCapability: {
+        query: async () => [],
+        read,
+        patch: async () => {
+          throw new Error("read-only test");
+        },
+      },
+      nodePublicOrigin: "https://cognidao.org",
+    });
+    const output = workItemReadContract.outputSchema.parse(
+      await reader.execute({ id: item.id })
+    );
+    expect(read).toHaveBeenCalledWith(item.id, { includeLinks: false });
+    expect(output).not.toHaveProperty("complete");
+    const outputMessage = result("native-read", "core__work_item_read", output);
+    const messages = [
+      call("native-read", "core__work_item_read", { id: item.id }),
+      outputMessage,
+    ];
+    expect(collectReviewEvidence(messages).entries).toEqual([item.id]);
+    expect(collectHubReads(messages)).toEqual([]);
+    expect(
+      isUncited(
+        {
+          metrics: [
+            {
+              metric: HUB_RULE_METRIC,
+              value: 0,
+              observations: [],
+              citations: [item.id],
+            },
+          ],
+          summary: "Item cited",
+        },
+        collectReviewEvidence(messages)
+      )
+    ).toBe(false);
+    expect(collectReviewEvidence([outputMessage]).entries).toEqual([]);
+    expect(
+      collectReviewEvidence([
+        call("different-read", "core__work_item_read", { id: item.id }),
+        outputMessage,
+      ]).entries
+    ).toEqual([]);
+    expect(
+      collectReviewEvidence([
+        call("native-read", "core__work_item_query", {}),
+        outputMessage,
+      ]).entries
+    ).toEqual([]);
+  });
+
+  it.each([
+    { item: null },
+    { item: { id: "task.1" } },
+    { complete: true, item: { id: "task.1" } },
+    { item: { ...item, title: undefined } },
+    { item: { ...item, revision: "1" } },
+    { item: { ...item, labels: null } },
+    { error: "authz_denied", item },
+  ])("rejects absent, partial, malformed or refused item evidence: %j", (output) => {
+    expect(
+      collectReviewEvidence([
+        call("read", "core__work_item_read", { id: item.id }),
+        result("read", "core__work_item_read", output),
+      ]).entries
+    ).toEqual([]);
   });
 
   it("does not count a knowledge_read domain listing (mode list), only single-entry body reads", () => {
@@ -310,8 +402,7 @@ describe("collectHubReads (NO_VERDICT_WITHOUT_HUB_READ)", () => {
     const noRule = [
       call("w", "core__work_item_read", { id: "task.1" }),
       result("w", "core__work_item_read", {
-        complete: true,
-        item: { id: "task.1" },
+        item,
       }),
       call("l", "core__knowledge_read", { domain: "method" }),
       result("l", "core__knowledge_read", {

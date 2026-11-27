@@ -4,7 +4,7 @@
 /**
  * Module: `@tests/unit/adapters/server/ai/langgraph/inproc.provider`
  * Purpose: Wiring tests for LangGraphInProcProvider - adapter integration and error handling.
- * Scope: Verifies adapter.executeCompletionUnit is called correctly and events reflect adapter stream. Does NOT test actual graph execution or LLM calls.
+ * Scope: Exercises provider wiring and the brain graph's guarded tool loop with scripted completions. No external LLM calls.
  * Invariants:
  *   - Valid graphId: events reflect adapter stream
  *   - Invalid graphId: emits client error (not_found), done is last
@@ -160,6 +160,209 @@ function createTestRequest(
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("LangGraphInProcProvider", () => {
+  describe("brain outer writer authorization is terminal", () => {
+    it.each([
+      "deny",
+      "unavailable",
+      "throw",
+      "allow",
+    ] as const)("ends an offered writer after outer %s, retaining the granted control", async (decision) => {
+      const toolId = "core__edo_hypothesize";
+      const bound = CORE_TOOL_BUNDLE.find(
+        (tool) => tool.contract.name === toolId
+      );
+      if (!bound) throw new Error("brain EDO contract missing");
+      const writes = vi.fn(async () => ({ committed: true }));
+      const runtime = {
+        ...toBoundToolRuntime(bound),
+        exec: writes,
+        validateOutput: (value: unknown) => value,
+        redact: (value: unknown) => value,
+      };
+      // The actual operator hypothesis tool uses the outer legacy tool.execute
+      // gate as well as the released principal/subject guard.
+      expect(runtime.requires).toBeUndefined();
+      const liveScopes = vi.fn(
+        async (_id: string, scopes: readonly string[]) => [...scopes]
+      );
+      const hasLiveRole = vi.fn(async () => true);
+      const authority: GuardDeps = {
+        withStore: (fn) =>
+          fn({ liveScopes, hasLiveRole } as unknown as AgentGrantsStore),
+        adminCheck: async () => "allow",
+      };
+      const authorization = new FakeAuthorizationAdapter();
+      const check = vi
+        .spyOn(authorization, "check")
+        .mockImplementation(async () => {
+          if (decision === "throw")
+            throw new Error("private authority outage details");
+          return decision === "allow"
+            ? { decision: "allow", code: "authz_allowed", checks: [] }
+            : {
+                decision: "deny",
+                code:
+                  decision === "deny" ? "authz_denied" : "authz_unavailable",
+                checks: [],
+              };
+        });
+      let turns = 0;
+      const adapter: CompletionUnitAdapter = {
+        executeCompletionUnit: vi.fn<
+          CompletionUnitAdapter["executeCompletionUnit"]
+        >((params) => {
+          turns += 1;
+          expect(
+            params.tools?.some((tool) => tool.function.name === toolId)
+          ).toBe(true);
+          return {
+            stream: (async function* () {})(),
+            final: Promise.resolve<import("@/ports").CompletionFinalResult>(
+              turns === 1
+                ? {
+                    ok: true,
+                    requestId: "test-completion",
+                    usage: { promptTokens: 10, completionTokens: 5 },
+                    toolCalls: [
+                      {
+                        id: "brain-writer-call",
+                        type: "function",
+                        function: {
+                          name: toolId,
+                          arguments: JSON.stringify({
+                            id: "hypothesis-test",
+                            domain: "strategy",
+                            title: "Test prediction",
+                            content: "The guarded call ends once.",
+                            evaluateAt: "2026-12-01T00:00:00.000Z",
+                            sourceType: "agent",
+                          }),
+                        },
+                      },
+                    ],
+                    finishReason: "tool_calls",
+                  }
+                : {
+                    ok: true,
+                    requestId: "test-completion",
+                    usage: { promptTokens: 10, completionTokens: 5 },
+                    content: "Granted writer finished.",
+                    finishReason: "stop",
+                  }
+            ),
+          };
+        }),
+      };
+      const provider = new LangGraphInProcProvider(
+        adapter,
+        {
+          getBoundTool: (id) => (id === toolId ? runtime : undefined),
+          listToolSpecs: () => [runtime.spec],
+          hasToolId: (id) => id === toolId,
+        },
+        undefined,
+        CORE_TOOL_BUNDLE,
+        authorization,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        authority
+      );
+      await runInScope(
+        {
+          ...TEST_SCOPE,
+          llmService: {
+            completionStream: vi.fn(async () => {
+              throw new Error("Scripted adapter owns inference");
+            }),
+          },
+          principalId: "node-ai-user",
+          subjectUserId: "requester",
+          nodeId: "operator-node",
+          runId: "test-run-id",
+          runKind: "user_immediate",
+        },
+        async () => {
+          const run = provider.runGraph(
+            createTestRequest({ graphId: "langgraph:brain" })
+          );
+          const events: AiEvent[] = [];
+          for await (const event of run.stream) events.push(event);
+          const final = await run.final;
+          expect(liveScopes).toHaveBeenCalledWith(
+            "node-ai-user",
+            expect.arrayContaining(["edo:write"])
+          );
+          expect(check).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              actorId: "agent:node-ai-user",
+              subjectId: "user:requester",
+              action: "tool.execute",
+              resource: `tool:${toolId}`,
+              context: expect.objectContaining({
+                tenantId: "test-billing",
+                runId: "test-run-id",
+                graphId: "langgraph:brain",
+                toolCallId: expect.any(String),
+              }),
+            })
+          );
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: "tool_call_result",
+              toolCallId: check.mock.calls[0]?.[0].context.toolCallId,
+            })
+          );
+          expect(events.filter((event) => event.type === "done")).toHaveLength(
+            1
+          );
+          expect(events.some((event) => event.type === "error")).toBe(false);
+          if (decision === "allow") {
+            expect(final).toMatchObject({
+              ok: true,
+              content: "Granted writer finished.",
+            });
+            expect(writes).toHaveBeenCalledOnce();
+            expect(writes).toHaveBeenCalledWith(
+              expect.any(Object),
+              expect.objectContaining({
+                actorId: "agent:node-ai-user",
+                subjectId: "user:requester",
+              }),
+              {}
+            );
+            expect(hasLiveRole).toHaveBeenCalledWith(
+              "node-ai-user",
+              "edo:write"
+            );
+            expect(adapter.executeCompletionUnit).toHaveBeenCalledTimes(2);
+          } else {
+            expect(final).toMatchObject({
+              ok: true,
+              finishReason: "stop",
+              content: "Tool execution stopped by its authority check.",
+              structuredOutput: {
+                code:
+                  decision === "deny" ? "policy_denied" : "authz_unavailable",
+                retryable: false,
+                lookup: { tool: toolId, scope: "edo:write" },
+              },
+            });
+            expect(writes).not.toHaveBeenCalled();
+            expect(hasLiveRole).not.toHaveBeenCalled();
+            expect(adapter.executeCompletionUnit).toHaveBeenCalledOnce();
+            expect(JSON.stringify({ final, events })).not.toContain(
+              "private authority outage details"
+            );
+          }
+        }
+      );
+    });
+  });
+
   describe("program writer refusal before graph construction", () => {
     it.each([
       {
