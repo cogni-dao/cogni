@@ -494,6 +494,9 @@ export function createActivities(deps: ActivityDeps) {
             runId: wireResult.runId,
             traceId: wireResult.traceId,
             errorCode: wireResult.error,
+            ...(wireResult.structuredOutput !== undefined && {
+              structuredOutput: wireResult.structuredOutput,
+            }),
           };
     } catch {
       const durationMs = performance.now() - start;

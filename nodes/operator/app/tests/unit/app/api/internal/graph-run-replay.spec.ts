@@ -7,12 +7,13 @@
  *   structured output on the cached branches, and the persisted output is bounded to 64 KB.
  * Scope: Pure helpers exported by the internal graph run route. Does not test HTTP or DB paths
  *   (the stack test covers the DB round trip).
- * Invariants: Cached ok replay carries structuredOutput; failures never do; >64 KB → null.
+ * Invariants: Cached success and failure replay carry bounded structuredOutput; >64 KB → null.
  * Side-effects: none
  * Links: src/app/api/internal/graphs/[graphId]/runs/route.ts, story.5102
  * @internal
  */
 
+import { InternalGraphRunOutputSchema } from "@cogni/node-contracts";
 import { describe, expect, it } from "vitest";
 import {
   boundStructuredOutput,
@@ -28,6 +29,31 @@ const verdict = {
 };
 
 describe("cachedRunResponse (VERDICT_SURVIVES_REPLAY)", () => {
+  it.each([
+    "policy_denied",
+    "authz_unavailable",
+  ] as const)("retains a %s receipt through the wire schema and replay", (code) => {
+    const receipt = {
+      code,
+      retryable: false,
+      lookup: { tool: "core__work_item_update", scope: "node.collaborate" },
+    };
+    const response = cachedRunResponse({
+      runId: "run-4",
+      traceId: null,
+      ok: false,
+      errorCode: code,
+      structuredOutput: boundStructuredOutput(receipt),
+    });
+    expect(InternalGraphRunOutputSchema.parse(response)).toEqual({
+      ok: false,
+      runId: "run-4",
+      traceId: null,
+      error: code,
+      structuredOutput: receipt,
+    });
+  });
+
   it("returns the persisted structured output on a cached success", () => {
     expect(
       cachedRunResponse({
@@ -45,7 +71,7 @@ describe("cachedRunResponse (VERDICT_SURVIVES_REPLAY)", () => {
     });
   });
 
-  it("omits structured output when none was persisted, and on failures", () => {
+  it("preserves bounded structured output on failures", () => {
     expect(
       cachedRunResponse({
         runId: "run-2",
@@ -68,6 +94,7 @@ describe("cachedRunResponse (VERDICT_SURVIVES_REPLAY)", () => {
       runId: "run-3",
       traceId: null,
       error: "insufficient_credits",
+      structuredOutput: verdict,
     });
   });
 });

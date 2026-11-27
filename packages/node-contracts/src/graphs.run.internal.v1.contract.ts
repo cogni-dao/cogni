@@ -67,6 +67,7 @@ export const InternalGraphRunOutputSchema = z.discriminatedUnion("ok", [
     traceId: z.string().nullable(),
     /** Error code from ai-core (reuses existing canonical codes) */
     error: z.enum(AI_EXECUTION_ERROR_CODES),
+    structuredOutput: z.unknown().optional(),
   }),
 ]);
 

@@ -37,6 +37,8 @@ const HTTP_STATUS_MAP: Record<AiExecutionErrorCode, number> = {
   remote_access_requested: 403,
   remote_policy_denied: 403,
   remote_unavailable: 503,
+  policy_denied: 403,
+  authz_unavailable: 503,
 };
 
 const OPENAI_ERROR_MAP: Record<
@@ -100,6 +102,16 @@ const OPENAI_ERROR_MAP: Record<
     status: 403,
     message: "The linked node refused this read.",
     type: "permission_error",
+  },
+  policy_denied: {
+    status: 403,
+    message: "Tool execution was denied.",
+    type: "permission_error",
+  },
+  authz_unavailable: {
+    status: 503,
+    message: "Tool authority is unavailable.",
+    type: "service_unavailable",
   },
   remote_unavailable: {
     status: 503,

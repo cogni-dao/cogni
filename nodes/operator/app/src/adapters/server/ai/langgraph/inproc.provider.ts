@@ -567,11 +567,14 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
               writerIds.has(name) &&
               (result.errorCode === "authz_denied" ||
                 result.errorCode === "authz_unavailable" ||
-                result.errorCode === "policy_denied")
+                result.errorCode === "policy_denied" ||
+                result.receipt?.code === "policy_denied" ||
+                result.receipt?.code === "authz_unavailable")
             ) {
               const denial = terminateWriter(
                 name,
-                result.errorCode === "authz_unavailable"
+                result.errorCode === "authz_unavailable" ||
+                  result.receipt?.code === "authz_unavailable"
                   ? "authz_unavailable"
                   : "policy_denied"
               );
@@ -794,10 +797,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         }
         if (terminalDenial && event.type === "error") continue;
         if (terminalDenial && event.type === "done") {
-          yield {
-            type: "text_delta" as const,
-            delta: "Tool execution stopped by its authority check.",
-          };
+          yield { type: "error" as const, error: terminalDenial.code };
         }
         yield event;
       }
@@ -808,10 +808,10 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         const result = await r.final;
         if (terminalDenial)
           return {
-            ok: true,
+            ok: false,
             runId,
             requestId,
-            finishReason: "stop" as const,
+            error: terminalDenial.code,
             content: "Tool execution stopped by its authority check.",
             structuredOutput: terminalDenial,
             ...(result.usage ? { usage: result.usage } : {}),

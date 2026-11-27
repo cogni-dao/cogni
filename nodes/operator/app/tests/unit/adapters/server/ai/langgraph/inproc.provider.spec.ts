@@ -51,6 +51,7 @@ import {
   LangGraphInProcProvider,
   selectArchitectEntryId,
 } from "@/adapters/server/ai/langgraph/inproc.provider";
+import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import type { GraphRunRequest } from "@/ports";
 import { EVENT_NAMES } from "@/shared/observability";
 
@@ -160,12 +161,40 @@ function createTestRequest(
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("LangGraphInProcProvider", () => {
+  it("field policy rejects before the writer with a nonretryable authority receipt", async () => {
+    const patch = vi.fn();
+    const capability = createWorkItemCapability({
+      workItemQuery: {} as never,
+      patchFields: () => ["summary"],
+      backlogWriter: {
+        attribution: () => ({}) as never,
+        attributionDenied: vi.fn(),
+        store: { patch } as never,
+      },
+    });
+    await expect(
+      capability.patch({
+        id: "task.1",
+        reason: "test",
+        set: { outcome: "denied" },
+      } as never)
+    ).rejects.toMatchObject({
+      receipt: {
+        code: "policy_denied",
+        retryable: false,
+        lookup: { tool: "core__work_item_update", scope: "node.collaborate" },
+      },
+    });
+    expect(patch).not.toHaveBeenCalled();
+  });
+
   describe("brain outer writer authorization is terminal", () => {
     it.each([
       "deny",
       "unavailable",
       "throw",
       "allow",
+      "field",
     ] as const)("ends an offered writer after outer %s, retaining the granted control", async (decision) => {
       const toolId = "core__edo_hypothesize";
       const bound = CORE_TOOL_BUNDLE.find(
@@ -173,9 +202,26 @@ describe("LangGraphInProcProvider", () => {
       );
       if (!bound) throw new Error("brain EDO contract missing");
       const writes = vi.fn(async () => ({ committed: true }));
+      const fieldCapability = createWorkItemCapability({
+        workItemQuery: {} as never,
+        patchFields: () => ["summary"],
+        backlogWriter: {
+          attribution: () => ({}) as never,
+          attributionDenied: vi.fn(),
+          store: { patch: writes } as never,
+        },
+      });
       const runtime = {
         ...toBoundToolRuntime(bound),
-        exec: writes,
+        exec:
+          decision === "field"
+            ? async () =>
+                fieldCapability.patch({
+                  id: "task.1",
+                  reason: "test",
+                  set: { outcome: "denied" },
+                } as never)
+            : writes,
         validateOutput: (value: unknown) => value,
         redact: (value: unknown) => value,
       };
@@ -197,7 +243,7 @@ describe("LangGraphInProcProvider", () => {
         .mockImplementation(async () => {
           if (decision === "throw")
             throw new Error("private authority outage details");
-          return decision === "allow"
+          return decision === "allow" || decision === "field"
             ? { decision: "allow", code: "authz_allowed", checks: [] }
             : {
                 decision: "deny",
@@ -319,7 +365,9 @@ describe("LangGraphInProcProvider", () => {
           expect(events.filter((event) => event.type === "done")).toHaveLength(
             1
           );
-          expect(events.some((event) => event.type === "error")).toBe(false);
+          expect(events.some((event) => event.type === "error")).toBe(
+            decision !== "allow"
+          );
           if (decision === "allow") {
             expect(final).toMatchObject({
               ok: true,
@@ -341,18 +389,24 @@ describe("LangGraphInProcProvider", () => {
             expect(adapter.executeCompletionUnit).toHaveBeenCalledTimes(2);
           } else {
             expect(final).toMatchObject({
-              ok: true,
-              finishReason: "stop",
+              ok: false,
+              error:
+                decision === "deny" || decision === "field"
+                  ? "policy_denied"
+                  : "authz_unavailable",
               content: "Tool execution stopped by its authority check.",
               structuredOutput: {
                 code:
-                  decision === "deny" ? "policy_denied" : "authz_unavailable",
+                  decision === "deny" || decision === "field"
+                    ? "policy_denied"
+                    : "authz_unavailable",
                 retryable: false,
                 lookup: { tool: toolId, scope: "edo:write" },
               },
             });
             expect(writes).not.toHaveBeenCalled();
-            expect(hasLiveRole).not.toHaveBeenCalled();
+            if (decision === "field") expect(hasLiveRole).toHaveBeenCalled();
+            else expect(hasLiveRole).not.toHaveBeenCalled();
             expect(adapter.executeCompletionUnit).toHaveBeenCalledOnce();
             expect(JSON.stringify({ final, events })).not.toContain(
               "private authority outage details"
@@ -438,15 +492,15 @@ describe("LangGraphInProcProvider", () => {
             return;
           }
           expect(await result.final).toMatchObject({
-            ok: true,
-            finishReason: "stop",
+            ok: false,
+            error: code,
             structuredOutput: {
               code,
               retryable: false,
               lookup: { tool: "core__edo_decide", scope: "edo:write" },
             },
           });
-          expect(events.some((event) => event.type === "error")).toBe(false);
+          expect(events.some((event) => event.type === "error")).toBe(true);
           expect(events.at(-1)).toEqual({ type: "done" });
           expect(adapter.executeCompletionUnit).not.toHaveBeenCalled();
         }

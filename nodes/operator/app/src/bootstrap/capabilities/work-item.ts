@@ -55,6 +55,7 @@ import {
   toWorkItemsPatchInput,
 } from "@cogni/work-items";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
+import { ToolAuthorityError } from "@cogni-dao/agent-grants";
 
 /**
  * Dependencies for creating the work item capability.
@@ -194,7 +195,11 @@ export function createWorkItemCapability(
           (field) => !fields.includes(field)
         );
         if (forbidden.length) {
-          throw new Error(`work_item_field_denied: ${forbidden.join(", ")}`);
+          throw new ToolAuthorityError(
+            "policy_denied",
+            "core__work_item_update",
+            "node.collaborate"
+          );
         }
       }
       const writer = deps.backlogWriter;
