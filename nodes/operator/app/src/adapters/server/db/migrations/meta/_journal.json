@@ -512,6 +512,13 @@
       "when": 1795795085906,
       "tag": "0072_operator_internal_principals",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1795802414211,
+      "tag": "0073_operator_node_role_resource",
+      "breakpoints": true
     }
   ]
 }

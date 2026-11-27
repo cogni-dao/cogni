@@ -160,6 +160,97 @@ function createTestRequest(
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("LangGraphInProcProvider", () => {
+  describe("program writer refusal before graph construction", () => {
+    it.each([
+      {
+        graph: "cogni",
+        unavailable: false,
+        granted: false,
+        code: "policy_denied",
+      },
+      {
+        graph: "cogni",
+        unavailable: true,
+        granted: false,
+        code: "authz_unavailable",
+      },
+      {
+        graph: "work-prioritizer",
+        unavailable: false,
+        granted: false,
+        code: "policy_denied",
+      },
+      {
+        graph: "work-prioritizer",
+        unavailable: true,
+        granted: false,
+        code: "authz_unavailable",
+      },
+      { graph: "cogni", unavailable: false, granted: true, code: undefined },
+    ])("retains authority outcomes without unauthorized inference: %j", async ({
+      graph,
+      unavailable,
+      granted,
+      code,
+    }) => {
+      const adapter = createMockAdapter();
+      const authority: GuardDeps = {
+        withStore: async (fn) => {
+          if (unavailable) throw new Error("store unavailable");
+          return fn({
+            liveScopes: async (_id, scopes) => (granted ? [...scopes] : []),
+          } as AgentGrantsStore);
+        },
+        adminCheck: async () => "denied",
+      };
+      const provider = new LangGraphInProcProvider(
+        adapter,
+        createMockToolSource(),
+        undefined,
+        CORE_TOOL_BUNDLE,
+        undefined,
+        "operator-node",
+        "https://test.cognidao.org",
+        {
+          content: "Serve this node.",
+          sourceRef: "test:mission",
+          buildSha: null,
+        },
+        undefined,
+        undefined,
+        undefined,
+        authority
+      );
+      await runInScope(
+        { ...TEST_SCOPE, principalId: "node-ai-user" },
+        async () => {
+          const result = provider.runGraph(
+            createTestRequest({ graphId: `langgraph:${graph}` })
+          );
+          const events: AiEvent[] = [];
+          for await (const event of result.stream) events.push(event);
+          if (granted) {
+            expect(await result.final).toMatchObject({ ok: true });
+            expect(adapter.executeCompletionUnit).toHaveBeenCalled();
+            return;
+          }
+          expect(await result.final).toMatchObject({
+            ok: true,
+            finishReason: "stop",
+            structuredOutput: {
+              code,
+              retryable: false,
+              lookup: { tool: "core__edo_decide", scope: "edo:write" },
+            },
+          });
+          expect(events.some((event) => event.type === "error")).toBe(false);
+          expect(events.at(-1)).toEqual({ type: "done" });
+          expect(adapter.executeCompletionUnit).not.toHaveBeenCalled();
+        }
+      );
+    });
+  });
+
   describe("valid graphId", () => {
     it("calls adapter.executeCompletionUnit and emits events reflecting adapter stream", async () => {
       await runInScope(TEST_SCOPE, async () => {

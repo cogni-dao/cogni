@@ -88,6 +88,7 @@ pnpm --filter @cogni/db-schema build
 
 - Subpath exports enable tree-shaking: consumers import only needed slices
 - `refs.ts` defines FK target tables shared across all slices
+- `agentRoles.resource` is node-only, defaults to `node` for existing writers, and supports the released grant store without adding account grants or RLS policies.
 - Schedule tables support Temporal migration (execution_requests for idempotency)
 - `billing.ts` includes `llmChargeDetails` (1:1 with charge_receipts, PK/FK cascade) for model/tokens/provider/latency/graphId
 - `charge_receipts.receipt_kind` distinguishes receipt types (e.g. "llm")

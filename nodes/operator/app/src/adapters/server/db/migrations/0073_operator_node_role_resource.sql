@@ -1,0 +1,2 @@
+ALTER TABLE "agent_roles" ADD COLUMN "resource" text DEFAULT 'node' NOT NULL;--> statement-breakpoint
+ALTER TABLE "agent_roles" ADD CONSTRAINT "agent_roles_node_resource_only" CHECK ("agent_roles"."resource" = 'node');

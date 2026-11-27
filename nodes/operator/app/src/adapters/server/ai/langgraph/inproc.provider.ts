@@ -11,6 +11,7 @@
  *   - CATALOG_SINGLE_SOURCE_OF_TRUTH: Uses catalog from @cogni/langgraph-graphs
  *   - NODE_BUNDLE_IS_CANONICAL: Resolves BoundTool from injected node bundle (CORE_TOOL_BUNDLE [+ POLY_TOOL_BUNDLE for poly]); never iterates the global TOOL_CATALOG (which is per-package and can drift behind per-node bundles).
  *   - DENY_BY_DEFAULT: Tool policy explicitly provided per graph
+ *   - PROGRAM_WRITER_REFUSAL_IS_TERMINAL: A withheld required program writer returns its authority receipt before graph construction or inference.
  *   - MCP_VIA_ASYNC_SOURCE: MCP tools resolved via async getMcpToolSource() function (shared cache with reconnect-on-error)
  *   - TOOL_AUTHZ_CONTEXT_ALWAYS_THREADED (authz v0): actor/tenant/graph/node/grant reach the tool runner with or
  *     without an authz adapter, plus one `ai.tool_authz.decision` log per evaluated call; `authz` only when installed.
@@ -35,7 +36,11 @@ import {
   createToolRunner,
   isAiExecutionError,
 } from "@cogni/ai-core";
-import { type CatalogBoundTool, WORK_ITEM_READ_NAME } from "@cogni/ai-tools";
+import {
+  type CatalogBoundTool,
+  EDO_DECIDE_NAME,
+  WORK_ITEM_READ_NAME,
+} from "@cogni/ai-tools";
 import type { AuthorizationPort } from "@cogni/authorization-core";
 import {
   type CompletionFn,
@@ -430,6 +435,25 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         guardScope,
         authority
       );
+      // Cogni/work-review programs require an EDO writer at construction. A
+      // withheld writer must terminate with the same authority receipt as an
+      // exec-time refusal, before the factory can turn it into an internal error.
+      const requiredWriterDenial = entry.program
+        ? offered.excluded.find((denial) => denial.tool === EDO_DECIDE_NAME)
+        : undefined;
+      if (requiredWriterDenial) {
+        terminalDenial = new ToolAuthorityError(
+          requiredWriterDenial.code,
+          requiredWriterDenial.tool,
+          requiresById[requiredWriterDenial.tool]?.scope ?? null
+        ).receipt;
+        return {
+          stream: (async function* () {
+            yield { type: "done" as const };
+          })(),
+          final: Promise.resolve({ ok: true }),
+        };
+      }
       const permitted = (id: string) =>
         !writerIds.has(id) || offered.offered.includes(id);
       const offeredIds = toolIds.filter(permitted);

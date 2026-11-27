@@ -11,7 +11,7 @@
  *   - CREDENTIALS_ONLY_ON_AGENT_PRINCIPALS: `agent_credentials` rows belong only to a user with an `external` `agent_principals` row
  *     (a trigger in the migration enforces it).
  *   - ROLE_ROWS_ARE_SOFT_REVOKED: a role row is never deleted; `revoked_at` ends it. One live row per (principal, scope).
- *   - NO_ACCOUNT_GRANTS: account scopes are out of scope; no account-grant table ships.
+ *   - NO_ACCOUNT_GRANTS: role resources remain node-only; no account grants or delegated-read policies ship.
  *   - TOKEN_HASH_ONLY / STATE_IS_DERIVED: `agent_credentials` stores sha256 of the key and timestamps only; state (pending, active,
  *     renew_only, expired, revoked) is derived by the SQL function `agent_credential_state` (migration), never stored.
  *   - SERVICE_ROLE_ONLY_WRITES: `agent_credentials` and `agent_roles` have ENABLE + FORCE RLS and no policy (deny-all for the app role).
@@ -98,6 +98,9 @@ export const agentRoles = pgTable(
       .notNull()
       .references(() => users.id),
     scope: text("scope").notNull(),
+    // The released store filters node roles by resource. The default preserves
+    // existing rows and old writers; the CHECK keeps account grants unsupported.
+    resource: text("resource").notNull().default("node"),
     approvedBy: text("approved_by").references(() => users.id),
     /** Set when an admin approves. Null while pending or denied. */
     grantedAt: timestamp("granted_at", { withTimezone: true }),
@@ -109,6 +112,7 @@ export const agentRoles = pgTable(
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
   },
   (table) => [
+    check("agent_roles_node_resource_only", sql`${table.resource} = 'node'`),
     uniqueIndex("agent_roles_live_unique")
       .on(table.principalUserId, table.scope)
       .where(sql`${table.revokedAt} IS NULL`),
