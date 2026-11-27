@@ -66,6 +66,11 @@ export {
 export { insertNetworkNode } from "./network-nodes";
 export { nextFreeNodePort } from "./node-port";
 export {
+  readSpecOperatorWalletAddress,
+  renderNodeWalletSpec,
+  specNamesOperatorWallet,
+} from "./node-wallet-spec";
+export {
   ACTIVATION_MARKUP_FACTOR,
   ACTIVATION_REVENUE_SHARE,
   hasPaymentsActivationSpec,
