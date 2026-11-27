@@ -323,6 +323,7 @@ import {
 } from "@/shared/observability";
 import { USDC_TOKEN_ADDRESS } from "@/shared/web3";
 import type { EvmOnchainClient } from "@/shared/web3/onchain/evm-onchain-client.interface";
+import { withOperatorEdoConfidence } from "./edo-confidence";
 
 export type UnhandledErrorPolicy = "rethrow" | "respond_500";
 
@@ -1092,7 +1093,7 @@ function createContainer(): Container {
       new PublishedEdoResolver({ sql: doltClient, store: edoStore })
     );
     edoToolCapability = bindEdoToolCapability(
-      edo,
+      withOperatorEdoConfidence(edo),
       createRunAttribution({
         scope: () => {
           const scope = findExecutionScope();

@@ -70,6 +70,7 @@ import {
 
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
+import { withOperatorEdoConfidence } from "@/bootstrap/edo-confidence";
 
 function item(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -1049,7 +1050,7 @@ describe("released invocation-to-writer identity seam", () => {
     expect(patch).not.toHaveBeenCalled();
   });
 
-  it("admits a released EDO decision with confidence, principal/requester/run commit lines, and refuses a missing principal", async () => {
+  it("enforces operator EDO confidence with attributed released writes and refuses a missing principal", async () => {
     const store = new FakeKnowledgeStoreAdapter();
     await store.registerDomain({ id: "strategy", name: "Strategy" });
     await store.withWrite(
@@ -1067,7 +1068,9 @@ describe("released invocation-to-writer identity seam", () => {
         })
     );
     const edo = bindEdoToolCapability(
-      createEdoCapability(store, new FakeEdoResolverAdapter(store)),
+      withOperatorEdoConfidence(
+        createEdoCapability(store, new FakeEdoResolverAdapter(store))
+      ),
       createRunAttribution({ scope: getExecutionScope, log })
     );
     const runtime = contractToRuntime(
@@ -1081,12 +1084,12 @@ describe("released invocation-to-writer identity seam", () => {
       content: "Observed evidence supports the decision",
       derivesFromHypothesisId: "hypothesis",
       sourceType: "agent",
-      confidencePct: 63,
+      confidencePct: 100,
     });
     await runInScope(scope("principal-P"), () =>
       runtime.exec(input, invocation, {})
     );
-    expect((await store.getKnowledge("decision"))?.confidencePct).toBe(63);
+    expect((await store.getKnowledge("decision"))?.confidencePct).toBe(30);
     expect(store.commitLog.at(-1)?.message).toContain("by actor:principal-P");
     expect(store.commitLog.at(-1)?.message).toContain(
       "Requested-by: requester-S"
@@ -1094,6 +1097,37 @@ describe("released invocation-to-writer identity seam", () => {
     expect(store.commitLog.at(-1)?.message).toContain(
       "Run: run-R system_scheduled"
     );
+    for (const [sourceType, expected] of [
+      ["agent", 30],
+      ["analysis_signal", 40],
+      ["external", 50],
+      ["human", 70],
+      ["derived", 40],
+    ] as const) {
+      await runInScope(scope("principal-P"), async () => {
+        await edo.hypothesize({
+          id: `hyp-${sourceType}`,
+          domain: "strategy",
+          title: "Prediction",
+          content: "Prediction",
+          evaluateAt: new Date("2027-01-01"),
+          sourceType,
+          confidencePct: 100,
+        });
+        await edo.decide({
+          ...input,
+          id: `decision-${sourceType}`,
+          sourceType,
+          confidencePct: undefined,
+        });
+      });
+      expect(
+        (await store.getKnowledge(`hyp-${sourceType}`))?.confidencePct
+      ).toBe(expected);
+      expect(
+        (await store.getKnowledge(`decision-${sourceType}`))?.confidencePct
+      ).toBe(expected);
+    }
     const before = store.commitLog.length;
     await expect(
       runInScope(scope(), () =>
