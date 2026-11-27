@@ -356,11 +356,9 @@ export class TemporalLedgerDiagnosticAdapter
         }
       }
       if (result.selection !== "incomplete") {
-        if (candidates.some((c) => c.blocker.state !== "RUNNING")) {
-          reason("blocker_changed");
-          result.selection = "incomplete";
-        } else if (candidates.length) {
-          candidates.sort(
+        const running = candidates.filter((c) => c.blocker.state === "RUNNING");
+        if (running.length) {
+          running.sort(
             (a, b) =>
               (a.blocker.startedAt ?? "").localeCompare(
                 b.blocker.startedAt ?? ""
@@ -368,9 +366,12 @@ export class TemporalLedgerDiagnosticAdapter
               a.ref.workflowId.localeCompare(b.ref.workflowId) ||
               a.ref.runId.localeCompare(b.ref.runId)
           );
-          result.blocker = candidates[0]?.blocker ?? null;
+          result.blocker = running[0]?.blocker ?? null;
           result.selection = "oldest_running";
           reason("historical_ownership_unproven");
+        } else if (candidates.length) {
+          reason("blocker_changed");
+          result.selection = "incomplete";
         } else {
           reason("no_running_reference");
         }

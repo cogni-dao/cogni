@@ -417,6 +417,72 @@ describe("finite native epoch diagnosis", () => {
     expect(partial.budgets.complete).toBe(false);
     expect(JSON.stringify(partial)).not.toContain("PRIVATE_ERROR_SENTINEL");
   });
+  it.each([
+    false,
+    true,
+  ])("selects a running candidate alongside a terminal candidate (reverse=%s)", async (reverse) => {
+    const first = schedule();
+    first.info.runningWorkflows.push({ workflowId: "terminal-private", runId });
+    if (reverse) first.info.runningWorkflows.reverse();
+    const f = fixture({
+      first,
+      describe: ({ execution: ref }) => {
+        const reply = execution();
+        reply.workflowExecutionInfo.execution = ref;
+        if (ref.workflowId === "terminal-private")
+          reply.workflowExecutionInfo.status = 2;
+        return reply;
+      },
+    });
+    const result = await f.adapter.read(binding, readOptions());
+    expect(result.selection).toBe("oldest_running");
+    expect(result.blocker?.startedAt).toContain("2026-11-13");
+    expect(result.consistent).toBe(true);
+    expect(result.budgets.complete).toBe(true);
+    expect(
+      f.calls.filter((c) => c === "describeWorkflowExecution")
+    ).toHaveLength(2);
+    expect(f.calls).toHaveLength(8);
+    expect(JSON.stringify(result)).not.toContain("terminal-private");
+  });
+  it("never selects a running candidate when another describe fails", async () => {
+    const first = schedule();
+    first.info.runningWorkflows.push({ workflowId: "failure-private", runId });
+    const f = fixture({
+      first,
+      describe: ({ execution: ref }) => {
+        if (ref.workflowId === "failure-private")
+          throw new Error("PRIVATE_FAILURE");
+        return execution();
+      },
+    });
+    const result = await f.adapter.read(binding, readOptions());
+    expect(result.selection).toBe("incomplete");
+    expect(result.blocker).toBeNull();
+    expect(result.reasonCodes).toContain("selection_incomplete");
+    expect(result.budgets.complete).toBe(false);
+    expect(
+      f.calls.filter((c) => c === "describeWorkflowExecution")
+    ).toHaveLength(2);
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_FAILURE");
+  });
+  it("keeps an all-terminal selection incomplete", async () => {
+    const f = fixture({
+      describe: () => {
+        const reply = execution();
+        reply.workflowExecutionInfo.status = 2;
+        return reply;
+      },
+    });
+    const result = await f.adapter.read(binding, readOptions());
+    expect(result.selection).toBe("incomplete");
+    expect(result.blocker).toBeNull();
+    expect(result.reasonCodes).toContain("blocker_changed");
+    expect(result.reasonCodes).not.toContain(
+      "stranded_on_unpolled_legacy_queue"
+    );
+    expect(result.budgets.complete).toBe(false);
+  });
   it("changed token, lost reference and ended execution do not form a current verdict", async () => {
     for (const change of ["token", "reference", "ended"]) {
       const final = schedule();
