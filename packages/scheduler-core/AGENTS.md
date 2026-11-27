@@ -62,6 +62,8 @@ Pure TypeScript types, port interfaces, and orchestration services for the sched
 - **Uses ports:** none
 - **Implements ports:** none (defines port interfaces)
 
+- Epoch diagnostics: canonical `buildWorkflowArgs` / `buildLedgerIngestInput`; strict `LedgerDiagnosticV1`, admitted binding, read-only `TemporalLedgerDiagnosticPort`; finite target-bound epoch event writer/reader policy.
+
 ## Responsibilities
 
 - This directory **does**: Define port interfaces, domain types, error classes, Zod payload schemas, and pure orchestration services

@@ -90,6 +90,8 @@ Ports = internal dependencies; contracts = edge IO (HTTP/MCP).
 
 - Node-deploy DNS records include typed `DnsZoneIdentityError` and bounded native zone identity validation before new paid use; the DNS port still has no delete.
 
+- `LokiQueryRange.bounds` opts strict privacy projections into real HTTP timeout, streamed-byte and line-byte caps. Existing reads retain their limits.
+
 ## Responsibilities
 
 - This directory **does:** Define interfaces for external dependencies (DB, AI, wallet, clock, rng, queues, etc.); Document expectations and invariants for each port (e.g. idempotency, error semantics)

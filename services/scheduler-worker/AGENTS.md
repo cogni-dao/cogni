@@ -91,6 +91,8 @@ src/
 - **Metrics:** `temporal_activity_duration_ms`, `temporal_activity_errors_total{error_type=retryable|non_retryable}`, `temporal_worker_info`, `scheduler_worker_node_reachable_at_boot{node_id}` (boot-time probe, never gates).
 - **Files considered API:** `src/main.ts` (entry point), `Dockerfile`
 
+- Safe epoch diagnostic events use the scheduler-core contract and a local Pino writer. Ledger targets come from the container; dispatch targets require endpoint-map membership and successful collect-scope authorization.
+
 ## Responsibilities
 
 - This directory **does**: Connect to Temporal; start one Worker per canonical nodeId (plus a legacy-queue drain Worker); register workflows from `@cogni/temporal-workflows` (GraphRunWorkflow, PrReviewWorkflow, CollectEpochWorkflow, CollectSourcesWorkflow, EnrichAndAllocateWorkflow); HTTP-delegate run/grant persistence to the owning node's internal API; dispatch enrichment and allocation via `@cogni/attribution-pipeline-plugins` registries.

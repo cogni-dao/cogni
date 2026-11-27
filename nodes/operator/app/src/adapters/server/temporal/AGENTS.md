@@ -41,6 +41,8 @@ Temporal schedule control adapter implementing `ScheduleControlPort` for schedul
 - **Implements ports:** `ScheduleControlPort`
 - **Contracts:** Contract tests in `tests/contract/schedule-control.contract.ts` (pending)
 
+- `TemporalLedgerDiagnosticAdapter` reads one admitted schedule and exact linked anonymous blockers with a request-local bounded raw connection; no list/query/mutation.
+
 ## Responsibilities
 
 - This directory **does**: Implement schedule lifecycle control via Temporal client

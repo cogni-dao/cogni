@@ -108,6 +108,11 @@ export interface OpenFgaAuthorizationAdapterConfig {
   readonly authorizationModelId?: string;
   readonly apiToken?: string;
   readonly timeoutMs?: number;
+  /** Optional native HTTP cancellation for a bounded read request. */
+  readonly readTransport?: {
+    readonly signal: AbortSignal;
+    readonly timeoutMs: number;
+  };
   /**
    * Per-attempt deadline for write/delete, ms (default 5000). Deliberately separate
    * from `timeoutMs`: checks are hot-path and must fail fast, writes are cold-path
@@ -173,6 +178,15 @@ function openFgaClientConfig(
 ): ConstructorParameters<typeof OpenFgaClient>[0] {
   return {
     apiUrl: config.apiUrl,
+    ...(config.readTransport
+      ? {
+          baseOptions: {
+            signal: config.readTransport.signal,
+            timeout: config.readTransport.timeoutMs,
+          },
+          retryParams: { maxRetry: 0 },
+        }
+      : {}),
     ...(storeId !== undefined ? { storeId } : {}),
     ...(config.apiToken !== undefined
       ? {

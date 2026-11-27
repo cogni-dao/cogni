@@ -30,6 +30,7 @@
 
 import type { AuthzDecisionCode } from "@cogni/authorization-core";
 import { NextResponse } from "next/server";
+import { readEpochWorkerLogs } from "@/app/_facades/nodes/observability-worker.server";
 import { resolveRouteIdentity } from "@/app/_lib/auth/route-identity";
 import { getSessionUser } from "@/app/_lib/auth/session";
 import { getContainer, resolveServiceDb } from "@/bootstrap/container";
@@ -58,6 +59,22 @@ const clock = { now: () => new Date().toISOString() };
 
 const MAX_LIMIT = 1000;
 const DEFAULT_LIMIT = 100;
+const EPOCH_WORKER_ERROR_CODES = new Set([
+  "invalid_query",
+  "query_out_of_scope",
+  "invalid_window",
+  "node_not_found",
+  "authz_unavailable",
+  "authz_denied",
+  "environment_mismatch",
+  "deadline_exceeded",
+  "diagnostic_logs_unwired",
+  "temporal_environment_unavailable",
+  "temporal_unwired",
+  "observability_unwired",
+  "loki_response_bounds",
+  "loki_query_failed",
+]);
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -85,11 +102,11 @@ export async function GET(
   const logComplete = (fields: {
     outcome: "success" | "error";
     status: number;
-    errorCode?: string;
+    errorCode?: string | undefined;
     nodeRef?: string;
     nodeId?: string;
     env?: string;
-    count?: number;
+    count?: number | undefined;
   }): void => {
     const payload = {
       reqId: reqCtx.reqId,
@@ -189,6 +206,33 @@ export async function GET(
       },
       { status: 400 }
     );
+  }
+
+  if (params.get("service")?.trim() === "epoch-worker") {
+    const result = await readEpochWorkerLogs(request, node.nodeId, env);
+    const errorCode =
+      "error" in result.body &&
+      typeof result.body.error === "string" &&
+      EPOCH_WORKER_ERROR_CODES.has(result.body.error)
+        ? result.body.error
+        : "loki_query_failed";
+    const count =
+      "count" in result.body &&
+      typeof result.body.count === "number" &&
+      Number.isInteger(result.body.count) &&
+      result.body.count >= 0 &&
+      result.body.count <= 100
+        ? result.body.count
+        : undefined;
+    logComplete({
+      outcome: result.status === 200 ? "success" : "error",
+      status: result.status,
+      errorCode: result.status === 200 ? undefined : errorCode,
+      count: result.status === 200 ? count : undefined,
+      nodeId: node.nodeId,
+      env,
+    });
+    return NextResponse.json(result.body, { status: result.status });
   }
 
   // Authorize the caller's full LogQL query against this node. `?query=` takes the SAME LogQL a dev

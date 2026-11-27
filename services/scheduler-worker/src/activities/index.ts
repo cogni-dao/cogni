@@ -20,8 +20,13 @@
 
 import { SYSTEM_ACTOR } from "@cogni/ids/system";
 import { InternalGraphRunOutputSchema } from "@cogni/node-contracts";
-import { type GraphRunKind, nodeTaskScope } from "@cogni/scheduler-core";
+import {
+  diagnosticTarget,
+  type GraphRunKind,
+  nodeTaskScope,
+} from "@cogni/scheduler-core";
 import { ApplicationFailure, activityInfo } from "@temporalio/activity";
+import { logEpochDiagnostic } from "../observability/epoch-diagnostic.js";
 import {
   activityDurationMs,
   activityErrorsTotal,
@@ -81,6 +86,7 @@ export interface ActivityDeps {
   config: {
     nodeEndpoints: Map<string, string>;
     schedulerApiToken: string;
+    diagnosticNamespace?: string;
   };
   logger: Logger;
 }
@@ -649,6 +655,22 @@ export function createActivities(deps: ActivityDeps) {
         grantId,
         scope
       );
+      try {
+        const info = activityInfo();
+        if (
+          route === "/api/internal/attribution/collect" &&
+          config.nodeEndpoints.has(nodeId) &&
+          info.workflowNamespace === config.diagnosticNamespace
+        ) {
+          logEpochDiagnostic(
+            logger,
+            diagnosticTarget(nodeId, info.workflowNamespace),
+            { event: "epoch.dispatch_authorized", attempt: info.attempt }
+          );
+        }
+      } catch {
+        /* Diagnostics preserve grant activity results. */
+      }
       logWorkerEvent(logger, WORKER_EVENT_NAMES.ACTIVITY_GRANT_VALIDATED, {
         ...correlation,
         nodeId,
