@@ -33,7 +33,7 @@ import {
 const nodeAiCatalog = Object.fromEntries(
   Object.entries(OPERATOR_LANGGRAPH_CATALOG).map(([id, entry]) => [
     id,
-    { ...entry, principal: "node-ai" },
+    { ...entry, principal: "node-ai", workItemUpdateFields: [] },
   ])
 );
 
@@ -41,11 +41,20 @@ const cogniWorkReview = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
 if (!cogniWorkReview)
   throw new Error("Operator Cogni graph is missing work-prioritizer");
 export const LANGGRAPH_CATALOG: LangGraphCatalog &
-  Readonly<Record<string, { readonly principal?: string }>> = {
+  Readonly<
+    Record<
+      string,
+      {
+        readonly principal?: string;
+        readonly workItemUpdateFields?: "all" | readonly string[];
+      }
+    >
+  > = {
   ...nodeAiCatalog,
   brain: {
     ...OPERATOR_LANGGRAPH_CATALOG.brain,
     principal: "node-ai",
+    workItemUpdateFields: [],
     toolIds: [
       ...OPERATOR_LANGGRAPH_CATALOG.brain.toolIds,
       EDO_HYPOTHESIZE_NAME,
@@ -56,14 +65,19 @@ export const LANGGRAPH_CATALOG: LangGraphCatalog &
   cogni: {
     ...OPERATOR_LANGGRAPH_CATALOG.cogni,
     principal: "node-ai",
+    workItemUpdateFields: [],
   },
   "operating-review": {
     ...OPERATOR_LANGGRAPH_CATALOG["operating-review"],
     principal: "operating-review",
+    // operator/prompts.ts: triage priority/status and flag labels/summary.
+    workItemUpdateFields: ["priority", "status", "labels", "summary"],
   },
   "work-prioritizer": {
     ...cogniWorkReview,
     principal: "prioritizer",
+    // work-prioritizer/prompts.ts limits item edits, even if a tool is added later.
+    workItemUpdateFields: ["priority", "rank", "labels"],
   },
 };
 export {

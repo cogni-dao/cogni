@@ -30,6 +30,8 @@ import type { BillingContext, LlmService } from "@/ports";
  * Shared ExecutionContext (actorUserId, sessionId, etc.) flows via runGraph(req, ctx).
  */
 export interface ExecutionScope extends RunAttributionScope {
+  /** Host-selected catalog field policy; absent means no work-item mutation. */
+  readonly workItemUpdateFields?: "all" | readonly string[];
   readonly billing: BillingContext;
   /** Authenticated requester, retained for existing user-scoped operations. Never the acting principal. */
   readonly actorUserId?: string;

@@ -55,6 +55,7 @@ vi.mock("@/bootstrap/container", () => {
 // Keep the actual execution scope for the capability; only GitHub transport is replaced.
 vi.mock("@/adapters/server", async () => ({
   ...(await import("@/adapters/server/ai/execution-scope")),
+  ...(await import("@/adapters/server/ai/run-node-authorization")),
   REVIEW_NODE_CODE_POLICY: {},
   GitHubVcsAdapter: class {
     nodeCodeReader() {
@@ -100,6 +101,9 @@ describe("published HTTP and graph work-item doors", () => {
     "work.items.release",
     "work.items.heartbeat",
     "work.items.artifacts.create",
+    "work.items.sessions.claim",
+    "work.items.sessions.heartbeat",
+    "work.items.sessions.pr",
   ];
   it.each(
     routeIds
@@ -160,12 +164,14 @@ describe("published HTTP and graph work-item doors", () => {
     expect(exec).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps human member access without reading live roles and leaves retired DELETE alone", async () => {
+  it.each(
+    routeIds
+  )("keeps human member access without live roles on %s", async (routeId) => {
     state.bearer = false;
     state.outage = true;
     const handler = wrapRouteHandlerWithLogging(
       {
-        routeId: "work.items.patch",
+        routeId,
         auth: {
           mode: "required",
           getSessionUser: async () => ({
@@ -184,6 +190,9 @@ describe("published HTTP and graph work-item doors", () => {
     ).toBe(200);
     expect(state.sql).not.toHaveBeenCalled();
     expect(workItemRouteRequires("work.items.delete")).toBeUndefined();
+    expect(
+      workItemRouteRequires("work.items.sessions.coordination")
+    ).toBeUndefined();
   });
 });
 
@@ -230,6 +239,8 @@ it("uses a supported agent principal through the real FGA adapter for delegated 
     .metadata.relations.delegates.directly_related_user_types.map(
       (type: { type: string }) => type.type
     );
+  let principalLive = true;
+  let delegationLive = true;
   const check = vi.fn(
     async (request: { user: string; relation: string; object: string }) => {
       if (
@@ -237,7 +248,12 @@ it("uses a supported agent principal through the real FGA adapter for delegated 
         !delegationTypes.includes(request.user.split(":")[0])
       )
         throw new Error("unsupported principal type");
-      return { allowed: state.live };
+      return {
+        allowed:
+          state.live &&
+          (request.user !== "user:actual-agent" || principalLive) &&
+          (request.relation !== "delegates" || delegationLive),
+      };
     }
   );
   const authorization = new OpenFgaAuthorizationAdapter({
@@ -271,6 +287,21 @@ it("uses a supported agent principal through the real FGA adapter for delegated 
       relation: "delegates",
       object: "user:requester",
     });
+    expect(check).toHaveBeenCalledWith({
+      user: "user:actual-agent",
+      relation: "can_flight",
+      object: "node:operator",
+    });
+    principalLive = false;
+    await expect(code.read({ path: "package.json" })).rejects.toThrow(
+      "node_code_authz_denied"
+    );
+    principalLive = true;
+    delegationLive = false;
+    await expect(code.read({ path: "package.json" })).rejects.toThrow(
+      "node_code_authz_denied"
+    );
+    delegationLive = true;
     state.live = false;
     await expect(code.read({ path: "package.json" })).rejects.toThrow(
       "node_code_authz_denied"

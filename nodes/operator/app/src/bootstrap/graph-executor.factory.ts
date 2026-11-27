@@ -360,6 +360,9 @@ export function runGraphWithScope(params: {
         usageSource,
         runId: req.runId,
         runKind: run.runKind,
+        workItemUpdateFields: graphName
+          ? (LANGGRAPH_CATALOG[graphName]?.workItemUpdateFields ?? [])
+          : [],
         ...(principalId ? { principalId } : {}),
         ...(params.nodeId ? { nodeId: params.nodeId } : {}),
         ...(params.grantId ? { grantId: params.grantId } : {}),

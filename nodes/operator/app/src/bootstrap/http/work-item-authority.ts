@@ -18,13 +18,22 @@ import {
   type ToolRequires,
 } from "@cogni-dao/agent-grants";
 
+// The operator keeps its private coordination routes; map only their mutating
+// doors to the released update policy before the wrapper invokes any facade.
+const coordinationDoors: Readonly<Record<string, string>> = {
+  "work.items.sessions.claim": "work.items.patch",
+  "work.items.sessions.heartbeat": "work.items.patch",
+  "work.items.sessions.pr": "work.items.patch",
+};
+
 /** Only declared work-item doors are in this repair's scope. Retired DELETE stays 410. */
 export function workItemRouteRequires(
   routeId: string
 ): ToolRequires | undefined {
   if (!routeId.startsWith("work.items.")) return undefined;
+  const publishedRouteId = coordinationDoors[routeId] ?? routeId;
   for (const [toolId, declaration] of Object.entries(SAME_DOOR_ROUTES)) {
-    if (!declaration.routes.includes(routeId)) continue;
+    if (!declaration.routes.includes(publishedRouteId)) continue;
     const requires = CORE_TOOL_BUNDLE.find(
       (tool) => tool.contract.name === toolId
     )?.contract.requires;

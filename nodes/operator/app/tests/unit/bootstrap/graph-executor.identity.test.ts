@@ -168,7 +168,7 @@ describe("durable run identity admission (story.0085)", () => {
   it("every catalog writer has a node-owned seed and grants stay separate", () => {
     const sql = readFileSync(
       new URL(
-        "../../../src/adapters/server/db/migrations/0071_operator_internal_principals.sql",
+        "../../../src/adapters/server/db/migrations/0072_operator_internal_principals.sql",
         import.meta.url
       ),
       "utf8"

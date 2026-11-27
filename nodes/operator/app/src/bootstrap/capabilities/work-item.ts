@@ -62,6 +62,8 @@ import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgr
 export interface WorkItemCapabilityDeps {
   /** Fallback query port when the Doltgres reader is absent. */
   readonly workItemQuery: WorkItemQueryPort;
+  /** Host-bound program limits, checked before the released attributed writer. */
+  readonly patchFields?: () => "all" | readonly string[];
   /**
    * Read-only list port for `query`. When set, `query` lists through it instead of
    * `workItemQuery`. Structural `list` only — a store's richer list result (e.g.
@@ -186,6 +188,15 @@ export function createWorkItemCapability(
     },
 
     async patch(input): Promise<WorkItemInfo> {
+      const fields = deps.patchFields?.();
+      if (fields !== undefined && fields !== "all") {
+        const forbidden = Object.keys(input.set).filter(
+          (field) => !fields.includes(field)
+        );
+        if (forbidden.length) {
+          throw new Error(`work_item_field_denied: ${forbidden.join(", ")}`);
+        }
+      }
       const writer = deps.backlogWriter;
       if (writer) {
         let attribution: WriteAttribution;

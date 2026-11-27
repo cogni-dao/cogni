@@ -1294,6 +1294,7 @@ function createContainer(): Container {
   });
   // The released writer preserves attribution, CAS and lifecycle gates on the same store as HTTP.
   const workItemCapability = createWorkItemCapability({
+    patchFields: () => getExecutionScope().workItemUpdateFields ?? [],
     workItemQuery: workItemAdapter,
     moveReadings: moveMetrics.readings,
     links: createCitationLinksPort(() => knowledgeStorePort),

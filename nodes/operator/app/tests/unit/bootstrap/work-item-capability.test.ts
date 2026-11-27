@@ -34,6 +34,7 @@ import {
   FakeEdoResolverAdapter,
   FakeKnowledgeStoreAdapter,
 } from "@cogni/knowledge-store/adapters/fake";
+import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
 import {
   createEdoDecideImplementation,
   createWorkItemQueryImplementation,
@@ -107,6 +108,94 @@ function markdownPorts() {
   } as unknown as WorkItemCommandPort;
   return { query, command };
 }
+
+describe("host program work-item field bounds", () => {
+  it.each([
+    ["work-prioritizer", { priority: 2, rank: 1, labels: ["focus"] }],
+    [
+      "operating-review",
+      {
+        priority: 2,
+        status: "needs_design",
+        labels: ["stuck"],
+        summary: "Needs design",
+      },
+    ],
+  ] as const)("refuses mixed forbidden patches without mutation for %s", async (graph, allowed) => {
+    const patch = vi.fn().mockResolvedValue(item({ revision: 5 }));
+    const attribution = vi.fn(() => ({ actor: "program-principal" }));
+    const capability = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      patchFields: () => LANGGRAPH_CATALOG[graph]?.workItemUpdateFields ?? [],
+      backlogWriter: {
+        store: { patch },
+        attribution,
+        attributionDenied: vi.fn(),
+      },
+    });
+    for (const forbidden of [
+      { title: "Overwritten" },
+      { outcome: "Overwritten" },
+      { scores: { impact: 5 } },
+    ]) {
+      await expect(
+        capability.patch({
+          id: "task.5282",
+          expectedRevision: 4,
+          reason: "Change item",
+          set: { ...allowed, ...forbidden },
+        } as never)
+      ).rejects.toThrow("work_item_field_denied");
+    }
+    expect(patch).not.toHaveBeenCalled();
+    expect(attribution).not.toHaveBeenCalled();
+    await capability.patch({
+      id: "task.5282",
+      expectedRevision: 4,
+      reason: "Focus next work",
+      cites: [{ id: "mission-loop-expert" }],
+      set: allowed,
+    });
+    expect(patch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        expectedRevision: 4,
+        reason: "Focus next work",
+        cites: [{ id: "mission-loop-expert" }],
+        set: allowed,
+      }),
+      { actor: "program-principal" }
+    );
+  });
+
+  it("keeps the full shared contract for a full-authority host program", async () => {
+    const patch = vi.fn().mockResolvedValue(item({ revision: 5 }));
+    const capability = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      patchFields: () => "all",
+      backlogWriter: {
+        store: { patch },
+        attribution: () => ({ actor: "node-ai" }),
+        attributionDenied: vi.fn(),
+      },
+    });
+    const set = {
+      title: "Refined title",
+      outcome: "Observable outcome",
+      summary: "Full description",
+      labels: ["focus"],
+    };
+    await capability.patch({
+      id: "task.5282",
+      expectedRevision: 4,
+      reason: "Refine accepted work",
+      set,
+    });
+    expect(patch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ set, expectedRevision: 4 }),
+      { actor: "node-ai" }
+    );
+  });
+});
 
 describe("createWorkItemCapability", () => {
   it("lists through backlogReader (Doltgres read path) and maps enrichment fields", async () => {
