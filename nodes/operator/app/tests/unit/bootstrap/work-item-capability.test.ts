@@ -26,10 +26,7 @@ import {
   WorkItemQueryOutputSchema,
   workItemReadContract,
 } from "@cogni/ai-tools";
-import {
-  bindEdoToolCapability,
-  createEdoCapability,
-} from "@cogni/knowledge-store";
+import { createEdoCapability } from "@cogni/knowledge-store";
 import {
   FakeEdoResolverAdapter,
   FakeKnowledgeStoreAdapter,
@@ -71,7 +68,7 @@ import {
 
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
-import { withOperatorEdoConfidence } from "@/bootstrap/edo-confidence";
+import { createOperatorEdoTools } from "@/bootstrap/edo-confidence";
 
 function item(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -1156,10 +1153,8 @@ describe("released invocation-to-writer identity seam", () => {
           evaluateAt: new Date("2027-01-01"),
         })
     );
-    const edo = bindEdoToolCapability(
-      withOperatorEdoConfidence(
-        createEdoCapability(store, new FakeEdoResolverAdapter(store))
-      ),
+    const edo = createOperatorEdoTools(
+      createEdoCapability(store, new FakeEdoResolverAdapter(store)),
       createRunAttribution({ scope: getExecutionScope, log })
     );
     const runtime = contractToRuntime(
