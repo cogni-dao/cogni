@@ -100,6 +100,14 @@ export const nodes = pgTable(
     tokenAddress: text("token_address"),
     operatorWalletAddress: text("operator_wallet_address"),
     operatorWalletPrivyId: text("operator_wallet_privy_id"),
+    // PENDING_NODE_WALLET (story.0083): the wallet the wizard created for this node and lane, owned by
+    // the node owner's browser key. Distinct from `operator_wallet_address`, whose ONLY writer is the
+    // payment-prereqs route (it copies the address from the node repo-spec on main). The key hash is set
+    // once (WHERE IS NULL) and pins the row to that owner key; the id/address are recorded after Privy
+    // answers. Public facts only: never key material.
+    pendingNodeWalletKeySha256: text("pending_node_wallet_key_sha256"),
+    pendingNodeWalletId: text("pending_node_wallet_id"),
+    pendingNodeWalletAddress: text("pending_node_wallet_address"),
     splitAddress: text("split_address"),
     daoTxHash: text("dao_tx_hash"),
     signalTxHash: text("signal_tx_hash"),

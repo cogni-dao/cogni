@@ -74,6 +74,10 @@ export const EVENT_NAMES = {
   // (recorded | unchanged | no_change | error), missingKey (only for prereq_missing), previousStatus, nextStatus,
   // status (HTTP), durationMs. Never an address, a URL or a repo-spec body.
   NODE_PAYMENT_PREREQS_COMPLETE: "node.payment_prereqs.complete",
+  // POST /api/v1/nodes/{id}/node-wallet (story.0083): ONE terminal event per call. Fields: nodeId, actorUserId,
+  // outcome (created | adopted | existing | error), walletAddress (public, only when a wallet exists), status (HTTP),
+  // errorCode, durationMs. Never the owner public key, its hash, a Privy id or err.message (err.name only).
+  NODE_WALLET_CREATE_COMPLETE: "node.wallet_create.complete",
   // defineScheduledJob dispatcher: one cron fire of a registered scheduled job.
   SCHEDULED_JOB_DISPATCH_RECEIVED: "feature.scheduled_job.dispatch_received",
   SCHEDULED_JOB_DISPATCH_COMPLETE: "feature.scheduled_job.dispatch_complete",

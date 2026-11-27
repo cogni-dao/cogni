@@ -1,10 +1,29 @@
 import path from "node:path";
 import type { NextConfig } from "next";
 
+// story.0083: the node wizard page makes the node owner's wallet-owner key in the browser. The page
+// must run no third-party script: scripts load only from this origin (plus the inline bootstrap Next.js
+// emits; `unsafe-eval` only in dev, where React needs it), plugins and <base> are off, and the page
+// cannot be framed. Applies to /nodes/<id> and everything under it.
+const NODE_WIZARD_CSP = [
+  `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'"}`,
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 const nextConfig: NextConfig = {
   output: "standalone",
   async headers() {
     return [
+      {
+        source: "/nodes/:id/:rest*",
+        headers: [
+          { key: "Content-Security-Policy", value: NODE_WIZARD_CSP },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      },
       {
         source: "/identity/attest/confirm",
         headers: [
