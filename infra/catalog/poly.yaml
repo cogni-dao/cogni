@@ -38,7 +38,8 @@ production_branch: deploy/production-poly
 # That is the property that would cost real money.
 envs: [candidate-a, preview, production]
 database:
-  # bug.5645 — role caps for the candidate-a and preview lanes, sized from ONE model:
+  # bug.5645 — declares the connection budget of the candidate-a and preview lanes (shared lane Postgres,
+  # no cell), sized from ONE model:
   #   simultaneous pods N = 3. The node-deploy sequencer starts a new release (blue) while the serving
   #   pod runs and keeps the replaced pod's lease for 10 minutes (retainMs), so live + retiring + blue
   #   are open at once (sequencer.ts does not hold a new create for a retiring attempt). Poly's own
@@ -46,6 +47,9 @@ database:
   #   Per pod, Poly main holds (packages/db-client build-client.ts, bootstrap/qualification.ts):
   #     app_poly:     app pool 1 + one transient qualification connection 1 = 2
   #     service_poly: service pool 1 + read pool 1 + job leader 1 = 3
+  #   DEPENDENCY: live candidate-a showed 4 service_poly sessions on one pod (2 cogni_job_leader). That
+  #   is a stray leader backend that poly#330 (bug.5066) removes; the 3-per-pod model assumes it is
+  #   deployed. After it lands, read pg_stat_activity during one release overlap and resize if it differs.
   #   cap = N x per-pod + 1 reserved connection per role:
   #     app_poly     = 3 x 2 + 1 = 7
   #     service_poly = 3 x 3 + 1 = 10
