@@ -167,7 +167,7 @@ export function createNodeCodeCapability(deps: {
     let decision: AuthzDecision;
     try {
       decision = await authorization.check({
-        actorId: `user:${scope.principalId}`,
+        actorId: `agent:${scope.principalId}`,
         ...(scope.subjectUserId
           ? { subjectId: `user:${scope.subjectUserId}` }
           : {}),

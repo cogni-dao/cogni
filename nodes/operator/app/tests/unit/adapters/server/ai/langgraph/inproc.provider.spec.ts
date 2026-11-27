@@ -238,7 +238,7 @@ describe("LangGraphInProcProvider", () => {
       expect(config).toMatchObject({
         nodeId: "operator-node-id",
         grantId: "grant-123",
-        actorId: "user:catalog-agent",
+        actorId: "agent:catalog-agent",
         subjectId: "user:00000000-0000-4000-a000-000000000001",
         graphId: "langgraph:poet",
       });
@@ -297,7 +297,7 @@ describe("LangGraphInProcProvider", () => {
       );
       const config = toolRunnerSpy.calls[0]?.[2] as Record<string, unknown>;
       expect(config).toMatchObject({
-        actorId: "user:catalog-agent",
+        actorId: "agent:catalog-agent",
         subjectId: "user:00000000-0000-4000-a000-000000000001",
         tenantId: "test-billing",
         graphId: "langgraph:poet",
@@ -445,7 +445,7 @@ describe("LangGraphInProcProvider", () => {
       expect(await run.exec("core__edo_decide")).toMatchObject({ ok: true });
       expect(run.writes).toHaveBeenCalledWith(
         {},
-        expect.objectContaining({ actorId: `user:${principalId}` }),
+        expect.objectContaining({ actorId: `agent:${principalId}` }),
         {}
       );
       expect(run.writes.mock.calls[0]?.[1]).not.toHaveProperty("subjectId");
@@ -470,7 +470,7 @@ describe("LangGraphInProcProvider", () => {
       expect(run.writes).toHaveBeenCalledWith(
         patch,
         expect.objectContaining({
-          actorId: `user:${principalId}`,
+          actorId: `agent:${principalId}`,
           subjectId: "user:requester",
         }),
         {}
@@ -526,7 +526,7 @@ describe("LangGraphInProcProvider", () => {
       });
       expect(run.check).toHaveBeenCalledWith(
         expect.objectContaining({
-          actorId: `user:${principalId}`,
+          actorId: `agent:${principalId}`,
           action: "node.flight",
           resource: `node:${nodeId}`,
         })

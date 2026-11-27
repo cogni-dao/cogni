@@ -1995,7 +1995,7 @@ packages:
         optional: true
 
   '@cogni-dao/knowledge-base@https://github.com/cogni-dao/node-template/releases/download/knowledge-base-v0.6.0/cogni-dao-knowledge-base-0.6.0.tgz':
-    resolution: {tarball: https://github.com/cogni-dao/node-template/releases/download/knowledge-base-v0.6.0/cogni-dao-knowledge-base-0.6.0.tgz}
+    resolution: {integrity: sha512-Uc/vntQBl3fN/MuZermRVWkVfsRwvNaFVvx4lgfvoR28I8ZhjFQchdUyoh01VP0aoH8VEK5U1jnu6jc6yMvJ0g==, tarball: https://github.com/cogni-dao/node-template/releases/download/knowledge-base-v0.6.0/cogni-dao-knowledge-base-0.6.0.tgz}
     version: 0.6.0
     peerDependencies:
       '@cogni/knowledge-store': '*'

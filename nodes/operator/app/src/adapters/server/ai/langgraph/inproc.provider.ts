@@ -386,7 +386,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
               args,
               {
                 ...ctx,
-                actorId: `user:${actingPrincipal(current)}`,
+                actorId: `agent:${actingPrincipal(current)}`,
                 ...(current.subjectUserId
                   ? { subjectId: `user:${current.subjectUserId}` }
                   : {}),
@@ -449,7 +449,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
         const source = createStaticToolSourceFromRecord(runtimeTools);
         const actorId =
           scope.principalId !== undefined
-            ? `user:${scope.principalId}`
+            ? `agent:${scope.principalId}`
             : undefined;
         const tenantId = scope.billing.billingAccountId;
         // Authority is checked on the REVIEWED node (`node_code_*` needs `node.flight` there); `scope.nodeId`
@@ -545,7 +545,7 @@ export class LangGraphInProcProvider implements GraphExecutorPort {
           model,
           toolIds: offeredIds,
           ...(scope.principalId !== undefined
-            ? { actorId: `user:${scope.principalId}` }
+            ? { actorId: `agent:${scope.principalId}` }
             : {}),
           tenantId: scope.billing.billingAccountId,
           graphId,
