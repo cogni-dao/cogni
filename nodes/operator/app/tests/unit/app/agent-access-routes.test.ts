@@ -8,6 +8,12 @@ const mocks = vi.hoisted(() => ({
   binding: vi.fn(),
 }));
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
+vi.mock("@/app/_lib/auth/request-identity", () => ({
+  currentBearerToken: async () => null,
+}));
+vi.mock("@/shared/env/server", () => ({
+  serverEnv: () => ({ APP_BASE_URL: "https://node.example" }),
+}));
 vi.mock("@/shared/env", () => ({
   serverEnv: () => ({ APP_BASE_URL: "https://node.example" }),
 }));
@@ -57,6 +63,7 @@ describe("access route boundaries", () => {
     const response = await adminOn(
       new Request("https://node.example/api/v1/admin/ai-access", {
         method: "POST",
+        headers: { origin: "https://node.example" },
         body: "{}",
       }) as never
     );
