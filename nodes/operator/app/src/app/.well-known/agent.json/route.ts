@@ -39,7 +39,7 @@ import {
 } from "@cogni-dao/agent-grants/http";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getAgentToolAuthority } from "@/bootstrap/agent-tool-authority";
+import { agentPermissions } from "@/bootstrap/agent-tool-authority";
 import { LangfuseObservationQuerySchema } from "@/contracts/nodes.langfuse.observations.v1.contract";
 import {
   getNodeBrandColor,
@@ -74,7 +74,7 @@ function publicOrigin(request: Request): string {
 export async function GET(request: Request) {
   const env = serverEnv();
   const origin = publicOrigin(request);
-  const permissions = (await getAgentToolAuthority()).permissions;
+  const permissions = agentPermissions;
   return NextResponse.json({
     name: "Cogni Node API",
     version: "v1",

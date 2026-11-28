@@ -11,7 +11,6 @@
  * @internal
  */
 
-import type { AuthorizationPort } from "@cogni/authorization-core";
 import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
 import { CORE_TOOL_BUNDLE } from "@cogni/shared-ai-tools";
@@ -26,6 +25,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  agentPermissions,
   bindAdminAiAccessCalls,
   createAgentToolAuthority,
 } from "@/bootstrap/agent-tool-authority";
@@ -59,23 +59,13 @@ describe("published operator capability host", () => {
 
   it("uses the runtime catalog and existing node-admin check for either caller kind", async () => {
     const factory = vi.mocked(sharedHost.createAgentToolAuthority);
-    const check = vi.fn<AuthorizationPort["check"]>().mockResolvedValue({
-      decision: "allow",
-      code: "authz_allowed",
-      checks: [],
-    });
-    const authorization: AuthorizationPort = {
-      check,
-      listRelations: vi.fn(),
-      listRelationsByObject: vi.fn(),
-      writeRelation: vi.fn(),
-      deleteRelation: vi.fn(),
-    };
+    const isAdminWallet = vi.fn(
+      (wallet: string | undefined) => wallet === "dao-wallet"
+    );
     const sql = Object.assign(vi.fn(), { begin: vi.fn() });
     createAgentToolAuthority({
       sql: sql as unknown as AgentAuthoritySql,
-      authorization,
-      nodeId: "operator",
+      isAdminWallet,
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     const deps = factory.mock.calls[0]?.[0];
@@ -83,24 +73,43 @@ describe("published operator capability host", () => {
     expect(deps.graphs).toEqual(Object.values(LANGGRAPH_CATALOG));
     expect(deps.sql).toBe(sql);
     for (const userId of ["session-admin", "bearer-admin"]) {
-      expect(await deps.nodeAdmin.check({ userId })).toEqual({ ok: true });
-      expect(check).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          actorId: `user:${userId}`,
-          action: "node.administer",
-          context: { tenantId: "operator", nodeId: "operator" },
-        })
-      );
+      expect(
+        await deps.nodeAdmin.check({ userId, walletAddress: "dao-wallet" })
+      ).toEqual({ ok: true });
+      expect(
+        await deps.nodeAdmin.check({ userId, walletAddress: "other" })
+      ).toEqual({ ok: false, errorCode: "authz_denied" });
+      expect(await deps.nodeAdmin.check({ userId })).toEqual({
+        ok: false,
+        errorCode: "authz_denied",
+      });
     }
     expect(sql).not.toHaveBeenCalled();
+  });
+
+  it("checks the stored wallet for either authenticated principal", async () => {
+    let wallet = "dao-wallet";
+    const sql = Object.assign(
+      vi.fn(async () => [{ external_id: wallet }]),
+      { begin: vi.fn() }
+    );
+    const host = createAgentToolAuthority({
+      sql: sql as unknown as AgentAuthoritySql,
+      isAdminWallet: (address) => address === "dao-wallet",
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+    for (const userId of ["session-admin", "bearer-admin"]) {
+      expect(await host.adminCheck(userId)).toBe("allow");
+      wallet = "other-wallet";
+      expect(await host.adminCheck(userId)).toBe("denied");
+      wallet = "dao-wallet";
+    }
   });
 
   it("derives grantable permissions from released contracts without reading or seeding SQL", () => {
     const sql = Object.assign(vi.fn(), { begin: vi.fn() });
     const host = createAgentToolAuthority({
       sql: sql as unknown as AgentAuthoritySql,
-      authorization: undefined,
-      nodeId: "operator",
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
 
@@ -127,6 +136,7 @@ describe("published operator capability host", () => {
     expect(
       host.permissions.every((permission) => permission.kind === "node")
     ).toBe(true);
+    expect(agentPermissions).toEqual(host.permissions);
     expect(sql).not.toHaveBeenCalled();
     expect(sql.begin).not.toHaveBeenCalled();
   });
@@ -136,8 +146,6 @@ describe("published operator capability host", () => {
     const sql = Object.assign(vi.fn(), { begin: vi.fn() });
     const host = createAgentToolAuthority({
       sql: sql as unknown as AgentAuthoritySql,
-      authorization: undefined,
-      nodeId: "operator",
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     expect(await host.principalClass(COGNI_SYSTEM_PRINCIPAL_USER_ID)).toBe(
@@ -246,16 +254,32 @@ describe("thin route inputs", () => {
     ]) {
       expect(workItemRouteRequires(route)).toEqual(policy);
     }
-    for (const route of ["work.items.delete", "work.items.get", "edo.decide"])
+    for (const route of ["work.items.delete", "work.items.get"])
       expect(workItemRouteRequires(route)).toBeUndefined();
+    for (const route of ["edo.decide", "edo.hypothesize", "edo.record_outcome"])
+      expect(workItemRouteRequires(route)?.scope).toBe("edo:write");
+    for (const route of [
+      "knowledge.list",
+      "knowledge.get",
+      "knowledge.index",
+      "knowledge.graph",
+      "knowledge.history",
+      "knowledge.domains.list",
+      "knowledge.domains.get",
+    ])
+      expect(workItemRouteRequires(route)?.scope).toBe("knowledge:read");
+    for (const route of [
+      "knowledge.contributions.create",
+      "knowledge.contributions.commits.append",
+      "knowledge.domains.create",
+    ])
+      expect(workItemRouteRequires(route)?.scope).toBe("knowledge:contribute");
   });
 
   it("passes a real host straight to both access-request HTTP cores", async () => {
     const sql = Object.assign(vi.fn(), { begin: vi.fn() });
     const authority = createAgentToolAuthority({
       sql: sql as unknown as AgentAuthoritySql,
-      authorization: undefined,
-      nodeId: "operator",
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     const onUnavailable = vi.fn();

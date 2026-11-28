@@ -27,8 +27,18 @@ const state = vi.hoisted(() => ({
   bearer: true,
   live: true,
   outage: false,
+  bootstrapFail: false,
+  expectedScope: "work_item:transition",
   sql: vi.fn(),
   codeRead: vi.fn(async () => ({ content: "source" })),
+}));
+vi.mock("@/app/_lib/auth/session", () => ({
+  getSessionUser: async () => ({
+    id: "admin",
+    displayName: null,
+    walletAddress: null,
+    avatarColor: null,
+  }),
 }));
 vi.mock("next/headers", () => ({
   headers: async () =>
@@ -43,12 +53,15 @@ vi.mock("@/bootstrap/container", () => {
     child: () => log,
   };
   return {
-    getContainer: () => ({
-      log,
-      clock: { now: () => new Date(0) },
-      config: { unhandledErrorPolicy: "rethrow" },
-      nodeId: "operator",
-    }),
+    getContainer: () => {
+      if (state.bootstrapFail) throw new Error("EVM_RPC_URL missing");
+      return {
+        log,
+        clock: { now: () => new Date(0) },
+        config: { unhandledErrorPolicy: "rethrow" },
+        nodeId: "operator",
+      };
+    },
     resolveServiceDb: () => ({ $client: state.sql }),
   };
 });
@@ -84,9 +97,13 @@ beforeEach(() => {
   state.bearer = true;
   state.live = true;
   state.outage = false;
+  state.bootstrapFail = false;
+  state.expectedScope = "work_item:transition";
   state.sql.mockReset().mockImplementation(async (_strings, ...values) => {
     if (state.outage) throw new Error("offline");
-    return state.live && values.includes("actual-agent")
+    return state.live &&
+      values.includes("actual-agent") &&
+      values.includes(state.expectedScope)
       ? [{ "?column?": 1 }]
       : [];
   });
@@ -127,13 +144,16 @@ describe("published HTTP and graph work-item doors", () => {
       },
       write
     );
-    const exec = vi.fn(async () => "written");
+    const exec = vi.fn(
+      async (_args: never, _ctx: never, _capabilities: never) => "written"
+    );
     const tool = guardTools(
       { update: { id: "update", effect: "write", exec } },
       { update: requires },
       { principalId: "actual-agent" },
       authority
     ).update;
+    if (!tool) throw new Error("missing tool");
     const call = () =>
       handler(
         new NextRequest("http://localhost/api/v1/work/items/task.1", {
@@ -194,6 +214,122 @@ describe("published HTTP and graph work-item doors", () => {
       workItemRouteRequires("work.items.sessions.coordination")
     ).toBeUndefined();
   });
+});
+
+it.each([
+  ["edo.hypothesize", "edo:write"],
+  ["edo.decide", "edo:write"],
+  ["edo.record_outcome", "edo:write"],
+  ["knowledge.list", "knowledge:read"],
+  ["knowledge.get", "knowledge:read"],
+  ["knowledge.index", "knowledge:read"],
+  ["knowledge.contributions.create", "knowledge:contribute"],
+  ["knowledge.contributions.commits.append", "knowledge:contribute"],
+  ["knowledge.domains.create", "knowledge:contribute"],
+])("checks live %s grant and denies before handler", async (routeId, scope) => {
+  state.expectedScope = scope;
+  const requires = workItemRouteRequires(routeId);
+  expect(requires?.scope).toBe(scope);
+  const write = vi.fn(async () => NextResponse.json({ ok: true }));
+  const handler = wrapRouteHandlerWithLogging(
+    {
+      routeId,
+      auth: {
+        mode: "required",
+        getSessionUser: async () => ({
+          id: "actual-agent",
+          displayName: null,
+          walletAddress: null,
+          avatarColor: null,
+        }),
+      },
+    },
+    write
+  );
+  const call = () =>
+    handler(
+      new NextRequest("http://localhost", {
+        method:
+          routeId.startsWith("knowledge.") && scope === "knowledge:read"
+            ? "GET"
+            : "POST",
+      })
+    );
+  expect((await call()).status).toBe(200);
+  state.live = false;
+  expect((await call()).status).toBe(403);
+  expect(write).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  "on",
+  "off",
+  "dismiss",
+] as const)("returns no-store 503 on %s store outage", async (call) => {
+  const authority = await import("@/bootstrap/agent-tool-authority");
+  const spy = vi.spyOn(authority, "getAdminAiAccessCalls").mockResolvedValue({
+    ok: true,
+    calls: {
+      list: async () => ({ permissions: [], more: 0 }),
+      on: async () => {
+        throw new Error("secret store detail");
+      },
+      off: async () => {
+        throw new Error("secret store detail");
+      },
+      dismiss: async () => {
+        throw new Error("secret store detail");
+      },
+      preview: async () => null,
+    },
+  });
+  const { adminRoute } = await import(
+    "@/app/api/v1/admin/ai-access/admin-route"
+  );
+  const response = await adminRoute(call === "dismiss" ? "off" : call)(
+    new NextRequest("http://localhost", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        principalUserId: "target",
+        scope: "edo:write",
+        ...(call === "dismiss" ? { deny: true } : {}),
+      }),
+    })
+  );
+  expect(response.status).toBe(503);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await response.json()).toEqual({ error: "authz_unavailable" });
+  spy.mockRestore();
+});
+
+it("serves discovery without runtime container readiness", async () => {
+  state.bootstrapFail = true;
+  vi.stubEnv("APP_ENV", "test");
+  vi.stubEnv("EVM_RPC_URL", "");
+  vi.stubEnv("LITELLM_MASTER_KEY", "test-key");
+  vi.stubEnv("DATABASE_URL", "postgresql://localhost/test");
+  vi.stubEnv("DATABASE_SERVICE_URL", "postgresql://localhost/test");
+  for (const key of [
+    "AUTH_SECRET",
+    "SCHEDULER_API_TOKEN",
+    "BILLING_INGEST_TOKEN",
+  ])
+    vi.stubEnv(key, "x".repeat(32));
+  const { GET } = await import("@/app/.well-known/agent.json/route");
+  const response = await GET(
+    new Request("http://localhost/.well-known/agent.json")
+  );
+  expect(response.status).toBe(200);
+  expect(
+    (await response.json()).permissions.map((p: { scope: string }) => p.scope)
+  ).toEqual(
+    expect.arrayContaining([
+      "knowledge:read",
+      "knowledge:contribute",
+      "edo:write",
+    ])
+  );
 });
 
 it("maps conflicts from the exported adapter constructor, preserving the canonical receipt", async () => {

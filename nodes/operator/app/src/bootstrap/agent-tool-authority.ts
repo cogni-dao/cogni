@@ -11,7 +11,6 @@
  * @internal
  */
 
-import type { AuthorizationPort } from "@cogni/authorization-core";
 import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
 import { CORE_TOOL_BUNDLE } from "@cogni/shared-ai-tools";
@@ -19,15 +18,17 @@ import {
   type AgentAuthoritySql,
   type AgentToolAuthority,
   type AgentToolAuthorityDeps,
+  buildPermissionCatalog,
+  buildRequiresById,
   createAgentToolAuthority as createSharedAgentToolAuthority,
 } from "@cogni-dao/agent-grants/host";
 import type { AdminAiAccessCalls } from "@cogni-dao/agent-grants/http";
 
 import {
-  checkNodeAdmin,
   type NodeAdminGate,
   nodeAdminUnavailable,
 } from "@/bootstrap/node-admin-gate";
+import { isDaoAdmin } from "@/shared/config/repoSpec.server";
 
 export type {
   AgentAuthoritySql,
@@ -44,19 +45,24 @@ const tools = CORE_TOOL_BUNDLE.flatMap(({ contract }) =>
     : []
 );
 
+export const agentPermissions = buildPermissionCatalog(
+  buildRequiresById(tools)
+).permissions;
+
 /** No seeds or grants: the shared host resolves this node's existing SQL rows. */
 export function createAgentToolAuthority(
   deps: Pick<AgentToolAuthorityDeps, "sql" | "log"> & {
-    readonly authorization: AuthorizationPort | undefined;
-    readonly nodeId: string;
+    readonly isAdminWallet?: (wallet: string | undefined) => boolean;
   }
 ): AgentToolAuthority {
   return createSharedAgentToolAuthority({
     sql: deps.sql,
     log: deps.log,
     nodeAdmin: {
-      check: ({ userId }) =>
-        checkNodeAdmin(deps.authorization, { userId, nodeId: deps.nodeId }),
+      check: async ({ walletAddress }) =>
+        (deps.isAdminWallet ?? isDaoAdmin)(walletAddress)
+          ? { ok: true }
+          : { ok: false, errorCode: "authz_denied" },
     },
     tools,
     graphs: Object.values(LANGGRAPH_CATALOG),
@@ -74,8 +80,6 @@ export async function getAgentToolAuthority(): Promise<AgentToolAuthority> {
     // The same BYPASSRLS postgres.js connection used by the existing guards and
     // credential store. The package owns its transaction/store implementation.
     sql: resolveServiceDb().$client as unknown as AgentAuthoritySql,
-    authorization: container.authorization,
-    nodeId: container.nodeId,
     log: container.log,
   });
 }

@@ -36,14 +36,25 @@ export function adminRoute(call: AdminAiAccessCall) {
           { error: binding.errorCode },
           { status: binding.status, headers: { "cache-control": "no-store" } }
         );
-      return send(
-        await adminAiAccessHttp(deps(ctx.log), call, {
-          calls: binding.calls,
-          ...(call === "list"
-            ? {}
-            : { body: await request.json().catch(() => undefined) }),
-        })
-      );
+      try {
+        return send(
+          await adminAiAccessHttp(deps(ctx.log), call, {
+            calls: binding.calls,
+            ...(call === "list"
+              ? {}
+              : { body: await request.json().catch(() => undefined) }),
+          })
+        );
+      } catch {
+        ctx.log.error(
+          { routeId: `admin.ai-access.${call}` },
+          "agent access unavailable"
+        );
+        return NextResponse.json(
+          { error: "authz_unavailable" },
+          { status: 503, headers: { "cache-control": "no-store" } }
+        );
+      }
     }
   );
 }

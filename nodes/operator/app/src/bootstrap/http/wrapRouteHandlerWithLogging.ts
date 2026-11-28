@@ -341,7 +341,12 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
 
           // Safe cast: for mode "required", the guard above returns 401 if null.
           // Published work-item routes use the same live scope policy as graph tools.
-          if (sessionUser && options.routeId.startsWith("work.items.")) {
+          if (
+            sessionUser &&
+            ["work.items.", "edo.", "knowledge."].some((prefix) =>
+              options.routeId.startsWith(prefix)
+            )
+          ) {
             const {
               authorizeWorkItemCaller,
               workItemHttpAuthority,

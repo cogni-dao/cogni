@@ -33,7 +33,12 @@ const sameDoorRoutes = composeAgentRoutes().sameDoorRoutes;
 export function workItemRouteRequires(
   routeId: string
 ): ToolRequires | undefined {
-  if (!routeId.startsWith("work.items.")) return undefined;
+  if (
+    !routeId.startsWith("work.items.") &&
+    !routeId.startsWith("edo.") &&
+    !routeId.startsWith("knowledge.")
+  )
+    return undefined;
   const publishedRouteId = coordinationDoors[routeId] ?? routeId;
   for (const [toolId, declaration] of Object.entries(sameDoorRoutes)) {
     if (!declaration.routes.includes(publishedRouteId)) continue;
@@ -43,6 +48,12 @@ export function workItemRouteRequires(
     if (!requires || requires.scope !== declaration.scope)
       throw new Error(`Missing published work-item scope: ${routeId}`);
     return requires;
+  }
+  for (const declaration of Object.values(
+    composeAgentRoutes().routeOnlyCapabilities
+  )) {
+    if (declaration.routes.includes(publishedRouteId))
+      return declaration.requires;
   }
   return undefined;
 }
