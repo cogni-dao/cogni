@@ -222,7 +222,10 @@ describe("released node-role host on the operator schema", () => {
       service`INSERT INTO agent_roles (principal_user_id, scope, link_hash) VALUES (${internal}, 'other', ${live?.link_hash})`
     ).rejects.toMatchObject({ code: "23505" });
     await expect(
-      service`INSERT INTO agent_roles (principal_user_id, scope, resource, account_id) VALUES (${internal}, 'fk', 'account', ${randomUUID()})`
+      service`INSERT INTO agent_roles (principal_user_id, scope, resource, account_id) VALUES (${internal}, 'account', 'account', ${randomUUID()})`
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      service`INSERT INTO agent_roles (principal_user_id, scope, resource) VALUES (${randomUUID()}, 'fk', 'node')`
     ).rejects.toMatchObject({ code: "23503" });
     await expect(
       service`INSERT INTO agent_roles (principal_user_id, scope, account_id) VALUES (${internal}, 'shape', ${randomUUID()})`
