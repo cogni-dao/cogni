@@ -37,6 +37,11 @@ function tokenOf(path: string | undefined): string {
   return token;
 }
 
+function expectTimestamp(value: Date | string | null | undefined): void {
+  expect(value instanceof Date || typeof value === "string").toBe(true);
+  expect(Number.isFinite(new Date(value ?? "").getTime())).toBe(true);
+}
+
 describe("released node-role host on the operator schema", () => {
   let service: Sql;
   let app: Sql;
@@ -98,7 +103,9 @@ describe("released node-role host on the operator schema", () => {
     const preview = (token: string) =>
       host.previewAsk({ token, resource: "node" });
     const rows = () =>
-      service`SELECT * FROM agent_roles WHERE principal_user_id = ${principal} ORDER BY created_at, id`;
+      service`SELECT *, link_expires_at > now() AS link_is_live,
+        link_consumed_at <= now() AS link_was_consumed
+        FROM agent_roles WHERE principal_user_id = ${principal} ORDER BY created_at, id`;
 
     expect(await authorize(legacy)).toMatchObject({
       decision: "allow",
@@ -133,7 +140,8 @@ describe("released node-role host on the operator schema", () => {
       link_consumed_at: null,
       link_hash: createHash("sha256").update(token).digest("hex"),
     });
-    expect(pending?.link_expires_at).toBeInstanceOf(Date);
+    expectTimestamp(pending?.link_expires_at);
+    expect(pending?.link_is_live).toBe(true);
     expect(await preview(token)).toMatchObject({
       principalUserId: principal,
       scope,
@@ -162,7 +170,8 @@ describe("released node-role host on the operator schema", () => {
     });
     const [approved] = await rows();
     expect(approved).toMatchObject({ approved_by: approver, link_hash: null });
-    expect(approved?.link_consumed_at).toBeInstanceOf(Date);
+    expectTimestamp(approved?.link_consumed_at);
+    expect(approved?.link_was_consumed).toBe(true);
     expect(await preview(token)).toBeNull();
     expect(await authorize(principal)).toMatchObject({
       decision: "allow",
