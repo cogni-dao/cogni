@@ -13,8 +13,8 @@
 import { CORE_TOOL_BUNDLE } from "@cogni/shared-ai-tools";
 import {
   authorizeCaller,
+  composeAgentRoutes,
   type GuardDeps,
-  SAME_DOOR_ROUTES,
   type ToolRequires,
 } from "@cogni-dao/agent-grants";
 
@@ -26,13 +26,16 @@ const coordinationDoors: Readonly<Record<string, string>> = {
   "work.items.sessions.pr": "work.items.patch",
 };
 
+// 0.11 exposes the baseline through its add-only route composer.
+const sameDoorRoutes = composeAgentRoutes().sameDoorRoutes;
+
 /** Only declared work-item doors are in this repair's scope. Retired DELETE stays 410. */
 export function workItemRouteRequires(
   routeId: string
 ): ToolRequires | undefined {
   if (!routeId.startsWith("work.items.")) return undefined;
   const publishedRouteId = coordinationDoors[routeId] ?? routeId;
-  for (const [toolId, declaration] of Object.entries(SAME_DOOR_ROUTES)) {
+  for (const [toolId, declaration] of Object.entries(sameDoorRoutes)) {
     if (!declaration.routes.includes(publishedRouteId)) continue;
     const requires = CORE_TOOL_BUNDLE.find(
       (tool) => tool.contract.name === toolId

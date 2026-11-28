@@ -356,8 +356,8 @@ importers:
         specifier: ^1.7.0
         version: 1.11.1
       '@cogni-dao/agent-grants':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.8.0/cogni-dao-agent-grants-0.8.0.tgz
-        version: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.8.0/cogni-dao-agent-grants-0.8.0.tgz
+        specifier: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.11.0/cogni-dao-agent-grants-0.11.0.tgz
+        version: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.11.0/cogni-dao-agent-grants-0.11.0.tgz(drizzle-orm@0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7))
       '@cogni-dao/attribution':
         specifier: https://github.com/cogni-dao/node-template/releases/download/attribution-v0.1.1/cogni-dao-attribution-0.1.1.tgz
         version: '@cogni-dao/attribution@https://github.com/cogni-dao/node-template/releases/download/attribution-v0.1.1/cogni-dao-attribution-0.1.1.tgz'
@@ -1179,8 +1179,8 @@ importers:
   packages/node-contracts:
     dependencies:
       '@cogni-dao/agent-grants':
-        specifier: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.8.0/cogni-dao-agent-grants-0.8.0.tgz
-        version: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.8.0/cogni-dao-agent-grants-0.8.0.tgz
+        specifier: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.11.0/cogni-dao-agent-grants-0.11.0.tgz
+        version: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.11.0/cogni-dao-agent-grants-0.11.0.tgz(drizzle-orm@0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7))
       '@cogni/ai-core':
         specifier: workspace:*
         version: link:../ai-core
@@ -1946,6 +1946,15 @@ packages:
   '@cogni-dao/agent-grants@https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.8.0/cogni-dao-agent-grants-0.8.0.tgz':
     resolution: {integrity: sha512-JFVjXih4wGxfVQk/k7GVnixSDw2P7h4pjvXSJWuXbVPYxvVT+rat0li/BGtbGIVYJLdHqyPhtXHUOYptL91uWg==, tarball: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.8.0/cogni-dao-agent-grants-0.8.0.tgz}
     version: 0.8.0
+
+  '@cogni-dao/agent-grants@https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.11.0/cogni-dao-agent-grants-0.11.0.tgz':
+    resolution: {integrity: sha512-54TEASPy3Dd7AbEwHIMj6aelZ4HCsKUDmU6JTL6rxxVGWOZmPdOVNmGzjTlZr17xrwdwOkRK3R0K9p/h5yukBw==, tarball: https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.11.0/cogni-dao-agent-grants-0.11.0.tgz}
+    version: 0.11.0
+    peerDependencies:
+      drizzle-orm: ^0.44.7
+    peerDependenciesMeta:
+      drizzle-orm:
+        optional: true
 
   '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.27.0/cogni-dao-ai-tools-0.27.0.tgz':
     resolution: {integrity: sha512-h4hfh//VhNW25wdjjqz9II6MtMatY3gljv8AhUiPIKwOMR0MN8MihpvKXLEznpdoRxrRZ08q8pWClKmYR2TnnQ==, tarball: https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.27.0/cogni-dao-ai-tools-0.27.0.tgz}
@@ -13686,6 +13695,12 @@ snapshots:
   '@cogni-dao/agent-grants@https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.8.0/cogni-dao-agent-grants-0.8.0.tgz':
     dependencies:
       zod: 4.3.6
+
+  '@cogni-dao/agent-grants@https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.11.0/cogni-dao-agent-grants-0.11.0.tgz(drizzle-orm@0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7))':
+    dependencies:
+      zod: 4.3.6
+    optionalDependencies:
+      drizzle-orm: 0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7)
 
   '@cogni-dao/ai-tools@https://github.com/cogni-dao/node-template/releases/download/ai-tools-v0.27.0/cogni-dao-ai-tools-0.27.0.tgz(@cogni-dao/knowledge-store@https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.27.0/cogni-dao-knowledge-store-0.27.0.tgz)(@cogni-dao/metrics@https://github.com/cogni-dao/node-template/releases/download/metrics-v0.27.0/cogni-dao-metrics-0.27.0.tgz(drizzle-orm@0.44.7(@opentelemetry/api@1.9.1)(@types/pg@8.16.0)(pg@8.17.1)(postgres@3.4.7))(postgres@3.4.7))(@cogni-dao/work-items@https://github.com/cogni-dao/node-template/releases/download/work-items-v0.27.0/cogni-dao-work-items-0.27.0.tgz)':
     dependencies:

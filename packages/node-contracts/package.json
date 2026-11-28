@@ -29,7 +29,7 @@
     "@ts-rest/open-api": "^3.52.1",
     "zod": "^4.1.12",
     "@cogni/shared-knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.27.0/cogni-dao-knowledge-store-0.27.0.tgz",
-    "@cogni-dao/agent-grants": "https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.8.0/cogni-dao-agent-grants-0.8.0.tgz"
+    "@cogni-dao/agent-grants": "https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.11.0/cogni-dao-agent-grants-0.11.0.tgz"
   },
   "devDependencies": {
     "tsup": "^8.5.1",
