@@ -6,19 +6,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   binding: vi.fn(),
+  ask: vi.fn(),
+  origin: "https://node.example" as string | undefined,
 }));
 vi.mock("@/app/_lib/auth/session", () => ({ getSessionUser: vi.fn() }));
 vi.mock("@/app/_lib/auth/request-identity", () => ({
   currentBearerToken: async () => null,
 }));
 vi.mock("@/shared/env/server", () => ({
-  serverEnv: () => ({ APP_BASE_URL: "https://node.example" }),
+  serverEnv: () => ({ APP_BASE_URL: mocks.origin }),
 }));
 vi.mock("@/shared/env", () => ({
-  serverEnv: () => ({ APP_BASE_URL: "https://node.example" }),
+  serverEnv: () => ({ APP_BASE_URL: mocks.origin }),
 }));
 vi.mock("@/bootstrap/agent-tool-authority", () => ({
-  getAgentToolAuthority: async () => ({ listOwnAccess: mocks.list }),
+  getAgentToolAuthority: async () => ({
+    listOwnAccess: mocks.list,
+    requestAccess: mocks.ask,
+  }),
   getAdminAiAccessCalls: mocks.binding,
 }));
 vi.mock("@/bootstrap/http", () => ({
@@ -32,17 +37,73 @@ vi.mock("@/bootstrap/http", () => ({
 }));
 
 import { POST as adminOn } from "@/app/api/v1/admin/ai-access/route";
-import { GET as list } from "@/app/api/v1/agent/access-requests/route";
+import {
+  POST as ask,
+  GET as list,
+} from "@/app/api/v1/agent/access-requests/route";
 
 describe("access route boundaries", () => {
   beforeEach(() => vi.resetAllMocks());
-  it("refuses session access to the agent plane without reading grants", async () => {
+  it("binds session listing to the authenticated user", async () => {
+    mocks.list.mockResolvedValue([]);
     const response = await list(
       new Request("https://node.example/api/v1/agent/access-requests") as never
     );
-    expect(response.status).toBe(404);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(mocks.list).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mocks.list).toHaveBeenCalledWith("caller");
+  });
+  it.each([
+    undefined,
+    "null",
+    "https://other.example",
+    "http://node.example",
+    "https://node.example:444",
+    "https://node.example/path",
+  ])("refuses session writes with origin %s", async (origin) => {
+    const response = await ask(
+      new Request("https://node.example/api/v1/agent/access-requests", {
+        method: "POST",
+        headers: origin ? { origin } : {},
+        body: JSON.stringify({ scope: "work:read" }),
+      }) as never
+    );
+    expect(response.status).toBe(403);
+    expect(mocks.ask).not.toHaveBeenCalled();
+  });
+  it.each([
+    "session",
+    "bearer",
+  ])("allows %s through the matching boundary", async (via) => {
+    mocks.ask.mockResolvedValue({ created: true, state: "pending" });
+    const response = await ask(
+      new Request("https://node.example/api/v1/agent/access-requests", {
+        method: "POST",
+        headers:
+          via === "session"
+            ? { origin: "https://node.example" }
+            : {
+                authorization: "Bearer example",
+                origin: "https://other.example",
+              },
+        body: JSON.stringify({ scope: "work:read" }),
+      }) as never
+    );
+    expect(mocks.ask).toHaveBeenCalledWith({
+      principalUserId: "caller",
+      scope: "work:read",
+    });
+    expect(response.status).toBe(201);
+  });
+  it("fails closed when the configured origin is unavailable", async () => {
+    mocks.origin = undefined;
+    const response = await ask(
+      new Request("https://node.example/api/v1/agent/access-requests", {
+        method: "POST",
+      }) as never
+    );
+    expect(response.status).toBe(503);
+    expect(mocks.ask).not.toHaveBeenCalled();
+    mocks.origin = "https://node.example";
   });
   it("binds bearer listing to the authenticated user", async () => {
     mocks.list.mockResolvedValue([]);

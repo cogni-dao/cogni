@@ -151,7 +151,7 @@
     "@cogni-dao/knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.27.0/cogni-dao-knowledge-store-0.27.0.tgz",
     "@cogni/shared-knowledge-store": "https://github.com/cogni-dao/node-template/releases/download/knowledge-store-v0.27.0/cogni-dao-knowledge-store-0.27.0.tgz",
     "@cogni-dao/metrics": "https://github.com/cogni-dao/node-template/releases/download/metrics-v0.27.0/cogni-dao-metrics-0.27.0.tgz",
-    "@cogni-dao/agent-grants": "https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.11.0/cogni-dao-agent-grants-0.11.0.tgz",
+    "@cogni-dao/agent-grants": "https://github.com/cogni-dao/node-template/releases/download/agent-grants-v0.11.1/cogni-dao-agent-grants-0.11.1.tgz",
     "@cogni-dao/attribution": "https://github.com/cogni-dao/node-template/releases/download/attribution-v0.1.1/cogni-dao-attribution-0.1.1.tgz",
     "@cogni/operator-knowledge-store": "workspace:@cogni/knowledge-store@*",
     "@cogni/ui-theme": "https://github.com/cogni-dao/node-template/releases/download/ui-theme-v0.1.1/cogni-dao-ui-theme-0.1.1.tgz"

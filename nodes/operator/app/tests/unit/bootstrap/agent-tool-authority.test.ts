@@ -19,7 +19,6 @@ import type { AgentAuthoritySql } from "@cogni-dao/agent-grants/host";
 import * as sharedHost from "@cogni-dao/agent-grants/host";
 import {
   accessRequestCreateHttp,
-  accessRequestListHttp,
   adminAiAccessHttp,
 } from "@cogni-dao/agent-grants/http";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -295,12 +294,6 @@ describe("thin route inputs", () => {
       }
     );
     expect(create.status).toBe(400);
-    // The published access-request core retains its bearer-only contract.
-    const list = await accessRequestListHttp(
-      { onUnavailable },
-      { via: "session", principalUserId: "caller", authority }
-    );
-    expect(list.status).toBe(404);
     expect(sql).not.toHaveBeenCalled();
     expect(sql.begin).not.toHaveBeenCalled();
     expect(onUnavailable).not.toHaveBeenCalled();
