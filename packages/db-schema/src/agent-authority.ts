@@ -37,7 +37,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
-import { users } from "./refs";
+import { billingAccounts, users } from "./refs";
 
 /**
  * A marked agent. `internal` rows are seeded for a graph to act as; `external` rows come from redeemed spawn grants (later);
@@ -101,6 +101,13 @@ export const agentRoles = pgTable(
     // The released store filters node roles by resource. The default preserves
     // existing rows and old writers; the CHECK keeps account grants unsupported.
     resource: text("resource").notNull().default("node"),
+    // The shared host reads these fields even for node-only requests. Account
+    // grants remain disabled by agent_roles_node_resource_only.
+    accountId: text("account_id").references(() => billingAccounts.id),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    linkHash: text("link_hash"),
+    linkExpiresAt: timestamp("link_expires_at", { withTimezone: true }),
+    linkConsumedAt: timestamp("link_consumed_at", { withTimezone: true }),
     approvedBy: text("approved_by").references(() => users.id),
     /** Set when an admin approves. Null while pending or denied. */
     grantedAt: timestamp("granted_at", { withTimezone: true }),
@@ -113,6 +120,15 @@ export const agentRoles = pgTable(
   },
   (table) => [
     check("agent_roles_node_resource_only", sql`${table.resource} = 'node'`),
+    check(
+      "agent_roles_node_shape",
+      sql`${table.resource} <> 'node' OR (${table.accountId} IS NULL AND ${table.expiresAt} IS NULL)`
+    ),
+    check(
+      "agent_roles_link_consumed_has_no_hash",
+      sql`${table.linkConsumedAt} IS NULL OR ${table.linkHash} IS NULL`
+    ),
+    uniqueIndex("agent_roles_link_hash_unique").on(table.linkHash),
     uniqueIndex("agent_roles_live_unique")
       .on(table.principalUserId, table.scope)
       .where(sql`${table.revokedAt} IS NULL`),
