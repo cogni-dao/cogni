@@ -18,6 +18,7 @@
 
 import "@/styles/tailwind.css";
 import "@rainbow-me/rainbowkit/styles.css";
+import { ApprovalFragmentScrub } from "@cogni/knowledge-base-ui";
 
 import type { Metadata } from "next";
 import { Manrope } from "next/font/google";
@@ -84,6 +85,7 @@ export default async function RootLayout({
           disableTransitionOnChange
         >
           <Providers initialState={initialState}>
+            <ApprovalFragmentScrub />
             <div id="main">{children}</div>
           </Providers>
         </ThemeProvider>
