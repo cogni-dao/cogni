@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildDoltgresClient,
   DoltgresKnowledgeContributionAdapter,
-} from "@cogni/knowledge-store/adapters/doltgres";
+} from "@cogni/operator-knowledge-store/adapters/doltgres";
 import postgres, { type Sql } from "postgres";
 import {
   GenericContainer,

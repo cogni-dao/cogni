@@ -50,6 +50,9 @@ vi.mock("@/bootstrap/container", () => {
     debug: vi.fn(),
   };
   return {
+    resolveServiceDb: () => {
+      throw new Error("Unexpected grants store access in session fixture");
+    },
     getContainer: vi.fn(() => ({
       log,
       clock: { now: vi.fn(() => new Date("2026-10-21T00:00:00Z")) },

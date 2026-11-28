@@ -14,6 +14,7 @@
 import {
   ACTIVE_WORK_STATUSES,
   DEFAULT_WORK_SORT,
+  WORK_ITEM_SCOPED_PARAMS,
   WORK_STATUSES,
 } from "@cogni/knowledge-base-ui";
 import type { ColumnFiltersState, SortingState } from "@tanstack/react-table";
@@ -123,10 +124,19 @@ export function writeWorkListState(
   return params;
 }
 
-export function workListStateSearchParams(
+/** The item view's own parameters (selected artifact, older pages) belong to one open item: another item, none, or a list edit never inherits them (story.0085). */
+function withoutItemScopedParams(
   searchParams: SerializableSearchParams
 ): URLSearchParams {
   const next = new URLSearchParams(searchParams.toString());
+  for (const key of WORK_ITEM_SCOPED_PARAMS) next.delete(key);
+  return next;
+}
+
+export function workListStateSearchParams(
+  searchParams: SerializableSearchParams
+): URLSearchParams {
+  const next = withoutItemScopedParams(searchParams);
   for (const key of WORK_LIST_CONTROLLED_PARAMS) next.delete(key);
   return next;
 }
@@ -150,12 +160,16 @@ export function openWorkItemPermalink(
   id: string,
   searchParams: SerializableSearchParams
 ): void {
-  router.push(workItemHref(id, searchParams), { scroll: false });
+  router.push(workItemHref(id, withoutItemScopedParams(searchParams)), {
+    scroll: false,
+  });
 }
 
 export function closeWorkItemPermalink(
   router: WorkRouter,
   searchParams: SerializableSearchParams
 ): void {
-  router.replace(workListHref(searchParams), { scroll: false });
+  router.replace(workListHref(withoutItemScopedParams(searchParams)), {
+    scroll: false,
+  });
 }

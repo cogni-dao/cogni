@@ -7,7 +7,7 @@
  * Scope: Node-owned composition only; no copied tool implementations or graph prompts.
  * Invariants:
  *   - HOST_POLICY_PRESERVED: every replaced contract keeps its existing operator requires gate.
- *   - RELEASE_OWNS_BEHAVIOR: the six baseline tool schemas come from the immutable tools release.
+ *   - RELEASE_OWNS_BEHAVIOR: the baseline tool schemas come from the immutable tools release.
  *   - OTHER_TOOLS_UNCHANGED: product/VCS tools retain their existing bindings and runtime policy.
  * Side-effects: none
  * Links: hub adopt-node-package-release, story.5111
@@ -20,7 +20,8 @@ import { CORE_TOOL_BUNDLE as SHARED_TOOL_BUNDLE } from "@cogni/shared-ai-tools";
 const baselineIds = new Set([
   "core__goal_list",
   "core__work_item_query",
-  "core__work_item_transition",
+  "core__work_item_read",
+  "core__work_item_update",
   "core__knowledge_search",
   "core__edo_decide",
   "core__get_current_time",
@@ -42,6 +43,12 @@ export const OPERATOR_CORE_TOOL_BUNDLE: readonly CatalogBoundTool[] =
     }
     return {
       ...shared,
-      contract: { ...shared.contract, requires: local.contract.requires },
+      contract: {
+        ...shared.contract,
+        requires:
+          local.contract.name === "core__work_item_update"
+            ? "node.collaborate"
+            : local.contract.requires,
+      },
     };
   });

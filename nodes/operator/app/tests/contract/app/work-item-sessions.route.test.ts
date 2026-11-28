@@ -53,6 +53,9 @@ vi.mock("@/lib/auth/server", () => ({
   getServerSessionUser: () => mocks.getServerSessionUser(),
 }));
 vi.mock("@/bootstrap/container", () => ({
+  resolveServiceDb: () => ({
+    $client: async () => [{ ok: 1 }],
+  }),
   getContainer: mocks.getContainer,
   getRequestLoggingDependencies: mocks.getRequestLoggingDependencies,
   getWorkItemSessionPort: () => ({

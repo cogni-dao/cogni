@@ -10,11 +10,11 @@
  * Links: app/_facades/goal-loop/service.server.ts
  * @internal
  */
-import { createEdoCapability } from "@cogni/knowledge-store";
+import { createEdoCapability } from "@cogni/operator-knowledge-store";
 import {
   FakeEdoResolverAdapter,
   FakeKnowledgeStoreAdapter,
-} from "@cogni/knowledge-store/adapters/fake";
+} from "@cogni/operator-knowledge-store/adapters/fake";
 import { describe, expect, it } from "vitest";
 import { runGoalStep } from "@/app/_facades/goal-loop/service.server";
 

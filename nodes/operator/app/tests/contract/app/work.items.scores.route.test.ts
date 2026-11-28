@@ -44,6 +44,9 @@ vi.mock("@/bootstrap/container", () => {
     debug: vi.fn(),
   };
   return {
+    resolveServiceDb: () => {
+      throw new Error("Unexpected grants store access in session fixture");
+    },
     getContainer: vi.fn(() => ({
       log,
       clock: { now: vi.fn(() => new Date("2026-10-23T00:00:00Z")) },
@@ -140,7 +143,10 @@ const json = (body: unknown) => ({
 describe("work-item scores HTTP boundary (story.5111)", () => {
   beforeEach(() => {
     sqlCalls.mockReset();
-    vi.mocked(session.getSessionUser).mockResolvedValue(TEST_SESSION_USER_1);
+    vi.mocked(session.getSessionUser).mockResolvedValue({
+      ...TEST_SESSION_USER_1,
+      displayName: "Test User",
+    });
     state.store = realAdapterOverStubSql();
   });
 
@@ -249,7 +255,7 @@ describe("work-item scores HTTP boundary (story.5111)", () => {
     });
     expect(store.create).toHaveBeenCalledWith(
       expect.objectContaining({ scores: created }),
-      expect.any(String)
+      { actor: TEST_SESSION_USER_1.id }
     );
 
     await testApiHandler({
@@ -277,7 +283,7 @@ describe("work-item scores HTTP boundary (story.5111)", () => {
     });
     expect(store.patch).toHaveBeenLastCalledWith(
       expect.objectContaining({ set: { scores: null } }),
-      expect.any(String)
+      { actor: TEST_SESSION_USER_1.id }
     );
   });
 });

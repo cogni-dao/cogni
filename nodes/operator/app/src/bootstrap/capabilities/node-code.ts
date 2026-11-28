@@ -28,6 +28,7 @@ import {
   GitHubVcsAdapter,
   getExecutionScope,
   REVIEW_NODE_CODE_POLICY,
+  withRunNodeAuthorization,
 } from "@/adapters/server";
 import { findServiceLinkTarget, type LinkTarget } from "@/shared/config";
 
@@ -147,7 +148,7 @@ export function createNodeCodeCapability(deps: {
   }
   async function scoped(): Promise<NodeCodeCapability> {
     const scope = getExecutionScope();
-    if (!scope.actorUserId || scope.nodeId !== deps.nodeId)
+    if (!scope.principalId || scope.nodeId !== deps.nodeId)
       throw new Error("node_code_scope_unavailable");
     const subject = scope.codeSubject;
     // SUBJECT_MUST_BE_LISTED: another node's code is readable only when that node is a listed link target.
@@ -166,8 +167,14 @@ export function createNodeCodeCapability(deps: {
     const authzNodeId = subject?.nodeId ?? deps.nodeId;
     let decision: AuthzDecision;
     try {
-      decision = await authorization.check({
-        actorId: `user:${scope.actorUserId}`,
+      decision = await withRunNodeAuthorization(
+        authorization,
+        scope.principalId
+      ).check({
+        actorId: `agent:${scope.principalId}`,
+        ...(scope.subjectUserId
+          ? { subjectId: `user:${scope.subjectUserId}` }
+          : {}),
         action: "node.flight",
         resource: authzNodeResource(authzNodeId),
         context: {

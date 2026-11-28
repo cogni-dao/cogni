@@ -1022,8 +1022,12 @@ export {
   type DoltgresEdoResolverConfig,
 } from "./edo-resolver.js";
 export {
+  ACQUIRE_TIMEOUT_MS,
   type BranchSessionLogger,
   type BranchSessionOptions,
   DoltBranchSessionRunner,
   KNOWLEDGE_BRANCH_LOCK_KEY,
+  LOCK_RETRY_MS,
+  LOCK_WAIT_MS,
+  QUEUE_WAIT_MS,
 } from "./session-admission.js";

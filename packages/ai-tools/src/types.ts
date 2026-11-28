@@ -20,6 +20,7 @@ import type {
   ToolAuthzRequirement,
   ToolEffect,
   ToolFailureReceipt,
+  ToolInvocationContext,
 } from "@cogni/ai-core";
 import type { z } from "zod";
 
@@ -103,7 +104,10 @@ export interface ToolContract<
  */
 export interface ToolImplementation<TInput, TOutput> {
   /** Execute the tool with validated input */
-  readonly execute: (input: TInput) => Promise<TOutput>;
+  readonly execute: (
+    input: TInput,
+    context?: ToolInvocationContext
+  ) => Promise<TOutput>;
 }
 
 /**

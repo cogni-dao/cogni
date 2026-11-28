@@ -21,7 +21,7 @@ import {
   KnowledgeWriteConflictError,
   KnowledgeWriteOutcomeUnknownError,
   KnowledgeWriteScopeRequiredError,
-} from "@cogni/knowledge-store";
+} from "@cogni/operator-knowledge-store";
 import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
 import { TEST_SESSION_USER_1 } from "@tests/_fakes/ids";
 import { testApiHandler } from "next-test-api-route-handler";
@@ -56,6 +56,9 @@ vi.mock("@/bootstrap/container", () => {
     debug: vi.fn(),
   };
   return {
+    resolveServiceDb: () => {
+      throw new Error("Unexpected grants store access in session fixture");
+    },
     getContainer: vi.fn(() => ({
       log,
       clock: { now: vi.fn(() => new Date("2026-10-09T00:00:00Z")) },
@@ -104,7 +107,10 @@ describe("work-item write error shape (bug.5408)", () => {
     deleteMock.mockReset();
     logWarn.mockReset();
     logError.mockReset();
-    vi.mocked(session.getSessionUser).mockResolvedValue(TEST_SESSION_USER_1);
+    vi.mocked(session.getSessionUser).mockResolvedValue({
+      ...TEST_SESSION_USER_1,
+      displayName: "Test User",
+    });
   });
 
   it("maps an author-scoped refusal to 403 authz_denied, not 500", async () => {
@@ -306,6 +312,10 @@ describe("work-item write error shape (bug.5408)", () => {
         expect(json.retryable).toBe(true);
       },
     });
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "bug", title: "retryable create" }),
+      { actor: TEST_SESSION_USER_1.id }
+    );
   });
 
   it("returns actionable 410 for retired hard deletion without a retry hint", async () => {
@@ -367,7 +377,7 @@ describe("work-item write error shape (bug.5408)", () => {
         reason: "Raise priority",
         set: { priority: 2 },
       },
-      expect.any(String)
+      { actor: TEST_SESSION_USER_1.id }
     );
     expect(logWarn).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: "revision_conflict" }),

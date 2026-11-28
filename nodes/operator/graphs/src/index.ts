@@ -9,7 +9,7 @@
  *   - OPERATOR_CATALOG_IS_LOCAL
  *   - COGNI_QUALIFICATION_IS_TEMPORARY: the operator qualifies the shared Cogni mechanism in this workspace
  *     (story.5116, Derek 2026-10-26); node-template adopts the proven version through node-sync-prs.
- *     The shared release baseline is still verified present so the pin stays honest.
+ *     The operator catalog owns the runtime selection during qualification.
  * Side-effects: none
  * Links: hub adopt-node-package-release, story.5111, story.5116
  * @public
@@ -22,15 +22,63 @@ import {
   OPERATOR_LANGGRAPH_GRAPH_IDS,
 } from "@cogni/langgraph-graphs";
 
-import { LANGGRAPH_CATALOG as SHARED_LANGGRAPH_CATALOG } from "@cogni/shared-langgraph-graphs";
+import {
+  EDO_DECIDE_NAME,
+  EDO_HYPOTHESIZE_NAME,
+  EDO_RECORD_OUTCOME_NAME,
+} from "@cogni/ai-tools";
 
-if (!SHARED_LANGGRAPH_CATALOG["work-prioritizer"])
-  throw new Error("Shared evaluation release is missing work-prioritizer");
+// These programs are this node's AI, not their human requester. Catalog identity
+// is explicit at composition; the launcher never falls back to a caller/system actor.
+const nodeAiCatalog = Object.fromEntries(
+  Object.entries(OPERATOR_LANGGRAPH_CATALOG).map(([id, entry]) => [
+    id,
+    { ...entry, principal: "node-ai", workItemUpdateFields: [] },
+  ])
+);
+
 const cogniWorkReview = OPERATOR_LANGGRAPH_CATALOG["work-prioritizer"];
-if (!cogniWorkReview) throw new Error("Operator Cogni graph is missing work-prioritizer");
-export const LANGGRAPH_CATALOG: LangGraphCatalog = {
-  ...OPERATOR_LANGGRAPH_CATALOG,
-  "work-prioritizer": cogniWorkReview,
+if (!cogniWorkReview)
+  throw new Error("Operator Cogni graph is missing work-prioritizer");
+export const LANGGRAPH_CATALOG: LangGraphCatalog &
+  Readonly<
+    Record<
+      string,
+      {
+        readonly principal?: string;
+        readonly workItemUpdateFields?: "all" | readonly string[];
+      }
+    >
+  > = {
+  ...nodeAiCatalog,
+  brain: {
+    ...OPERATOR_LANGGRAPH_CATALOG.brain,
+    principal: "node-ai",
+    workItemUpdateFields: [],
+    toolIds: [
+      ...OPERATOR_LANGGRAPH_CATALOG.brain.toolIds,
+      EDO_HYPOTHESIZE_NAME,
+      EDO_DECIDE_NAME,
+      EDO_RECORD_OUTCOME_NAME,
+    ],
+  },
+  cogni: {
+    ...OPERATOR_LANGGRAPH_CATALOG.cogni,
+    principal: "node-ai",
+    workItemUpdateFields: [],
+  },
+  "operating-review": {
+    ...OPERATOR_LANGGRAPH_CATALOG["operating-review"],
+    principal: "operating-review",
+    // operator/prompts.ts: triage priority/status and flag labels/summary.
+    workItemUpdateFields: ["priority", "status", "labels", "summary"],
+  },
+  "work-prioritizer": {
+    ...cogniWorkReview,
+    principal: "prioritizer",
+    // work-prioritizer/prompts.ts limits item edits, even if a tool is added later.
+    workItemUpdateFields: ["priority", "rank", "labels"],
+  },
 };
 export {
   DEFAULT_LANGGRAPH_GRAPH_ID,

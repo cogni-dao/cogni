@@ -7,7 +7,7 @@
  * Scope: Unit test of createWorkItemCapability with fake ports. Does not touch Doltgres or markdown files.
  * Invariants:
  *   - QUERY_READS_THE_LIVE_BACKLOG: `query` lists via `backlogReader` when wired, never the markdown port
- *   - WRITES_NOT_WIDENED: transition still resolves + commands through the markdown ports only
+ *   - ACTOR_IS_PRINCIPAL: missing principals refuse before the writer
  *   - PATCH_ON_THE_LIVE_BACKLOG / PATCH_CAS_PASSTHROUGH (story.5096): `patch` writes through the
  *     Doltgres `backlogWriter` as its principal, forwards `expectedRevision`, and turns the store's
  *     `WorkItemRevisionConflictError` into the ai-tools `WorkItemPatchConflictError`
@@ -21,14 +21,25 @@
  */
 
 import {
+  contractToRuntime,
   createWorkItemReadImplementation,
   WorkItemQueryOutputSchema,
   workItemReadContract,
 } from "@cogni/ai-tools";
+import { createEdoCapability } from "@cogni/knowledge-store";
 import {
+  FakeEdoResolverAdapter,
+  FakeKnowledgeStoreAdapter,
+} from "@cogni/knowledge-store/adapters/fake";
+import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
+import {
+  createEdoDecideImplementation,
   createWorkItemQueryImplementation,
+  createWorkItemUpdateImplementation,
+  edoDecideContract,
   WorkItemPatchConflictError,
   workItemQueryContract,
+  workItemUpdateContract,
 } from "@cogni/shared-ai-tools";
 import type {
   WorkItem,
@@ -36,12 +47,29 @@ import type {
   WorkItemId,
   WorkItemQueryPort,
 } from "@cogni/work-items";
-import { toWorkItemDto, WorkItemDtoSchema } from "@cogni/work-items";
-import { WorkItemRevisionConflictError } from "@cogni/work-items/adapters/doltgres";
+import {
+  actingPrincipal,
+  createRunAttribution,
+  createWorkItemWriters,
+  toWorkItemDto,
+  WorkItemDtoSchema,
+} from "@cogni/work-items";
+import {
+  WorkItemGateFactsUnavailableError,
+  WorkItemGateUnmetError,
+  WorkItemRevisionConflictError,
+} from "@cogni/work-items/adapters/doltgres";
+import { ToolAuthorityError } from "@cogni-dao/agent-grants";
 import { describe, expect, it, vi } from "vitest";
+import {
+  type ExecutionScope,
+  getExecutionScope,
+  runInScope,
+} from "@/adapters/server/ai/execution-scope";
 
 import { createWorkItemCapability } from "@/bootstrap/capabilities/work-item";
 import { createMoveMetricPorts } from "@/bootstrap/capabilities/work-item-moves";
+import { createOperatorEdoTools } from "@/bootstrap/edo-confidence";
 
 function item(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -79,6 +107,106 @@ function markdownPorts() {
   return { query, command };
 }
 
+describe("host program work-item field bounds", () => {
+  it.each([
+    ["work-prioritizer", { priority: 2, rank: 1, labels: ["focus"] }],
+    [
+      "operating-review",
+      {
+        priority: 2,
+        status: "needs_design",
+        labels: ["stuck"],
+        summary: "Needs design",
+      },
+    ],
+  ] as const)("refuses mixed forbidden patches without mutation for %s", async (graph, allowed) => {
+    const patch = vi.fn().mockResolvedValue(item({ revision: 5 }));
+    const attribution = vi.fn(() => ({ actor: "program-principal" }));
+    const attributionDenied = vi.fn();
+    const capability = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      patchFields: () => LANGGRAPH_CATALOG[graph]?.workItemUpdateFields ?? [],
+      backlogWriter: {
+        store: { patch },
+        attribution,
+        attributionDenied,
+      },
+    });
+    for (const forbidden of [
+      { title: "Overwritten" },
+      { outcome: "Overwritten" },
+      { scores: { impact: 5 } },
+    ]) {
+      const result = capability.patch({
+        id: "task.5282",
+        expectedRevision: 4,
+        reason: "Change item",
+        set: { ...allowed, ...forbidden },
+      } as never);
+      await expect(result).rejects.toBeInstanceOf(ToolAuthorityError);
+      await expect(result).rejects.toMatchObject({
+        receipt: {
+          code: "policy_denied",
+          retryable: false,
+          lookup: { tool: "core__work_item_update", scope: "node.collaborate" },
+        },
+      });
+      expect(patch).not.toHaveBeenCalled();
+      expect(attribution).not.toHaveBeenCalled();
+      expect(attributionDenied).not.toHaveBeenCalled();
+    }
+    expect(patch).not.toHaveBeenCalled();
+    expect(attribution).not.toHaveBeenCalled();
+    await capability.patch({
+      id: "task.5282",
+      expectedRevision: 4,
+      reason: "Focus next work",
+      cites: [{ id: "mission-loop-expert" }],
+      set: allowed,
+    });
+    expect(attribution).toHaveBeenCalledOnce();
+    expect(attributionDenied).not.toHaveBeenCalled();
+    expect(patch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        expectedRevision: 4,
+        reason: "Focus next work",
+        cites: [{ id: "mission-loop-expert" }],
+        set: allowed,
+      }),
+      { actor: "program-principal" }
+    );
+  });
+
+  it("keeps the full shared contract for a full-authority host program", async () => {
+    const patch = vi.fn().mockResolvedValue(item({ revision: 5 }));
+    const capability = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      patchFields: () => "all",
+      backlogWriter: {
+        store: { patch },
+        attribution: () => ({ actor: "node-ai" }),
+        attributionDenied: vi.fn(),
+      },
+    });
+    const set = {
+      title: "Refined title",
+      outcome: "Observable outcome",
+      summary: "Full description",
+      labels: ["focus"],
+    };
+    await capability.patch({
+      id: "task.5282",
+      expectedRevision: 4,
+      reason: "Refine accepted work",
+      set,
+    });
+    expect(patch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ set, expectedRevision: 4 }),
+      { actor: "node-ai" }
+    );
+  });
+});
+
 describe("createWorkItemCapability", () => {
   it("lists through backlogReader (Doltgres read path) and maps enrichment fields", async () => {
     const md = markdownPorts();
@@ -90,7 +218,6 @@ describe("createWorkItemCapability", () => {
     };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader,
     });
 
@@ -124,13 +251,12 @@ describe("createWorkItemCapability", () => {
     };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader,
     });
     const params = {
       sortBy: "rankScore",
       sortDirection: "asc",
-      limit: 2,
+      limit: 1,
     } as const;
     await cap.query(params);
     expect(await cap.queryPage?.(params)).toMatchObject({ nextCursor: "next" });
@@ -162,7 +288,6 @@ describe("createWorkItemCapability", () => {
     };
     const capability = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader,
     });
     const discovery = await createWorkItemQueryImplementation({
@@ -177,7 +302,7 @@ describe("createWorkItemCapability", () => {
     const full = await createWorkItemReadImplementation({
       workItemCapability: capability,
     }).execute({ id: selected.id });
-    expect(full.complete).toBe(true);
+    expect(full.item).not.toBeNull();
     expect(full.item).toMatchObject({
       id: selected.id,
       revision: 4,
@@ -186,7 +311,7 @@ describe("createWorkItemCapability", () => {
     });
     expect(backlogReader.list).toHaveBeenLastCalledWith({
       ids: [selected.id],
-      limit: 2,
+      limit: 1,
     });
     expect(md.query.get).not.toHaveBeenCalled();
     expect(md.query.list).not.toHaveBeenCalled();
@@ -212,7 +337,6 @@ describe("createWorkItemCapability", () => {
     });
     const capability = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader: { list: vi.fn().mockResolvedValue({ items: [selected] }) },
     });
     const expectedAssignees = [
@@ -228,13 +352,17 @@ describe("createWorkItemCapability", () => {
     ];
     const result = await createWorkItemReadImplementation({
       workItemCapability: capability,
+      nodePublicOrigin: "https://cognidao.org",
     }).execute({ id: selected.id });
     const full = workItemReadContract.redact(
       workItemReadContract.outputSchema.parse(result)
     );
     expect(full).toEqual({
-      complete: true,
-      item: { ...toWorkItemDto(selected), assignees: expectedAssignees },
+      item: {
+        ...toWorkItemDto(selected),
+        assignees: expectedAssignees,
+        sourceUrl: `https://cognidao.org/work/items/${selected.id}`,
+      },
     });
     const queryResult = await createWorkItemQueryImplementation({
       workItemCapability: capability,
@@ -255,22 +383,21 @@ describe("createWorkItemCapability", () => {
     const list = vi.fn().mockResolvedValue({ items: [] });
     const capability = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader: { list },
     });
     const read = createWorkItemReadImplementation({
       workItemCapability: capability,
     });
-    await expect(read.execute({ id: "task.5282" })).rejects.toThrow(
-      "work_source_unavailable"
-    );
+    await expect(read.execute({ id: "task.5282" })).resolves.toEqual({
+      item: null,
+    });
     list.mockResolvedValue({ items: [item(), item()] });
     await expect(read.execute({ id: "task.5282" })).rejects.toThrow(
       "work_source_unavailable"
     );
     list.mockResolvedValue({ items: [item({ outcome: "x".repeat(65536) })] });
     await expect(read.execute({ id: "task.5282" })).rejects.toThrow(
-      "work_source_incomplete"
+      "work_item_read_exceeds_limit"
     );
   });
 
@@ -281,7 +408,6 @@ describe("createWorkItemCapability", () => {
       .mockResolvedValue({ items: [item({ revision: undefined })] });
     const capability = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader: { list },
     });
     const read = createWorkItemReadImplementation({
@@ -292,7 +418,6 @@ describe("createWorkItemCapability", () => {
     );
     list.mockResolvedValue({ items: [item({ outcome: undefined })] });
     expect(await read.execute({ id: "task.5282" })).toMatchObject({
-      complete: true,
       item: { id: "task.5282", revision: 4 },
     });
   });
@@ -302,18 +427,17 @@ describe("createWorkItemCapability", () => {
     const backlogReader = { list: vi.fn().mockResolvedValue({ items: [] }) };
     const capability = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
       backlogReader,
     });
     await capability.query({
       ids: ["task.7777"],
       cursor: "cursor-2",
-      limit: 2,
+      limit: 1,
     });
     expect(backlogReader.list).toHaveBeenCalledWith({
       ids: ["task.7777"],
       cursor: "cursor-2",
-      limit: 2,
+      limit: 1,
     });
   });
 
@@ -321,27 +445,9 @@ describe("createWorkItemCapability", () => {
     const md = markdownPorts();
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
     });
     await cap.query({});
     expect(md.query.list).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps transitions on the markdown ports (writes are not routed to the reader)", async () => {
-    const md = markdownPorts();
-    const backlogReader = { list: vi.fn() };
-    const cap = createWorkItemCapability({
-      workItemQuery: md.query,
-      workItemCommand: md.command,
-      backlogReader,
-    });
-
-    await expect(
-      cap.transitionStatus({ id: "task.5282", toStatus: "done" })
-    ).rejects.toThrow("Work item not found");
-    expect(md.query.get).toHaveBeenCalledTimes(1);
-    expect(backlogReader.list).not.toHaveBeenCalled();
-    expect(md.command.transitionStatus).not.toHaveBeenCalled();
   });
 
   it("patches through the Doltgres backlogWriter as its principal, forwarding expectedRevision", async () => {
@@ -353,8 +459,11 @@ describe("createWorkItemCapability", () => {
     };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     const result = await cap.patch({
@@ -371,7 +480,7 @@ describe("createWorkItemCapability", () => {
         reason: "Raise the rank",
         set: { priority: 2, rank: 2 },
       },
-      "actor:system"
+      { actor: "system" }
     );
     expect(result).toMatchObject({ priority: 2, rank: 2, revision: 5 });
     expect(md.query.get).not.toHaveBeenCalled();
@@ -383,8 +492,11 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockResolvedValue(item()) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     await cap.patch({
@@ -395,7 +507,7 @@ describe("createWorkItemCapability", () => {
 
     expect(store.patch).toHaveBeenCalledWith(
       { id: "task.5282", reason: "Label it", set: { labels: ["x"] } },
-      "actor:system"
+      { actor: "system" }
     );
   });
 
@@ -407,8 +519,11 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockRejectedValue(refused) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     await expect(
@@ -428,8 +543,11 @@ describe("createWorkItemCapability", () => {
     };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     const err = await cap
@@ -457,8 +575,11 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockRejectedValue(denied) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     await expect(
@@ -474,7 +595,6 @@ describe("createWorkItemCapability", () => {
     const md = markdownPorts();
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
     });
 
     await expect(
@@ -484,7 +604,7 @@ describe("createWorkItemCapability", () => {
         reason: "Raise priority",
         set: { priority: 2 },
       })
-    ).rejects.toThrow("requires the Doltgres backlog writer");
+    ).rejects.toThrow("Doltgres backlog writer required");
     expect(md.command.patch).not.toHaveBeenCalled();
   });
 
@@ -495,8 +615,11 @@ describe("createWorkItemCapability", () => {
     const store = { patch: vi.fn().mockResolvedValue(item({ priority })) };
     const cap = createWorkItemCapability({
       workItemQuery: md.query,
-      workItemCommand: md.command,
-      backlogWriter: { store, principalId: "actor:system" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "system" }),
+        attributionDenied: vi.fn(),
+      },
     });
 
     const result = await cap.patch({
@@ -507,7 +630,7 @@ describe("createWorkItemCapability", () => {
 
     expect(store.patch).toHaveBeenCalledWith(
       { id: "task.5282", reason: "Set priority", set: { priority } },
-      "actor:system"
+      { actor: "system" }
     );
     expect(result.id).toBe("task.5282");
   });
@@ -529,7 +652,11 @@ describe("shared evaluation capability adoption", () => {
     const capability = createWorkItemCapability({
       workItemQuery: query,
       workItemCommand: command,
-      backlogWriter: { store, principalId: "actor:test" },
+      backlogWriter: {
+        store,
+        attribution: () => ({ actor: "test" }),
+        attributionDenied: vi.fn(),
+      },
     });
     const result = await capability.patch({
       id: scored.id,
@@ -544,7 +671,7 @@ describe("shared evaluation capability adoption", () => {
         reason: "Score it",
         set: { scores },
       },
-      "actor:test"
+      { actor: "test" }
     );
     expect(result).toMatchObject({
       scores,
@@ -773,5 +900,338 @@ describe("work-item moves at read time", () => {
       });
       expect(read?.moves?.[0]).not.toHaveProperty("kpi");
     });
+  });
+});
+
+describe("published 0.27 update through the operator host", () => {
+  const request = {
+    id: "task.5282",
+    expectedRevision: 4,
+    reason: "Prioritize the supported release",
+    cites: [{ id: "work-gate-enforcement" }],
+    set: { rank: 2, labels: ["train"] },
+  };
+
+  it("executes the released contract preserving reason, cites and CAS, then refuses a stale revision", async () => {
+    let current = item();
+    const commits: unknown[] = [];
+    const patch = vi.fn(async (input, attribution) => {
+      if (input.expectedRevision !== current.revision) {
+        throw new WorkItemRevisionConflictError(
+          input.id,
+          input.expectedRevision,
+          current.revision
+        );
+      }
+      current = { ...current, ...input.set, revision: current.revision + 1 };
+      commits.push({ input, attribution });
+      return current;
+    });
+    const cap = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: {
+        store: { patch },
+        attribution: () => ({ actor: "prior-system-principal" }),
+        attributionDenied: vi.fn(),
+      },
+    });
+    const impl = createWorkItemUpdateImplementation({
+      workItemCapability: cap,
+    });
+    const parsed = workItemUpdateContract.inputSchema.parse(request);
+    const result = workItemUpdateContract.outputSchema.parse(
+      await impl.execute(parsed)
+    );
+    expect(result).toMatchObject({
+      id: request.id,
+      revision: 5,
+      rank: 2,
+      labels: ["train"],
+    });
+    expect(result).not.toHaveProperty("action");
+    expect(commits).toEqual([
+      { input: request, attribution: { actor: "prior-system-principal" } },
+    ]);
+    const stale = workItemUpdateContract.outputSchema.parse(
+      await impl.execute(parsed)
+    );
+    expect(stale).toMatchObject({
+      success: false,
+      code: "revision_conflict",
+      currentRevision: 5,
+    });
+    expect(commits).toHaveLength(1);
+    expect(current.revision).toBe(5);
+  });
+
+  it.each([
+    { status: "needs_merge" },
+    { title: "New authority" },
+    { outcome: "New acceptance" },
+    { estimate: 3 },
+    { moves: [] },
+  ])("refuses every field without an acting principal before store admission: %j", async (set) => {
+    const patch = vi.fn();
+    const cap = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: {
+        store: { patch },
+        attribution: () => ({
+          actor: actingPrincipal({ subjectUserId: "requester" }),
+        }),
+        attributionDenied: vi.fn(),
+      },
+    });
+    const impl = createWorkItemUpdateImplementation({
+      workItemCapability: cap,
+    });
+    const parsed = workItemUpdateContract.inputSchema.parse({
+      ...request,
+      set,
+    });
+    await expect(impl.execute(parsed)).rejects.toThrow("acting principal");
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      new WorkItemGateUnmetError(
+        "task.5282",
+        "needs_implement",
+        "needs_closeout",
+        "review"
+      ),
+      "gate_unmet",
+    ],
+    [
+      new WorkItemGateFactsUnavailableError(
+        "task.5282",
+        "needs_implement",
+        "needs_closeout",
+        "pr.head"
+      ),
+      "gate_facts_unavailable",
+    ],
+  ])("preserves released gate errors from the store: %s", async (error, code) => {
+    // Metadata request exercises propagation only; this does not prove an admitted status write.
+    const patch = vi.fn().mockRejectedValue(error);
+    const cap = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: {
+        store: { patch },
+        attribution: () => ({ actor: "prior-system-principal" }),
+        attributionDenied: vi.fn(),
+      },
+    });
+    await expect(cap.patch(request)).rejects.toBe(error);
+    const impl = createWorkItemUpdateImplementation({
+      workItemCapability: cap,
+    });
+    const result = workItemUpdateContract.outputSchema.parse(
+      await impl.execute(workItemUpdateContract.inputSchema.parse(request))
+    );
+    expect(result).toMatchObject({ success: false, code, id: request.id });
+  });
+
+  it("never translates a lookalike conflict class or falls back to a markdown writer", async () => {
+    const error = Object.assign(new Error("foreign conflict"), {
+      name: "WorkItemRevisionConflictError",
+    });
+    const cap = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: {
+        store: { patch: vi.fn().mockRejectedValue(error) },
+        attribution: () => ({ actor: "prior-system-principal" }),
+        attributionDenied: vi.fn(),
+      },
+    });
+    await expect(cap.patch(request)).rejects.toBe(error);
+    const unwired = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+    });
+    await expect(unwired.patch(request)).rejects.toThrow(
+      "Doltgres backlog writer required"
+    );
+  });
+});
+
+describe("released invocation-to-writer identity seam", () => {
+  const log = { info: vi.fn(), warn: vi.fn() };
+  const scope = (principalId?: string): ExecutionScope => ({
+    billing: { billingAccountId: "payer", virtualKeyId: "key" },
+    llmService: {} as ExecutionScope["llmService"],
+    usageSource: "litellm",
+    subjectUserId: "requester-S",
+    actorUserId: "requester-S",
+    ...(principalId ? { principalId } : {}),
+    runId: "run-R",
+    runKind: "system_scheduled",
+  });
+  const invocation = {
+    runId: "run-R",
+    toolCallId: "call-C",
+    actorId: "user:principal-P",
+    subjectId: "user:requester-S",
+    tenantId: "payer",
+  };
+
+  it("preserves host invocation context separately from model arguments", async () => {
+    const execute = vi.fn().mockResolvedValue({});
+    const runtime = contractToRuntime(workItemUpdateContract, { execute });
+    const input = {
+      id: "task.5282",
+      reason: "Observed work requires prioritization",
+      set: { rank: 2 },
+    };
+    await runtime.exec(input, invocation, {});
+    expect(execute).toHaveBeenCalledWith(input, invocation);
+  });
+
+  it.each([
+    "user_immediate",
+    "system_scheduled",
+    "system_webhook",
+  ] as const)("records P, requester S and the actual %s run through the released writer", async (runKind) => {
+    const patch = vi.fn().mockResolvedValue(item({ revision: 5 }));
+    const writers = createWorkItemWriters({
+      log,
+      scope: getExecutionScope,
+      traceId: () => "trace",
+      store: () => ({ patch }),
+      artifacts: () => undefined,
+    });
+    const capability = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: writers.backlogWriter,
+    });
+    const runtime = contractToRuntime(
+      workItemUpdateContract,
+      createWorkItemUpdateImplementation({ workItemCapability: capability })
+    );
+    const input = workItemUpdateContract.inputSchema.parse({
+      id: "task.5282",
+      expectedRevision: 4,
+      reason: "Observed work requires prioritization",
+      set: { rank: 2 },
+    });
+    await runInScope({ ...scope("principal-P"), runKind }, () =>
+      runtime.exec(input, invocation, {})
+    );
+    expect(patch).toHaveBeenCalledWith(input, {
+      actor: "principal-P",
+      requestedBy: "requester-S",
+      run: { id: "run-R", kind: runKind },
+    });
+  });
+
+  it("a requester without a principal cannot reach the work-item store", async () => {
+    const patch = vi.fn();
+    const writers = createWorkItemWriters({
+      log,
+      scope: getExecutionScope,
+      traceId: () => undefined,
+      store: () => ({ patch }),
+      artifacts: () => undefined,
+    });
+    const capability = createWorkItemCapability({
+      workItemQuery: markdownPorts().query,
+      backlogWriter: writers.backlogWriter,
+    });
+    await expect(
+      runInScope(scope(), () =>
+        capability.patch({
+          id: "task.5282",
+          reason: "Observed work requires prioritization",
+          set: { rank: 2 },
+        })
+      )
+    ).rejects.toThrow();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("enforces operator EDO confidence with attributed released writes and refuses a missing principal", async () => {
+    const store = new FakeKnowledgeStoreAdapter();
+    await store.registerDomain({ id: "strategy", name: "Strategy" });
+    await store.withWrite(
+      { operationId: "seed", message: "seed hypothesis" },
+      (write) =>
+        write.addKnowledge({
+          id: "hypothesis",
+          domain: "strategy",
+          title: "Prediction",
+          content: "Prediction",
+          entryType: "hypothesis",
+          sourceType: "agent",
+          confidencePct: 30,
+          evaluateAt: new Date("2027-01-01"),
+        })
+    );
+    const edo = createOperatorEdoTools(
+      createEdoCapability(store, new FakeEdoResolverAdapter(store)),
+      createRunAttribution({ scope: getExecutionScope, log })
+    );
+    const runtime = contractToRuntime(
+      edoDecideContract,
+      createEdoDecideImplementation({ edoCapability: edo })
+    );
+    const input = edoDecideContract.inputSchema.parse({
+      id: "decision",
+      domain: "strategy",
+      title: "Decision",
+      content: "Observed evidence supports the decision",
+      derivesFromHypothesisId: "hypothesis",
+      sourceType: "agent",
+      confidencePct: 100,
+    });
+    await runInScope(scope("principal-P"), () =>
+      runtime.exec(input, invocation, {})
+    );
+    expect((await store.getKnowledge("decision"))?.confidencePct).toBe(30);
+    expect(store.commitLog.at(-1)?.message).toContain("by actor:principal-P");
+    expect(store.commitLog.at(-1)?.message).toContain(
+      "Requested-by: requester-S"
+    );
+    expect(store.commitLog.at(-1)?.message).toContain(
+      "Run: run-R system_scheduled"
+    );
+    for (const [sourceType, expected] of [
+      ["agent", 30],
+      ["analysis_signal", 40],
+      ["external", 50],
+      ["human", 70],
+      ["derived", 40],
+    ] as const) {
+      await runInScope(scope("principal-P"), async () => {
+        await edo.hypothesize({
+          id: `hyp-${sourceType}`,
+          domain: "strategy",
+          title: "Prediction",
+          content: "Prediction",
+          evaluateAt: new Date("2027-01-01"),
+          sourceType,
+          confidencePct: 100,
+        });
+        await edo.decide({
+          ...input,
+          id: `decision-${sourceType}`,
+          sourceType,
+          confidencePct: undefined,
+        });
+      });
+      expect(
+        (await store.getKnowledge(`hyp-${sourceType}`))?.confidencePct
+      ).toBe(expected);
+      expect(
+        (await store.getKnowledge(`decision-${sourceType}`))?.confidencePct
+      ).toBe(expected);
+    }
+    const before = store.commitLog.length;
+    await expect(
+      runInScope(scope(), () =>
+        runtime.exec({ ...input, id: "refused" }, invocation, {})
+      )
+    ).rejects.toThrow();
+    expect(await store.getKnowledge("refused")).toBeNull();
+    expect(store.commitLog).toHaveLength(before);
   });
 });

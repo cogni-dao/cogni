@@ -33,8 +33,13 @@ import {
   workItemsHistoryOperation,
   workItemsPatchOperation,
 } from "@cogni/node-contracts";
+import {
+  agentAccessRequestCreateOperation,
+  agentAccessRequestListOperation,
+} from "@cogni-dao/agent-grants/http";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { agentPermissions } from "@/bootstrap/agent-tool-authority";
 import { LangfuseObservationQuerySchema } from "@/contracts/nodes.langfuse.observations.v1.contract";
 import {
   getNodeBrandColor,
@@ -69,6 +74,7 @@ function publicOrigin(request: Request): string {
 export async function GET(request: Request) {
   const env = serverEnv();
   const origin = publicOrigin(request);
+  const permissions = agentPermissions;
   return NextResponse.json({
     name: "Cogni Node API",
     version: "v1",
@@ -86,6 +92,7 @@ export async function GET(request: Request) {
         thumbnail: getNodeThumbnail(),
       },
     },
+    permissions,
     registrationUrl: `${origin}/api/v1/agent/register`,
     auth: { type: "bearer", keyPrefix: "cogni_ag_sk_v1_" },
     traceObservability: {
@@ -158,6 +165,19 @@ export async function GET(request: Request) {
       cognition: `${origin}/api/v1/cognition`,
     },
     actions: {
+      requestAgentAccess: {
+        method: "POST",
+        endpoint: `${origin}/api/v1/agent/access-requests`,
+        auth: { type: "bearer" },
+        inputSchema: z.toJSONSchema(agentAccessRequestCreateOperation.input),
+        outputSchema: z.toJSONSchema(agentAccessRequestCreateOperation.output),
+      },
+      listAgentAccess: {
+        method: "GET",
+        endpoint: `${origin}/api/v1/agent/access-requests`,
+        auth: { type: "bearer" },
+        outputSchema: z.toJSONSchema(agentAccessRequestListOperation.output),
+      },
       // IDENTITY_SEAM_IS_DISCOVERABLE: `endpoints.agentIdentity` is only a URL.
       // This action tells an agent the method, that a bearer key is required, and
       // the exact response shape (principal, key expiry, per-node grants) — so a

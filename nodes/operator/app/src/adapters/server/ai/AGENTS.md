@@ -94,5 +94,5 @@ pnpm test tests/component/ai/
 - Connects to LiteLLM proxy service for provider abstraction
 - InProcCompletionUnitAdapter fails the run if LiteLLM response lacks call ID (prevents silent under-billing)
 - All providers thread graphId through to UsageFact for per-agent analytics
-- ExecutionScope (AsyncLocalStorage): carries llmService, usageSource, billing identity, and abortSignal per-request. Set by graph-executor.factory.ts before graph invocation.
+- ExecutionScope (AsyncLocalStorage): carries the resolved acting principal, authenticated requester, durable run ID/kind, llmService, usageSource, billing identity, and abortSignal per-request. Set by graph-executor.factory.ts before graph invocation.
 - UsageCommitDecorator: consumes usage_report events from stream, validates via Zod, commits BYO receipts directly (platform deferred to LiteLLM callback). Events are consumed (not forwarded downstream).

@@ -58,3 +58,7 @@ AI tool bindings and tool source factory. Wires tool implementations with inject
 ## Notes
 
 - Per TOOL_BINDING_REQUIRED: createBoundToolSource throws if any catalog tool lacks binding
+
+## Released writer binding
+
+The update and EDO tools use the qualified 0.27 implementations. Bootstrap binds the run's actual principal, requester and ledger kind through the published work-item and EDO writers. Missing principals fail closed. Operator tool policies, admin checks, revision checks, status gates and confidence rules remain enforced. No artifact-record tool is registered.

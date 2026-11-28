@@ -11,7 +11,7 @@
  * @internal
  */
 import type { KnowledgeContributionReadCapability } from "@cogni/ai-tools";
-import type { ContributionService } from "@cogni/knowledge-store";
+import type { ContributionService } from "@cogni/operator-knowledge-store";
 import { getExecutionScope } from "@/adapters/server";
 
 export function createKnowledgeContributionReadCapability(deps: {
@@ -21,7 +21,7 @@ export function createKnowledgeContributionReadCapability(deps: {
   return {
     read: async (input) => {
       const scope = getExecutionScope();
-      if (scope.nodeId !== deps.nodeId || !scope.actorUserId)
+      if (scope.nodeId !== deps.nodeId || !scope.principalId)
         throw new Error("knowledge_inbox_scope_unavailable");
       const service = deps.service;
       if (!service) throw new Error("knowledge_inbox_source_unavailable");

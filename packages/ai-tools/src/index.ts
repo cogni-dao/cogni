@@ -11,6 +11,12 @@
  * @public
  */
 
+export {
+  WORK_ITEM_UPDATE_NAME,
+  WorkItemUpdateSuccessSchema,
+  workItemUpdateBoundTool,
+  workItemUpdateContract,
+} from "@cogni/shared-ai-tools";
 export type {
   ActiveGoalInfo,
   ApproveWorkflowRunsResult,
@@ -80,7 +86,6 @@ export type {
   WorkItemInfo,
   WorkItemQueryPage,
   WorkItemQueryParams,
-  WorkItemTransitionResult,
 } from "./capabilities";
 // Capabilities
 export {
@@ -438,19 +443,6 @@ export {
   workItemReadBoundTool,
   workItemReadContract,
 } from "./tools/work-item-read";
-export {
-  createWorkItemTransitionImplementation,
-  WORK_ITEM_TRANSITION_NAME,
-  type WorkItemTransitionDeps,
-  type WorkItemTransitionInput,
-  WorkItemTransitionInputSchema,
-  type WorkItemTransitionOutput,
-  WorkItemTransitionOutputSchema,
-  type WorkItemTransitionRedacted,
-  workItemTransitionBoundTool,
-  workItemTransitionContract,
-  workItemTransitionStubImplementation,
-} from "./tools/work-item-transition";
 // Tool types
 export type {
   BoundTool,

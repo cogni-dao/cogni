@@ -54,6 +54,7 @@ Next.js App Router delivery layer. UI pages and API routes that expose features 
   - Infra: `/health`, `/openapi.json`, `/meta/route-manifest` (via `(infra)/*`)
   - API: `/api/auth/*`, `/api/v1/chat/completions`
   - Internal ops: `/api/internal/ops/governance/schedules/sync` [POST] (deploy-only trigger)
+  - `/admin/ai-access`: admin access review using the shared AI access section.
   - Agent discovery: `/.well-known/agent.json` [GET] — public discovery document for machine clients
   - Shared-lane infra reconcile: `/api/v1/deploy/infra-reconcile` [POST] — operator node only; `preview` env-manager-gated, `production`/`candidate-a` production-promoter-gated. Dispatches via the operator GitHub App and preserves the requested lane's app pin; a strict fixed production-worker target publishes candidate routing or reverses its Git receipt
   - Attestation JWKS: `/.well-known/jwks.json` [GET] — public keys for verifying operator-signed identity attestations (task.5024)

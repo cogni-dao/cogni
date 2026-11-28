@@ -13,7 +13,7 @@
 "use client";
 
 import type { CitationLinkProps } from "@cogni/knowledge-base-ui";
-import { isWorkItemEndpointId } from "@cogni/knowledge-store";
+import { isWorkItemEndpointId } from "@cogni/operator-knowledge-store";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import {

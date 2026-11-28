@@ -3,83 +3,29 @@
 
 /**
  * Module: `@cogni/ai-tools/tools/work-item-read`
- * Purpose: Read one complete work item through the existing query capability.
- * Scope: Exact-ID read only. Never clips an item's constraints or performs a write. Does not perform source mutations.
- * Invariants: Explicit failure on missing, ambiguous, or oversized source.
- *   MOVES_READ_AT_READ_TIME (story.0033): `item.moves` carries each move's pinned baseline, the current reading and `moved`; the capability adds them for this one-item read, and `unknown` is never zero.
- * Side-effects: IO (work-item query).
- * Links: https://cognidao.org/work/items/task.5367
+ * Purpose: Apply operator policy to the released work-item reader.
+ * Scope: Tool composition only. Does not implement the shared read envelope.
+ * Invariants:
+ *   - HOST_POLICY_PRESERVED: The reader requires node collaboration authority.
+ *   - RELEASE_OWNS_BEHAVIOR: The operator supplies no private read implementation.
+ * Side-effects: none (composition only)
+ * Links: https://node-template.cognidao.org/knowledge/work-item-artifacts
  * @public
  */
-import { z } from "zod";
-import type { WorkItemCapability } from "../capabilities/work-item";
-import type { BoundTool, ToolContract, ToolImplementation } from "../types";
-import { WorkItemOutputSchema } from "./work-item-query";
+import {
+  workItemReadBoundTool as sharedRead,
+  workItemReadContract as sharedReadContract,
+} from "@cogni/shared-ai-tools";
 
-export const WORK_ITEM_READ_NAME = "core__work_item_read" as const;
-const inputSchema = z.object({ id: z.string().min(1) }).strict();
-const outputSchema = z.object({
-  complete: z.literal(true),
-  item: WorkItemOutputSchema.extend({
-    revision: z.number().int().nonnegative(),
-  }),
-});
-type Input = z.infer<typeof inputSchema>;
-type Output = z.infer<typeof outputSchema>;
-export const workItemReadContract: ToolContract<
-  typeof WORK_ITEM_READ_NAME,
-  Input,
-  Output,
-  Output
-> = {
-  name: WORK_ITEM_READ_NAME,
-  description:
-    "Read one complete work item by exact ID, including full outcome and constraints. Required before proposing a next action for that item. Oversized sources fail explicitly; discovery excerpts are not full reads. " +
-    "`moves` lists the metrics the item moves: each has its pinned baseline, the current reading and `moved` (as_declared, against, flat or unknown). unknown is never zero: it means a reading is missing.",
-  effect: "read_only",
+export {
+  createWorkItemReadImplementation,
+  WORK_ITEM_READ_NAME,
+} from "@cogni/shared-ai-tools";
+export const workItemReadContract = {
+  ...sharedReadContract,
   requires: "node.collaborate",
-  inputSchema,
-  outputSchema,
-  redact: (output) => output,
-  allowlist: ["complete", "item"],
 };
-export function createWorkItemReadImplementation(deps: {
-  workItemCapability: WorkItemCapability;
-}): ToolImplementation<Input, Output> {
-  return {
-    execute: async ({ id }) => {
-      const items = await deps.workItemCapability.query({
-        ids: [id],
-        limit: 2,
-      });
-      if (items.length !== 1 || items[0]?.id !== id)
-        throw new Error(
-          "work_source_unavailable: exact item missing or ambiguous"
-        );
-      const source = items[0];
-      if (!Number.isSafeInteger(source.revision))
-        throw new Error(
-          "work_source_revision_unavailable: exact item has no numeric revision"
-        );
-      const item = WorkItemOutputSchema.parse(source);
-      if (new TextEncoder().encode(JSON.stringify(item)).length > 65536)
-        throw new Error(
-          "work_source_incomplete: item exceeds complete-read budget"
-        );
-      return outputSchema.parse({ complete: true, item });
-    },
-  };
-}
-export const workItemReadBoundTool: BoundTool<
-  typeof WORK_ITEM_READ_NAME,
-  Input,
-  Output,
-  Output
-> = {
+export const workItemReadBoundTool = {
+  ...sharedRead,
   contract: workItemReadContract,
-  implementation: {
-    execute: async () => {
-      throw new Error("WorkItemCapability not configured");
-    },
-  },
 };

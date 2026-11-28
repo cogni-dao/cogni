@@ -505,6 +505,27 @@
       "when": 1795219535144,
       "tag": "0071_node_wallet_pending",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1795795085906,
+      "tag": "0072_operator_internal_principals",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1795802414211,
+      "tag": "0073_operator_node_role_resource",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1795846881373,
+      "tag": "0074_illegal_nitro",
+      "breakpoints": true
     }
   ]
 }

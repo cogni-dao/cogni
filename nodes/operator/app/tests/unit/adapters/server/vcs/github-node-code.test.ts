@@ -12,7 +12,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { FakeAuthorizationAdapter } from "@cogni/authorization-core";
+import { readFileSync } from "node:fs";
+import {
+  FakeAuthorizationAdapter,
+  OpenFgaAuthorizationAdapter,
+} from "@cogni/authorization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { NodeCodeGitRequest } from "@/adapters/server/vcs/github-node-code.adapter";
 import {
@@ -28,11 +32,12 @@ const scope = vi.hoisted(
   () =>
     ({
       nodeId: "node-own",
-      actorUserId: "developer",
+      principalId: "developer",
       billing: { billingAccountId: "payer" },
     }) as {
       nodeId: string;
-      actorUserId: string;
+      principalId: string;
+      subjectUserId?: string;
       billing: { billingAccountId: string };
       codeSubject?: {
         nodeId: string;
@@ -64,6 +69,9 @@ vi.mock("@octokit/core", () => ({
   },
 }));
 vi.mock("@/adapters/server", async () => ({
+  withRunNodeAuthorization: (
+    await import("@/adapters/server/ai/run-node-authorization")
+  ).withRunNodeAuthorization,
   REVIEW_NODE_CODE_POLICY: (
     await import("@/adapters/server/vcs/github-node-code.adapter")
   ).REVIEW_NODE_CODE_POLICY,
@@ -394,6 +402,123 @@ describe("host-bound immutable node Git reader", () => {
       noAuthority.read({ path: "packages/source.ts" })
     ).rejects.toThrow("authz_unavailable");
     expect(boundRead).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "all",
+    "principal",
+    "subject",
+    "delegation",
+    "offline",
+    "autonomous",
+  ])("requires each real FGA run lock for code access: %s", async (missing) => {
+    const model = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../../../../../../infra/openfga/rbac-model.json",
+          import.meta.url
+        ),
+        "utf8"
+      )
+    );
+    const node = model.type_definitions.find(
+      (entry: { type: string }) => entry.type === "node"
+    );
+    const user = model.type_definitions.find(
+      (entry: { type: string }) => entry.type === "user"
+    );
+    const role = node.relations.can_flight.computedUserset.relation;
+    expect(role).toBe("developer");
+    const tuples = new Set([
+      ...(missing === "principal"
+        ? []
+        : ["user:developer#developer@node:node-own"]),
+      ...(missing === "subject"
+        ? []
+        : ["user:requester#developer@node:node-own"]),
+      ...(missing === "delegation"
+        ? []
+        : ["agent:developer#delegates@user:requester"]),
+    ]);
+    const check = vi.fn(
+      async (request: { user: string; relation: string; object: string }) => {
+        if (missing === "offline") throw new Error("FGA offline");
+        const relation =
+          request.relation === "can_flight" ? role : request.relation;
+        const definition = request.object.startsWith("node:") ? node : user;
+        const accepted =
+          definition.metadata.relations[relation].directly_related_user_types;
+        if (
+          !accepted.some(
+            (type: { type: string }) => type.type === request.user.split(":")[0]
+          )
+        )
+          throw new Error("unsupported FGA reference type");
+        return {
+          allowed: tuples.has(`${request.user}#${relation}@${request.object}`),
+        };
+      }
+    );
+    const authorization = new OpenFgaAuthorizationAdapter({
+      apiUrl: "http://fga.invalid",
+      storeId: "fixture",
+      client: { check },
+    });
+    const cap = createNodeCodeCapability({
+      ...binding,
+      appId: "123",
+      privateKeyBase64: "aw==",
+      log,
+      getAuthorization: () => authorization,
+    });
+    scope.nodeId = "node-own";
+    scope.subjectUserId = "requester";
+    if (missing === "autonomous") delete scope.subjectUserId;
+    boundRead.mockReset();
+    boundRead.mockResolvedValue({ complete: true });
+    try {
+      if (missing === "all" || missing === "autonomous") {
+        await expect(
+          cap.read({ path: "packages/source.ts" })
+        ).resolves.toMatchObject({ complete: true });
+        // Revoke the principal's own role: the next request cannot borrow its requester's role.
+        tuples.delete("user:developer#developer@node:node-own");
+        await expect(cap.list({ path: "packages" })).rejects.toThrow(
+          "node_code_authz_denied"
+        );
+        expect(boundRead).toHaveBeenCalledTimes(1);
+      } else {
+        await expect(cap.read({ path: "packages/source.ts" })).rejects.toThrow(
+          missing === "offline"
+            ? "node_code_authz_unavailable"
+            : "node_code_authz_denied"
+        );
+        expect(boundRead).not.toHaveBeenCalled();
+      }
+      expect(check).toHaveBeenCalledWith({
+        user: "user:developer",
+        relation: "can_flight",
+        object: "node:node-own",
+      });
+      if (
+        missing === "all" ||
+        missing === "subject" ||
+        missing === "delegation"
+      ) {
+        expect(check).toHaveBeenCalledWith({
+          user: "user:requester",
+          relation: "can_flight",
+          object: "node:node-own",
+        });
+        expect(check).toHaveBeenCalledWith({
+          user: "agent:developer",
+          relation: "delegates",
+          object: "user:requester",
+        });
+      }
+    } finally {
+      delete scope.subjectUserId;
+    }
   });
 
   it("leaves optional private-code source unavailable when the host origin is missing or invalid", async () => {

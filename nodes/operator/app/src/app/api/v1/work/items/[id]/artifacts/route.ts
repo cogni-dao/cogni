@@ -7,7 +7,7 @@
  *   `GET ?view=refs&cursor=` returns one page of 20 refs and `nextCursor` (story.0058); without `view` the answer is unchanged.
  * Scope: Thin shells: session check, id, body parse, one `@cogni/work-items` handler call, one log event, response. PASS-grade and the insert live in the package.
  * Invariants:
- *   - SAME_AUTH_AS_PATCH: POST needs the same authenticated principal `PATCH /work/items/{id}` needs (session or agent bearer through `getSessionUser`); the operator runs no separate same-door grant check on work items. GET needs a session, like history.
+ *   - SAME_AUTH_AS_PATCH: POST needs the same authenticated principal `PATCH /work/items/{id}` needs (session or agent bearer through `getSessionUser`); the HTTP wrapper checks the published work-item scope for bearer callers. Human member access stays unchanged. GET needs a session, like history.
  *   - AUTHOR_IS_STAMPED: the author is `sessionUser.id`; a body never names one.
  *   - Errors, each with an `errorCode`: 400 `invalid_input` (an invalid JSON body too), 403 grant, 404 `not_found`, 409 `work_item_write_outcome_unknown` (inspect, never replay), 503 `artifacts_unavailable` (no store wired too). Nothing is written in the 400, 404 and 503 cases. The author is stamped for audit; no check compares it with the subject's author.
  *   - One terminal log event per call (codes and counts only): `work.items.artifact_recorded` on success, `work.items.artifact_refused` on every other write outcome, `work.items.artifacts_read` for the list. A failure carries its `errorName` on that same terminal line.
@@ -62,7 +62,7 @@ export const POST = wrapRouteHandlerWithLogging<{
     return respond(
       ctx,
       startedAt,
-      await recordWorkItemArtifact(deps, id, sessionUser.id, body)
+      await recordWorkItemArtifact(deps, id, { actor: sessionUser.id }, body)
     );
   }
 );

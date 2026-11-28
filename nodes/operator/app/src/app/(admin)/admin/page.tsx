@@ -57,6 +57,12 @@ const GOVERNANCE_VIEWS = [
 
 const TREASURY_SERVICES = [
   {
+    href: "/admin/ai-access",
+    title: "AI access",
+    description: "Review access requests and permissions.",
+    icon: ShieldCheck,
+  },
+  {
     href: "/admin/payments",
     title: "Financials",
     description:

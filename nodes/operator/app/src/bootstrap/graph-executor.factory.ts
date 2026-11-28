@@ -37,12 +37,19 @@ import {
   UsageCommitDecorator,
 } from "@cogni/graph-execution-host";
 import type { UserId } from "@cogni/ids";
+import { SYSTEM_ACTOR } from "@cogni/ids/system";
 import {
   loadMcpTools,
   McpToolSource,
   parseMcpConfigFromEnv,
 } from "@cogni/langgraph-graphs";
+import { COGNI_SYSTEM_PRINCIPAL_USER_ID } from "@cogni/node-shared";
 import { LANGGRAPH_CATALOG } from "@cogni/operator-graphs";
+import { GRAPH_RUN_KINDS } from "@cogni/scheduler-core";
+import {
+  createPostgresAgentGrantsStore,
+  resolveInternalPrincipal,
+} from "@cogni-dao/agent-grants";
 import { trace } from "@opentelemetry/api";
 import {
   type CompletionStreamFn,
@@ -57,6 +64,7 @@ import {
 } from "@/adapters/server/ai/execution-scope";
 import { OPERATOR_CORE_TOOL_BUNDLE } from "@/bootstrap/ai/evaluation-baseline";
 import { createCommitFileReader } from "@/bootstrap/capabilities/node-code";
+import { checkNodeAdmin } from "@/bootstrap/node-admin-gate";
 import { createSubjectGroundingLoader } from "@/bootstrap/review/subject-grounding";
 import type {
   AiExecutionErrorCode,
@@ -74,6 +82,7 @@ import {
   type AiAdapterDeps,
   getContainer,
   resolveAiAdapterDeps,
+  resolveServiceDb,
 } from "./container";
 
 /**
@@ -316,19 +325,78 @@ export function runGraphWithScope(params: {
   readonly codeSubject?: ExecutionCodeSubject;
 }): GraphRunResult {
   const { executor, req, ctx, billing, llmService, usageSource } = params;
-  return runInScope(
-    {
-      billing,
-      llmService,
-      usageSource,
-      ...(params.nodeId ? { nodeId: params.nodeId } : {}),
-      ...(params.grantId ? { grantId: params.grantId } : {}),
-      ...(params.codeSubject ? { codeSubject: params.codeSubject } : {}),
-      ...(ctx?.actorUserId ? { actorUserId: ctx.actorUserId } : {}),
-      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-    },
-    () => executor.runGraph(req, ctx)
-  );
+  // Read the actual durable record; request fields and grant presence never guess a run kind.
+  const prepare = async (): Promise<GraphRunResult> => {
+    const container = getContainer();
+    const run = await container.graphRunRepository.getRunByRunId(
+      SYSTEM_ACTOR,
+      req.runId
+    );
+    if (!run) throw new Error("durable graph run required");
+    if (run.runId !== req.runId || run.graphId !== req.graphId)
+      throw new Error("run graph identity mismatch");
+    if (!run.runKind || !GRAPH_RUN_KINDS.includes(run.runKind))
+      throw new Error("durable graph run kind required");
+    const graphName = req.graphId.startsWith("langgraph:")
+      ? req.graphId.slice("langgraph:".length)
+      : undefined;
+    const slug = graphName
+      ? LANGGRAPH_CATALOG[graphName]?.principal
+      : undefined;
+    const principalId = slug
+      ? await resolveInternalPrincipal(
+          createPostgresAgentGrantsStore(resolveServiceDb().$client),
+          slug
+        )
+      : undefined;
+    const subjectUserId =
+      ctx?.actorUserId && ctx.actorUserId !== COGNI_SYSTEM_PRINCIPAL_USER_ID
+        ? ctx.actorUserId
+        : undefined;
+    return runInScope(
+      {
+        billing,
+        llmService,
+        usageSource,
+        runId: req.runId,
+        runKind: run.runKind,
+        workItemUpdateFields: graphName
+          ? (LANGGRAPH_CATALOG[graphName]?.workItemUpdateFields ?? [])
+          : [],
+        ...(principalId ? { principalId } : {}),
+        ...(params.nodeId ? { nodeId: params.nodeId } : {}),
+        ...(params.grantId ? { grantId: params.grantId } : {}),
+        ...(params.codeSubject ? { codeSubject: params.codeSubject } : {}),
+        ...(subjectUserId ? { actorUserId: subjectUserId, subjectUserId } : {}),
+        ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+      },
+      () => executor.runGraph(req, ctx)
+    );
+  };
+  const inner = prepare().catch((error): GraphRunResult => {
+    getContainer().log.error(
+      { runId: req.runId, graphId: req.graphId, error },
+      "Run identity preparation failed"
+    );
+    return {
+      stream: (async function* () {
+        yield { type: "error" as const, error: "internal" as const };
+        yield { type: "done" as const };
+      })(),
+      final: Promise.resolve({
+        ok: false,
+        runId: req.runId,
+        requestId: ctx?.requestId ?? req.runId,
+        error: "internal",
+      }),
+    };
+  });
+  return {
+    stream: (async function* () {
+      yield* (await inner).stream;
+    })(),
+    final: inner.then((result) => result.final),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -590,7 +658,27 @@ function createInProcProvider(
       }),
       operatorBuildSha: serverEnv().APP_BUILD_SHA ?? null,
       log: container.log,
-    })
+    }),
+    {
+      withStore: (fn) =>
+        fn(createPostgresAgentGrantsStore(resolveServiceDb().$client)),
+      adminCheck: async (userId) => {
+        const decision = await checkNodeAdmin(container.authorization, {
+          userId,
+          nodeId: container.nodeId,
+        });
+        return decision.ok
+          ? "allow"
+          : decision.errorCode === "authz_unavailable"
+            ? "unavailable"
+            : "denied";
+      },
+      onDecision: (event) =>
+        container.log.info(
+          { ...event, event: "ai.tool_authz.decision" },
+          "ai.tool_authz.decision"
+        ),
+    }
   );
 }
 

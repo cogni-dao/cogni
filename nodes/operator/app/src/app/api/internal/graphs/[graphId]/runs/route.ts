@@ -162,6 +162,9 @@ export function cachedRunResponse(cached: {
     runId: cached.runId,
     traceId: cached.traceId,
     error: cached.errorCode ?? "internal",
+    ...(cached.structuredOutput
+      ? { structuredOutput: cached.structuredOutput }
+      : {}),
   };
 }
 
@@ -914,10 +917,8 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
     // --- 10. Finalize idempotency record with outcome ---
     // VERDICT_SURVIVES_REPLAY: persist the bounded structured output; the live response returns
     // the same bounded value so live and replay agree.
-    const structuredOutput = final.ok
-      ? boundStructuredOutput(final.structuredOutput)
-      : null;
-    if (final.ok && final.structuredOutput !== undefined && !structuredOutput) {
+    const structuredOutput = boundStructuredOutput(final.structuredOutput);
+    if (final.structuredOutput !== undefined && !structuredOutput) {
       log.warn(
         { runId, graphId, maxBytes: MAX_STRUCTURED_OUTPUT_BYTES },
         "Structured output dropped — over the replay bound"
@@ -988,6 +989,7 @@ export const POST = wrapRouteHandlerWithLogging<RouteParams>(
         runId,
         traceId,
         error: final.error ?? "internal",
+        ...(structuredOutput ? { structuredOutput } : {}),
       };
       return NextResponse.json(errorResponse, { status: 200 });
     }

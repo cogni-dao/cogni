@@ -52,6 +52,8 @@ export const AI_EXECUTION_ERROR_CODES = [
   "remote_access_requested",
   "remote_policy_denied",
   "remote_unavailable",
+  "policy_denied",
+  "authz_unavailable",
 ] as const;
 
 export type AiExecutionErrorCode = (typeof AI_EXECUTION_ERROR_CODES)[number];

@@ -13,12 +13,13 @@
  * @public
  */
 
+/** The tool-facing capability: the host binds the run attribution to each write (task.0133), so a tool never builds one. */
 export type {
   ChainDirection,
   ChainNodeEntry,
   DecideParams,
-  EdoCapability,
   EdoSourceType,
+  EdoToolCapability as EdoCapability,
   GetChainParams,
   GetChainResult,
   HypothesizeParams,

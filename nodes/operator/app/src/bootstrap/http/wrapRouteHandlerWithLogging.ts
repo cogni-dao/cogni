@@ -340,6 +340,49 @@ export function wrapRouteHandlerWithLogging<TContext = unknown>(
           }
 
           // Safe cast: for mode "required", the guard above returns 401 if null.
+          // Published work-item routes use the same live scope policy as graph tools.
+          if (
+            sessionUser &&
+            ["work.items.", "edo.", "knowledge."].some((prefix) =>
+              options.routeId.startsWith(prefix)
+            )
+          ) {
+            const {
+              authorizeWorkItemCaller,
+              workItemHttpAuthority,
+              workItemRouteRequires,
+            } = await import("./work-item-authority");
+            const requires = workItemRouteRequires(options.routeId);
+            if (requires) {
+              const authorization = (await headers()).get("authorization");
+              const decision = await authorizeWorkItemCaller(
+                await workItemHttpAuthority(),
+                {
+                  userId: sessionUser.id,
+                  via: authorization?.toLowerCase().startsWith("bearer ")
+                    ? "bearer"
+                    : "session",
+                  requires,
+                }
+              );
+              if (decision.decision !== "allow") {
+                const unavailable = decision.code === "authz_unavailable";
+                responseStatus = unavailable ? 503 : 403;
+                return NextResponse.json(
+                  {
+                    error: unavailable
+                      ? "authorization unavailable"
+                      : "not authorized",
+                    errorCode: unavailable
+                      ? "authz_unavailable"
+                      : "authz_denied",
+                  },
+                  { status: responseStatus }
+                );
+              }
+            }
+          }
+
           // For mode "optional"/"none", handlers accept null. Either way, this is sound.
           response = await (handler as AuthOptionalHandler<TContext>)(
             ctx,

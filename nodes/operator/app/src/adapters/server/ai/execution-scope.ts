@@ -3,8 +3,8 @@
 
 /**
  * Module: `@adapters/server/ai/execution-scope`
- * Purpose: AsyncLocalStorage-based execution scope for billing, abort signal, and usage source.
- * Scope: Provides per-run billing context, abort signal, and usage source (SourceSystem) to static inner providers via Node-native ALS. Does not carry shared contract types — billing is app-local.
+ * Purpose: AsyncLocalStorage execution scope for host-bound run identity, billing, abort signal, and usage.
+ * Scope: Carries the shared attribution facts plus app-local billing, abort signal and resolved model service to static inner providers via Node-native ALS.
  * Invariants:
  *   - ALS_NOT_SHARED: ExecutionScope is app-local, never exported to @cogni/graph-execution-core
  *   - BILLING_SET_BY_LAUNCHER: runInScope is called by the launcher (chat, schedule, webhook)
@@ -20,17 +20,20 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { SourceSystem } from "@cogni/ai-core";
+import type { RunAttributionScope } from "@cogni/work-items";
 import type { BillingContext, LlmService } from "@/ports";
 
 /**
  * Per-run execution scope set by the launcher, read by static inner providers.
  *
- * Contains only billing + optional abort + resolved LlmService. Tracing flows via OTel.
+ * Carries acting principal, authenticated requester and ledger run facts alongside billing and LlmService. Tracing flows via OTel.
  * Shared ExecutionContext (actorUserId, sessionId, etc.) flows via runGraph(req, ctx).
  */
-export interface ExecutionScope {
+export interface ExecutionScope extends RunAttributionScope {
+  /** Host-selected catalog field policy; absent means no work-item mutation. */
+  readonly workItemUpdateFields?: "all" | readonly string[];
   readonly billing: BillingContext;
-  /** Actor who initiated this run. Used by tools that need user-scoped operations (e.g., schedule CRUD). */
+  /** Authenticated requester, retained for existing user-scoped operations. Never the acting principal. */
   readonly actorUserId?: string;
   /** Chat-only temporary tech debt — browser disconnect, not durable cancellation. */
   readonly abortSignal?: AbortSignal;

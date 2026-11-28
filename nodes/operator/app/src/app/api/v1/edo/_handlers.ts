@@ -32,6 +32,7 @@ import {
   EdoHypothesizeInputSchema,
   EdoRecordOutcomeInputSchema,
 } from "@cogni/ai-tools";
+import type { SessionUser } from "@cogni/node-shared";
 import {
   CitationTargetNotFoundError,
   CitationTypeMismatchError,
@@ -49,8 +50,7 @@ import {
   KnowledgeWriteScopeRequiredError,
   type PrincipalAuthSource,
   sessionUserToPrincipal,
-} from "@cogni/knowledge-store";
-import type { SessionUser } from "@cogni/node-shared";
+} from "@cogni/operator-knowledge-store";
 import { NextResponse } from "next/server";
 
 import { getContainer } from "@/bootstrap/container";

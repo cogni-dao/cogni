@@ -38,7 +38,6 @@
  * @internal
  */
 
-import { createFleetTrainLagCalculator } from "@cogni/fleet-metrics-source/fleet-train-lag";
 import {
   createGoalProgressReader,
   createGoalSource,
@@ -118,8 +117,6 @@ export function createGoalMetrics(deps: {
     ...rest,
     node: getNodeId(),
     nodeCalculators: [
-      // task.5503: retire this injection with the source alias when the engine owns this family.
-      createFleetTrainLagCalculator(),
       // story.0061: the read-miss KPI over this node's own `knowledge_read_daily` (`knowledge.usage@1`).
       createKnowledgeUsageCalculator(rest.observationsSql),
       ...createDeliveryCalculators(deliverySource, { controlHost, snapshots }),

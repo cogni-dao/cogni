@@ -10,7 +10,7 @@
  * Links: https://cognidao.org/work/items/task.5367
  * @internal
  */
-import type { ContributionRecord } from "@cogni/knowledge-store";
+import type { ContributionRecord } from "@cogni/operator-knowledge-store";
 import { describe, expect, it, vi } from "vitest";
 import {
   type ExecutionScope,
@@ -43,7 +43,7 @@ const scope = (
   llmService: {} as ExecutionScope["llmService"],
   usageSource: "litellm",
   nodeId,
-  ...(actorUserId ? { actorUserId } : {}),
+  ...(actorUserId ? { principalId: actorUserId } : {}),
 });
 const fixture = () => {
   const service = {
