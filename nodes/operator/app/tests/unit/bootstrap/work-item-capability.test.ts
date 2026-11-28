@@ -59,6 +59,7 @@ import {
   WorkItemGateUnmetError,
   WorkItemRevisionConflictError,
 } from "@cogni/work-items/adapters/doltgres";
+import { ToolAuthorityError } from "@cogni-dao/agent-grants";
 import { describe, expect, it, vi } from "vitest";
 import {
   type ExecutionScope,
@@ -121,13 +122,14 @@ describe("host program work-item field bounds", () => {
   ] as const)("refuses mixed forbidden patches without mutation for %s", async (graph, allowed) => {
     const patch = vi.fn().mockResolvedValue(item({ revision: 5 }));
     const attribution = vi.fn(() => ({ actor: "program-principal" }));
+    const attributionDenied = vi.fn();
     const capability = createWorkItemCapability({
       workItemQuery: markdownPorts().query,
       patchFields: () => LANGGRAPH_CATALOG[graph]?.workItemUpdateFields ?? [],
       backlogWriter: {
         store: { patch },
         attribution,
-        attributionDenied: vi.fn(),
+        attributionDenied,
       },
     });
     for (const forbidden of [
@@ -135,14 +137,23 @@ describe("host program work-item field bounds", () => {
       { outcome: "Overwritten" },
       { scores: { impact: 5 } },
     ]) {
-      await expect(
-        capability.patch({
-          id: "task.5282",
-          expectedRevision: 4,
-          reason: "Change item",
-          set: { ...allowed, ...forbidden },
-        } as never)
-      ).rejects.toThrow("work_item_field_denied");
+      const result = capability.patch({
+        id: "task.5282",
+        expectedRevision: 4,
+        reason: "Change item",
+        set: { ...allowed, ...forbidden },
+      } as never);
+      await expect(result).rejects.toBeInstanceOf(ToolAuthorityError);
+      await expect(result).rejects.toMatchObject({
+        receipt: {
+          code: "policy_denied",
+          retryable: false,
+          lookup: { tool: "core__work_item_update", scope: "node.collaborate" },
+        },
+      });
+      expect(patch).not.toHaveBeenCalled();
+      expect(attribution).not.toHaveBeenCalled();
+      expect(attributionDenied).not.toHaveBeenCalled();
     }
     expect(patch).not.toHaveBeenCalled();
     expect(attribution).not.toHaveBeenCalled();
@@ -153,6 +164,8 @@ describe("host program work-item field bounds", () => {
       cites: [{ id: "mission-loop-expert" }],
       set: allowed,
     });
+    expect(attribution).toHaveBeenCalledOnce();
+    expect(attributionDenied).not.toHaveBeenCalled();
     expect(patch).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         expectedRevision: 4,
